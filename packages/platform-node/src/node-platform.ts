@@ -18,6 +18,8 @@ import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory,
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
 import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
+import type { DrainOptions, DrainResult } from "./drain-deadline";
+import { settlesBefore, startDrainDeadline } from "./drain-deadline";
 import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-route";
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
@@ -180,9 +182,11 @@ export interface NodePlatform<
      * Separate from `close()` because the two answer different questions:
      * `close()` releases handles and stays synchronous (it backs
      * `Symbol.dispose`), while draining is inherently awaitable. A graceful
-     * shutdown is `await platform.drain()` then `platform.close()`.
+     * shutdown is `await platform.drain()` then `platform.close()`. Bounded by
+     * `timeoutMs` (30 s by default); resolves with what was still running when
+     * it passed.
      */
-    drain: () => Promise<void>;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
 
     /**
      * The `.global()` backend, or `undefined` when the caller named no database
@@ -437,10 +441,14 @@ export const createNodePlatform = <
             dispatch: (request) => dispatch(request),
             // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
             // would let `close()` dispose a database a handler is still writing.
-            drain: async () => {
-                await drain();
-                await registry.drain();
-                await drain();
+            drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
+                // Concurrent, each under the same timeout, so the whole drain stays within one deadline.
+                const deadline = startDrainDeadline(drainOptions);
+                const [hostSettled, shards] = await Promise.all([settlesBefore(drain(), deadline), registry.drain(drainOptions)]);
+
+                deadline.cancel();
+
+                return hostSettled ? shards : { pending: ["waitUntil work on the platform host", ...shards.pending], timedOut: true };
             },
             globalTables,
             kv,

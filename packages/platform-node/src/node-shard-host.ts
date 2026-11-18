@@ -665,7 +665,7 @@ interface NodeShardHostOptions {
  */
 const createNodeShardHost = (
     options: NodeShardHostOptions = {},
-): { database: Database.Database; dispose: () => void; drain: () => Promise<void>; host: ShardHost } => {
+): { database: Database.Database; dispose: () => void; drain: () => Promise<void>; host: ShardHost; pendingBackground: () => number } => {
     const database = new Database(options.path ?? ":memory:");
 
     database.pragma("journal_mode = WAL");
@@ -868,7 +868,9 @@ const createNodeShardHost = (
         }
     };
 
-    return { database, dispose, drain, host };
+    // How many `waitUntil` promises are unsettled, so a registry drain can tell an idle shard from one that gained work after
+    // its own drain resolved.
+    return { database, dispose, drain, host, pendingBackground: () => background.size };
 };
 
 export type { NodeShardHostOptions };

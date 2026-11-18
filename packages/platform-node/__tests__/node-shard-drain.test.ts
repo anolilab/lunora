@@ -1,6 +1,7 @@
 import { resolveShard } from "@lunora/platform";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { DrainTimer } from "../src/drain-deadline";
 import { createNodePlatform } from "../src/node-platform";
 import { createNodeShardRegistry } from "../src/node-shard-registry";
 
@@ -111,6 +112,129 @@ describe("shard drain", () => {
             expect(events).toStrictEqual(["fetch done", "drained"]);
         } finally {
             platform.close();
+        }
+    });
+});
+
+/** A deadline the test fires by hand: no clock runs in these tests. */
+const manualTimer = (): { fire: () => void; timer: DrainTimer } => {
+    let onExpire: () => void = () => {};
+
+    return {
+        fire: () => {
+            onExpire();
+        },
+        timer: (_ms, expire) => {
+            onExpire = expire;
+
+            return () => {
+                onExpire = () => {};
+            };
+        },
+    };
+};
+
+describe("shard drain passes", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("sees waitUntil work added to a shard whose own drain already finished", async () => {
+        expect.assertions(2);
+
+        const gateA = deferred();
+        const gateB = deferred();
+        const events: string[] = [];
+        const registry = createNodeShardRegistry();
+
+        try {
+            const shardB = registry.shardFor("b");
+
+            // Shard a's background work, once released, hands new work to shard b, which the first pass already found idle.
+            registry.shardFor("a").shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await gateA.promise;
+                    shardB.shard.waitUntil?.(
+                        (async (): Promise<void> => {
+                            await gateB.promise;
+                            events.push("b done");
+                        })(),
+                    );
+                })(),
+            );
+
+            const drained = registry.drain().then((result) => {
+                events.push("drained");
+
+                return result;
+            });
+
+            gateA.release();
+            await turn();
+            gateB.release();
+
+            await expect(drained).resolves.toStrictEqual({ pending: [], timedOut: false });
+            expect(events).toStrictEqual(["b done", "drained"]);
+        } finally {
+            registry.close();
+        }
+    });
+
+    it("sees a shard opened while draining", async () => {
+        expect.assertions(1);
+
+        const gateA = deferred();
+        const gateC = deferred();
+        const events: string[] = [];
+        const registry = createNodeShardRegistry();
+
+        try {
+            registry.shardFor("a").shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await gateA.promise;
+                    // A shard that did not exist when the drain began.
+                    registry.shardFor("c").shard.waitUntil?.(
+                        (async (): Promise<void> => {
+                            await gateC.promise;
+                            events.push("c done");
+                        })(),
+                    );
+                })(),
+            );
+
+            const drained = registry.drain().then(() => events.push("drained"));
+
+            gateA.release();
+            await turn();
+            gateC.release();
+            await drained;
+
+            expect(events).toStrictEqual(["c done", "drained"]);
+        } finally {
+            registry.close();
+        }
+    });
+
+    it("gives up at the deadline, naming what was still running", async () => {
+        expect.assertions(2);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const { fire, timer } = manualTimer();
+        const never = deferred();
+        const registry = createNodeShardRegistry();
+
+        try {
+            registry.shardFor("stuck").shard.waitUntil?.(never.promise);
+
+            const drained = registry.drain({ timer });
+
+            fire();
+
+            await expect(drained).resolves.toStrictEqual({ pending: ["waitUntil work on shard stuck"], timedOut: true });
+            expect(logged).toHaveBeenCalledWith(expect.stringContaining("waitUntil work on shard stuck"));
+        } finally {
+            never.release();
+            registry.close();
         }
     });
 });

@@ -276,16 +276,31 @@ that a shard's `d1` thunk expects.
 Builds the SQL executor over a `better-sqlite3` connection. Its `transaction`
 holds `BEGIN IMMEDIATE` open across the awaits of an async closure.
 
+### `DrainOptions`, `DrainResult`, `DrainTimer`, `DEFAULT_DRAIN_TIMEOUT_MS`
+
+**Type:** interfaces and a constant
+
+What every `drain()` in this package takes and returns. `timeoutMs` bounds the
+drain (`DEFAULT_DRAIN_TIMEOUT_MS`, 30 s, when omitted), and `timer` replaces the
+clock it runs on, so a test can fire the deadline by hand. A `DrainResult`
+reports `timedOut` and the `pending` work, one readable label each, still
+running when the deadline passed.
+
 ### `createNodeHttpServer`
 
 **Type:** `(options: NodeHttpServerOptions) => Promise<NodeHttpServer>`
 
 Serves an app worker's `fetch` over `node:http` and resolves once the server is
 listening. `fetch` is required. `host` defaults to the loopback interface. A
-handler that throws is answered with 500 and logged with its error. `drain()`
-waits until every response in progress is written or its client is gone; event
-streams and WebSockets are not waited for, and `close()` ends them. A graceful
-shutdown refuses new requests in its `fetch`, awaits `drain()`, then `close()`.
+handler that throws is answered with 500 and logged with its error, its method
+and its path (never the query string, which can carry a token). `drain()` stops
+the listener, then waits until every response that was in progress when it
+began is written or its client is gone; a request still arriving on an open
+connection is answered with `Connection: close` and not waited for. Event
+streams and WebSockets are not waited for, and `close()` ends them. It is
+bounded by a deadline (see `DrainOptions`) and resolves with what was still
+unfinished, which it also logs. A graceful shutdown refuses new requests in its
+`fetch`, awaits `drain()`, then `close()`.
 
 ### `createNodeHyperdrive`
 
@@ -388,7 +403,10 @@ SQLite file per shard. Omit it for in-memory shards, which do not survive a
 restart. `onAlarm` and `onFetch` are the registry's delivery hooks. `drain()`
 waits until every shard is idle: no `onFetch` or `onAlarm` call in flight (cron
 and scheduled-job deliveries included), no `waitUntil` work pending and no socket
-close handler running. Await it before `close()`, which does not wait.
+close handler running. Each pass re-reads every live shard, so work handed to a
+shard after its own drain finished, or a shard opened while draining, is seen;
+it returns only when a full pass finds nothing running, or when its deadline
+passes, logging what was left. Await it before `close()`, which does not wait.
 
 ### `createNodeShardState`
 

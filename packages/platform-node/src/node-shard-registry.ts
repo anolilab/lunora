@@ -52,6 +52,8 @@ import { join } from "node:path";
 import { LunoraError } from "@lunora/errors";
 import type { DirectShardDirectory, ShardHost, ShardKvStore, ShardStub, SocketHost } from "@lunora/platform";
 
+import type { DrainOptions, DrainResult } from "./drain-deadline";
+import { settlesBefore, startDrainDeadline } from "./drain-deadline";
 import { createNodeShardKvStore } from "./node-kv-store";
 import { createNodeShardHost } from "./node-shard-host";
 import type { NodeSocketHost } from "./node-socket-host";
@@ -199,11 +201,12 @@ export interface NodeShardRegistry {
 
     /**
      * Wait until every shard is idle: no `onFetch` or `onAlarm` call in flight (a cron or scheduled job's delivery is one), no
-     * promise handed to a shard's `waitUntil` pending, and no socket close handler still running. Work that starts more work is
-     * waited for too. A graceful shutdown awaits this, then calls {@link NodeShardRegistry.close}; `close()` alone does not wait
-     * for any of it.
+     * promise handed to a shard's `waitUntil` pending, and no socket close handler still running, across every live shard,
+     * including one opened while draining. Work that starts more work is waited for too. Bounded by `timeoutMs` (30 s by
+     * default); resolves with what was still running when it passed, which it also logs. A graceful shutdown awaits this, then
+     * calls {@link NodeShardRegistry.close}; `close()` alone does not wait for any of it.
      */
-    drain: () => Promise<void>;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
 
     /**
      * Every shard key this registry knows about — the set `@lunora/runtime`'s
@@ -223,12 +226,15 @@ export interface NodeShardRegistry {
 
 /** Build the in-process shard registry. */
 export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}): NodeShardRegistry => {
-    const live = new Map<string, { dispose: () => void; drain: () => Promise<void> | undefined; drainHost: () => Promise<void>; shard: NodeShard }>();
+    const live = new Map<
+        string,
+        { dispose: () => void; drain: () => Promise<void> | undefined; drainHost: () => Promise<void>; pendingBackground: () => number; shard: NodeShard }
+    >();
 
-    /** `onFetch` and `onAlarm` calls still running, so {@link NodeShardRegistry.drain} can wait for them. */
-    const inFlight = new Set<Promise<unknown>>();
+    /** `onFetch` and `onAlarm` calls still running, with a label for the drain's log, so {@link NodeShardRegistry.drain} can wait for them. */
+    const inFlight = new Map<Promise<unknown>, string>();
 
-    const track = async <T>(work: () => Promise<T> | T): Promise<T> => {
+    const track = async <T>(label: string, work: () => Promise<T> | T): Promise<T> => {
         const running = Promise.resolve().then(work);
         // Tracking only: the caller still receives `running` and its rejection.
         const settled = running.then(
@@ -236,7 +242,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             () => undefined,
         );
 
-        inFlight.add(settled);
+        inFlight.set(settled, label);
 
         settled.finally(() => inFlight.delete(settled)).catch(() => undefined);
 
@@ -283,8 +289,9 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             dispose: disposeHost,
             drain: drainHost,
             host,
+            pendingBackground,
         } = createNodeShardHost({
-            onAlarm: async () => track(() => options.onAlarm?.(shard)),
+            onAlarm: async () => track(`alarm on shard ${key}`, () => options.onAlarm?.(shard)),
             path,
             shardKey: key,
         });
@@ -299,7 +306,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             sockets: socketHost.socket,
         };
 
-        live.set(key, { dispose: disposeHost, drain: socketHost.drain, drainHost, shard });
+        live.set(key, { dispose: disposeHost, drain: socketHost.drain, drainHost, pendingBackground, shard });
         known.add(key);
 
         return shard;
@@ -316,7 +323,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
                     return new Response(key);
                 }
 
-                return track(() => onFetch(request, shard));
+                return track(`request on shard ${key}`, () => onFetch(request, shard));
             },
         };
     };
@@ -336,23 +343,49 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
 
             live.clear();
         },
-        drain: async () => {
-            let busy = true;
+        drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
+            const deadline = startDrainDeadline(drainOptions);
 
-            // A pass can start more work (a request's `waitUntil`, a fetch that background work makes), so passes repeat until one
-            // begins with nothing in flight and ends that way.
-            while (busy) {
-                const entries = [...live.values()];
-                const closing = entries.flatMap((entry) => {
-                    const pending = entry.drain();
+            // What is still running, across every shard live now: re-read on each pass, so a shard opened during the last
+            // pass, or one that gained background work after its own drain resolved, is seen.
+            const pendingWork = (): { labels: string[]; waits: Promise<unknown>[] } => {
+                const labels = [...inFlight.values()];
+                const waits: Promise<unknown>[] = [...inFlight.keys()];
 
-                    return pending === undefined ? [] : [pending];
-                });
+                for (const [key, entry] of live) {
+                    const closing = entry.drain();
 
-                busy = inFlight.size > 0 || closing.length > 0;
-                // eslint-disable-next-line no-await-in-loop -- each pass waits for the work that existed when it began
-                await Promise.all([...inFlight, ...closing, ...entries.map(async (entry) => entry.drainHost())]);
-                busy ||= inFlight.size > 0;
+                    if (closing !== undefined) {
+                        labels.push(`socket close handler on shard ${key}`);
+                        waits.push(closing);
+                    }
+
+                    if (entry.pendingBackground() > 0) {
+                        labels.push(`waitUntil work on shard ${key}`);
+                        waits.push(entry.drainHost());
+                    }
+                }
+
+                return { labels, waits };
+            };
+
+            try {
+                // Done only when a full pass over every shard finds nothing running, not when the work one pass saw settles.
+                for (let work = pendingWork(); work.waits.length > 0; work = pendingWork()) {
+                    // eslint-disable-next-line no-await-in-loop -- each pass waits for what it found before looking again
+                    if (!(await settlesBefore(Promise.all(work.waits), deadline))) {
+                        const pending = pendingWork().labels;
+
+                        // eslint-disable-next-line no-console -- the drain gives up on these, so the log is the only record of what was cut off
+                        console.error(`[@lunora/platform-node] shard drain deadline passed with work still running: ${pending.join(", ")}`);
+
+                        return { pending, timedOut: true };
+                    }
+                }
+
+                return { pending: [], timedOut: false };
+            } finally {
+                deadline.cancel();
             }
         },
         directory: {

@@ -11,6 +11,36 @@ SemVer promise until the package graduates.
 
 ## `@lunora/platform-node`
 
+### `DEFAULT_DRAIN_TIMEOUT_MS` (const)
+
+```ts
+const DEFAULT_DRAIN_TIMEOUT_MS = 3e4;
+```
+
+### `DrainOptions` (interface)
+
+```ts
+interface DrainOptions {
+    timeoutMs?: number;
+    timer?: DrainTimer;
+}
+```
+
+### `DrainResult` (interface)
+
+```ts
+interface DrainResult {
+    pending: string[];
+    timedOut: boolean;
+}
+```
+
+### `DrainTimer` (type)
+
+```ts
+type DrainTimer = (ms: number, onExpire: () => void) => () => void;
+```
+
 ### `NODE_SCHEDULER_DISPATCH_PATH` (const)
 
 ```ts
@@ -101,7 +131,7 @@ interface NodeGlobalStoreOptions {
 ```ts
 interface NodeHttpServer {
     close: () => Promise<void>;
-    drain: () => Promise<void>;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
     origin: string;
 }
 ```
@@ -143,7 +173,7 @@ interface NodePlatform<Queues extends Record<string, {
     close: () => void;
     directory: ShardDirectory;
     dispatch: (request: Request) => Promise<Response>;
-    drain: () => Promise<void>;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
     globalTables?: NodeGlobalStore;
     kv: ShardKvStore;
     objectStorage?: R2BucketLike;
@@ -299,7 +329,7 @@ interface NodeShardHostOptions {
 interface NodeShardRegistry {
     close: () => void;
     directory: DirectShardDirectory;
-    drain: () => Promise<void>;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
     listShardKeys: (table?: string) => ReadonlyArray<string>;
     shardFor: (key: string) => NodeShard;
 }
@@ -480,6 +510,7 @@ const createNodeShardHost: (options?: NodeShardHostOptions) => {
     dispose: () => void;
     drain: () => Promise<void>;
     host: ShardHost;
+    pendingBackground: () => number;
 };
 ```
 

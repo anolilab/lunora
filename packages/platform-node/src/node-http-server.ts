@@ -18,6 +18,8 @@ import type { Duplex } from "node:stream";
 
 import { WebSocketServer } from "ws";
 
+import type { DrainOptions, DrainResult } from "./drain-deadline";
+import { settlesBefore, startDrainDeadline } from "./drain-deadline";
 import { takeUpgradeClient } from "./node-socket-pair";
 
 /** A host as it appears in a URL: an IPv6 literal such as `::1` needs brackets, `[::1]`, or the origin is not a valid URL. */
@@ -179,6 +181,9 @@ const toRequest = (incoming: IncomingMessage, origin: string, signal: AbortSigna
 
 // A helper rather than an inline `outgoing.destroyed` check: TypeScript would narrow that property after an early return and then flag the loop's later re-check as always truthy.
 const isDisconnected = (outgoing: ServerResponse): boolean => outgoing.destroyed;
+
+/** The method and path of a request for a log line. Never the query string: it can carry a token or a signed URL's signature. */
+const describeRequest = (incoming: IncomingMessage): string => `${incoming.method ?? "GET"} ${(incoming.url ?? "/").split("?", 1)[0] ?? "/"}`;
 
 /** An event stream is endless by design, so a draining server closes it rather than waiting for it to end. */
 const isEventStream = (response: Response): boolean => (response.headers.get("content-type") ?? "").toLowerCase().startsWith("text/event-stream");
@@ -354,11 +359,33 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
     // Raw sockets whose upgrade is still awaiting the worker. They are not in `webSockets.clients` yet, so `close` reaches them here.
     const pendingUpgrades = new Set<Duplex>();
     const server = createServer();
-    /** Every response still being produced or written; see {@link NodeHttpServer.drain}. */
-    const responses = new Set<Promise<void>>();
+    /** Every response still being produced or written, with its log label; see {@link NodeHttpServer.drain}. */
+    const responses = new Map<Promise<void>, string>();
+    /** Set by {@link NodeHttpServer.drain}: a request that arrives on a kept-alive connection afterwards is served, not waited for. */
+    let draining = false;
+    let stopped: Promise<void> | undefined;
+
+    // `server.close()` stops the listener at once but calls back only when every connection has ended, and a second call
+    // fails, so `drain` and `close` share the one call.
+    const stopListening = async (): Promise<void> => {
+        stopped ??= new Promise<void>((resolve, reject) => {
+            server.close((error) => {
+                if (error === undefined) {
+                    resolve();
+                } else {
+                    reject(error);
+                }
+            });
+        });
+
+        return stopped;
+    };
     // The origin every request URL is built on, for plain requests and upgrades alike. The client's Host header is never read:
     // the configured public origin, or else the bound address.
-    const requestOrigin = (): string => configured ?? `http://${urlHost(host)}:${String((server.address() as AddressInfo).port)}`;
+    // The port is read once listening and kept: `server.address()` is null once `drain()` has stopped the listener, and a
+    // request still arriving on an open connection then must not crash building its URL.
+    let boundPort = 0;
+    const requestOrigin = (): string => configured ?? `http://${urlHost(host)}:${String(boundPort)}`;
 
     server.on("request", (incoming, outgoing) => {
         const origin = requestOrigin();
@@ -369,9 +396,17 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             settle = resolve;
         });
 
-        responses.add(settled);
+        if (draining) {
+            // Answered, then the connection closes, so no kept-alive connection keeps bringing traffic to a draining server.
+            outgoing.setHeader("connection", "close");
+        } else {
+            responses.set(settled, describeRequest(incoming));
+            settled.then(() => responses.delete(settled)).catch(() => undefined);
+        }
 
-        settled.then(() => responses.delete(settled)).catch(() => undefined);
+        // `finish` is the response flushed to the socket; `close` alone can wait for the connection to end when a pipelined
+        // request follows on it, and fires by itself when the client goes away first.
+        outgoing.once("finish", settle);
         outgoing.once("close", settle);
 
         // A client that disconnects before the response is complete will never read it, so the handler's signal fires
@@ -400,10 +435,7 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
                 (response) => writeResponse(response, outgoing, settle),
                 (error: unknown) => {
                     // eslint-disable-next-line no-console -- the client only sees a 500, so the log is where the error, its stack and its cause surface
-                    console.error(
-                        `[@lunora/platform-node] the fetch handler threw for ${incoming.method ?? "GET"} ${incoming.url ?? "/"}; answered 500`,
-                        error,
-                    );
+                    console.error(`[@lunora/platform-node] the fetch handler threw for ${describeRequest(incoming)}; answered 500`, error);
 
                     if (!outgoing.headersSent) {
                         outgoing.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
@@ -479,6 +511,8 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
 
     const { port } = server.address() as AddressInfo;
 
+    boundPort = port;
+
     return {
         close: async () => {
             // Each socket's close event is what starts the shard's close handler, so `close` settles only after
@@ -496,24 +530,36 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             }
 
             webSockets.close();
-            server.closeAllConnections();
 
-            await new Promise<void>((resolve, reject) => {
-                server.close((error) => {
-                    if (error === undefined) {
-                        resolve();
-                    } else {
-                        reject(error);
-                    }
-                });
-            });
+            const listenerStopped = stopListening();
+
+            server.closeAllConnections();
+            await listenerStopped;
             await Promise.all(socketsClosed);
         },
-        drain: async () => {
-            while (responses.size > 0) {
-                // eslint-disable-next-line no-await-in-loop -- a response that settles can be followed by one that arrived meanwhile
-                await Promise.all(responses);
+        drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
+            draining = true;
+            // Stop accepting connections now; its callback waits for every connection, which `close()` ends later.
+            stopListening().catch(() => undefined);
+            server.closeIdleConnections();
+
+            // Only what was in flight when the drain began: traffic that keeps arriving on open connections cannot extend it.
+            const inFlight = new Map(responses);
+            const deadline = startDrainDeadline(drainOptions);
+            const settled = await settlesBefore(Promise.all(inFlight.keys()), deadline);
+
+            deadline.cancel();
+
+            if (settled) {
+                return { pending: [], timedOut: false };
             }
+
+            const pending = [...inFlight].filter(([response]) => responses.has(response)).map(([, label]) => label);
+
+            // eslint-disable-next-line no-console -- the drain gives up on these, so the log is the only record of what was cut off
+            console.error(`[@lunora/platform-node] HTTP drain deadline passed with ${String(pending.length)} response(s) unfinished: ${pending.join(", ")}`);
+
+            return { pending, timedOut: true };
         },
         origin: `http://${urlHost(host)}:${String(port)}`,
     };
@@ -544,11 +590,13 @@ export interface NodeHttpServer {
     close: () => Promise<void>;
 
     /**
-     * Wait until every HTTP response in progress has been written to the end, or its client has gone. Event streams
-     * (`text/event-stream`) and WebSockets are endless by design and are not waited for; {@link NodeHttpServer.close} ends them.
-     * New requests keep being served meanwhile, so a graceful shutdown refuses them in its `fetch` first, then drains, then closes.
+     * Stop accepting connections, then wait until every HTTP response that was in progress when the drain began has been written
+     * to the end or its client has gone, or until the deadline passes (`timeoutMs`, 30 s by default). A request that still
+     * arrives on an open connection is answered with keep-alive off and is not waited for. Event streams (`text/event-stream`)
+     * and WebSockets are endless by design and are not waited for; {@link NodeHttpServer.close} ends them. Resolves with what was
+     * still unfinished when the deadline passed, which it also logs.
      */
-    drain: () => Promise<void>;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
     /** The `http://host:port` origin the server answers on. */
     origin: string;
 }
