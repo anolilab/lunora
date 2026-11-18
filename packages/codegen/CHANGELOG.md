@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.424](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.423...@lunora/codegen@1.0.0-alpha.424) (2026-11-18)
+
+- fix(codegen)!: finish the identity-scope follow-ups (#1605) (#1614)
+
 ## @lunora/codegen [1.0.0-alpha.423](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.422...@lunora/codegen@1.0.0-alpha.423) (2026-11-18)
 
 - feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)
