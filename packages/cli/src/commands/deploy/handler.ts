@@ -1787,15 +1787,18 @@ const runNodeContainerDeploy = async (options: DeployCommandOptions, target: str
 
     logger.success(`wrote the Node container build context to ${context} (${artifact.files.join(", ")})`);
 
-    // createWorker's own schedules (backupCron, crons keys) reach only the worker's scheduled() handler, which nothing calls in
-    // the container. Each is named, with its handler, whether or not a declared cron shares the expression: sharing it delivers
-    // the cron job, not the backup or the crons handler.
+    // Two kinds of schedule reach only the worker's scheduled() handler, which nothing calls in the container: createWorker's
+    // own (backupCron, crons keys), named with their handler whether or not a declared cron shares the expression, since sharing
+    // it delivers the cron job and not that handler; and a wrangler trigger the generated LUNORA_CRONS map does not deliver, as
+    // for a hand-written scheduled().
     const entrySchedules = codegen.result?.workerEntryCrons ?? [];
+    const named = new Set(entrySchedules.map((entry) => entry.cron));
+    const delivered = new Set(artifact.deliveredCrons);
+    const undeliveredTriggers = [...new Set(artifact.cronTriggers)].filter((cron) => !delivered.has(cron) && !named.has(cron));
+    const neverRun = [...entrySchedules.map((entry) => `${entry.handler} "${entry.cron}"`), ...undeliveredTriggers.map((cron) => `triggers.crons "${cron}"`)];
 
-    if (entrySchedules.length > 0) {
-        logger.warn(
-            `the Node server never calls the worker's scheduled() handler, so these createWorker schedules never run: ${entrySchedules.map((entry) => `${entry.handler} "${entry.cron}"`).join(", ")}`,
-        );
+    if (neverRun.length > 0) {
+        logger.warn(`the Node server never calls the worker's scheduled() handler, so these schedules never run: ${neverRun.join(", ")}`);
     }
 
     if (artifact.unbound.length > 0) {

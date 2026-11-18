@@ -12,7 +12,7 @@
  * dev --target node` resolves the latter: both are heavy (a per-platform binary
  * and a native addon), and every other `lunora` install would pay for them.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
@@ -134,6 +134,8 @@ interface NodeWranglerConfig {
 interface NodeDeployProject {
     /** Wrangler's `alias`, with relative targets resolved from the project root as wrangler resolves them from its config. */
     alias: Record<string, string>;
+    /** Wrangler's `triggers.crons`: on Cloudflare each reaches the worker's `scheduled()`, which this server never calls. */
+    cronTriggers: string[];
     /** Wrangler's `define`: identifiers replaced with JavaScript expressions at bundle time, as wrangler's own build does. */
     define: Record<string, string>;
     /** The `durable_objects.bindings[]` the server constructs. The shard binding (class `ShardDO` or `LunoraDO`) also carries crons. */
@@ -160,6 +162,10 @@ interface NodeDeployEnvVariable {
 }
 
 interface NodeContainerArtifact {
+    /** Wrangler's `triggers.crons`, for the caller to compare with {@link NodeContainerArtifact.deliveredCrons}. */
+    cronTriggers: string[];
+    /** The schedules the server delivers: the keys of the generated `LUNORA_CRONS` map. */
+    deliveredCrons: string[];
     /** The build context, absolute. */
     directory: string;
     env: NodeDeployEnvVariable[];
@@ -370,6 +376,29 @@ const refuseWorkerEnvOverride = (sources: ReadonlyArray<{ names: ReadonlyArray<s
     }
 };
 
+/** `triggers.crons`: each a cron expression string. */
+const cronTriggerList = (value: unknown, configName: string): string[] => {
+    const crons = isRecord(value) ? value.crons : undefined;
+
+    if (crons === undefined || crons === null) {
+        return [];
+    }
+
+    if (!Array.isArray(crons) || !crons.every((cron) => typeof cron === "string")) {
+        throw new TypeError(`--target node reads triggers.crons in ${configName} as a list of cron expressions, and it is ${JSON.stringify(crons)}`);
+    }
+
+    return crons;
+};
+
+/** The schedules the generated `LUNORA_CRONS` map delivers. A self-contained module, so loading it runs nothing of the app's. */
+const deliveredCronSchedules = async (cronsModule: string): Promise<string[]> => {
+    const { createJiti } = await import("jiti");
+    const crons = await createJiti(cronsModule).import<{ LUNORA_CRONS?: Record<string, unknown> }>(cronsModule);
+
+    return Object.keys(crons.LUNORA_CRONS ?? {});
+};
+
 /** `vars`: an object of environment variable names, since an override comes from the variable of the same name. */
 const declaredVariables = (value: unknown, configName: string): Record<string, unknown> => {
     if (value === undefined || value === null) {
@@ -526,6 +555,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
                 target.startsWith(".") ? resolve(projectRoot, target) : target,
             ]),
         ),
+        cronTriggers: cronTriggerList(declared.triggers, configName),
         define: stringMap(declared.define, "define", configName),
         durableObjects,
         entry: resolve(projectRoot, parsed.main),
@@ -1119,6 +1149,18 @@ const realPath = (path: string): string => {
     }
 };
 
+/** The name esbuild gives the generated server entry it reads from stdin. */
+const SERVER_SOURCEFILE = "lunora-node-server.mjs";
+
+/** Whether `path` is a file on disk, not a virtual module or a directory. */
+const isFile = (path: string): boolean => {
+    try {
+        return statSync(path).isFile();
+    } catch {
+        return false;
+    }
+};
+
 const isInside = (path: string, directory: string): boolean => path === directory || path.startsWith(`${directory}${sep}`);
 
 const MISSING_EXPORT = /^No matching export in "([^"]+)" for import "([^"]+)"$/u;
@@ -1198,7 +1240,8 @@ const ALIASED = Symbol("lunora-aliased");
 
 /** The alias entry `specifier` matches: the key itself, or a subpath of it (`key/...`), as esbuild's own alias matches. */
 const aliasTarget = (alias: Record<string, string>, specifier: string): string | undefined => {
-    for (const [name, target] of Object.entries(alias)) {
+    // The longest key first, as esbuild matches: with `pkg` and `pkg/special` both declared, `pkg/special` takes its own target.
+    for (const [name, target] of Object.entries(alias).toSorted(([a], [b]) => b.length - a.length)) {
         if (specifier === name) {
             return target;
         }
@@ -1223,8 +1266,15 @@ const appScopedPlugin = (
     platformNodeDirectory: string,
     project: NodeDeployProject,
 ): { name: string; setup: (build: EsbuildPluginBuild) => void } => {
+    // The generated server is esbuild's stdin, which it places at projectRoot/SERVER_SOURCEFILE though no such file exists: it
+    // and any other path not on disk are the deploy's own, never app code.
+    const serverEntry = join(projectRoot, SERVER_SOURCEFILE);
     const isAppFile = (path: string): boolean =>
-        isInside(path, projectRoot) && !path.split(sep).includes("node_modules") && !isInside(realPath(path), platformNodeDirectory);
+        path !== serverEntry &&
+        isInside(path, projectRoot) &&
+        !path.split(sep).includes("node_modules") &&
+        isFile(path) &&
+        !isInside(realPath(path), platformNodeDirectory);
 
     return {
         name: "lunora-app-define-alias",
@@ -1291,7 +1341,7 @@ const bundleServer = async (
         outfile: join(directory, "server.mjs"),
         platform: "node",
         plugins: scoped ? [appScopedPlugin(esbuild, paths.projectRoot, paths.platformNodeDirectory, project)] : [],
-        stdin: { contents, loader: "js", resolveDir: paths.projectRoot, sourcefile: "lunora-node-server.mjs" },
+        stdin: { contents, loader: "js", resolveDir: paths.projectRoot, sourcefile: SERVER_SOURCEFILE },
         target: "node22",
     });
 };
@@ -1376,6 +1426,8 @@ const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promis
     return {
         directory,
         env,
+        cronTriggers: project.cronTriggers,
+        deliveredCrons: await deliveredCronSchedules(cronsModule),
         files: [".dockerignore", "Dockerfile", "package-lock.json", "package.json", "README.md", "server.mjs"],
         unbound: project.unbound,
     };

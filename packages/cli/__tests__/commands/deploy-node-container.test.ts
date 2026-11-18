@@ -1230,9 +1230,52 @@ describe("lunora deploy --target node", () => {
             await expect(runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" })).resolves.toMatchObject({
                 code: 0,
             });
-            expect(warnings.join("\n")).toContain(
-                'never calls the worker\'s scheduled() handler, so these createWorker schedules never run: crons "0 3 * * *"',
+            expect(warnings.join("\n")).toContain('never calls the worker\'s scheduled() handler, so these schedules never run: crons "0 3 * * *"');
+        });
+
+        it("names a wrangler triggers.crons the server does not deliver, as for a hand-written scheduled()", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { triggers: { crons: ["*/5 * * * *"] } } });
+
+            const { logger, warnings } = recordingLogger();
+
+            await expect(runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" })).resolves.toMatchObject({
+                code: 0,
+            });
+            expect(warnings.join("\n")).toContain('these schedules never run: triggers.crons "*/5 * * * *"');
+        });
+
+        it("does not name a wrangler trigger the generated cron map delivers", async () => {
+            expect.assertions(2);
+
+            // A declared cron makes the generated app import @lunora/scheduler, which this package does not depend on.
+            writeFixture(workdir, {
+                extraModules: { "@lunora/scheduler": join(PACKAGE_NODE_MODULES, "..", "..", "scheduler") },
+                wrangler: { triggers: { crons: ["0 4 * * *"] } },
+            });
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/scheduler": "*" }, name: "node-container-app", private: true, type: "module" }),
+                "utf8",
             );
+            writeFileSync(
+                join(workdir, "lunora", "jobs.ts"),
+                `import { internalMutation } from "./_generated/server.js";\n\nexport const tick = internalMutation.mutation(async () => null);\n`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/server";\n\nimport { internal } from "./_generated/internal.js";\n\nconst crons = cronJobs();\n\ncrons.daily("tick", { hourUTC: 4, minuteUTC: 0 }, internal.jobs.tick, {});\n\nexport default crons;\n`,
+                "utf8",
+            );
+
+            const { logger, warnings } = recordingLogger();
+
+            await expect(runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" })).resolves.toMatchObject({
+                code: 0,
+            });
+            expect(warnings.join("\n")).not.toContain("never run");
         });
 
         it("names a createWorker backupCron even when a declared cron job shares its expression", async () => {
@@ -1270,7 +1313,7 @@ describe("lunora deploy --target node", () => {
             await expect(runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" })).resolves.toMatchObject({
                 code: 0,
             });
-            expect(warnings.join("\n")).toContain('these createWorker schedules never run: backupCron "0 4 * * *"');
+            expect(warnings.join("\n")).toContain('these schedules never run: backupCron "0 4 * * *"');
         });
 
         it("gives an app file whose name contains platform-node the ordinary missing-export message, not the upgrade advice", async () => {
@@ -1463,6 +1506,39 @@ describe("lunora deploy --target node", () => {
                 code: 2,
                 error: expect.stringContaining(`sets WORKER_ENV to production itself, and wrangler.jsonc also declares it in ${source}`),
             });
+        });
+
+        it("aliases a subpath to its own, longer alias key before the shorter one", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { alias: { "fixture-pkg": "./src/pkg.ts", "fixture-pkg/special": "./src/special.ts" } } });
+            writeFileSync(join(workdir, "src", "pkg.ts"), `export const marker = "from-the-package";\n`, "utf8");
+            writeFileSync(join(workdir, "src", "special.ts"), `export const marker = "from-the-special-subpath";\n`, "utf8");
+
+            const worker = join(workdir, "src", "worker.ts");
+
+            writeFileSync(
+                worker,
+                `import { marker } from "fixture-pkg/special";\n\n${readFileSync(worker, "utf8").replace(
+                    'case "/__fixture/env":',
+                    'case "/__fixture/marker":\n                return new Response(marker);\n            case "/__fixture/env":',
+                )}`,
+                "utf8",
+            );
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+            expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).toContain("from-the-special-subpath");
+        });
+
+        it("keeps a wrangler alias off the generated server's own imports", async () => {
+            expect.assertions(2);
+
+            // Aliases a package the generated server imports; on Cloudflare that import does not exist, so it must not move.
+            writeFixture(workdir, { wrangler: { alias: { "@lunora/platform-node": "./src/not-the-platform.ts" } } });
+            writeFileSync(join(workdir, "src", "not-the-platform.ts"), `export const notThePlatform = "aliased-platform-marker";\n`, "utf8");
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+            expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).not.toContain("aliased-platform-marker");
         });
 
         it("allows secrets.required to list a name twice, which puts one key on env", async () => {
