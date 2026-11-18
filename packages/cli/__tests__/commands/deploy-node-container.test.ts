@@ -282,10 +282,23 @@ interface ServerRun {
     waitForStdout: (text: string) => Promise<void>;
 }
 
+/**
+ * A port nothing listens on right now. The server refuses PORT=0, so each run gets a real one; found synchronously, by a child
+ * that binds port 0 and prints what it was given, so startServer stays synchronous.
+ */
+const freePort = (): string =>
+    spawnSync(
+        process.execPath,
+        ["-e", "const s = require('node:net').createServer().listen(0, () => { process.stdout.write(String(s.address().port)); s.close(); });"],
+        {
+            encoding: "utf8",
+        },
+    ).stdout;
+
 const startServer = (artifact: string, dataDirectory: string, env: Record<string, string> = RUN_ENV, nodeArguments: string[] = []): ServerRun => {
     const child = spawn(process.execPath, [...nodeArguments, "server.mjs"], {
         cwd: artifact,
-        env: { LUNORA_DATA_DIR: dataDirectory, PATH: process.env.PATH, PORT: "0", ...env },
+        env: { LUNORA_DATA_DIR: dataDirectory, PATH: process.env.PATH, PORT: freePort(), ...env },
         stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -574,7 +587,7 @@ describe("lunora deploy --target node", () => {
             },
         );
 
-        it.each(["not-a-port-7Qx", "80.5", "65536"])("refuses to start when PORT is %j, instead of listening somewhere else", async (value) => {
+        it.each(["not-a-port-7Qx", "0", "80.5", "65536"])("refuses to start when PORT is %j, instead of listening somewhere else", async (value) => {
             expect.assertions(3);
 
             const run = startServer(artifact, dataDirectory(), { ...RUN_ENV, PORT: value });
@@ -584,7 +597,7 @@ describe("lunora deploy --target node", () => {
             await run.exited;
 
             expect(outcome).toBe("exit 1");
-            expect(run.stderr()).toContain("PORT is not a whole number from 0 to 65535 (such as 8787)");
+            expect(run.stderr()).toContain("PORT is not a whole number from 1 to 65535 (such as 8787)");
             // Never the value itself, which may be a secret.
             expect(run.stderr()).not.toContain(value);
         });

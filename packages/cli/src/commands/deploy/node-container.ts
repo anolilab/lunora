@@ -574,7 +574,7 @@ const nodeDeployEnv = (project: NodeDeployProject): NodeDeployEnvVariable[] => [
         name: "LUNORA_ORIGIN_URL",
         required: true,
     },
-    { description: `Port to listen on (default \`${String(DEFAULT_PORT)}\`).`, name: "PORT", required: false },
+    { description: `Port to listen on, a whole number from 1 to 65535 (default \`${String(DEFAULT_PORT)}\`).`, name: "PORT", required: false },
     { description: "Interface to bind (default `127.0.0.1`; the image sets `0.0.0.0`).", name: "HOST", required: false },
     {
         description: `How long a shutdown waits for in-flight work before closing the databases anyway (default \`${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)}\`). Keep it below the container's stop timeout.`,
@@ -704,9 +704,10 @@ const shutdownTimeoutMs = rawShutdownTimeout === undefined ? ${String(DEFAULT_SH
 // Empty is unset, as a blank \`-e PORT=\` leaves it; Number() would read it as 0, a random port nothing routes to.
 const rawPort = process.env.PORT === "" ? undefined : process.env.PORT;
 
-if (rawPort !== undefined && !(/^\\d+$/u.test(rawPort) && Number(rawPort) <= 65_535)) {
+// 0 is refused too: Node would listen on a random port, which no published container port maps to.
+if (rawPort !== undefined && !(/^\\d+$/u.test(rawPort) && Number(rawPort) >= 1 && Number(rawPort) <= 65_535)) {
     // The value is not printed: a platform can pass a secret-bearing variable through, and a log line would expose it.
-    console.error("lunora: refusing to start, PORT is not a whole number from 0 to 65535 (such as ${String(DEFAULT_PORT)})");
+    console.error("lunora: refusing to start, PORT is not a whole number from 1 to 65535 (such as ${String(DEFAULT_PORT)})");
     process.exit(1);
 }
 
