@@ -1,4 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- the `__lunora_relation__:` reserved-prefix template strings are framework constants, not credentials */
 import { LunoraError } from "@lunora/errors";
 import type { CrossShardReadArgs, DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
 import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
@@ -21,7 +20,7 @@ import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
  * relation tables.
  * @param schema The generated schema (for the table + `shardMode` lookup).
  * @param database The request's schema-aware ctx-db writer (built by the subclass).
- * @param functionPath The reserved path — `${RELATION_FUNCTION_PREFIX}read` or `:count`.
+ * @param functionPath The reserved path: `RELATION_FUNCTION_PREFIX` followed by `read` or `count`.
  * @param args The fan-out args. Typed as {@link CrossShardReadArgs} — the SAME
  * contract `@lunora/sql-store` produces and `@lunora/runtime` forwards — plus the
  * `table` the envelope names. It arrives as parsed JSON, so `table` still gets a

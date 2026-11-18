@@ -1,5 +1,3 @@
-/* eslint-disable n/no-unsupported-features/node-builtins -- workerd provides the Web Crypto global (`crypto.subtle`); agent code runs in Workers, never under Node */
-
 /**
  * `@lunora/agent/channels` — start a durable agent run from a verified inbound
  * webhook (Slack / GitHub / Discord), the HTTP cousin of `@lunora/agent/inbound`

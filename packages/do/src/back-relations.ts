@@ -22,7 +22,6 @@
  * one and the JSON path is bound, never interpolated.
  */
 
-/* eslint-disable no-restricted-syntax -- every `dsql`…`` here is a drizzle tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 import type { SqlExec } from "@lunora/shard-engine";
 import { DOC_COLUMN, renderSql, sqliteInList } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
@@ -69,6 +68,7 @@ const MAX_BACK_RELATIONS = 8;
 /** Resolve a column to its SQL expression: a physical column, or a bound `__doc__` JSON path. */
 const columnExpression = (column: string, physical: string[]): SQL | undefined => {
     if (physical.includes(column)) {
+        // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
         return dsql`${dsql.identifier(column)}`;
     }
 
