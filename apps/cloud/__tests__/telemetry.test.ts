@@ -104,7 +104,7 @@ describe(createCloudflareTelemetryStore, () => {
         expect(() => {
             store.recordCounts({ incidents: 1, issues: 2, organizationId: "org_1" });
         }).not.toThrow();
-        await expect(store.archiveEvents([{ functionPath: "a:b", kind: "error", message: "m", ts: 1 }])).resolves.toBeUndefined();
+        await expect(store.archiveEvents([{ functionPath: "a:b", kind: "error", message: "m", ts: 1 }], "org_1")).resolves.toBeUndefined();
     });
 
     it("writes one AE data point with the issue/incident counts", () => {
@@ -120,7 +120,7 @@ describe(createCloudflareTelemetryStore, () => {
         expect(points).toStrictEqual([{ blobs: ["telemetry.ingest", "org_42"], doubles: [7, 3], indexes: ["org_42"] }]);
     });
 
-    it("archives decoded events through the pipeline binding", async () => {
+    it("archives decoded events through the pipeline binding, attributed to the org", async () => {
         const batches: unknown[][] = [];
         const TELEMETRY_PIPELINE = {
             send: async (records: unknown[]) => {
@@ -128,10 +128,9 @@ describe(createCloudflareTelemetryStore, () => {
             },
         } as unknown as PipelineBindingLike;
 
-        await createCloudflareTelemetryStore({ TELEMETRY_PIPELINE }).archiveEvents([{ functionPath: "a:b", kind: "error", message: "m", ts: 1 }]);
+        await createCloudflareTelemetryStore({ TELEMETRY_PIPELINE }).archiveEvents([{ functionPath: "a:b", kind: "error", message: "m", ts: 1 }], "org_7");
 
-        expect(batches).toHaveLength(1);
-        expect(batches[0]).toHaveLength(1);
+        expect(batches).toStrictEqual([[{ functionPath: "a:b", kind: "error", message: "m", organizationId: "org_7", recordType: "event", ts: 1 }]]);
     });
 });
 

@@ -80,7 +80,7 @@ export const handleTelemetryRoute = async (request: Request, environment: Router
         const store = createCloudflareTelemetryStore(environment);
 
         store.recordCounts({ incidents: result.incidents, issues: result.issues, organizationId });
-        await store.archiveEvents(events).catch(() => undefined);
+        await store.archiveEvents(events, organizationId).catch(() => undefined);
         // Tier every span to the columnar archive (scales past D1's hot window).
         await store.archiveSpans(observations, organizationId).catch(() => undefined);
 

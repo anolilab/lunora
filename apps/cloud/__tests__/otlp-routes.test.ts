@@ -112,8 +112,8 @@ describe("oTLP ingest routes", () => {
 
         const archived: string[] = [];
         const TELEMETRY_PIPELINE = {
-            send: async (records: { recordType?: string }[]) => {
-                archived.push(...records.map((record) => record.recordType ?? "event"));
+            send: async (records: { organizationId?: string; recordType?: string }[]) => {
+                archived.push(...records.map((record) => `${record.recordType ?? "untagged"}:${record.organizationId ?? "no org"}`));
             },
         };
         const spans = [{ ...okSpan(1), status: { code: 2, message: "boom" } }];
@@ -127,7 +127,7 @@ describe("oTLP ingest routes", () => {
             { __lunoraCtx: context, TELEMETRY_PIPELINE },
         );
 
-        expect(archived).toStrictEqual(["event", "span"]);
+        expect(archived).toStrictEqual(["event:org_1", "span:org_1"]);
     });
 
     it("accepts an OTLP/protobuf body (no longer 415s it)", async () => {

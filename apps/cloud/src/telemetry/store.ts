@@ -33,8 +33,13 @@ const MAX_METRIC_WRITES = 500;
 
 /** The non-relational telemetry sink — metrics + raw archival. */
 export interface TelemetryStore {
-    /** Archive the raw decoded events (Pipeline → R2). No-op without the binding. */
-    archiveEvents: (events: ReadonlyArray<TelemetryEvent>) => Promise<void>;
+    /**
+     * Archive the raw decoded events (Pipeline → R2). No-op without the binding. They share the
+     * span archive's table, so each record is tagged `recordType: "event"` (the span readers'
+     * `recordType = 'span'` filter skips it) and carries its `organizationId`, without which a
+     * tenant's rows could not be scoped or deleted.
+     */
+    archiveEvents: (events: ReadonlyArray<TelemetryEvent>, organizationId: string) => Promise<void>;
 
     /**
      * Tier spans to the columnar archive (Pipeline → R2/Iceberg), so the Traces
@@ -75,6 +80,15 @@ export const spanArchiveRecord = (observation: SpanObservation, organizationId: 
     };
 };
 
+/** Map a decoded error event to its flat archive record (see {@link spanArchiveRecord}). */
+export const eventArchiveRecord = (event: TelemetryEvent, organizationId: string): Record<string, unknown> => {
+    return {
+        ...event,
+        organizationId,
+        recordType: "event",
+    };
+};
+
 /** The telemetry bindings + config the store reads off the worker env (all optional). */
 export interface TelemetryStoreEnv {
     /** Account id for the R2-SQL read-back endpoint. */
@@ -104,13 +118,12 @@ export interface TelemetryStoreEnv {
  */
 export const createCloudflareTelemetryStore = (env: TelemetryStoreEnv): TelemetryStore => {
     return {
-        archiveEvents: async (events) => {
+        archiveEvents: async (events, organizationId) => {
             if (!env.TELEMETRY_PIPELINE || events.length === 0) {
                 return;
             }
 
-            // TelemetryEvent is a fixed-shape record; the Pipeline stream stores it as JSON.
-            await createPipelines({ binding: env.TELEMETRY_PIPELINE }).send(events as unknown as Record<string, unknown>[]);
+            await createPipelines({ binding: env.TELEMETRY_PIPELINE }).send(events.map((event) => eventArchiveRecord(event, organizationId)));
         },
         archiveSpans: async (observations, organizationId) => {
             if (!env.TELEMETRY_PIPELINE || observations.length === 0) {

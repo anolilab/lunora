@@ -226,7 +226,7 @@ export const handleOtlpTracesRoute = (request: Request, environment: RouterEnv):
         // the spans tiered to the columnar archive (best-effort; scales past D1).
         const store = createCloudflareTelemetryStore(environment);
 
-        await store.archiveEvents(keptEvents).catch(() => undefined);
+        await store.archiveEvents(keptEvents, auth.organizationId).catch(() => undefined);
         await store.archiveSpans(observations, auth.organizationId).catch(() => undefined);
 
         // An error span past the event cap still lands as an observation, so it is
