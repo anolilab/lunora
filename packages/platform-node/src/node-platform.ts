@@ -434,8 +434,20 @@ export const createNodePlatform = <
             // job timer that fired in between would find it closed. Every teardown is
             // guarded on its own, so ordering makes the guard the backstop rather than
             // the mechanism. The copy keeps `close()` callable more than once.
+            // Each teardown runs even when an earlier one throws, so one failing resource cannot leave the rest open; the
+            // failures are thrown together once all of them have been tried.
+            const failures: unknown[] = [];
+
             for (const undo of teardown.toReversed()) {
-                undo(closeOptions);
+                try {
+                    undo(closeOptions);
+                } catch (error: unknown) {
+                    failures.push(error);
+                }
+            }
+
+            if (failures.length > 0) {
+                throw new AggregateError(failures, `@lunora/platform-node: ${String(failures.length)} resource(s) failed to close`);
             }
         };
 

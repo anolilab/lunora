@@ -428,7 +428,10 @@ It returns only when a full pass finds nothing running, or when its deadline
 passes, logging one line per shard with how many requests, alarms and
 `waitUntil` tasks it still had (never the request or its payload). Await it before `close()`, which does not wait. `close({ force: true })`, for
 after a drain has finished or reached its deadline, disposes a shard whose socket
-close handler is still running instead of waiting for it, and logs it.
+close handler is still running instead of waiting for it, and logs it. A shard
+that fails to close does not stop the others: every one is tried, each failure is
+logged, and `close()` then throws one `AggregateError` naming them.
+`NodePlatform.close()` runs all of its teardowns the same way.
 
 ### `createNodeShardState`
 

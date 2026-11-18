@@ -435,6 +435,17 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
     return {
         close: (closeOptions) => {
             const forced: string[] = [];
+            const failed: { error: unknown; key: string }[] = [];
+
+            // One shard failing to close must not leave the rest open: each is disposed on its own, and failures are reported
+            // together once every shard has been tried.
+            const dispose = (key: string, entry: { dispose: () => void }): void => {
+                try {
+                    entry.dispose();
+                } catch (error: unknown) {
+                    failed.push({ error, key });
+                }
+            };
 
             for (const [key, entry] of live) {
                 // A route's close handler may still be writing; the database is disposed only once it settles. Forced (after a
@@ -442,21 +453,37 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
                 const pending = entry.drain();
 
                 if (pending === undefined) {
-                    entry.dispose();
+                    dispose(key, entry);
                 } else if (closeOptions?.force === true) {
                     forced.push(key);
-                    entry.dispose();
+                    dispose(key, entry);
                 } else {
-                    pending.finally(entry.dispose).catch(() => undefined);
+                    pending
+                        .finally(() => {
+                            dispose(key, entry);
+                        })
+                        .catch(() => undefined);
                 }
             }
+
+            live.clear();
 
             if (forced.length > 0) {
                 // eslint-disable-next-line no-console -- these shards are closed under a running handler, so the log is the only record of it
                 console.error("[@lunora/platform-node] closed %d shard(s) with a socket close handler still running: %s", forced.length, forced.join(", "));
             }
 
-            live.clear();
+            for (const { error, key } of failed) {
+                // eslint-disable-next-line no-console -- the caller gets one aggregate error; each shard's own cause is recorded here
+                console.error("[@lunora/platform-node] shard %s failed to close", key, error);
+            }
+
+            if (failed.length > 0) {
+                throw new AggregateError(
+                    failed.map(({ error }) => error),
+                    `@lunora/platform-node: ${String(failed.length)} shard(s) failed to close: ${failed.map(({ key }) => key).join(", ")}`,
+                );
+            }
         },
         drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
             const deadline = startDrainDeadline(drainOptions);

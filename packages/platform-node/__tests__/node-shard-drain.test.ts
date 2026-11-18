@@ -793,6 +793,47 @@ describe("shard drain passes", () => {
         }
     });
 
+    it("closes every shard when one fails to close, then reports that one", () => {
+        expect.assertions(4);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const registry = createNodeShardRegistry();
+        const first = registry.shardFor("a");
+        const second = registry.shardFor("b");
+
+        // The driver refuses the first close, as a busy connection does; the second shard must still be closed.
+        vi.spyOn(Database.prototype, "close").mockImplementationOnce(() => {
+            throw new Error("database is busy");
+        });
+
+        expect(() => {
+            registry.close({ force: true });
+        }).toThrow("1 shard(s) failed to close: a");
+        expect(() => second.sockets.accept({}, undefined, [])).toThrow("platform closed");
+        expect(printed(logged)).toContainEqual(expect.stringContaining("shard a failed to close"));
+        expect(first.shardKey).toBe("a");
+    });
+
+    it("runs every platform teardown when one throws, then reports it", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const platform = createNodePlatform();
+
+        // A request opens a registry shard, so its database is the first one the platform closes; that close fails.
+        await resolveShard(platform.directory, "stuck").fetch(new Request("https://shard.internal/rpc"));
+        vi.spyOn(Database.prototype, "close").mockImplementationOnce(() => {
+            throw new Error("database is busy");
+        });
+
+        expect(() => {
+            platform.close({ force: true });
+        }).toThrow("resource(s) failed to close");
+        // The platform's own database, closed after the registry, was still closed.
+        expect(() => platform.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
     it("keeps the process alive until the deadline, so a stalled shard cannot end it silently", async () => {
         expect.assertions(2);
 
