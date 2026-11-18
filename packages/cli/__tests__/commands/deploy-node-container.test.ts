@@ -124,6 +124,15 @@ export default {
                 void Promise.reject(new Error("unhandled boom", { cause: new Error("deep cause") }));
 
                 return new Response("accepted");
+            case "/__fixture/background-fail-late":
+                // Fails only once released, which the test does while the server is draining.
+                ctx.waitUntil(
+                    held(url.searchParams.get("hold")).then(() => {
+                        throw new Error("late background boom");
+                    }),
+                );
+
+                return new Response("accepted");
             case "/__fixture/slow":
                 return new Response(await held(url.searchParams.get("hold")));
             case "/__fixture/slow-then-reject": {
@@ -266,6 +275,8 @@ interface ServerRun {
     listening: Promise<string>;
     stderr: () => string;
     stdout: () => string;
+    /** Resolves once `text` appears on stderr; rejects when the process exits first. */
+    waitForStderr: (text: string) => Promise<void>;
     /** Resolves once `text` appears on stdout; rejects when the process exits first. */
     waitForStdout: (text: string) => Promise<void>;
 }
@@ -278,10 +289,10 @@ const startServer = (artifact: string, dataDirectory: string, env: Record<string
     });
     let stdout = "";
     let stderr = "";
-    const watchers: { reject: (error: Error) => void; resolve: () => void; text: string }[] = [];
+    const watchers: { reject: (error: Error) => void; resolve: () => void; stream: "stderr" | "stdout"; text: string }[] = [];
 
     const settleWatchers = (): void => {
-        for (const watcher of watchers.filter((candidate) => stdout.includes(candidate.text))) {
+        for (const watcher of watchers.filter((candidate) => (candidate.stream === "stdout" ? stdout : stderr).includes(candidate.text))) {
             watchers.splice(watchers.indexOf(watcher), 1);
             watcher.resolve();
         }
@@ -293,6 +304,7 @@ const startServer = (artifact: string, dataDirectory: string, env: Record<string
     });
     child.stderr?.on("data", (chunk: Buffer) => {
         stderr += chunk.toString("utf8");
+        settleWatchers();
     });
 
     const exited = new Promise<number | null>((resolve) => {
@@ -305,18 +317,21 @@ const startServer = (artifact: string, dataDirectory: string, env: Record<string
         });
     });
 
-    const waitForStdout = async (text: string): Promise<void> =>
-        new Promise<void>((resolve, reject) => {
-            watchers.push({ reject, resolve, text });
-            settleWatchers();
-        });
+    const waitFor =
+        (stream: "stderr" | "stdout") =>
+        async (text: string): Promise<void> =>
+            new Promise<void>((resolve, reject) => {
+                watchers.push({ reject, resolve, stream, text });
+                settleWatchers();
+            });
+    const waitForStdout = waitFor("stdout");
 
     const listening = waitForStdout("lunora: listening on ").then(() => /lunora: listening on (\S+)/u.exec(stdout)?.[1] ?? "");
 
     // A test that expects an early exit never awaits this one.
     listening.catch(() => undefined);
 
-    return { child, exited, listening, stderr: () => stderr, stdout: () => stdout, waitForStdout };
+    return { child, exited, listening, stderr: () => stderr, stdout: () => stdout, waitForStderr: waitFor("stderr"), waitForStdout };
 };
 
 /** A local origin that holds each request until the test releases it: work "in flight" for exactly as long as the test needs. */
@@ -618,7 +633,7 @@ describe("lunora deploy --target node", () => {
         });
 
         it(
-            "logs a failed waitUntil with its stack and cause instead of dropping it",
+            "logs a failed waitUntil with its stack and cause when it fails, and a failure before shutdown keeps the exit clean",
             async () => {
                 expect.assertions(5);
 
@@ -627,15 +642,43 @@ describe("lunora deploy --target node", () => {
 
                 await expect(fetch(`${origin}/__fixture/background-fail`).then(async (response) => response.text())).resolves.toBe("accepted");
 
-                // Shutdown drains background work, so the failure is on stderr by the time the process has exited.
+                // Logged as it happens, long before any shutdown.
+                await run.waitForStderr("root cause of the boom");
                 run.child.kill("SIGTERM");
 
-                // A failed waitUntil is an unclean shutdown, so the exit code is 1.
-                await expect(run.exited).resolves.toBe(1);
-
+                // That failure belongs to its own moment; it says nothing about whether this shutdown is clean.
+                await expect(run.exited).resolves.toBe(0);
                 expect(run.stderr()).toContain("lunora: work handed to waitUntil failed");
                 expect(run.stderr()).toMatch(/Error: background boom\n\s+at /u);
                 expect(run.stderr()).toContain("root cause of the boom");
+            },
+            SERVER_TEST_TIMEOUT,
+        );
+
+        it(
+            "exits 1 when waitUntil work the shutdown is draining fails",
+            async () => {
+                expect.assertions(2);
+
+                const hold = await holdServer();
+                const run = startServer(artifact, dataDirectory());
+
+                try {
+                    const origin = await run.listening;
+
+                    await fetch(`${origin}/__fixture/background-fail-late?hold=${encodeURIComponent(hold.url)}`);
+                    await hold.arrived;
+                    run.child.kill("SIGTERM");
+                    await run.waitForStdout("lunora: shutting down");
+                    // Released only now, so the task fails while the shutdown waits for it.
+                    hold.release("go");
+
+                    await expect(run.exited).resolves.toBe(1);
+                    expect(run.stderr()).toContain("late background boom");
+                } finally {
+                    run.child.kill("SIGKILL");
+                    await hold.close();
+                }
             },
             SERVER_TEST_TIMEOUT,
         );
@@ -1109,10 +1152,21 @@ describe("lunora deploy --target node", () => {
             expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).toContain('PRIMARY_BINDING = "MAIN"');
         });
 
-        it("names the wrangler cron triggers only a scheduled() handler would serve, which never fire in the container", async () => {
+        it("names a createWorker crons handler, which only scheduled() would run and the container never calls", async () => {
             expect.assertions(2);
 
-            writeFixture(workdir, { wrangler: { triggers: { crons: ["0 3 * * *"] } } });
+            writeFixture(workdir);
+
+            const worker = join(workdir, "src", "worker.ts");
+
+            writeFileSync(
+                worker,
+                readFileSync(worker, "utf8").replace(
+                    "createWorker({ shardDO: env.SHARD })",
+                    'createWorker({ crons: { "0 3 * * *": async () => {} }, shardDO: env.SHARD })',
+                ),
+                "utf8",
+            );
 
             const { logger, warnings } = recordingLogger();
 
@@ -1120,14 +1174,31 @@ describe("lunora deploy --target node", () => {
                 code: 0,
             });
             expect(warnings.join("\n")).toContain(
-                "never calls the worker's scheduled() handler, so these wrangler triggers.crons will not fire (a createWorker backupCron or crons job on them does not run): 0 3 * * *",
+                'never calls the worker\'s scheduled() handler, so these createWorker schedules never run: crons "0 3 * * *"',
             );
         });
 
-        it("names a createWorker backupCron trigger, which codegen lists but only scheduled() would run", async () => {
+        it("names a createWorker backupCron even when a declared cron job shares its expression", async () => {
             expect.assertions(2);
 
-            writeFixture(workdir, { wrangler: { triggers: { crons: ["0 4 * * *"] } } });
+            // A declared cron makes the generated app import @lunora/scheduler, which this package does not depend on.
+            writeFixture(workdir, { extraModules: { "@lunora/scheduler": join(PACKAGE_NODE_MODULES, "..", "..", "scheduler") } });
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/scheduler": "*" }, name: "node-container-app", private: true, type: "module" }),
+                "utf8",
+            );
+            // A declared job on the same schedule, which LUNORA_CRONS delivers: the backup on that schedule still never runs.
+            writeFileSync(
+                join(workdir, "lunora", "jobs.ts"),
+                `import { internalMutation } from "./_generated/server.js";\n\nexport const tick = internalMutation.mutation(async () => null);\n`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/server";\n\nimport { internal } from "./_generated/internal.js";\n\nconst crons = cronJobs();\n\ncrons.daily("tick", { hourUTC: 4, minuteUTC: 0 }, internal.jobs.tick, {});\n\nexport default crons;\n`,
+                "utf8",
+            );
 
             const worker = join(workdir, "src", "worker.ts");
 
@@ -1142,7 +1213,7 @@ describe("lunora deploy --target node", () => {
             await expect(runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" })).resolves.toMatchObject({
                 code: 0,
             });
-            expect(warnings.join("\n")).toContain("will not fire (a createWorker backupCron or crons job on them does not run): 0 4 * * *");
+            expect(warnings.join("\n")).toContain('these createWorker schedules never run: backupCron "0 4 * * *"');
         });
 
         it("gives an app file whose name contains platform-node the ordinary missing-export message, not the upgrade advice", async () => {
@@ -1255,7 +1326,7 @@ describe("lunora deploy --target node", () => {
             expect(bundle).toContain("from-the-alias");
         });
 
-        it("allows the same name twice within one source, which puts one key on env", async () => {
+        it("allows secrets.required to list a name twice, which puts one key on env", async () => {
             expect.assertions(1);
 
             writeFixture(workdir, { wrangler: { secrets: { required: ["SESSION_SECRET", "SESSION_SECRET"] } } });
@@ -1293,6 +1364,99 @@ describe("lunora deploy --target node", () => {
                 const origin = await run.listening;
 
                 await expect(fetch(`${origin}/__fixture/process-env`).then(async (response) => response.json())).resolves.toStrictEqual({ keys: 0 });
+            } finally {
+                run.child.kill("SIGTERM");
+                await run.exited;
+            }
+        });
+
+        it("refuses a Durable Object binding name repeated within its own list", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, {
+                wrangler: {
+                    durable_objects: {
+                        bindings: [
+                            { class_name: "ShardDO", name: "SHARD" },
+                            { class_name: "ShardDO", name: "SHARD" },
+                        ],
+                    },
+                },
+            });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 2,
+                error: expect.stringContaining("declares SHARD (durable_objects.bindings and durable_objects.bindings) more than once"),
+            });
+        });
+
+        it("refuses a __proto__ key under vars, which parsing would turn into a prototype and lose", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            // Written into the raw text: a JavaScript object literal cannot carry a __proto__ key into JSON.stringify.
+            const config = join(workdir, "wrangler.jsonc");
+
+            writeFileSync(config, readFileSync(config, "utf8").replace('"vars":{', '"vars":{"__proto__":{"polluted":true},'), "utf8");
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 2, error: expect.stringContaining("uses __proto__ as a key at vars.__proto__") });
+        });
+
+        it("refuses constructor as a var name", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { wrangler: { vars: { constructor: "c", LIMIT: 3 } } });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 2, error: expect.stringContaining('vars in wrangler.jsonc has "constructor"') });
+        });
+
+        it("turns a docker build that cannot start into a failed deploy result", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const npm = fakeNpm();
+            const spawner: Spawner = async (descriptor) =>
+                descriptor.command === "docker" ? Promise.reject(new Error("spawn docker ENOENT")) : npm(descriptor);
+
+            await expect(deploy(workdir, { dockerAvailable: () => true, image: "my-app", spawner })).resolves.toMatchObject({
+                code: 1,
+                error: "docker build could not start: spawn docker ENOENT",
+            });
+        });
+
+        it("bundles a CommonJS helper's package require while a define is set", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { define: { __BUILD_ID__: '"build-7"' } } });
+            writeFileSync(join(workdir, "src", "helper.cjs"), `module.exports = { valid: (version) => require("semver").valid(version) };\n`, "utf8");
+
+            const worker = join(workdir, "src", "worker.ts");
+
+            writeFileSync(
+                worker,
+                `import helper from "./helper.cjs";\n\n${readFileSync(worker, "utf8").replace(
+                    'case "/__fixture/env":',
+                    'case "/__fixture/helper":\n                return Response.json({ version: helper.valid("1.2.3") });\n            case "/__fixture/env":',
+                )}`,
+                "utf8",
+            );
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+            const artifact = join(workdir, NODE_DEPLOY_DIRECTORY);
+
+            mkdirSync(join(artifact, "node_modules"));
+            symlinkSync(BETTER_SQLITE3, join(artifact, "node_modules", "better-sqlite3"), "dir");
+
+            // Only better-sqlite3 is installed beside the server: semver must be inside server.mjs to load.
+            const run = startServer(artifact, join(workdir, "data"));
+
+            try {
+                const origin = await run.listening;
+
+                await expect(fetch(`${origin}/__fixture/helper`).then(async (response) => response.json())).resolves.toStrictEqual({ version: "1.2.3" });
             } finally {
                 run.child.kill("SIGTERM");
                 await run.exited;

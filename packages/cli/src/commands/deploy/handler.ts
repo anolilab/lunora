@@ -1784,14 +1784,14 @@ const runNodeContainerDeploy = async (options: DeployCommandOptions, target: str
 
     logger.success(`wrote the Node container build context to ${context} (${artifact.files.join(", ")})`);
 
-    // The server delivers only the generated LUNORA_CRONS map, through the platform scheduler. Codegen's cronTriggers also lists
-    // createWorker's backupCron and crons keys, which reach nothing but scheduled(), never called here, so they count as unserved.
-    const deliveredCrons = new Set(artifact.deliveredCrons);
-    const scheduledOnly = artifact.cronTriggers.filter((cron) => !deliveredCrons.has(cron));
+    // createWorker's own schedules (backupCron, crons keys) reach only the worker's scheduled() handler, which nothing calls in
+    // the container. Each is named, with its handler, whether or not a declared cron shares the expression: sharing it delivers
+    // the cron job, not the backup or the crons handler.
+    const entrySchedules = codegen.result?.workerEntryCrons ?? [];
 
-    if (scheduledOnly.length > 0) {
+    if (entrySchedules.length > 0) {
         logger.warn(
-            `the Node server never calls the worker's scheduled() handler, so these wrangler triggers.crons will not fire (a createWorker backupCron or crons job on them does not run): ${scheduledOnly.join(", ")}`,
+            `the Node server never calls the worker's scheduled() handler, so these createWorker schedules never run: ${entrySchedules.map((entry) => `${entry.handler} "${entry.cron}"`).join(", ")}`,
         );
     }
 
@@ -1825,7 +1825,18 @@ const runNodeContainerDeploy = async (options: DeployCommandOptions, target: str
         cwd,
         stdoutToStderr: options.format === "json",
     };
-    const built = await (options.spawner ?? defaultSpawner)(descriptor);
+    let built: Awaited<ReturnType<Spawner>>;
+
+    try {
+        built = await (options.spawner ?? defaultSpawner)(descriptor);
+    } catch (error: unknown) {
+        // A spawn that cannot start (no docker binary on PATH, a permission error) is the same failed build as a nonzero exit.
+        const message = `docker build could not start: ${error instanceof Error ? error.message : String(error)}`;
+
+        logger.error(message);
+
+        return { code: 1, container, descriptor, error: message, validation: NO_VALIDATION };
+    }
 
     if (built.code !== 0) {
         const message = `docker build exited with code ${String(built.code)}`;

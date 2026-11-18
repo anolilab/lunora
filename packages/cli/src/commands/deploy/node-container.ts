@@ -18,6 +18,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { COMPOSED_WORKER_ENTRY, DURABLE_OBJECT_BINDINGS, resolveSchemaDirectory } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
+import type { Node as JsonNode } from "jsonc-parser";
+import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
 import type { Spawner } from "../../util/spawn";
 
@@ -129,8 +131,6 @@ interface NodeWranglerConfig {
 interface NodeDeployProject {
     /** Wrangler's `alias`, with relative targets resolved from the project root as wrangler resolves them from its config. */
     alias: Record<string, string>;
-    /** Wrangler's `triggers.crons`: on Cloudflare they reach the worker's `scheduled()`, which this server never calls. */
-    cronTriggers: string[];
     /** Wrangler's `define`: identifiers replaced with JavaScript expressions at bundle time, as wrangler's own build does. */
     define: Record<string, string>;
     /** The `durable_objects.bindings[]` the server constructs. The shard binding (class `ShardDO` or `LunoraDO`) also carries crons. */
@@ -157,10 +157,6 @@ interface NodeDeployEnvVariable {
 }
 
 interface NodeContainerArtifact {
-    /** Wrangler's `triggers.crons`, for the caller to compare with {@link NodeContainerArtifact.deliveredCrons}. */
-    cronTriggers: string[];
-    /** The schedules the server delivers: the keys of the generated `LUNORA_CRONS` map, nothing `scheduled()` alone serves. */
-    deliveredCrons: string[];
     /** The build context, absolute. */
     directory: string;
     env: NodeDeployEnvVariable[];
@@ -282,17 +278,18 @@ const durableObjectEntries = (value: unknown, configName: string): { className: 
  * Every name that lands on `env` comes from one place. Built in a fixed order (vars, then each secret, Hyperdrive and the
  * Durable Objects), a later source would silently replace an earlier one, and the code reading it gets the wrong kind of value.
  */
-const refuseEnvCollisions = (sources: ReadonlyArray<readonly [string, ReadonlyArray<string>]>, configName: string): void => {
-    // Distinct sources per name: the same name listed twice in one source (secrets.required) puts one key on env, not two.
-    const owners = new Map<string, Set<string>>();
+const refuseEnvCollisions = (sources: ReadonlyArray<{ names: ReadonlyArray<string>; repeatable?: boolean; source: string }>, configName: string): void => {
+    const owners = new Map<string, string[]>();
 
-    for (const [source, names] of sources) {
-        for (const name of names) {
-            owners.set(name, new Set([...(owners.get(name) ?? []), source]));
+    for (const { names, repeatable, source } of sources) {
+        // A repeat within secrets.required asks for one variable twice, which is harmless; a repeat within a binding list
+        // declares two bindings under one name, and the later replaces the earlier.
+        for (const name of repeatable === true ? new Set(names) : names) {
+            owners.set(name, [...(owners.get(name) ?? []), source]);
         }
     }
 
-    const collisions = [...owners].filter(([, from]) => from.size > 1).map(([name, from]) => `${name} (${[...from].join(" and ")})`);
+    const collisions = [...owners].filter(([, from]) => from.length > 1).map(([name, from]) => `${name} (${from.join(" and ")})`);
 
     if (collisions.length > 0) {
         throw new Error(
@@ -316,19 +313,43 @@ const stringMap = (value: unknown, section: string, configName: string): Record<
     return value as Record<string, string>;
 };
 
-/** `triggers.crons`: each a cron expression string. */
-const cronTriggerList = (value: unknown, configName: string): string[] => {
-    const crons = isRecord(value) ? value.crons : undefined;
+/** Names that act on an object's prototype rather than being an ordinary key; never valid as a var name. */
+const RESERVED_OBJECT_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
 
-    if (crons === undefined || crons === null) {
-        return [];
+/**
+ * Every `__proto__` key under `vars`, at any depth, read from the config's raw syntax: parsing applies such a key as a
+ * prototype instead of keeping it, so after parsing it cannot be seen and its value is silently lost.
+ */
+const prototypeKeysUnderVariables = (text: string): string[] => {
+    const root = parseTree(text);
+    const variables = root === undefined ? undefined : findNodeAtLocation(root, ["vars"]);
+    const found: string[] = [];
+
+    const walk = (node: JsonNode, path: string): void => {
+        for (const child of node.children ?? []) {
+            if (child.type === "property") {
+                const [key, value] = child.children ?? [];
+                const name = String(key?.value);
+                const here = `${path}.${name}`;
+
+                if (name === "__proto__") {
+                    found.push(here);
+                }
+
+                if (value !== undefined) {
+                    walk(value, here);
+                }
+            } else {
+                walk(child, path);
+            }
+        }
+    };
+
+    if (variables !== undefined) {
+        walk(variables, "vars");
     }
 
-    if (!Array.isArray(crons) || !crons.every((cron) => typeof cron === "string")) {
-        throw new TypeError(`--target node reads triggers.crons in ${configName} as a list of cron expressions, and it is ${JSON.stringify(crons)}`);
-    }
-
-    return crons;
+    return found;
 };
 
 /** `vars`: an object of environment variable names, since an override comes from the variable of the same name. */
@@ -341,7 +362,7 @@ const declaredVariables = (value: unknown, configName: string): Record<string, u
         throw new Error(`--target node reads vars in ${configName} as an object of names and values, and it is ${JSON.stringify(value)}`);
     }
 
-    const invalid = Object.keys(value).filter((name) => !ENV_NAME.test(name));
+    const invalid = Object.keys(value).filter((name) => !ENV_NAME.test(name) || RESERVED_OBJECT_KEYS.has(name));
 
     if (invalid.length > 0) {
         throw new Error(
@@ -415,6 +436,14 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         throw new Error(`--target node bundles the worker entry \`main\` names, and ${configName} has no \`main\``);
     }
 
+    const prototypeKeys = prototypeKeysUnderVariables(readFileSync(configPath, "utf8"));
+
+    if (prototypeKeys.length > 0) {
+        throw new Error(
+            `--target node passes vars to the worker as data, and ${configName} uses __proto__ as a key at ${prototypeKeys.join(", ")}: parsing applies it as a prototype instead of keeping it, so its value would silently be lost. Rename the key`,
+        );
+    }
+
     const refusal = frameworkRefusal(projectRoot, parsed.main, configName);
 
     if (refusal !== undefined) {
@@ -461,11 +490,11 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
 
     refuseEnvCollisions(
         [
-            ["vars", Object.keys(variables)],
-            ["secrets.required", workerSecrets],
-            ["secrets_store_secrets", storeSecrets],
-            ["hyperdrive", hyperdrive],
-            ["durable_objects.bindings", durableObjects.map((binding) => binding.name)],
+            { names: Object.keys(variables), source: "vars" },
+            { names: workerSecrets, repeatable: true, source: "secrets.required" },
+            { names: storeSecrets, source: "secrets_store_secrets" },
+            { names: hyperdrive, source: "hyperdrive" },
+            { names: durableObjects.map((binding) => binding.name), source: "durable_objects.bindings" },
         ],
         configName,
     );
@@ -479,7 +508,6 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
                 target.startsWith(".") ? resolve(projectRoot, target) : target,
             ]),
         ),
-        cronTriggers: cronTriggerList(declared.triggers, configName),
         define: stringMap(declared.define, "define", configName),
         durableObjects,
         entry: resolve(projectRoot, parsed.main),
@@ -545,7 +573,7 @@ const projectSpecifier = (projectRoot: string, path: string): string => `./${rel
  * ones to be written, close the listener (ending event streams and WebSockets), drain the worker's `waitUntil` work, drain every shard (in-flight requests, alarms, cron deliveries
  * and their `waitUntil` work), then close the databases. Only names reach this file, never a secret's value.
  */
-const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cronsModule: string, workerModule: string): string => {
+const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cronsModule: string): string => {
     const config = {
         durableObjects: project.durableObjects,
         hyperdrive: project.hyperdrive,
@@ -582,7 +610,7 @@ import {
     drainTogether,
 } from "@lunora/platform-node";
 
-import handler, { ${classImports} } from ${JSON.stringify(projectSpecifier(projectRoot, workerModule))};
+import handler, { ${classImports} } from ${JSON.stringify(projectSpecifier(projectRoot, project.entry))};
 import { LUNORA_CRONS } from ${JSON.stringify(projectSpecifier(projectRoot, cronsModule))};
 
 // A version guard, not a value this file uses: a platform-node without deadline-bounded drains has no such export, so the
@@ -746,19 +774,23 @@ const drainSet = async (set, { timeoutMs }) => {
             if (!(await Promise.race([Promise.all(set).then(() => true), expired]))) {
                 console.error("lunora: shutdown deadline passed with %d waitUntil task(s) still running", set.size);
 
-                return { failed: backgroundFailures.splice(0), pending: [...set].map(() => "waitUntil work"), timedOut: true };
+                return { failed: drainFailures(), pending: [...set].map(() => "waitUntil work"), timedOut: true };
             }
         }
 
-        return { failed: backgroundFailures.splice(0), pending: [], timedOut: false };
+        return { failed: drainFailures(), pending: [], timedOut: false };
     } finally {
         clearTimeout(timer);
     }
 };
 
 const background = new Set();
-// Background work that failed, each also logged where it happened: reported by the shutdown's drain so the exit code is 1.
-const backgroundFailures = [];
+// waitUntil work that failed while the shutdown drained it: each is logged as it happens, and only these make the exit code 1.
+// A failure from long before the shutdown was logged then and says nothing about whether this shutdown is clean, so it is not
+// counted, and a counter, unlike a list, cannot grow for the life of the process.
+let failedWhileDraining = 0;
+
+const drainFailures = () => (failedWhileDraining === 0 ? [] : [\`\${String(failedWhileDraining)} waitUntil task(s) failed during shutdown\`]);
 const context = {
     passThroughOnException: () => undefined,
     waitUntil: (promise) => {
@@ -766,7 +798,10 @@ const context = {
             background,
             Promise.resolve(promise).catch((error) => {
                 logError("work handed to waitUntil failed", error);
-                backgroundFailures.push("a waitUntil task failed");
+
+                if (stopping) {
+                    failedWhileDraining += 1;
+                }
             }),
         );
     },
@@ -1041,6 +1076,7 @@ const writeLockfile = async (directory: string, spawner: Spawner): Promise<void>
 
 interface EsbuildApi {
     build: (options: Record<string, unknown>) => Promise<{ errors: unknown[] }>;
+    transform: (input: string, options: Record<string, unknown>) => Promise<{ code: string }>;
 }
 
 interface EsbuildFailure {
@@ -1113,72 +1149,134 @@ const unresolvedOptionalRefusal = (error: unknown): Error | undefined => {
     );
 };
 
-/** The schedules the generated `LUNORA_CRONS` map delivers. A self-contained module, so loading it runs nothing of the app's. */
-const deliveredCronSchedules = async (cronsModule: string): Promise<string[]> => {
-    const { createJiti } = await import("jiti");
-    const crons = await createJiti(cronsModule).import<{ LUNORA_CRONS?: Record<string, unknown> }>(cronsModule);
+/** What this file uses of esbuild's plugin API: an onLoad and an onResolve hook, and resolving a path the way esbuild would. */
+interface EsbuildPluginBuild {
+    onLoad: (
+        options: { filter: RegExp },
+        callback: (args: { path: string }) => Promise<{ contents: string; loader: string; resolveDir: string } | undefined>,
+    ) => void;
+    onResolve: (
+        options: { filter: RegExp },
+        callback: (args: { importer: string; kind: string; path: string; pluginData?: unknown; resolveDir: string }) => Promise<unknown>,
+    ) => void;
+    resolve: (path: string, options: { kind: string; pluginData: unknown; resolveDir: string }) => Promise<unknown>;
+}
 
-    return Object.keys(crons.LUNORA_CRONS ?? {});
+const TSX_FILE = /\.[cm]?tsx$/u;
+const TS_FILE = /\.[cm]?ts$/u;
+const JSX_FILE = /\.[cm]?jsx$/u;
+
+// esbuild plugin filters are Go regular expressions, which reject the `u` flag.
+const ANY_PATH = /.*/;
+const SCRIPT_FILE = /\.[cm]?[jt]sx?$/;
+
+/** Marks the resolve the alias hook starts itself, so it is not aliased a second time. */
+const ALIASED = Symbol("lunora-aliased");
+
+/** The loader for an app source file, by extension. */
+const loaderFor = (path: string): string => {
+    if (TSX_FILE.test(path)) {
+        return "tsx";
+    }
+
+    if (TS_FILE.test(path)) {
+        return "ts";
+    }
+
+    return JSX_FILE.test(path) ? "jsx" : "js";
+};
+
+/** The alias entry `specifier` matches: the key itself, or a subpath of it (`key/...`), as esbuild's own alias matches. */
+const aliasTarget = (alias: Record<string, string>, specifier: string): string | undefined => {
+    for (const [name, target] of Object.entries(alias)) {
+        if (specifier === name) {
+            return target;
+        }
+
+        if (specifier.startsWith(`${name}/`)) {
+            return `${target}${specifier.slice(name.length)}`;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Wrangler's define and alias, applied to the app's own files only, in the one bundle with the generated server: a define such
+ * as `process.env` applied to the whole bundle would rewrite the server's own environment checks and platform-node. So
+ * `define` is applied by transforming each app file's source, `alias` by resolving an app file's imports, and everything
+ * else, packages and CommonJS included, bundles as normal. Unlike wrangler, neither reaches dependencies, and a transformed
+ * file is compiled without the project's tsconfig (its JSX or decorator settings).
+ */
+const appScopedPlugin = (
+    esbuild: EsbuildApi,
+    projectRoot: string,
+    platformNodeDirectory: string,
+    project: NodeDeployProject,
+): { name: string; setup: (build: EsbuildPluginBuild) => void } => {
+    const isAppFile = (path: string): boolean =>
+        isInside(path, projectRoot) && !path.split(sep).includes("node_modules") && !isInside(realPath(path), platformNodeDirectory);
+
+    return {
+        name: "lunora-app-define-alias",
+        setup: (build) => {
+            if (Object.keys(project.alias).length > 0) {
+                build.onResolve({ filter: ANY_PATH }, async (args) => {
+                    const target = aliasTarget(project.alias, args.path);
+
+                    // pluginData marks the resolve this hook starts itself, so it is not aliased a second time.
+                    if (target === undefined || args.pluginData === ALIASED || !isAppFile(args.importer)) {
+                        return undefined;
+                    }
+
+                    return build.resolve(target, { kind: args.kind, pluginData: ALIASED, resolveDir: args.resolveDir });
+                });
+            }
+
+            if (Object.keys(project.define).length > 0) {
+                build.onLoad({ filter: SCRIPT_FILE }, async (args) => {
+                    if (!isAppFile(args.path)) {
+                        return undefined;
+                    }
+
+                    const transformed = await esbuild.transform(readFileSync(args.path, "utf8"), {
+                        define: project.define,
+                        loader: loaderFor(args.path),
+                        sourcefile: args.path,
+                    });
+
+                    return { contents: transformed.code, loader: "js", resolveDir: dirname(args.path) };
+                });
+            }
+        },
+    };
 };
 
 /** Bundle the generated entry and the app into `server.mjs`. */
-/** The app's code bundled on its own, with wrangler's define and alias, when it has either; never shipped. */
-const WORKER_PASS_FILE = ".worker-pass.mjs";
-
-const SERVER_OPTIONS = {
-    // CommonJS dependencies bundled into ESM still call `require` for Node built-ins.
-    banner: { js: `import { createRequire as __lunoraCreateRequire } from "node:module";\nconst require = __lunoraCreateRequire(import.meta.url);` },
-    bundle: true,
-    format: "esm",
-    legalComments: "none",
-    logLevel: "silent",
-    platform: "node",
-    target: "node22",
-} as const;
-
-/**
- * Bundle the generated entry and the app into `server.mjs`. With a wrangler define or alias, the app's own code goes through a
- * first pass that applies them and leaves every package import in place, and the server is bundled around its output without
- * them: a define such as `process.env` must rewrite the app, not the server's own environment checks or platform-node. Packages
- * are still bundled once, in the second pass, so the app and the server share one copy of each. Unlike wrangler, the define and
- * alias therefore reach the app's own files but not its dependencies.
- */
 const bundleServer = async (
     esbuild: EsbuildApi,
     directory: string,
-    render: (workerModule: string) => string,
+    contents: string,
     project: NodeDeployProject,
-    projectRoot: string,
+    paths: { platformNodeDirectory: string; projectRoot: string },
     external: ReadonlyArray<string>,
 ): Promise<void> => {
     const scoped = Object.keys(project.define).length > 0 || Object.keys(project.alias).length > 0;
-    const workerPass = join(directory, WORKER_PASS_FILE);
 
-    try {
-        if (scoped) {
-            await esbuild.build({
-                alias: project.alias,
-                bundle: true,
-                define: project.define,
-                entryPoints: [project.entry],
-                format: "esm",
-                logLevel: "silent",
-                outfile: workerPass,
-                packages: "external",
-                platform: "node",
-                target: "node22",
-            });
-        }
-
-        await esbuild.build({
-            ...SERVER_OPTIONS,
-            external: [...external],
-            outfile: join(directory, "server.mjs"),
-            stdin: { contents: render(scoped ? workerPass : project.entry), loader: "js", resolveDir: projectRoot, sourcefile: "lunora-node-server.mjs" },
-        });
-    } finally {
-        rmSync(workerPass, { force: true });
-    }
+    await esbuild.build({
+        // CommonJS dependencies bundled into ESM still call `require` for Node built-ins.
+        banner: { js: `import { createRequire as __lunoraCreateRequire } from "node:module";\nconst require = __lunoraCreateRequire(import.meta.url);` },
+        bundle: true,
+        external: [...external],
+        format: "esm",
+        legalComments: "none",
+        logLevel: "silent",
+        outfile: join(directory, "server.mjs"),
+        platform: "node",
+        plugins: scoped ? [appScopedPlugin(esbuild, paths.projectRoot, paths.platformNodeDirectory, project)] : [],
+        stdin: { contents, loader: "js", resolveDir: paths.projectRoot, sourcefile: "lunora-node-server.mjs" },
+        target: "node22",
+    });
 };
 
 /**
@@ -1223,10 +1321,14 @@ const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promis
     );
 
     try {
-        await bundleServer(esbuild, directory, (workerModule) => renderServerEntry(projectRoot, project, cronsModule, workerModule), project, projectRoot, [
-            "better-sqlite3",
-            ...Object.keys(optional),
-        ]);
+        await bundleServer(
+            esbuild,
+            directory,
+            renderServerEntry(projectRoot, project, cronsModule),
+            project,
+            { platformNodeDirectory: realPath(dirname(platformNodeManifest)), projectRoot },
+            ["better-sqlite3", ...Object.keys(optional)],
+        );
     } catch (error: unknown) {
         throw missingExportRefusal(error, project, projectRoot, realPath(dirname(platformNodeManifest))) ?? unresolvedOptionalRefusal(error) ?? error;
     }
@@ -1259,8 +1361,6 @@ const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promis
         env,
         files: [".dockerignore", "Dockerfile", "package-lock.json", "package.json", "README.md", "server.mjs"],
         unbound: project.unbound,
-        cronTriggers: project.cronTriggers,
-        deliveredCrons: await deliveredCronSchedules(cronsModule),
     };
 };
 
