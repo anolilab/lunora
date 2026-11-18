@@ -240,8 +240,10 @@ export interface PlatformCapabilities {
          * They exist only in a runtime that implements the Workers API; anywhere
          * else, a module importing one fails to load.
          *
-         * Gate-bearing: codegen collects every app module under `lunora/` that
-         * imports a `cloudflare:*` specifier (a whole `import type` declaration erases
+         * Gate-bearing: codegen walks the modules it reads under `lunora/` and every
+         * file their relative imports reach (including `codegen.exclude`d files and
+         * `.tsx`, `.mts`, `.cts` and JavaScript helpers, but never `_generated/`),
+         * collects each that imports a `cloudflare:*` specifier (a whole `import type` declaration erases
          * and is not counted; inline `type` specifiers still load the module) and refuses the app, naming the modules, on a target rating
          * this `unsupported`. Without the rating the refusal is a boot failure.
          */

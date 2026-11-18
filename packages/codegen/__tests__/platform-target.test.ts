@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1210,6 +1210,59 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         /** The cloudflare: refusals codegen returned for the current project. */
         const cloudflareRefusals = (): ReturnType<typeof codegen>["platformDiagnostics"] =>
             codegen().platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"));
+
+        /** Write `name` under `lunora/`, creating its directories. */
+        const writeNested = (name: string, source: string): void => {
+            const path = join(workdir, "lunora", name);
+
+            mkdirSync(dirname(path), { recursive: true });
+            writeFileSync(path, source, "utf8");
+        };
+
+        const LOADS_ENV = `import { env } from "cloudflare:workers";\n\nexport const binding = () => env;\n`;
+
+        it("follows an included module's import into a helper codegen.exclude skips", () => {
+            expect.assertions(1);
+
+            // Excluded from function discovery, but still bundled: send.ts imports it.
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { codegen: { exclude: ["helpers/**"] }, target: "node" };\n`, "utf8");
+            writeNested("helpers/env.ts", LOADS_ENV);
+            write("send.ts", `import { binding } from "./helpers/env";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helpers/env.ts (cloudflare:workers)");
+        });
+
+        it("follows a dynamic import into an excluded helper", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { codegen: { exclude: ["helpers/**"] }, target: "node" };\n`, "utf8");
+            writeNested("helpers/later.ts", LOADS_ENV);
+            write("send.ts", `export const load = async () => import("./helpers/later");\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helpers/later.ts (cloudflare:workers)");
+        });
+
+        it.each([
+            [".tsx", "./view", "view.tsx"],
+            [".mts, written as .mjs", "./util.mjs", "util.mts"],
+            [".cts", "./legacy", "legacy.cts"],
+        ])("follows an import into a %s helper the lister never lists", (_label, specifier, file) => {
+            expect.assertions(1);
+
+            writeNested(file, LOADS_ENV);
+            write("send.ts", `import { binding } from "${specifier}";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain(`lunora/${file} (cloudflare:workers)`);
+        });
+
+        it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
+            expect.assertions(1);
+
+            writeNested("_generated/registryStub.ts", LOADS_ENV);
+            write("send.ts", `import { binding } from "./_generated/registryStub";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
 
         it("refuses the real registry mail starter on node, so no Node build can run it", () => {
             expect.assertions(1);
