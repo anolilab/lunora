@@ -492,9 +492,10 @@ lunora dev --target node         # codegen watch + Studio + the app on the Node 
 Codegen watches `lunora/` as usual, and the app reloads after each finished
 codegen run and when a file the entry loaded from outside `lunora/` changes. A
 reload restarts the listener, so open sockets and streams reconnect. Studio
-works against it (data browser, logs, live subscriptions). Only Durable Object
-bindings and vars are bound; any other declared binding is named in a startup
-warning. `--remote` is refused, `--inspector-port` is ignored, and a Vite or
+works against it (data browser, logs, live subscriptions). Durable Object
+bindings, vars, declared crons, Secrets Store secrets (read from `.dev.vars` or
+the shell) and Hyperdrive (built from `DATABASE_URL`) are bound; any other
+declared binding is named in a startup warning. `--remote` is refused, `--inspector-port` is ignored, and a Vite or
 framework project still gets this standalone stack, so start its frontend dev
 server separately. Shard data persists in `.lunora/node/`.
 

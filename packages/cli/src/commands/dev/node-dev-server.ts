@@ -16,9 +16,14 @@
  * event instead would import `_generated/*` while codegen is still rewriting
  * it. Files the entry loaded from outside `lunora/` (the entry itself and its
  * helpers) are watched here, because the codegen watcher never sees them.
+ *
+ * Besides the Durable Object bindings, each load binds what `@lunora/platform-node`
+ * can stand in for: the declared crons (`_generated/crons.ts`), armed on the
+ * scheduler and delivered to the shard; each `secrets_store_secrets` binding,
+ * read from the dev env; and each `hyperdrive` binding, built from `DATABASE_URL`.
  */
 import type { FSWatcher } from "node:fs";
-import { realpathSync, watch } from "node:fs";
+import { existsSync, realpathSync, watch } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
 import { resolveLocalWorkerEnv, resolveSchemaDirectory } from "@lunora/config";
@@ -43,13 +48,11 @@ const UNBOUND_BINDING_KEYS = [
     "browser",
     "containers",
     "d1_databases",
-    "hyperdrive",
     "images",
     "kv_namespaces",
     "pipelines",
     "queues",
     "r2_buckets",
-    "secrets_store_secrets",
     "send_email",
     "services",
     "vectorize",
@@ -58,8 +61,10 @@ const UNBOUND_BINDING_KEYS = [
 
 interface NodeWranglerConfig {
     durable_objects?: { bindings?: ReadonlyArray<{ class_name?: unknown; name?: unknown; script_name?: unknown }> };
+    hyperdrive?: ReadonlyArray<{ binding?: unknown }>;
     main?: unknown;
     secrets?: { required?: unknown } | null;
+    secrets_store_secrets?: ReadonlyArray<{ binding?: unknown }>;
     vars?: Record<string, unknown> | null;
 }
 
@@ -74,12 +79,19 @@ interface NodeDevProject {
     configPath: string;
     durableObjects: DurableObjectBinding[];
     entry: string;
+    /** `hyperdrive[].binding` names. */
+    hyperdrive: string[];
     parsed: NodeWranglerConfig;
+    /** `secrets_store_secrets[].binding` names. */
+    secrets: string[];
     /** Declared bindings with no Node composition in dev, by wrangler key. */
     unbound: string[];
 }
 
 const isPresent = (value: unknown): boolean => (Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null);
+
+const bindingNames = (entries: ReadonlyArray<{ binding?: unknown }> | undefined): string[] =>
+    (entries ?? []).flatMap((entry) => (typeof entry.binding === "string" ? [entry.binding] : []));
 
 /** Read the worker entry and its Durable Object bindings, or throw naming what is missing. */
 const readNodeDevProject = (projectRoot: string): NodeDevProject => {
@@ -106,7 +118,15 @@ const readNodeDevProject = (projectRoot: string): NodeDevProject => {
 
     const unbound = UNBOUND_BINDING_KEYS.filter((key) => isPresent((parsed as Record<string, unknown>)[key]));
 
-    return { configPath, durableObjects, entry: resolve(projectRoot, parsed.main), parsed, unbound };
+    return {
+        configPath,
+        durableObjects,
+        entry: resolve(projectRoot, parsed.main),
+        hyperdrive: bindingNames(parsed.hyperdrive),
+        parsed,
+        secrets: bindingNames(parsed.secrets_store_secrets),
+        unbound,
+    };
 };
 
 /**
@@ -154,13 +174,20 @@ interface NodeAppHost {
  */
 interface PlatformNode {
     createNodeAppHost: (options: {
+        crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
         dataDirectory?: string;
         durableObjects: ReadonlyArray<DurableObjectBinding>;
         env?: Record<string, unknown>;
         worker: Record<string, unknown>;
     }) => NodeAppHost;
     createNodeHttpServer: (options: { fetch: (request: Request) => Promise<Response>; port?: number }) => Promise<{ close: () => Promise<void> }>;
+    createNodeHyperdrive: (url?: string) => unknown;
+    createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, unknown>;
 }
+
+/** The string values of a dev env, which are what a secret or `DATABASE_URL` can be read from. */
+const stringValues = (env: Record<string, unknown>): Record<string, string> =>
+    Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 
 const isUnder = (path: string, directory: string): boolean => path === directory || path.startsWith(`${directory}${sep}`);
 
@@ -194,7 +221,9 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     }
 
     if (project.unbound.length > 0) {
-        logger.warn(`Node dev binds only Durable Objects and vars; these wrangler bindings are not bound, so reading one fails: ${project.unbound.join(", ")}`);
+        logger.warn(
+            `Node dev binds Durable Objects, vars, crons, Secrets Store secrets and Hyperdrive; these wrangler bindings are not bound, so reading one fails: ${project.unbound.join(", ")}`,
+        );
     }
 
     const isProjectSource = (path: string): boolean => isUnder(path, projectRoot) && !path.split(sep).includes("node_modules");
@@ -256,15 +285,44 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     // Loads and composes without touching the running version: a host opens no shard database until a request reaches one,
     // so a module that cannot be composed (a removed Durable Object export, a broken wrangler config) is caught while the
     // previous version still serves.
+    // Absent until codegen has run once; an app with no `crons.ts` declares none either way.
+    const cronsModule = join(schemaDirectory, "_generated", "crons.ts");
+    let hyperdriveWarned = false;
+
+    // `.dev.vars` (or `.env`) first, then the shell: wrangler reads local secrets and the Hyperdrive URL from the same files.
+    const bindPlatformEnv = (current: NodeDevProject, env: Record<string, unknown>): Record<string, unknown> => {
+        const source = { ...process.env, ...stringValues(env) };
+        const hyperdrive: Record<string, unknown> = {};
+        const url = source["DATABASE_URL"];
+
+        if (current.hyperdrive.length > 0 && (url === undefined || url === "")) {
+            if (!hyperdriveWarned) {
+                hyperdriveWarned = true;
+                logger.warn(`node: Hyperdrive ${current.hyperdrive.join(", ")} is not bound — set DATABASE_URL in .dev.vars or the shell to bind it`);
+            }
+        } else {
+            for (const name of current.hyperdrive) {
+                hyperdrive[name] = platform.createNodeHyperdrive(url);
+            }
+        }
+
+        return { ...env, ...platform.createNodeSecretBindings(current.secrets, source), ...hyperdrive };
+    };
+
     const prepare = async (): Promise<NodeAppHost> => {
         const worker = await load();
         const current = readNodeDevProject(projectRoot);
         const { env } = resolveLocalWorkerEnv({ config: current.parsed, configPath: current.configPath, projectRoot, vars: { WORKER_ENV: "development" } });
+        // After `load`, which evicted it with the rest of the project, so a schedule edit lands with the reload codegen triggers.
+        const generated = existsSync(cronsModule)
+            ? await jiti.import<{ LUNORA_CRONS?: Readonly<Record<string, ReadonlyArray<unknown>>> }>(cronsModule)
+            : undefined;
 
         return platform.createNodeAppHost({
+            crons: generated?.LUNORA_CRONS,
             dataDirectory: join(projectRoot, NODE_DEV_STATE_DIRECTORY),
             durableObjects: current.durableObjects,
-            env,
+            env: bindPlatformEnv(current, env),
             worker,
         });
     };
