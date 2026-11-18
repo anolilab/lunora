@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,7 +43,12 @@ const deps = (over: Partial<CloudCommandDeps> = {}): Partial<CloudCommandDeps> =
             };
         },
         ejectFn: async () => {
-            return { projectSlug: "acme", scriptName: "acme-v3", snapshot: '{"table":"users"}\n', url: "https://acme.lunora.app" };
+            return {
+                projectSlug: "acme",
+                scriptName: "acme-v3",
+                snapshot: new Response('{"table":"users"}\n{"end":true,"rows":1}\n').body as ReadableStream<Uint8Array>,
+                url: "https://acme.lunora.app",
+            };
         },
         rollbackFn: async () => {
             return { scriptName: "app-v2", version: 2 };
@@ -576,7 +581,7 @@ describe("lunora cloud", () => {
     it("eject writes the four files into ./eject", async () => {
         expect.assertions(4);
 
-        const written: { content: string; directory: string; name: string }[] = [];
+        const written: { content: ReadableStream<Uint8Array> | string; directory: string; name: string }[] = [];
         const { logger } = capturingLogger();
 
         const result = await runCloudCommand({
@@ -632,10 +637,8 @@ describe("lunora cloud", () => {
             argument: ["eject", "dep_1"],
             cwd: "/x",
             deps: deps({
-                writeEjectFile: (_directory, name, content) => {
-                    written.set(name, content);
-
-                    return Promise.resolve();
+                writeEjectFile: async (_directory, name, content) => {
+                    written.set(name, typeof content === "string" ? content : await new Response(content).text());
                 },
             }),
             logger,
@@ -670,6 +673,45 @@ describe("lunora cloud", () => {
 
         expect(result.code).toBe(1);
         expect(errors[0]).toMatch(/requires a deployment id/);
+    });
+
+    it("eject streams the snapshot to disk, and leaves no file when it arrives cut short", async () => {
+        expect.assertions(4);
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-eject-"));
+        const snapshotOf = (body: string) => async () => {
+            return {
+                projectSlug: "acme",
+                scriptName: "acme-v3",
+                snapshot: new Response(body).body as ReadableStream<Uint8Array>,
+                url: "https://acme.lunora.app",
+            };
+        };
+        // The real writer: every dep but it is faked.
+        const faked = deps();
+
+        delete faked.writeEjectFile;
+
+        try {
+            const { logger } = capturingLogger();
+            const cut = await runCloudCommand({
+                argument: ["eject", "dep_1"],
+                cwd: directory,
+                deps: { ...faked, ejectFn: snapshotOf('{"table":"users"}\n') },
+                logger,
+            });
+
+            expect(cut.code).toBe(1);
+            expect(readdirSync(join(directory, "eject"))).toStrictEqual([]);
+
+            const complete = '{"table":"users"}\n{"end":true,"rows":1}\n';
+            const ok = await runCloudCommand({ argument: ["eject", "dep_1"], cwd: directory, deps: { ...faked, ejectFn: snapshotOf(complete) }, logger });
+
+            expect(ok.code).toBe(0);
+            expect(readFileSync(join(directory, "eject", "export.ndjson"), "utf8")).toBe(complete);
+        } finally {
+            rmSync(directory, { force: true, recursive: true });
+        }
     });
 
     /**

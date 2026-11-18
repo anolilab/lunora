@@ -5,12 +5,19 @@ import { resolveAdminToken } from "../admin-token";
 import type { RouterEnv } from "./shared";
 import { jsonError, nonEmptyString, otlpBearer, readJsonObject, rejected, requireContext } from "./shared";
 
+/** Where the eject response names the deployment; mirrored by `packages/cli/src/util/cloud-client.ts`. Change both together. */
+export const EJECT_HEADERS = {
+    projectSlug: "x-lunora-project-slug",
+    scriptName: "x-lunora-script-name",
+    url: "x-lunora-url",
+} as const;
+
 /**
  * `POST /v1/eject` — the no-lock-in exit hatch, over a deploy key (GAPS.md D2).
  *
- * Returns the deployment's data snapshot together with the identity the BYO
- * `wrangler.jsonc` is named after, so `lunora cloud eject` can write a complete,
- * runnable package from one round trip. The CLI does the scaffolding: the files
+ * Streams the deployment's data snapshot as the NDJSON body, with the identity
+ * the BYO `wrangler.jsonc` is named after in {@link EJECT_HEADERS}, so
+ * `lunora cloud eject` can write a complete, runnable package from one round trip. The CLI does the scaffolding: the files
  * land on the user's disk, so the templates belong on the user's side.
  *
  * Deploy-key authorized, unlike the studio's session-gated `/v1/admin` proxy —
@@ -19,9 +26,9 @@ import { jsonError, nonEmptyString, otlpBearer, readJsonObject, rejected, requir
  * from the verified key, never from the body, so a caller cannot name another
  * org's deployment.
  *
- * The snapshot is buffered into the JSON response. That bounds this to exports
- * that fit in a Worker's memory; a streaming form (or a signed R2 hand-off) is
- * the upgrade if real snapshots outgrow it.
+ * The tenant's export is passed through unbuffered, so a snapshot is not bounded
+ * by the Worker's memory. Once the 200 is sent a failure can only cut the body
+ * short; the export's end marker (`shared/export-end.ts`) is how the CLI tells.
  */
 export const handleEjectRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
@@ -67,20 +74,23 @@ export const handleEjectRoute = async (request: Request, environment: RouterEnv)
     // The same export the tenant backups read (src/backup/tenant-transport). Over
     // the public URL rather than the driver's in-network `reach`: the exit hatch
     // reads the tenant exactly as its owner's own tooling would.
-    let snapshot: string;
+    let snapshot: ReadableStream<Uint8Array>;
 
     try {
-        const exported = await exportTenantSnapshot(tenantSender({ adminToken, url: target.url }));
-
-        snapshot = await new Response(exported).text();
+        snapshot = await exportTenantSnapshot(tenantSender({ adminToken, url: target.url }));
     } catch (error) {
         return jsonError(502, error instanceof TenantAdminError ? error.message : "tenant export failed");
     }
 
     await context.runMutation(internal.audit_log.record, { action: "deployment.eject", organizationId: target.organizationId });
 
-    return Response.json(
-        { projectSlug: target.projectSlug, scriptName: target.scriptName, snapshot, url: target.url },
-        { headers: { "content-type": "application/json" }, status: 200 },
-    );
+    return new Response(snapshot, {
+        headers: {
+            "content-type": "application/x-ndjson",
+            [EJECT_HEADERS.projectSlug]: target.projectSlug,
+            [EJECT_HEADERS.scriptName]: target.scriptName,
+            [EJECT_HEADERS.url]: target.url,
+        },
+        status: 200,
+    });
 };

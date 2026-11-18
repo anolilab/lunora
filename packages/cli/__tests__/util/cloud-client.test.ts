@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DeployEvent } from "../../src/util/cloud-client";
-import { collectAssets, deployToCloud, resolveDeployConfigPath, rollbackDeployment } from "../../src/util/cloud-client";
+import { collectAssets, deployToCloud, fetchEjectPackage, resolveDeployConfigPath, rollbackDeployment } from "../../src/util/cloud-client";
 
 /** The slice of `fetch` these tests actually drive — the real signature is wider. */
 type FetchStub = (url: string, init: RequestInit) => Promise<Response>;
@@ -93,6 +93,34 @@ describe(rollbackDeployment, () => {
         await expect(
             rollbackDeployment({ apiUrl: "https://cloud", deployKey: "dk", deploymentId: "d", fetch: fetchImpl, organizationId: "o" }),
         ).rejects.toThrow(/rollback failed \(409\)/);
+    });
+});
+
+describe(fetchEjectPackage, () => {
+    it("hands back the snapshot body unread, with the identity from the headers", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(() =>
+            Promise.resolve(
+                new Response('{"end":true,"rows":0}\n', {
+                    headers: { "x-lunora-project-slug": "acme", "x-lunora-script-name": "acme-v3", "x-lunora-url": "https://acme.lunora.app" },
+                }),
+            ),
+        );
+        const { snapshot, ...identity } = await fetchEjectPackage({ apiUrl: "https://cloud/", deployKey: "dk", deploymentId: "dep_1", fetch: fetchMock });
+
+        expect(identity).toStrictEqual({ projectSlug: "acme", scriptName: "acme-v3", url: "https://acme.lunora.app" });
+        await expect(new Response(snapshot).text()).resolves.toBe('{"end":true,"rows":0}\n');
+    });
+
+    it("refuses an answer without the deployment's identity", async () => {
+        expect.assertions(1);
+
+        const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ snapshot: "" })));
+
+        await expect(fetchEjectPackage({ apiUrl: "https://cloud", deployKey: "dk", deploymentId: "dep_1", fetch: fetchMock })).rejects.toThrow(
+            /no snapshot stream and deployment identity/,
+        );
     });
 });
 

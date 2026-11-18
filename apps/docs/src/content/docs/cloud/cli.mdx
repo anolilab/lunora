@@ -169,8 +169,10 @@ The control plane holds your tenant's admin token, uses it, and keeps it — the
 CLI only ever receives the resulting bytes. So ejecting never leaves a long-lived
 tenant credential on your disk or in your shell history.
 
-The export completes before the first file is written, so a failed eject leaves
-nothing behind rather than a half-written directory that looks like a backup.
+The snapshot streams straight to disk, so its size is not bounded by memory on
+either side. It is written first and checked against the export's end marker as
+it arrives: an export that fails or is cut short leaves nothing behind rather
+than a half-written directory that looks like a backup.
 
 ## Reading logs
 

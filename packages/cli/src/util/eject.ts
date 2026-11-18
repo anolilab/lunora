@@ -21,6 +21,8 @@ import type { WranglerConfigShape } from "@lunora/config/cloudflare";
 import { wranglerToAlchemy } from "@lunora/config/cloudflare";
 import { isAbsolute, join } from "@visulima/path";
 
+import { exportEndRows } from "../../../../shared/export-end";
+
 /**
  * What `POST /v1/eject` hands back: the snapshot plus the identity the scaffolded
  * config is named after.
@@ -46,13 +48,65 @@ interface EjectProject {
 
 interface EjectPorts {
     /** Fetch the package from the control plane's `/v1/eject` (deploy-key authorized). */
-    fetchPackage: () => Promise<EjectTarget & { snapshot: string }>;
+    fetchPackage: () => Promise<EjectTarget & { snapshot: ReadableStream<Uint8Array> }>;
     /** The output directory as the README should name it, relative to the project directory. */
     outputDirectory: string;
     project: EjectProject;
-    /** Persist one output file (the CLI writes to `./eject/{name}`). */
-    writeFile: (name: string, content: string) => Promise<void>;
+
+    /**
+     * Persist one output file (the CLI writes to `./eject/{name}`). A stream that errors must leave no file
+     * behind: the snapshot errors when it arrives incomplete, and a partial one would read as a backup.
+     */
+    writeFile: (name: string, content: ReadableStream<Uint8Array> | string) => Promise<void>;
 }
+
+/**
+ * Pass the snapshot through, erroring at its end unless its last line is the export's end marker and
+ * counts the rows before it. The response is streamed, so a tenant export that fails after the
+ * control plane answered 200 arrives as a body cut short, which still parses.
+ */
+const verifiedSnapshot = (snapshot: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> => {
+    const decoder = new TextDecoder();
+    let pending = "";
+    let last = "";
+    let lines = 0;
+    const take = (text: string): void => {
+        const parts = (pending + text).split("\n");
+
+        pending = parts.pop() ?? "";
+
+        for (const line of parts) {
+            if (line.trim().length > 0) {
+                lines += 1;
+                last = line;
+            }
+        }
+    };
+
+    return snapshot.pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+            flush: () => {
+                take(`${decoder.decode()}\n`);
+
+                let parsed: unknown;
+
+                try {
+                    parsed = JSON.parse(last);
+                } catch {
+                    parsed = undefined;
+                }
+
+                if (lines === 0 || exportEndRows(parsed) !== lines - 1) {
+                    throw new Error("the snapshot has no end marker with a matching row count, so it was cut short; nothing was written");
+                }
+            },
+            transform: (chunk, controller) => {
+                take(decoder.decode(chunk, { stream: true }));
+                controller.enqueue(chunk);
+            },
+        }),
+    );
+};
 
 /**
  * Replace the ids that name resources in the account the config was written for
@@ -211,8 +265,9 @@ interface EjectResult {
  * Run the eject: pull the package, derive the BYO config and the Alchemy
  * program from the project's own config, write the README.
  *
- * The fetch happens before any write, so a failed export leaves no half-written
- * directory for someone to mistake for a complete backup.
+ * The fetch happens before any write, and the snapshot is written first and
+ * checked as it is, so a failed export leaves no half-written directory for
+ * someone to mistake for a complete backup.
  */
 const runEject = async (ports: EjectPorts): Promise<EjectResult> => {
     const { snapshot, ...target } = await ports.fetchPackage();
@@ -222,7 +277,7 @@ const runEject = async (ports: EjectPorts): Promise<EjectResult> => {
     // paths, and only the relocated wrangler file is rebased.
     const { source, unsupported } = wranglerToAlchemy(config);
 
-    await ports.writeFile("export.ndjson", snapshot);
+    await ports.writeFile("export.ndjson", verifiedSnapshot(snapshot));
     await ports.writeFile("wrangler.jsonc", `${JSON.stringify(rebasePaths(config, ports.project.configDirectory), undefined, 4)}\n`);
     await ports.writeFile("alchemy.run.ts", source);
     await ports.writeFile("README.md", README(target, config, unsupported, ports.outputDirectory));

@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { open, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { ManifestConfigShape } from "@lunora/config/cloudflare";
@@ -35,8 +36,8 @@ interface CloudCommandDeps {
     rollbackFn: typeof rollbackDeployment;
     /** Write `deploy --out`'s request body to a file, creating its directory (injected for tests). */
     writeDeployBody: (path: string, content: string) => Promise<void>;
-    /** Write one eject output file under `<cwd>/<dir>` (injected for tests). */
-    writeEjectFile: (directory: string, name: string, content: string) => Promise<void>;
+    /** Write one eject output file under `<cwd>/<dir>`, leaving none when a streamed one errors (injected for tests). */
+    writeEjectFile: (directory: string, name: string, content: ReadableStream<Uint8Array> | string) => Promise<void>;
 }
 
 interface CloudCommandOptions {
@@ -68,6 +69,39 @@ interface CloudCommandResult {
     outcome?: string;
 }
 
+/**
+ * Stream `content` to `path` through a sibling `.partial` file, renamed into place only once the
+ * stream ended cleanly: a snapshot too large to hold in memory, and one that errors, leaves no file
+ * at `path` to be mistaken for a complete one.
+ */
+const writeStreamed = async (path: string, content: ReadableStream<Uint8Array>): Promise<void> => {
+    const partial = `${path}.partial`;
+    const handle = await open(partial, "w");
+    const reader = content.getReader();
+
+    try {
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- one chunk at a time is the backpressure
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await handle.write(value);
+        }
+    } catch (error) {
+        await handle.close();
+        await rm(partial, { force: true });
+
+        throw error;
+    }
+
+    await handle.close();
+    await rename(partial, path);
+};
+
 const defaultDeps = (): CloudCommandDeps => {
     return {
         deployFn: deployToCloud,
@@ -88,11 +122,16 @@ const defaultDeps = (): CloudCommandDeps => {
 
             return Promise.resolve();
         },
-        writeEjectFile: (directory, name, content) => {
+        writeEjectFile: async (directory, name, content) => {
             mkdirSync(directory, { recursive: true });
-            writeFileSync(join(directory, name), content);
 
-            return Promise.resolve();
+            if (typeof content === "string") {
+                writeFileSync(join(directory, name), content);
+
+                return;
+            }
+
+            await writeStreamed(join(directory, name), content);
         },
     };
 };

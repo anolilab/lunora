@@ -147,13 +147,20 @@ interface EjectOptions {
     fetch?: typeof globalThis.fetch;
 }
 
-/** The eject package: the data snapshot plus the identity the BYO config is named after. */
+/** The eject package: the data snapshot, as the NDJSON stream it arrives as, plus the identity the BYO config is named after. */
 interface EjectPackage {
     projectSlug: string;
     scriptName: string;
-    snapshot: string;
+    snapshot: ReadableStream<Uint8Array>;
     url: string;
 }
+
+/** Mirrors `EJECT_HEADERS` in `apps/cloud/src/deploy/routes/eject.ts` — the CLI cannot import that private app. Change both together. */
+const EJECT_HEADERS = {
+    projectSlug: "x-lunora-project-slug",
+    scriptName: "x-lunora-script-name",
+    url: "x-lunora-url",
+} as const;
 
 /**
  * `POST /v1/eject` — pull a deployment's data snapshot and BYO identity.
@@ -161,6 +168,10 @@ interface EjectPackage {
  * The control plane holds the tenant's admin token and never hands it over: it
  * unseals it, calls the tenant's export, and returns only the bytes. So the exit
  * hatch never leaves a long-lived tenant bearer on a developer's machine.
+ *
+ * The snapshot is the response body, unread: a large tenant's export never has
+ * to fit in memory on either side. Its end marker is checked as it is written
+ * (`runEject`), since a body cut short still parses.
  */
 const fetchEjectPackage = async (options: EjectOptions): Promise<EjectPackage> => {
     const fetchImpl = options.fetch ?? globalThis.fetch;
@@ -177,7 +188,17 @@ const fetchEjectPackage = async (options: EjectOptions): Promise<EjectPackage> =
         throw new Error(`eject failed (${String(response.status)})${detail ? `: ${detail}` : ""}`);
     }
 
-    return (await response.json()) as EjectPackage;
+    const projectSlug = response.headers.get(EJECT_HEADERS.projectSlug);
+    const scriptName = response.headers.get(EJECT_HEADERS.scriptName);
+    const url = response.headers.get(EJECT_HEADERS.url);
+
+    if (!response.body || !projectSlug || !scriptName || url === null) {
+        await response.body?.cancel().catch(() => undefined);
+
+        throw new Error("eject failed: the control plane's answer carries no snapshot stream and deployment identity — is it older than this CLI?");
+    }
+
+    return { projectSlug, scriptName, snapshot: response.body, url };
 };
 
 /**

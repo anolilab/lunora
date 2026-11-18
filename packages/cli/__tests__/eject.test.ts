@@ -29,15 +29,31 @@ const PROJECT: Record<string, unknown> & WranglerConfigShape = {
     services: [{ binding: "AUTH", service: "auth-worker" }],
 };
 
+const SNAPSHOT = '{"table":"users","row":{}}\n{"end":true,"rows":1}\n';
+
+/** `text` as the control plane streams it, in chunks that split its lines. */
+const streamOf = (text: string): ReadableStream<Uint8Array> => {
+    const bytes = new TextEncoder().encode(text);
+
+    return new ReadableStream({
+        start: (controller) => {
+            for (let offset = 0; offset < bytes.length; offset += 7) {
+                controller.enqueue(bytes.slice(offset, offset + 7));
+            }
+
+            controller.close();
+        },
+    });
+};
+
 const fakePorts = (written: Map<string, string>, over: Partial<EjectPorts> = {}): EjectPorts => {
     return {
-        fetchPackage: () => Promise.resolve({ ...target, snapshot: '{"table":"users","row":{}}\n' }),
+        fetchPackage: () => Promise.resolve({ ...target, snapshot: streamOf(SNAPSHOT) }),
         outputDirectory: "eject",
         project: { config: PROJECT, configDirectory: ".." },
-        writeFile: (name, content) => {
-            written.set(name, content);
-
-            return Promise.resolve();
+        // Like the CLI's writer: a stream that errors leaves no file.
+        writeFile: async (name, content) => {
+            written.set(name, typeof content === "string" ? content : await new Response(content).text());
         },
         ...over,
     };
@@ -77,7 +93,7 @@ describe(runEject, () => {
         const result = await runEject(fakePorts(written));
 
         expect(result.files).toStrictEqual(["export.ndjson", "wrangler.jsonc", "alchemy.run.ts", "README.md"]);
-        expect(written.get("export.ndjson")).toContain('"table":"users"');
+        expect(written.get("export.ndjson")).toBe(SNAPSHOT);
 
         const wrangler = JSON.parse(written.get("wrangler.jsonc") ?? "") as WranglerConfigShape;
 
@@ -118,6 +134,21 @@ describe(runEject, () => {
         const written = new Map<string, string>();
 
         await expect(runEject(fakePorts(written, { fetchPackage: () => Promise.reject(new Error("export failed")) }))).rejects.toThrow("export failed");
+        expect(written.size).toBe(0);
+    });
+
+    it.each([
+        ["no end marker", '{"table":"users","row":{}}\n'],
+        ["a marker counting more rows than arrived", '{"table":"users","row":{}}\n{"end":true,"rows":2}\n'],
+        ["nothing at all", ""],
+    ])("writes nothing when the streamed snapshot has %s — it was cut short after the 200", async (_case, body) => {
+        expect.assertions(2);
+
+        const written = new Map<string, string>();
+
+        await expect(runEject(fakePorts(written, { fetchPackage: () => Promise.resolve({ ...target, snapshot: streamOf(body) }) }))).rejects.toThrow(
+            /no end marker with a matching row count/,
+        );
         expect(written.size).toBe(0);
     });
 });
