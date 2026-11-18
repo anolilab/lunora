@@ -1157,6 +1157,74 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(viaFactory.generated.server).not.toContain(imagesField);
     });
 
+    describe("cloudflare:* built-in modules", () => {
+        /** The registry `mail` starter's shape: `env` from `cloudflare:workers`, the send binding through `cloudflare:email`. */
+        const writeMailStarter = (): void => {
+            write(
+                "mailer.ts",
+                [
+                    `import { createMailerFromEnv } from "@lunora/mail";`,
+                    `import { env } from "cloudflare:workers";`,
+                    ``,
+                    `export const mailer = () => createMailerFromEnv(env as Record<string, unknown>);`,
+                    `export const cloudflareSend = async () => (await import("cloudflare:email")).EmailMessage;`,
+                    ``,
+                ].join("\n"),
+            );
+        };
+
+        it("refuses a node app module that loads cloudflare:workers, and names it", () => {
+            expect.assertions(2);
+
+            writeMailStarter();
+
+            const refusals = codegen().platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"));
+
+            expect(refusals).toMatchObject([{ level: "error", name: "platform_unsupported_feature", target: "node" }]);
+            expect(refusals[0]?.message).toContain("lunora/mailer.ts (cloudflare:workers, cloudflare:email)");
+        });
+
+        it("lets a node app that sends through platform.mail.mailer build, type-only cloudflare: imports included", async () => {
+            expect.assertions(2);
+
+            // The Node mail path: the app takes the host's mailer; `import type` erases and loads nothing.
+            write(
+                "mailer.ts",
+                [
+                    `import type { Mailer } from "@lunora/mail";`,
+                    `import type { ExecutionContext } from "cloudflare:workers";`,
+                    ``,
+                    `export const sendWelcome = async (mailer: Mailer, _context?: ExecutionContext) =>`,
+                    `    mailer.queue({ subject: "Welcome", text: "Hi", to: "ada@example.com" });`,
+                    ``,
+                ].join("\n"),
+            );
+
+            const { NODE_CAPABILITIES } = await import("@lunora/platform");
+
+            // The gate is live on node, so the silence below is the import being judged, not ignored.
+            expect(NODE_CAPABILITIES.features.cloudflareModules?.level).toBe("unsupported");
+            expect(codegen().platformDiagnostics).toStrictEqual([]);
+        });
+
+        it.each([
+            ["cloudflare", "native"],
+            // celld implements the Workers API, so cloudflare:workers loads there: every shard imports it.
+            ["celld", "native"],
+        ])("lets a %s app load cloudflare:workers", async (target, level) => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "${target}" };\n`, "utf8");
+            writeMailStarter();
+
+            const { CELLD_CAPABILITIES, CLOUDFLARE_CAPABILITIES } = await import("@lunora/platform");
+            const matrix = target === "celld" ? CELLD_CAPABILITIES : CLOUDFLARE_CAPABILITIES;
+
+            expect(matrix.features.cloudflareModules?.level).toBe(level);
+            expect(codegen().platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"))).toStrictEqual([]);
+        });
+    });
+
     it("lets a @lunora/mail import through on node, whose host queues and delivers the sends", () => {
         expect.assertions(1);
 

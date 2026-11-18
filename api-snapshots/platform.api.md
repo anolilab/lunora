@@ -292,6 +292,7 @@ interface PlatformCapabilities {
         artifacts?: Capability;
         authJurisdictionMove?: Capability;
         browser?: Capability;
+        cloudflareModules?: Capability;
         commitOrderedTables?: Capability;
         conditionalWrites?: Capability;
         containerEgressPolicy?: Capability;

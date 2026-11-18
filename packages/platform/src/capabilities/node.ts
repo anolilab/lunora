@@ -75,6 +75,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it. Gate-bearing: codegen refuses an app that declares a durable stream on this target, rather than emitting one that silently behaves as an ephemeral stream",
         },
+        cloudflareModules: {
+            level: "unsupported",
+            note: "Node has none of the built-in modules under the cloudflare: scheme, so an app module importing one (cloudflare:workers for env, cloudflare:email for send_email) fails to load. Codegen refuses the app at build time and names each such module under lunora/. The `mail` registry starter is one: on Node, send through platform.mail.mailer, or build a mailer from your own env",
+        },
         commitOrderedTables: {
             level: "emulated",
             note: "The sequence orders commits correctly, but the serialization it depends on is Lunora's per-shard write gate rather than a platform property — one process, one better-sqlite3 handle per shard key. Correct here; not something the host guarantees the way a Durable Object does",

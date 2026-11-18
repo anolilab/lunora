@@ -29,7 +29,7 @@
  * something the app declares in its schema or a declaration file). The
  * gate-bearing keys are:
  *
- * `agents`, `ai`, `aiSearch`, `analytics`, `analyticsSql`, `artifacts`, `browser`, `commitOrderedTables`,
+ * `agents`, `ai`, `aiSearch`, `analytics`, `analyticsSql`, `artifacts`, `browser`, `cloudflareModules`, `commitOrderedTables`,
  * `containerEgressPolicy`, `containerRuntimeScheduling`, `containerSandboxTools`, `containers`,
  * `cronTriggers`, `cronWorkflowTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
@@ -233,6 +233,19 @@ export interface PlatformCapabilities {
 
         /** Browser rendering / headless browser. */
         browser?: Capability;
+
+        /**
+         * The `cloudflare:*` built-in modules (`cloudflare:workers`,
+         * `cloudflare:email`, `cloudflare:sockets`, …) importable from app code.
+         * They exist only in a runtime that implements the Workers API; anywhere
+         * else, a module importing one fails to load.
+         *
+         * Gate-bearing: codegen collects every app module under `lunora/` that
+         * imports a `cloudflare:*` specifier (a type-only import erases and is not
+         * counted) and refuses the app, naming the modules, on a target rating
+         * this `unsupported`. Without the rating the refusal is a boot failure.
+         */
+        cloudflareModules?: Capability;
 
         /**
          * `.commitOrdered()` tables — the `_commitSeq` system field: a per-shard

@@ -43,6 +43,7 @@ import { CELLD_CAPABILITIES, CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "
 import type { StudioFeaturesResult } from "@lunora/shard-engine";
 
 import type { CapabilityKey } from "./capabilities";
+import type { CloudflareModuleImport } from "./discover/cloudflare-modules";
 import type { FeatureUsage } from "./discover/feature-usage";
 import type { VectorIndexIR } from "./ir";
 import { readProjectConfigLiterals } from "./project-config-file";
@@ -327,6 +328,13 @@ const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = 
 interface PlatformSignals {
     /** A `defineAgent` export in `lunora/agents.ts`. */
     agents?: boolean;
+
+    /**
+     * The app modules under `lunora/` that load a `cloudflare:*` built-in. Not a
+     * boolean, because the diagnostic names each module: judged after the
+     * signal loop, against `cloudflareModules`, like `liveContext`.
+     */
+    cloudflareModuleImports?: ReadonlyArray<CloudflareModuleImport>;
     /** A `.commitOrdered()` table. */
     commitOrderedTables?: boolean;
     /** A `defineContainer({ allowedHosts | deniedHosts | interceptHttps })` egress policy. */
@@ -420,6 +428,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
     globalTables: "global tables (`.global()`)",
     liveContext: "the live publisher (`ctx.live`)",
+    cloudflareModuleImports: "imports of the Workers runtime's `cloudflare:*` built-in modules",
     liveStreams: "live topic streams (`defineLiveStream`)",
     queues: "queues (`defineQueue`)",
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
@@ -505,6 +514,39 @@ const unsupportedSignalDiagnostic = (key: keyof PlatformSignals, matrix: Platfor
  * runtime never sets the publisher on the context: the read would throw a
  * TypeError on first use. Refused here rather than left to fail at runtime.
  */
+
+/**
+ * App modules that load `cloudflare:*` built-ins on a target that has none.
+ * Each module is named: the fix is in those files, and on a Node target the
+ * usual one is the `mail` registry starter, which reads `env` from
+ * `cloudflare:workers`. Rated through `cloudflareModules`, so celld, which
+ * implements the Workers API, passes, and a new host decides in its own matrix.
+ */
+const cloudflareModulesDiagnostic = (
+    matrix: PlatformCapabilities,
+    target: string,
+    imports: ReadonlyArray<CloudflareModuleImport>,
+    level: "unsupported" | undefined,
+): PlatformDiagnostic => {
+    const listed = imports.map(({ module, specifiers }) => `${module} (${specifiers.join(", ")})`).join("; ");
+
+    return level === undefined
+        ? {
+              level: "error",
+              message: `${matrix.name}'s capability matrix does not declare whether its runtime provides the cloudflare:* built-in modules, and these app modules import them: ${listed}. Treated as unsupported.`,
+              name: "platform_undeclared_feature",
+              remediation: `Rate "cloudflareModules" in the ${matrix.name} capability matrix as "native", "emulated", or "unsupported".`,
+              target,
+          }
+        : {
+              level: "error",
+              message: `${matrix.name} has no cloudflare:* built-in modules, so these app modules would fail to load on the "${target}" target: ${listed}.`,
+              name: "platform_unsupported_feature",
+              remediation: `Remove the cloudflare:* imports from those modules (a type-only import is fine), or deploy to a target whose capability matrix marks "cloudflareModules" as native or emulated. For mail on Node, send through platform.mail.mailer instead of the registry starter.`,
+              target,
+          };
+};
+
 const liveContextWithheldDiagnostic = (matrix: PlatformCapabilities, target: string): PlatformDiagnostic => {
     return {
         level: "error",
@@ -685,6 +727,13 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
 
     if (signals.liveContext === true && liveStreamsWithheld) {
         diagnostics.push(liveContextWithheldDiagnostic(matrix, target));
+    }
+
+    const cloudflareImports = signals.cloudflareModuleImports ?? [];
+    const cloudflareModulesLevel = matrix.features.cloudflareModules?.level;
+
+    if (cloudflareImports.length > 0 && (cloudflareModulesLevel === undefined || cloudflareModulesLevel === "unsupported")) {
+        diagnostics.push(cloudflareModulesDiagnostic(matrix, target, cloudflareImports, cloudflareModulesLevel));
     }
 
     return { diagnostics, liveStreamsWithheld, signals: gatedSignals, usage: gated };

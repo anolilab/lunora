@@ -42,6 +42,7 @@ import { usedCapabilities } from "./capabilities";
 import { discoverAgents } from "./discover/agents";
 import type { AuthClaim } from "./discover/auth-claims";
 import discoverAuthClaims from "./discover/auth-claims";
+import { discoverCloudflareModuleImports } from "./discover/cloudflare-modules";
 import { discoverContainers } from "./discover/containers";
 import discoverCrons from "./discover/crons";
 import { discoverEnv } from "./discover/env";
@@ -308,6 +309,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // model inference to run its loop, which is why it is rated on its own
         // key rather than inherited from `workflows`.
         agents: agents.length > 0,
+        cloudflareModuleImports: discoverCloudflareModuleImports(project, lunoraDirectory),
         // Read off the SAME IR as `globalTables` below. Until this was wired, a
         // target whose matrix rates `commitOrderedTables` as `unsupported` emitted
         // the full surface and silently dropped the ordering guarantee.
