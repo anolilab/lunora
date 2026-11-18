@@ -100,6 +100,16 @@ export interface CodegenOptions {
     target?: string;
 
     /**
+     * The worker entry wrangler's `main` names, as an absolute path, when it lies
+     * outside the conventional places codegen already scans (`src/server`,
+     * `src/index.ts`, `src/worker.ts`). It seeds the `cloudflare:*` import gate, so
+     * an import in a custom entry is refused at build time on a target without
+     * those modules. Produced by `@lunora/config`'s `wranglerCodegenInputs`;
+     * absent when there is no wrangler config or no `main`.
+     */
+    workerEntry?: string;
+
+    /**
      * Every `queues.producers[]` entry of `wrangler.jsonc`, top level and each
      * `env.<name>` block. A producer naming a push queue's binding with another
      * queue name becomes an extra route in `_generated/queues.ts`, so a batch from

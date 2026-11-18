@@ -1,10 +1,10 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
-import type { CallExpression, ImportDeclaration, ImportEqualsDeclaration, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind, ts } from "ts-morph";
+import type { CallExpression, ImportDeclaration, ImportEqualsDeclaration, SourceFile } from "ts-morph";
+import { Node, Project, SyntaxKind, ts } from "ts-morph";
 
-import { descendantsOfKind, listLunoraSourceFiles } from "./ast";
+import { descendantsOfKind, listSecurityScanFiles } from "./ast";
 
 /** The scheme of the Workers runtime's built-in modules: `cloudflare:workers`, `cloudflare:email`, `cloudflare:sockets`, … */
 const CLOUDFLARE_SCHEME = "cloudflare:";
@@ -328,18 +328,32 @@ const fileKey = (path: string): string => {
  * Every reached file is examined: the diagnostic names each module, so there is
  * no early exit once one is found.
  */
-const discoverCloudflareModuleImports = (project: Project, lunoraDirectory: string): CloudflareModuleImport[] => {
+const discoverCloudflareModuleImports = (project: Project, lunoraDirectory: string, workerEntry?: string): CloudflareModuleImport[] => {
     // Paths are shown from the project root, so the `lunora/` prefix tells the reader where to look.
     const root = dirname(lunoraDirectory);
     // The lister leaves out the root `schema.ts`, which `discoverSchema` reads on its own, but
     // the generated shard imports it, so it and whatever it imports are in the bundle too.
     const rootSchema = join(lunoraDirectory, "schema.ts");
-    const pending = [...listLunoraSourceFiles(lunoraDirectory), ...(isFile(rootSchema) ? [rootSchema] : [])];
+    // The walk starts from everything the worker bundle is built from: the `lunora/` modules,
+    // the worker entry in its conventional places (`src/server`, `src/index.ts`, and the
+    // composed `src/worker.ts`) with `lunora.config.*`, which is the security lints' set, the
+    // root schema, and a wrangler `main` elsewhere when the caller knows one.
+    const pending = [
+        ...new Set([
+            ...listSecurityScanFiles(lunoraDirectory).map((file) => file.filePath),
+            ...[rootSchema, ...(workerEntry === undefined ? [] : [workerEntry])].filter((file) => isFile(file)),
+        ]),
+    ];
+    // Files the walk reads that the shared Project does not already hold are parsed here, in a
+    // Project of its own, and never added to the shared one: every later pass over the shared
+    // Project (suppression directives, for one) would otherwise judge them as app code, on every
+    // target. The walk reads syntax only, so it needs no program of their own.
+    const scratch = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     const seen = new Set(pending.map((file) => fileKey(file)));
     const found: CloudflareModuleImport[] = [];
 
     for (let filePath = pending.shift(); filePath !== undefined; filePath = pending.shift()) {
-        const specifiers = runtimeSpecifiersOf(project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath));
+        const specifiers = runtimeSpecifiersOf(project.getSourceFile(filePath) ?? scratch.getSourceFile(filePath) ?? scratch.addSourceFileAtPath(filePath));
         const cloudflare = specifiers.filter((specifier) => specifier.startsWith(CLOUDFLARE_SCHEME));
 
         if (cloudflare.length > 0) {

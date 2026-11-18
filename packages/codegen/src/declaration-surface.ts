@@ -217,6 +217,8 @@ interface DeclarationSurfaceOptions {
     schema: SchemaIR;
     /** The deploy target the emitted `ctx.*` surface is tailored to. */
     target?: string;
+    /** A worker entry outside the conventional places; see `RunCodegenOptions.workerEntry`. */
+    workerEntry?: string;
 }
 
 /**
@@ -309,7 +311,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // model inference to run its loop, which is why it is rated on its own
         // key rather than inherited from `workflows`.
         agents: agents.length > 0,
-        cloudflareModuleImports: discoverCloudflareModuleImports(project, lunoraDirectory),
+        cloudflareModuleImports: discoverCloudflareModuleImports(project, lunoraDirectory, options.workerEntry),
         // Read off the SAME IR as `globalTables` below. Until this was wired, a
         // target whose matrix rates `commitOrderedTables` as `unsupported` emitted
         // the full surface and silently dropped the ordering guarantee.

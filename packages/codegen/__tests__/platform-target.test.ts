@@ -1531,6 +1531,50 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message).toContain("lunora/blocked/entry.tsx (cloudflare:workers)");
         });
 
+        it("starts from the composed worker entry src/worker.ts, outside lunora/", () => {
+            expect.assertions(1);
+
+            // The file `lunora deploy` bundles in place of `main`; the walk had seeded from lunora/ alone.
+            mkdirSync(join(workdir, "src"));
+            writeFileSync(join(workdir, "src", "worker.ts"), LOADS_ENV, "utf8");
+
+            expect(cloudflareRefusals()[0]?.message).toContain("src/worker.ts (cloudflare:workers)");
+        });
+
+        it("starts from a custom worker entry the caller passes from wrangler's main", () => {
+            expect.assertions(1);
+
+            // Outside every conventional place: only the caller, which reads wrangler, knows it.
+            mkdirSync(join(workdir, "worker"));
+            writeFileSync(join(workdir, "worker", "main.ts"), LOADS_ENV, "utf8");
+
+            const { platformDiagnostics } = runCodegen({ projectRoot: workdir, workerEntry: join(workdir, "worker", "main.ts"), wranglerQueueProducers: [] });
+
+            expect(platformDiagnostics.find((entry) => entry.message.includes("cloudflare:"))?.message).toContain("worker/main.ts (cloudflare:workers)");
+        });
+
+        it("adds no suppression warning for a helper the walk reads outside lunora/", () => {
+            expect.assertions(1);
+
+            // The walk only reads this file; a directive in it is not the app's lunora/ code to judge.
+            mkdirSync(join(workdir, "shared"));
+            writeFileSync(
+                join(workdir, "shared", "helper.ts"),
+                "// lunora-advisor-exempt unindexed_foreign_key -- a helper the import gate walks into\nexport const value = 1;\n",
+                "utf8",
+            );
+            write("send.ts", `import { value } from "../shared/helper";\n\nexport const use = () => value;\n`);
+
+            const suppressionWarnings = codegen().advisories.filter(
+                (finding) =>
+                    finding.name.startsWith("advisor_suppression_") &&
+                    typeof finding.metadata?.file === "string" &&
+                    finding.metadata.file.includes("shared/helper"),
+            );
+
+            expect(suppressionWarnings).toStrictEqual([]);
+        });
+
         it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
             expect.assertions(1);
 

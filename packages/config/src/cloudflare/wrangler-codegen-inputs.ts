@@ -35,8 +35,11 @@ interface WranglerCodegenInputs {
      * project root. Absent keeps them in the Worker bundle (see `studio-assets.ts`).
      */
     studioAssets?: { binding: string; directory: string };
+    /** wrangler's `main`, resolved against the wrangler file's directory: the worker entry codegen's import gate starts from. */
+    workerEntry?: string;
     /** Every well-formed `queues.producers[]` entry of the top level and each `env.<name>` block. */
     wranglerQueueProducers: WranglerQueueProducerIR[];
+
     /** Top-level `vars` entries that look like plaintext secrets. */
     wranglerVariables: WranglerVariableIR[];
 }
@@ -75,6 +78,7 @@ const wranglerCodegenInputs = (projectRoot: string, target?: string): WranglerCo
 
     return {
         ...(spaAssetsBindings.length === 0 ? {} : { spaAssetsBindings }),
+        ...(typeof parsed.main === "string" && parsed.main !== "" ? { workerEntry: resolve(dirname(wranglerPath), parsed.main) } : {}),
         ...(studioAssets === undefined
             ? {}
             : { studioAssets: { binding: studioAssets.binding, directory: relative(projectRoot, resolve(dirname(wranglerPath), studioAssets.directory)) } }),

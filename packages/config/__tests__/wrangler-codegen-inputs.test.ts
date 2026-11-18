@@ -40,6 +40,18 @@ describe("wranglerCodegenInputs — wranglerQueueProducers", () => {
         ]);
     });
 
+    it("passes wrangler's main on as the worker entry, resolved against the wrangler file's directory", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "main": "worker/main.ts" }`);
+
+        expect(wranglerCodegenInputs(root).workerEntry).toBe(join(root, "worker", "main.ts"));
+
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app" }`);
+
+        expect(wranglerCodegenInputs(root).workerEntry).toBeUndefined();
+    });
+
     it("ignores a producers value that is not an array", () => {
         expect.assertions(1);
 
