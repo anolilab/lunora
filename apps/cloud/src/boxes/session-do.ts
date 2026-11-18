@@ -295,7 +295,7 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
 
         if (this.readySockets().length === 0 && boxId !== undefined && database !== undefined) {
             this.jobs.failAll("BOX_OFFLINE", "the box's session ended");
-            await markOffline(database, boxId);
+            await markOffline(database, boxId, () => this.readySockets().length > 0);
         }
 
         if (this.ctx.getWebSockets().length > 0) {
@@ -651,7 +651,7 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
         if (attachment.phase === "ready" && this.readySockets().every((other) => other === socket) && database !== undefined) {
             // The box's authenticated session is gone and no other replaced it.
             this.jobs.failAll("BOX_OFFLINE", "the box's session ended");
-            await markOffline(database, attachment.boxId);
+            await markOffline(database, attachment.boxId, () => this.readySockets().some((other) => other !== socket));
         }
     }
 

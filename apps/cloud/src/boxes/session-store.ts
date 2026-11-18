@@ -112,10 +112,13 @@ export const markSeen = async (database: ControlPlaneStore, boxId: string, now: 
 };
 
 /** Record that a box's session ended: an `online` box is offline until it authenticates again. Any other status stays. */
-export const markOffline = async (database: ControlPlaneStore, boxId: string): Promise<void> => {
+export const markOffline = async (database: ControlPlaneStore, boxId: string, connected: () => boolean): Promise<void> => {
     const box = await loadBox(database, boxId);
 
-    if (box?.status !== "online") {
+    // Asked again after the read: a Durable Object takes other events while D1 answers, so a new
+    // session may have authenticated and recorded `online` in the meantime. Its `recordHello`
+    // reads before it writes, so a session that turns ready after this check writes after us.
+    if (box?.status !== "online" || connected()) {
         return;
     }
 
