@@ -68,6 +68,14 @@ const OUTCOME_UNKNOWN_RETRY_SECONDS = 180;
  */
 const MAIL_EVIDENCE_TTL_MS = 15 * 86_400_000;
 
+/**
+ * A mail row's idempotency key, read off its stored body. Guarded so the
+ * expression never throws: on a connection shared with app queues, a `v8` or
+ * `bytes` body is not JSON, and an index expression that threw would fail their
+ * inserts. The same text in the index and the query, or SQLite will not use it.
+ */
+const ROW_KEY_SQL = "CASE WHEN content_type = 'json' AND json_valid(CAST(body AS TEXT)) THEN json_extract(CAST(body AS TEXT), '$.idempotencyKey') END";
+
 /** How long a key remembers the content it was first queued with: the ledger's default sent TTL. */
 const MAIL_KEY_CONTENT_TTL_MS = 86_400_000;
 
@@ -197,10 +205,65 @@ const createSentLedger = (database: Database.Database, clock: () => number): Sen
     };
 };
 
+/** A value as JSON with its object keys sorted, so the same content always hashes the same. */
+const canonicalJson = (value: unknown): string => {
+    if (Array.isArray(value)) {
+        return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+    }
+
+    if (value !== null && typeof value === "object") {
+        const entries = Object.entries(value as Record<string, unknown>)
+            .filter(([, entry]) => entry !== undefined)
+            .toSorted(([a], [b]) => (a < b ? -1 : 1));
+
+        return `{${entries.map(([name, entry]) => `${JSON.stringify(name)}:${canonicalJson(entry)}`).join(",")}}`;
+    }
+
+    return JSON.stringify(value);
+};
+
+/** A recipient field as the consumer reads it: a lone address and a one-element list are the same, an empty list is absent. */
+const recipientList = (value: unknown): unknown => {
+    const list = typeof value === "string" ? [value] : value;
+
+    return Array.isArray(list) && list.length === 0 ? undefined : list;
+};
+
+/**
+ * The mail a body would send, hashed: only the fields `consumeQueuedSend` reads,
+ * with recipients normalized as it normalizes them, so two bodies that send the
+ * same mail never read as a conflict. The key itself is left out; it is what
+ * the record is stored under.
+ */
+const fingerprintOf = (body: unknown): string => {
+    const fields = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+
+    return createHash("sha256")
+        .update(
+            canonicalJson({
+                bcc: recipientList(fields.bcc),
+                cc: recipientList(fields.cc),
+                from: fields.from,
+                headers: fields.headers,
+                html: fields.html,
+                replyTo: fields.replyTo,
+                subject: fields.subject,
+                text: fields.text,
+                to: recipientList(fields.to),
+            }),
+        )
+        .digest("hex");
+};
+
 /** One delivery at a time per idempotency key, and one content per key, across polls and processes on the file. */
 interface KeyClaims {
-    /** Forget a content record `recordContent` just made, for an enqueue that then failed. */
-    forgetContent: (key: string) => void;
+    /**
+     * Forget the content record `recordContent` made, for an enqueue that then
+     * failed: only while it still names this content and no live row carries the
+     * key. Another enqueue of the same mail may have used the record in between,
+     * and deleting it would free the key for different content.
+     */
+    forgetContent: (key: string, fingerprint: string) => void;
 
     /** Keep the key's content record at least as long as the sent record a successful send just wrote. */
     keepContent: (key: string) => void;
@@ -290,6 +353,37 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
     const extendContent = database.prepare<[number, string]>("UPDATE _lunora_mail_keys SET expires_at = max(expires_at, ?) WHERE key = ?");
     let prunedAt = Number.NEGATIVE_INFINITY;
 
+    // Prepared on first use: the queue host creates `_lunora_queue_messages` after these claims.
+    let oldestLiveRow: Database.Statement<[string], { body: Buffer }> | undefined;
+
+    /**
+     * The content a key belongs to: its record while that lives, otherwise the
+     * oldest queued, retrying or parked row that still carries the key, judged by
+     * that row's own stored body. The record lapses 24 hours after the enqueue, but
+     * a delayed, retrying or parked row outlives it; without the rows, a later
+     * enqueue with other content would take the key and the old row would be
+     * judged a conflict when it finally came due.
+     */
+    const liveRowFor = (key: string): { body: Buffer } | undefined => {
+        oldestLiveRow ??= database.prepare<[string], { body: Buffer }>(
+            `SELECT body FROM _lunora_queue_messages WHERE queue = '${MAIL_QUEUE_NAME}' AND state IN ('pending', 'dead') AND ${ROW_KEY_SQL} = ? ORDER BY enqueued_at LIMIT 1`,
+        );
+
+        return oldestLiveRow.get(key);
+    };
+
+    const ownerFingerprint = (key: string, now: number): { fingerprint: string; recorded: boolean } | undefined => {
+        const known = readContent.get(key, now)?.fingerprint;
+
+        if (known !== undefined) {
+            return { fingerprint: known, recorded: true };
+        }
+
+        const row = liveRowFor(key);
+
+        return row === undefined ? undefined : { fingerprint: fingerprintOf(JSON.parse(row.body.toString("utf8")) as unknown), recorded: false };
+    };
+
     const pruneDue = (now: number): void => {
         if (now - prunedAt >= LEDGER_PRUNE_INTERVAL_MS) {
             pruneClaims.run(now);
@@ -304,15 +398,24 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
 
         pruneDue(now);
 
-        const known = readContent.get(key, now)?.fingerprint;
+        const owner = ownerFingerprint(key, now);
 
-        if (known === undefined) {
+        if (owner === undefined) {
             writeContent.run(key, fingerprint, now + MAIL_KEY_CONTENT_TTL_MS);
 
             return "recorded";
         }
 
-        return known === fingerprint ? "matches" : "conflict";
+        if (owner.fingerprint !== fingerprint) {
+            return "conflict";
+        }
+
+        // Owned by a live row whose record had lapsed: re-record it, so the next lookup is a read.
+        if (!owner.recorded) {
+            writeContent.run(key, fingerprint, now + MAIL_KEY_CONTENT_TTL_MS);
+        }
+
+        return "matches";
     });
 
     const takeInTransaction = database.transaction((key: string, fingerprint: string, messageId: string): TakeOutcome => {
@@ -320,9 +423,9 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
 
         pruneDue(now);
 
-        const known = readContent.get(key, now)?.fingerprint;
+        const owner = ownerFingerprint(key, now);
 
-        if (known !== undefined && known !== fingerprint) {
+        if (owner !== undefined && owner.fingerprint !== fingerprint) {
             return { outcome: "conflict" };
         }
 
@@ -330,18 +433,31 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
             return { outcome: "busy" };
         }
 
-        if (known === undefined) {
-            writeContent.run(key, fingerprint, now + MAIL_KEY_CONTENT_TTL_MS);
-        }
+        // Refreshed, not only written when absent: the record must outlast the send this claim
+        // starts (up to the lease), and `keepContent` then extends it to the sent record's life.
+        writeContent.run(key, fingerprint, Math.max(now + MAIL_KEY_CONTENT_TTL_MS, now + MAIL_VISIBILITY_TIMEOUT_MS));
 
         const numbered = nextDelivery.get(key, now, now + MAIL_EVIDENCE_TTL_MS, now, now);
 
         return { delivery: numbered?.delivery ?? 1, firstDeliveredAt: numbered?.first_at ?? now, outcome: "taken" };
     });
 
-    return {
-        forgetContent: (key) => {
+    const forgetInTransaction = database.transaction((key: string, fingerprint: string): void => {
+        const now = clock();
+
+        if (readContent.get(key, now)?.fingerprint !== fingerprint) {
+            return;
+        }
+
+        // A row still carrying the key is a live use of the record: it stays.
+        if (liveRowFor(key) === undefined) {
             dropContent.run(key);
+        }
+    });
+
+    return {
+        forgetContent: (key, fingerprint) => {
+            forgetInTransaction.immediate(key, fingerprint);
         },
         keepContent: (key) => {
             extendContent.run(clock() + MAIL_KEY_CONTENT_TTL_MS, key);
@@ -352,56 +468,6 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
         },
         take: (key, fingerprint, messageId) => takeInTransaction.immediate(key, fingerprint, messageId),
     };
-};
-
-/** A value as JSON with its object keys sorted, so the same content always hashes the same. */
-const canonicalJson = (value: unknown): string => {
-    if (Array.isArray(value)) {
-        return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
-    }
-
-    if (value !== null && typeof value === "object") {
-        const entries = Object.entries(value as Record<string, unknown>)
-            .filter(([, entry]) => entry !== undefined)
-            .toSorted(([a], [b]) => (a < b ? -1 : 1));
-
-        return `{${entries.map(([name, entry]) => `${JSON.stringify(name)}:${canonicalJson(entry)}`).join(",")}}`;
-    }
-
-    return JSON.stringify(value);
-};
-
-/** A recipient field as the consumer reads it: a lone address and a one-element list are the same, an empty list is absent. */
-const recipientList = (value: unknown): unknown => {
-    const list = typeof value === "string" ? [value] : value;
-
-    return Array.isArray(list) && list.length === 0 ? undefined : list;
-};
-
-/**
- * The mail a body would send, hashed: only the fields `consumeQueuedSend` reads,
- * with recipients normalized as it normalizes them, so two bodies that send the
- * same mail never read as a conflict. The key itself is left out; it is what
- * the record is stored under.
- */
-const fingerprintOf = (body: unknown): string => {
-    const fields = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-
-    return createHash("sha256")
-        .update(
-            canonicalJson({
-                bcc: recipientList(fields.bcc),
-                cc: recipientList(fields.cc),
-                from: fields.from,
-                headers: fields.headers,
-                html: fields.html,
-                replyTo: fields.replyTo,
-                subject: fields.subject,
-                text: fields.text,
-                to: recipientList(fields.to),
-            }),
-        )
-        .digest("hex");
 };
 
 /** The queued body's idempotency key, when it carries a usable one; `consumeQueuedSend` refuses the rest. */
@@ -534,6 +600,9 @@ interface MailConsumer {
     clock: () => number;
     mailer: Mailer;
     sent: SentMailStore;
+
+    /** Rows found superseded during a batch, parked once the batch has settled. */
+    superseded: Set<string>;
 }
 
 /** Retry a send whose key another delivery holds: it is settled by then, and the ledger answers for it. */
@@ -573,7 +642,16 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
             : consumer.claims.take(key, fingerprintOf(message.body), message.id);
 
     if (claimed.outcome === "conflict") {
-        refuse(message, "lunora.mail.idempotency_key_conflict", `idempotency key "${String(key)}" was already queued with different content`);
+        // Parked, never acked: this is real mail whose key another message owns, and an ack would
+        // drop it without a trace. A long retry keeps it out of reach until the poll parks it.
+        logFailure(
+            "error",
+            "lunora.mail.idempotency_key_conflict",
+            message.attempts,
+            new Error(`idempotency key "${String(key)}" belongs to different content; this send is parked in deadLetters, not sent`),
+        );
+        consumer.superseded.add(message.id);
+        message.retry({ delaySeconds: MAX_DELAY_SECONDS });
 
         return;
     }
@@ -702,7 +780,7 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
                 // Nothing was queued under the key, so the record this call made must not outlive it.
                 if (recorded === "recorded") {
                     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see above
-                    consumer.claims.forgetContent(String(key));
+                    consumer.claims.forgetContent(String(key), fingerprintOf(payload));
                 }
 
                 throw error;
@@ -711,7 +789,13 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
     };
     // Built before the tables, so a refusal leaves nothing behind in the database.
     const mailer = buildMailer(env, queue, options.transport);
-    const consumer: MailConsumer = { claims: createKeyClaims(database, clock), clock, mailer, sent: createSentLedger(database, clock) };
+    const consumer: MailConsumer = {
+        claims: createKeyClaims(database, clock),
+        clock,
+        mailer,
+        sent: createSentLedger(database, clock),
+        superseded: new Set(),
+    };
     const host = createNodeQueueHost(database, {
         now: clock,
         onBatch: async (batch) => {
@@ -729,6 +813,16 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         },
         visibilityTimeoutMs: MAIL_VISIBILITY_TIMEOUT_MS,
     });
+    // The lookup `createKeyClaims` makes when a key's record has lapsed. Partial, so only mail rows
+    // are indexed and an app queue's non-JSON bodies never reach the expression.
+    database.exec(
+        `CREATE INDEX IF NOT EXISTS _lunora_mail_row_keys ON _lunora_queue_messages ((${ROW_KEY_SQL}), enqueued_at) WHERE queue = '${MAIL_QUEUE_NAME}'`,
+    );
+
+    const park = database.prepare<[string]>(
+        `UPDATE _lunora_queue_messages SET state = 'dead' WHERE id = ? AND queue = '${MAIL_QUEUE_NAME}' AND state = 'pending'`,
+    );
+
     // Scoped to this queue, unlike the queue host's own requeue: the table is shared with the
     // app's queues. Attempts are kept, not reset, because `consumeQueuedSend` reads them to tell
     // a redelivery from a first send.
@@ -769,7 +863,13 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         },
         mailer,
         poll: async (now) => {
-            const run = host.poll(now);
+            const run = host.poll(now).finally(() => {
+                for (const id of consumer.superseded) {
+                    park.run(id);
+                }
+
+                consumer.superseded.clear();
+            });
 
             inFlight.add(run);
 

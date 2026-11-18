@@ -605,10 +605,16 @@ export const createNodePlatform = <
                 suspendHostAlarms();
                 registry.suspendAlarms();
 
-                // Mail first: a poll in flight settles its rows through the database `close()` shuts.
+                // Mail on both sides of the shards: a poll in flight settles its rows through the database
+                // `close()` shuts, and work handed to `shard.waitUntil` can start a poll the first
+                // snapshot never saw. Mail polls register no shard work, so one more pass is the last.
                 await mail?.drain();
 
-                return drainTogether([host, registry], drainOptions);
+                const result = await drainTogether([host, registry], drainOptions);
+
+                await mail?.drain();
+
+                return result;
             },
             globalTables,
             kv,

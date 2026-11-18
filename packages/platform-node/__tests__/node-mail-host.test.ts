@@ -1151,4 +1151,177 @@ describe(createNodeMailHost, () => {
             expect(transport.sent).toHaveLength(1);
         });
     });
+
+    describe("seventh review", () => {
+        const DAY_MS = 24 * 60 * 60 * 1000;
+
+        it("keeps a delayed row's key from new content after the key's record lapses", async () => {
+            expect.assertions(2);
+
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            // Due in 24 h: the key's record, written at enqueue, lapses before the row is sent.
+            await mail.queue.send({ idempotencyKey: "digest-7", subject: "Digest", text: "Original", to: "ada@example.com" }, { delaySeconds: 86_400 });
+            clock.advance(DAY_MS + 60_000);
+
+            await expect(mail.mailer.queue({ idempotencyKey: "digest-7", subject: "Digest", text: "Replacement", to: "ada@example.com" })).rejects.toThrow(
+                /already queued with different content/u,
+            );
+
+            await mail.poll();
+
+            expect(transport.sent.map((payload) => payload.text)).toStrictEqual(["Original"]);
+        });
+
+        it("keeps a parked row's key from new content, so its requeue still sends it", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const refused = new Error("connection refused");
+            const transport = scriptedTransport([refused, refused, refused, refused, "ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "invoice-3", subject: "Invoice", text: "Original", to: "ada@example.com" });
+
+            for (let delivery = 0; delivery < 4; delivery += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
+                await mail.poll();
+            }
+
+            clock.advance(DAY_MS + 60_000);
+
+            await expect(mail.mailer.queue({ idempotencyKey: "invoice-3", subject: "Invoice", text: "Replacement", to: "ada@example.com" })).rejects.toThrow(
+                /already queued with different content/u,
+            );
+
+            const [parked] = mail.deadLetters.list();
+
+            mail.deadLetters.requeue(parked?.id ?? "");
+            await mail.poll();
+
+            expect(transport.sent.at(-1)?.text).toBe("Original");
+        });
+
+        it("parks, never acks, a row found superseded when it is delivered", async () => {
+            expect.assertions(3);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const database = freshDatabase();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "welcome-9", subject: "Welcome", text: "Owner", to: "ada@example.com" });
+            // A row queued before any content record existed (an older build, a raw producer): same key, other content.
+            database
+                .prepare(
+                    "INSERT INTO _lunora_queue_messages (id, queue, body, content_type, visible_at, enqueued_at) VALUES ('legacy', 'lunora-mail', ?, 'json', ?, ?)",
+                )
+                .run(
+                    Buffer.from(JSON.stringify({ idempotencyKey: "welcome-9", subject: "Welcome", text: "Legacy", to: "bob@example.com" })),
+                    clock.now(),
+                    clock.now(),
+                );
+            await mail.poll();
+
+            expect(transport.sent.map((payload) => payload.text)).toStrictEqual(["Owner"]);
+            expect(mail.deadLetters.list()).toMatchObject([{ body: { text: "Legacy" }, id: "legacy" }]);
+            expect(error.mock.calls.map(([line]) => logged(line).event)).toContain("lunora.mail.idempotency_key_conflict");
+        });
+
+        it("keeps a key reserved while its delivery is in flight across the record's expiry", async () => {
+            expect.assertions(1);
+
+            const clock = startClock();
+            const gate = blockingTransport();
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport: gate.transport });
+
+            await mail.mailer.queue({ idempotencyKey: "otp-dee", subject: "Code", text: "1111", to: "dee@example.com" });
+            clock.advance(DAY_MS - 60_000);
+
+            const sending = mail.poll();
+
+            await gate.entered;
+            // The send is still awaited when the enqueue-time record would have lapsed.
+            clock.advance(3 * 60_000);
+
+            await expect(mail.mailer.queue({ idempotencyKey: "otp-dee", subject: "Code", text: "2222", to: "dee@example.com" })).rejects.toThrow(
+                /already queued with different content/u,
+            );
+
+            gate.release();
+            await sending;
+        });
+
+        it("keeps a reservation a concurrent enqueue of the same mail is using when another enqueue fails", async () => {
+            expect.assertions(2);
+
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: scriptedTransport(["ok"]) });
+            const mailFields = { idempotencyKey: "news-1", subject: "News", text: "Issue 1", to: "ada@example.com" };
+
+            // Same mail, so one reservation; the first body is over the 128 KiB message ceiling.
+            const oversized = mail.queue.send({ ...mailFields, padding: "x".repeat(200_000) });
+            const accepted = mail.queue.send(mailFields);
+
+            await expect(oversized).rejects.toThrow(/128 KiB/u);
+
+            await accepted;
+
+            expect(database.prepare("SELECT key FROM _lunora_mail_keys WHERE key = 'news-1'").get()).toStrictEqual({ key: "news-1" });
+        });
+
+        it("drains a mail poll that shard background work started during drain()", async () => {
+            expect.assertions(2);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-waituntil-"));
+
+            const mailPath = join(directory, "mail.sqlite3");
+            const gate = blockingTransport();
+            const platform = createNodePlatform({
+                mail: { env: PRODUCTION, path: mailPath, transport: gate.transport },
+                path: join(directory, "shard.sqlite3"),
+            });
+
+            await platform.mail?.mailer.queue({ subject: "Bye", text: "From the background", to: "ada@example.com" });
+
+            let kick: () => void = () => undefined;
+            const kicked = new Promise<void>((resolve) => {
+                kick = resolve;
+            });
+            let polling: Promise<number> | undefined;
+
+            expect(platform.shard.waitUntil).toBeDefined();
+
+            // Background work that starts a poll only once drain() is already waiting on it.
+            platform.shard.waitUntil?.(
+                (async () => {
+                    await kicked;
+                    polling = platform.mail?.poll();
+                })(),
+            );
+
+            const reader = new Database(mailPath, { readonly: true });
+            let rowsWhenDrained: unknown;
+            const drained = (async () => {
+                await platform.drain();
+                rowsWhenDrained = reader.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get();
+            })();
+
+            kick();
+            await gate.entered;
+            gate.release();
+            await drained;
+            await polling;
+            reader.close();
+            platform.close();
+
+            expect(rowsWhenDrained).toStrictEqual({ n: 0 });
+        });
+    });
 });

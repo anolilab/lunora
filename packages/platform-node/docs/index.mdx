@@ -383,14 +383,18 @@ Delivery is at-least-once, narrowed:
   The claim names the row holding it, so a row redelivered after a crash takes
   its own claim back and sends. Another row's abandoned claim lapses with the
   lease.
-- A key records the content it was first queued with, at enqueue, for 24 hours,
-  so the first message queued under a key owns it whatever order rows are
-  delivered in. `mailer.queue()` and `queue.send()` throw for a key already queued
-  with different content. Content is compared on the fields the consumer sends,
-  with a lone recipient and a one-element list counting as the same. A row queued
-  before any record existed is checked at delivery, and refused there as the
-  error `lunora.mail.idempotency_key_conflict`. Expired records and abandoned
-  claims are pruned at most once a minute.
+- A key records the content it was first queued with, at enqueue, so the first
+  message queued under a key owns it whatever order rows are delivered in. The
+  record is refreshed when a delivery takes the key and kept as long as the sent
+  record. Once it lapses, the key still belongs to the oldest queued, retrying or
+  parked row that carries it, judged by that row's own stored content. So
+  `mailer.queue()` and `queue.send()` throw for a key with different content for as
+  long as any row of the original is live. Content is compared on the fields the
+  consumer sends, with a lone recipient and a one-element list counting as the
+  same. A row found superseded when it is delivered (queued before any record
+  existed) is logged as the error `lunora.mail.idempotency_key_conflict` and parked
+  in `deadLetters`, never acked. Expired records and abandoned claims are pruned at
+  most once a minute.
 - A key's deliveries are numbered across every row that carries it, and that
   number, not a row's own attempt count, is what the attempt marks are keyed on.
   The dedupe window runs from the key's first delivery. A second row queued for a
@@ -423,8 +427,9 @@ send is logged as an error and dropped, because a retry could mail a second copy
 count, so a send that may already have landed is refused rather than mailed again
 once Resend's window has passed. It throws for a send queued 15 or more days ago,
 since its attempt record has expired. The app's `platform.queues.deadLetters.requeue`
-cannot revive a mail send. `drain()` waits for every poll in flight, and
-`createNodePlatform`'s `drain()` calls it. `env` defaults to `process.env` and is
+cannot revive a mail send. `drain()` waits for every poll in flight. `createNodePlatform`'s `drain()`
+calls it before and after the shard drain, so a poll started by `shard.waitUntil`
+work is waited for too. `env` defaults to `process.env` and is
 read once. Construction throws when `MAIL_FROM` is unset, or when neither
 `transport` nor `RESEND_API_KEY` gives it a way to deliver. Cloudflare's
 `send_email` binding and inbound Email Routing do not exist on Node.
