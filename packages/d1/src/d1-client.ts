@@ -1,4 +1,4 @@
-/* eslint-disable max-classes-per-file -- D1Session and D1Client are both public exports (re-exported by src/index.ts) and are intentionally co-located: the client mints sessions, so splitting them across files would break the cohesive Sessions-API surface consumers import together. */
+// eslint-disable-next-line max-classes-per-file -- the client mints sessions: D1Session and D1Client are one Sessions-API surface
 import type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "@lunora/platform";
 import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
 import type { AnyD1Database, DrizzleD1Database } from "drizzle-orm/d1";

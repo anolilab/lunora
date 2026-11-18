@@ -11,8 +11,6 @@
  * branches: `log({ ref })` honours a commit id (history from that commit, `[]`
  * when unknown) and reads the whole list for a branch or tag name.
  */
-/* eslint-disable unicorn/no-null -- the Artifacts binding's contract uses `null` (an unset description, a never-pushed repo, a missing object from the read methods); the fake has to return the same values */
-/* eslint-disable @typescript-eslint/require-await -- every binding method is an RPC that settles asynchronously and reports failure as a rejection; the in-memory bodies are synchronous, and `async` is what turns their throws into rejections */
 import type {
     ArtifactsBindingLike,
     ArtifactsCommitMetadata,
@@ -175,12 +173,15 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
         const info: ArtifactsRepoInfo = {
             createdAt: now,
             defaultBranch: settings.defaultBranch ?? "main",
+            // eslint-disable-next-line unicorn/no-null -- the Artifacts binding reports an unset description as `null`
             description: settings.description ?? null,
             id: nextId("repo"),
+            // eslint-disable-next-line unicorn/no-null -- a never-pushed repo has a `null` lastPushAt in the binding's contract
             lastPushAt: null,
             name,
             readOnly: settings.readOnly ?? false,
             remote: `https://artifacts.fake.test/${namespace}/${name}.git`,
+            // eslint-disable-next-line unicorn/no-null -- the binding reports a repo with no source as `null`
             source: settings.source ?? null,
             updatedAt: now,
         };
@@ -209,6 +210,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
             [Symbol.dispose]: () => {
                 handles.disposed += 1;
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- the binding method is an RPC that reports failure as a rejection; `async` turns the in-memory body's throws into one
             createToken: async (scope = "write", ttl = DEFAULT_TOKEN_TTL_SECONDS) => {
                 checkLive();
 
@@ -218,6 +220,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
 
                 return mintToken(repo, scope, ttl);
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
             fork: async (name, forkOptions) => {
                 checkLive();
 
@@ -250,11 +253,13 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
 
                 return created;
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
             info: async () => {
                 checkLive();
 
                 return { ...repo.info };
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
             listTokens: async () => {
                 checkLive();
 
@@ -264,6 +269,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
 
                 return { tokens, total: tokens.length };
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
             log: async (logOptions) => {
                 checkLive();
 
@@ -282,16 +288,21 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
 
                 return repo.commits.slice(start + offset, start + offset + limit);
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
             readBlob: async (hash) => {
                 checkLive();
 
+                // eslint-disable-next-line unicorn/no-null -- the binding's read methods return `null` for a missing object
                 return repo.blobs.get(hash) ?? null;
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
             readCommit: async (hash) => {
                 checkLive();
 
+                // eslint-disable-next-line unicorn/no-null -- see `readBlob`
                 return repo.commits.find((commit) => commit.hash === hash) ?? null;
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
             readFile: async ({ path, ref }) => {
                 checkLive();
 
@@ -299,13 +310,17 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                     throw artifactsError("INVALID_INPUT", "ref and path must be non-empty");
                 }
 
+                // eslint-disable-next-line unicorn/no-null -- see `readBlob`
                 return repo.files.get(`${ref}:${path}`) ?? null;
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
             readTree: async (hash) => {
                 checkLive();
 
+                // eslint-disable-next-line unicorn/no-null -- see `readBlob`
                 return repo.trees.get(hash) ?? null;
             },
+            // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
             revokeToken: async (tokenOrId) => {
                 checkLive();
 
@@ -327,6 +342,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
     };
 
     const binding: ArtifactsBindingLike = {
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
         create: async (name, createOptions) => {
             checkFailure();
 
@@ -336,6 +352,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
                 readOnly: createOptions?.readOnly,
             });
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
         delete: async (name) => {
             checkFailure();
 
@@ -348,11 +365,13 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
 
             return repos.delete(name);
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
         get: async (name) => {
             checkFailure();
 
             return openHandle(requireRepo(name));
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
         import: async ({ source, target }) => {
             checkFailure();
 
@@ -362,6 +381,7 @@ const createArtifactsFake = (options: { namespace?: string } = {}): ArtifactsFak
 
             return addRepo(target.name, { description: target.opts?.description, readOnly: target.opts?.readOnly, source: source.url });
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `createToken`
         list: async (listOptions) => {
             checkFailure();
 

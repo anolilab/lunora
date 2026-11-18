@@ -22,7 +22,6 @@
  * debit). `releaseSpendOnFailure` becomes an `OnPaymentCreationFailureHook` that
  * frees a reservation if the signature itself later fails.
  */
-/* eslint-disable import/exports-last -- the private asset-table / cap-scaling helpers read `usdToAtomic` and `DEFAULT_ALLOWED_ASSETS`, so they must sit below those exports; hoisting them above would trade this for no-use-before-define. Enforcement reads top-to-bottom, which matters more than export placement in money code. */
 import { LunoraError } from "@lunora/errors";
 import type { BeforePaymentCreationHook, OnPaymentCreationFailureHook, PaymentPolicy } from "@x402/core/client";
 import type { PaymentRequirements } from "@x402/core/types";
@@ -58,7 +57,7 @@ const parseAtomicAmount = (raw: string): bigint | undefined => (ATOMIC_AMOUNT.te
  * a spend policy never assumes it, and scales each requirement by the decimals of
  * the asset it actually names (see {@link SpendPolicy.allowedAssets}).
  */
-export const DEFAULT_STABLECOIN_DECIMALS = 6;
+const DEFAULT_STABLECOIN_DECIMALS = 6;
 
 /**
  * A stablecoin an agent wallet may pay in, and the decimals its atomic amounts are
@@ -71,7 +70,7 @@ export const DEFAULT_STABLECOIN_DECIMALS = 6;
  * `@x402/evm`'s own `DEFAULT_STABLECOINS` registry is *not* uniformly 6-decimal
  * (MegaUSD and Mezo USD are 18), which is exactly why it can't be trusted as a gate.
  */
-export interface AllowedAsset {
+interface AllowedAsset {
     /** Token contract (EVM) or mint (SVM) address. Matched case-insensitively on EVM, exactly on SVM. */
     readonly asset: string;
     /** Atomic base-unit decimals for this asset. Used to scale the USD caps — must match the token on chain. */
@@ -93,7 +92,7 @@ export interface AllowedAsset {
  * `ethereum` (`eip155:1`) is absent — the SDK ships no default stablecoin for it, so
  * paying there needs an explicit {@link SpendPolicy.allowedAssets} entry.
  */
-export const DEFAULT_ALLOWED_ASSETS: ReadonlyArray<AllowedAsset> = [
+const DEFAULT_ALLOWED_ASSETS: ReadonlyArray<AllowedAsset> = [
     { asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6, network: "base" },
     { asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", decimals: 6, network: "base-sepolia" },
     { asset: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", decimals: 6, network: "polygon" },
@@ -110,7 +109,7 @@ export const DEFAULT_ALLOWED_ASSETS: ReadonlyArray<AllowedAsset> = [
  * Caps are denominated in USD (the stablecoin's dollar value); addresses and
  * networks are matched against the requirement the server offers.
  */
-export interface SpendPolicy {
+interface SpendPolicy {
     /**
      * Asset allowlist, each entry carrying its own `decimals` (defaults to
      * {@link DEFAULT_ALLOWED_ASSETS} — canonical USDC per friendly network).
@@ -153,7 +152,7 @@ export interface SpendPolicy {
 /**
  * A running spend ledger the per-run cap is measured (and reserved) against.
  */
-export interface SpendState {
+interface SpendState {
     /** Reserve a payment (atomic base units) against the running total, before it is signed. */
     readonly add: (amount: bigint) => void;
     /** Release a previously reserved amount (atomic base units) — e.g. a declined or failed payment. Clamps at 0. */
@@ -166,7 +165,7 @@ export interface SpendState {
  * A fresh spend ledger. One per wallet instance; the guard reserves into it and
  * releases from it.
  */
-export const createSpendState = (): SpendState => {
+const createSpendState = (): SpendState => {
     let spent = 0n;
 
     return {
@@ -188,7 +187,7 @@ export const createSpendState = (): SpendState => {
  * can round a cap the wrong way. Throws on a malformed amount (including
  * exponential notation like `"1e-7"`, which a decimal string never needs).
  */
-export const usdToAtomic = (usd: X402Price, decimals: number = DEFAULT_STABLECOIN_DECIMALS): bigint => {
+const usdToAtomic = (usd: X402Price, decimals: number = DEFAULT_STABLECOIN_DECIMALS): bigint => {
     if (!Number.isInteger(decimals) || decimals < 0) {
         throw new LunoraError("BAD_REQUEST", `x402 policy: decimals must be a non-negative integer, got ${String(decimals)}.`);
     }
@@ -288,7 +287,7 @@ const scaleCapPerDecimals = (usd: X402Price | undefined, table: Map<string, Allo
  * assumption. Pinning the asset (and taking its decimals from the policy, not the
  * requirement) closes that.
  */
-export const buildSpendPolicy = (policy: SpendPolicy): PaymentPolicy => {
+const buildSpendPolicy = (policy: SpendPolicy): PaymentPolicy => {
     const assets = buildAssetTable(policy);
     const maxPerCall = scaleCapPerDecimals(policy.maxPerCall, assets);
     const allowedNetworks = policy.allowedNetworks?.map((network) => toCaip2(network));
@@ -347,7 +346,7 @@ export const buildSpendPolicy = (policy: SpendPolicy): PaymentPolicy => {
  * the two are registered on separate client seams, and a guard that assumed the
  * filter ran would be one wiring change away from signing an unpinned asset.
  */
-export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): BeforePaymentCreationHook => {
+const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): BeforePaymentCreationHook => {
     const assets = buildAssetTable(policy);
     const maxPerRun = scaleCapPerDecimals(policy.maxPerRun, assets);
 
@@ -446,7 +445,7 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
  * over-count against the per-run cap for the rest of the run — fail-closed, but
  * needlessly so when the client (`wrapFetchWithPayment`) may retry.
  */
-export const releaseSpendOnFailure =
+const releaseSpendOnFailure =
     (state: SpendState): OnPaymentCreationFailureHook =>
     (context) => {
         // Server-controlled string — same fail-closed parse as the guard and the
@@ -473,7 +472,7 @@ export const releaseSpendOnFailure =
  * `maxPerRun`, or a dynamic `onPaymentRequired` gate actually bound spend, so only
  * those count here.
  */
-export const assertBoundedPolicy = (policy: SpendPolicy): void => {
+const assertBoundedPolicy = (policy: SpendPolicy): void => {
     const bounded = policy.maxPerCall !== undefined || policy.maxPerRun !== undefined || policy.onPaymentRequired !== undefined;
 
     if (!bounded) {
@@ -482,4 +481,16 @@ export const assertBoundedPolicy = (policy: SpendPolicy): void => {
             "x402 pay: refusing to build a wallet with an unbounded spend policy. Set at least one of maxPerCall, maxPerRun, or onPaymentRequired (allowedNetworks/allowedRecipients/allowedAssets narrow but do not bound spend).",
         );
     }
+};
+
+export type { AllowedAsset, SpendPolicy, SpendState };
+export {
+    assertBoundedPolicy,
+    buildPaymentGuard,
+    buildSpendPolicy,
+    createSpendState,
+    DEFAULT_ALLOWED_ASSETS,
+    DEFAULT_STABLECOIN_DECIMALS,
+    releaseSpendOnFailure,
+    usdToAtomic,
 };

@@ -17,8 +17,6 @@
  * records the audit entry.
  */
 
-/* eslint-disable import/exports-last -- a contract + engine module: the wire types are declared next to the caps and the code that produces them; grouping every export at the end would split the contract from its enforcement. */
-
 import type { Solution } from "@lunora/errors";
 import { findIssueSolution, flattenHint, LunoraError } from "@lunora/errors";
 
@@ -40,7 +38,7 @@ import { findIssueSolution, flattenHint, LunoraError } from "@lunora/errors";
  * the Cloudflare host happens to pass. Kept exported so that host has a name to
  * pass rather than a string literal.
  */
-export const DEFAULT_EXPLAIN_ISSUE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_EXPLAIN_ISSUE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 /** Cap the raw error text fed to the model so a pathological message can't blow the prompt budget. */
 const EXPLAIN_ISSUE_MESSAGE_CAP = 2000;
@@ -194,12 +192,12 @@ const fenceSafe = (value: string): string => {
  * `@cloudflare/workers-types`) to reach `env.AI`. Mirrors `AiBindingLike` in
  * `@lunora/ai`.
  */
-export interface AiRunBinding {
+interface AiRunBinding {
     run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
 }
 
 /** Parsed `__lunora_admin__:explainIssue` payload: the folded Issue's identifying facts, plus an optional model override. */
-export interface ExplainIssueArgs {
+interface ExplainIssueArgs {
     /** The Issue's culprit (`<file>:<function>` or `container:<name>`), for grounding context. */
     culprit?: string;
     /** Per-request model-id override; falls back to the caller's `defaultModel`, then {@link DEFAULT_EXPLAIN_ISSUE_MODEL}. */
@@ -216,7 +214,7 @@ export interface ExplainIssueArgs {
  * time instead of letting it fall through to the client's generic error copy.
  * Mirrored by `ExplainIssueResult["reason"]` in `@lunora/studio`'s `lib/admin.ts`.
  */
-export type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-binding";
+type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-binding";
 
 /**
  * The grounding facts both `__lunora_admin__:explainIssue` outcomes carry. Present
@@ -227,7 +225,7 @@ export type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-
  * same catalog offline (that is the whole point of the grounded layer), so
  * shipping it would be payload nothing reads.
  */
-export interface ExplainIssueGrounding {
+interface ExplainIssueGrounding {
     /**
      * The id of the matched catalog/platform solution the prompt was grounded in,
      * absent when nothing recognized the message. The client renders a caveat on
@@ -265,7 +263,7 @@ interface ExplainIssueSuccess extends ExplainIssueGrounding {
     model: string;
 }
 
-export type ExplainIssueResult = ExplainIssueDegraded | ExplainIssueSuccess;
+type ExplainIssueResult = ExplainIssueDegraded | ExplainIssueSuccess;
 
 /**
  * Validate the `__lunora_admin__:explainIssue` payload. Requires a non-empty
@@ -276,7 +274,7 @@ export type ExplainIssueResult = ExplainIssueDegraded | ExplainIssueSuccess;
  * `sampleMessage` alone left `title`/`culprit` as an open door onto the same
  * prompt budget.
  */
-export const parseExplainIssueArgs = (args: Record<string, unknown>): ExplainIssueArgs => {
+const parseExplainIssueArgs = (args: Record<string, unknown>): ExplainIssueArgs => {
     const sampleMessage = typeof args["sampleMessage"] === "string" ? args["sampleMessage"] : "";
 
     if (sampleMessage.trim() === "") {
@@ -390,7 +388,7 @@ const runExplainIssueModel = async (
  * `binding` is `unknown` so the caller can hand over `env.AI` untyped — the shape
  * check lives here rather than at each call site.
  */
-export const explainIssue = async (binding: unknown, args: Record<string, unknown>, options: { defaultModel?: string } = {}): Promise<ExplainIssueResult> => {
+const explainIssue = async (binding: unknown, args: Record<string, unknown>, options: { defaultModel?: string } = {}): Promise<ExplainIssueResult> => {
     const parsed = parseExplainIssueArgs(args);
 
     // Ground on the canonical catalog fact, re-derived server-side (never trust
@@ -420,3 +418,6 @@ export const explainIssue = async (binding: unknown, args: Record<string, unknow
 
     return { ...grounding, degraded: false, explanation: explanation.trim(), model };
 };
+
+export type { AiRunBinding, ExplainIssueArgs, ExplainIssueDegradedReason, ExplainIssueGrounding, ExplainIssueResult };
+export { DEFAULT_EXPLAIN_ISSUE_MODEL, explainIssue, parseExplainIssueArgs };

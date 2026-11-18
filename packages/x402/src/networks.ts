@@ -18,30 +18,28 @@
 
 import { LunoraError } from "@lunora/errors";
 
-/* eslint-disable import/exports-last, no-void, sonarjs/void-use -- a data + types module: public types sit next to the consts they describe, and each const's shape is checked with a standalone `void (… satisfies …)` (an inline `as const satisfies` breaks isolatedDeclarations, TS9010). */
-
 /**
  * A CAIP-2 chain identifier, e.g. `"eip155:8453"` (Base) or `"solana:5eyk…"`.
  */
-export type Caip2 = `${string}:${string}`;
+type Caip2 = `${string}:${string}`;
 
 /**
  * Friendly network names Lunora maps to CAIP-2 for `@x402/core`.
  */
-export type FriendlyNetwork = "arbitrum" | "arbitrum-sepolia" | "base" | "base-sepolia" | "ethereum" | "polygon" | "solana" | "solana-devnet";
+type FriendlyNetwork = "arbitrum" | "arbitrum-sepolia" | "base" | "base-sepolia" | "ethereum" | "polygon" | "solana" | "solana-devnet";
 
 /**
  * A network Lunora can settle on: a {@link FriendlyNetwork} alias (mapped to
  * CAIP-2 internally) or a raw {@link Caip2} id for chains without a friendly name.
  */
-export type X402Network = Caip2 | FriendlyNetwork;
+type X402Network = Caip2 | FriendlyNetwork;
 
 /**
  * Friendly name → CAIP-2 id. Values verified against `@x402/evm` and `@x402/svm`
  * `DEFAULT_STABLECOINS` at 2.17.0. `base` / `base-sepolia` are the primary
  * prod / test pair.
  */
-export const NETWORK_TO_CAIP2 = {
+const NETWORK_TO_CAIP2 = {
     arbitrum: "eip155:42161",
     "arbitrum-sepolia": "eip155:421614",
     base: "eip155:8453",
@@ -55,27 +53,30 @@ export const NETWORK_TO_CAIP2 = {
 // `isolatedDeclarations` (oxc `.d.ts` emit) rejects an inline `as const satisfies …`, so the
 // exported consts keep `as const` (preserving their literal types) and validate their shape with a
 // standalone `satisfies` here. Don't fold these back into `as const satisfies` — it reintroduces TS9010.
+// eslint-disable-next-line no-void, sonarjs/void-use -- `void` makes the standalone `satisfies` check a statement without tripping no-unused-expressions
 void (NETWORK_TO_CAIP2 satisfies Record<FriendlyNetwork, Caip2>);
 
 /**
  * EVM friendly networks (signed via `@x402/evm` + viem).
  */
-export const EVM_NETWORKS = ["arbitrum", "arbitrum-sepolia", "base", "base-sepolia", "ethereum", "polygon"] as const;
+const EVM_NETWORKS = ["arbitrum", "arbitrum-sepolia", "base", "base-sepolia", "ethereum", "polygon"] as const;
 
+// eslint-disable-next-line no-void, sonarjs/void-use -- as above
 void (EVM_NETWORKS satisfies ReadonlyArray<FriendlyNetwork>);
 
 /**
  * Solana friendly networks (signed via `@x402/svm`).
  */
-export const SVM_NETWORKS = ["solana", "solana-devnet"] as const;
+const SVM_NETWORKS = ["solana", "solana-devnet"] as const;
 
+// eslint-disable-next-line no-void, sonarjs/void-use -- as above
 void (SVM_NETWORKS satisfies ReadonlyArray<FriendlyNetwork>);
 
 /**
  * Resolve a network to its CAIP-2 id. Friendly aliases are looked up; a value
  * that already looks like CAIP-2 (`namespace:reference`) passes through.
  */
-export const toCaip2 = (network: X402Network): Caip2 => {
+const toCaip2 = (network: X402Network): Caip2 => {
     const mapped = (NETWORK_TO_CAIP2 as Record<string, Caip2>)[network];
 
     if (mapped !== undefined) {
@@ -95,9 +96,12 @@ export const toCaip2 = (network: X402Network): Caip2 => {
 /**
  * True when `network` settles on an EVM chain (viem signer path).
  */
-export const isEvmNetwork = (network: X402Network): boolean => toCaip2(network).startsWith("eip155:");
+const isEvmNetwork = (network: X402Network): boolean => toCaip2(network).startsWith("eip155:");
 
 /**
  * True when `network` settles on Solana (`@x402/svm` signer path).
  */
-export const isSvmNetwork = (network: X402Network): boolean => toCaip2(network).startsWith("solana:");
+const isSvmNetwork = (network: X402Network): boolean => toCaip2(network).startsWith("solana:");
+
+export type { Caip2, FriendlyNetwork, X402Network };
+export { EVM_NETWORKS, isEvmNetwork, isSvmNetwork, NETWORK_TO_CAIP2, SVM_NETWORKS, toCaip2 };

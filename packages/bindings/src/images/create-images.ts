@@ -1,5 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- JSDoc names the `ReadableStream<Uint8Array>` return type, not a credential. */
-
 /**
  * The action-only Images client over the Cloudflare Images binding.
  *
@@ -44,8 +42,8 @@ const isR2ObjectBody = (input: ImageInput): input is R2ObjectBodyLike => {
 };
 
 /**
- * Normalize any accepted input into the `ReadableStream<Uint8Array>` the binding
- * wants. An R2 object body (from `ctx.storage.download(key)`) is unwrapped to its
+ * Normalize any accepted input into the `ReadableStream` of `Uint8Array` chunks
+ * the binding wants. An R2 object body (from `ctx.storage.download(key)`) is unwrapped to its
  * `.body` stream; a `Blob`/`ArrayBuffer`/`Uint8Array` is wrapped in a one-chunk
  * stream; a stream passes through.
  */

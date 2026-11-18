@@ -9,7 +9,6 @@
  * generation, so a wrong header name or a mis-built URL compiles cleanly and fails in
  * production. Here it is ordinary code with ordinary tests, and codegen emits a call.
  */
-/* eslint-disable unicorn/no-null -- `resolveIdentity` is a runtime contract that returns `null` for an anonymous request; `undefined` would be a different signal */
 import { LunoraError } from "@lunora/errors";
 
 import type { AuthAuditEntry, AuthAuditReader } from "./audit";
@@ -54,14 +53,15 @@ const copyDeclaredClaims = (identity: SessionIdentity, body: Record<string, unkn
 };
 
 /** The slice of a Durable Object namespace this needs — structural, so tests need no runtime. */
-/* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (a real `DurableObjectNamespace.get` takes a `DurableObjectId`, not `unknown`), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
 export interface AuthNamespaceLike {
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameter bivariant: a real `DurableObjectNamespace` takes a `DurableObjectId`, not `unknown`
     get(this: void, id: unknown): { fetch: (request: Request) => Promise<Response> };
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameter bivariant: a real `DurableObjectNamespace` takes a `DurableObjectId`, not `unknown`
     idFromName(this: void, name: string): unknown;
     /** Jurisdiction-restricted subnamespace. Optional only so older binding types still fit; {@link createDoAuthWiring} fails closed without it when a jurisdiction is set. */
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameter bivariant: a real `DurableObjectNamespace` takes a `DurableObjectId`, not `unknown`
     jurisdiction?(this: void, jurisdiction: AuthJurisdiction): AuthNamespaceLike;
 }
-/* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */
 
 /**
  * Cloudflare Durable Object data-residency jurisdiction. Widening union —
@@ -307,12 +307,14 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
             // returning `null` here makes that an anonymous request rather than a
             // round-trip that is guaranteed to 401.
             if (!internalSecret) {
+                // eslint-disable-next-line unicorn/no-null -- `resolveIdentity` returns `null` for an anonymous request; `undefined` is a different signal
                 return null;
             }
 
             const target = stub();
 
             if (!target) {
+                // eslint-disable-next-line unicorn/no-null -- anonymous: see above
                 return null;
             }
 
@@ -331,6 +333,7 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
             const response = await target.fetch(new Request(sessionUrl, { headers }));
 
             if (!response.ok) {
+                // eslint-disable-next-line unicorn/no-null -- anonymous: see above
                 return null;
             }
 
@@ -341,6 +344,7 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
             const userId = body?.["userId"];
 
             if (!body || typeof userId !== "string" || userId.length === 0) {
+                // eslint-disable-next-line unicorn/no-null -- anonymous: see above
                 return null;
             }
 

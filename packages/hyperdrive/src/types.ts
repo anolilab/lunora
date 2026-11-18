@@ -116,8 +116,8 @@ export interface SqlClient {
  *
  * Method syntax, not an arrow property — see {@link PostgresJsLike}.
  */
-/* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (the drivers declare mutable arrays), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
 export interface NodePgLike {
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameters bivariant: the drivers declare mutable arrays
     query(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<{ rows: unknown[] }>;
 }
 
@@ -142,7 +142,9 @@ export interface NodePgLike {
  */
 export interface PostgresJsLike {
     /** postgres.js's `sql.begin(fn)`: reserves one connection and runs `fn` inside `BEGIN` … `COMMIT`. */
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameters bivariant: the drivers declare mutable arrays
     begin?(this: void, work: (tx: PostgresJsLike) => Promise<unknown>): Promise<unknown>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameters bivariant: the drivers declare mutable arrays
     unsafe(this: void, text: string, params?: ReadonlyArray<unknown>, options?: { prepare?: boolean }): Promise<unknown>;
 }
 
@@ -182,6 +184,6 @@ export interface PostgresJsLike {
  * values at runtime regardless.
  */
 export interface Mysql2Like {
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameters bivariant: the drivers declare mutable arrays
     query(this: void, text: string, params?: unknown): Promise<[unknown, unknown]>;
 }
-/* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */
