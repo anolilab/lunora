@@ -596,6 +596,22 @@ const hasAlternativeWithin = (node: TsNode, within: TsNode): boolean => {
     return false;
 };
 
+/**
+ * Whether `statement` is the only way its function returns: the one `return` of the function's own body, written
+ * directly in that body, not under an `if`, loop or `try`. Any other shape (`if (args.skip) return true; return …`,
+ * two returns that each require the identity) is not analysed, so it does not count.
+ */
+const isSoleReturn = (statement: TsNode): boolean => {
+    const owner = enclosingFunctionOf(statement);
+    const body = owner?.getBody();
+
+    if (owner === undefined || !Node.isBlock(body) || statement.getParent() !== body) {
+        return false;
+    }
+
+    return owner.getDescendantsOfKind(SyntaxKind.ReturnStatement).every((exit) => exit === statement || enclosingFunctionOf(exit) !== owner);
+};
+
 /** Whether `comparison` is the predicate a callback returns as a whole, alone or in a `&&` chain. */
 const isReturnedPredicate = (comparison: TsNode): boolean => {
     let current = valueWrapperOf(comparison);
@@ -610,7 +626,7 @@ const isReturnedPredicate = (comparison: TsNode): boolean => {
 
     const parent = current.getParent();
 
-    return (Node.isArrowFunction(parent) && parent.getBody() === current) || Node.isReturnStatement(parent);
+    return (Node.isArrowFunction(parent) && parent.getBody() === current) || (Node.isReturnStatement(parent) && isSoleReturn(parent));
 };
 
 /** The `ctx.auth` member that names the caller; `getIdentity` is a method shared by every caller. */

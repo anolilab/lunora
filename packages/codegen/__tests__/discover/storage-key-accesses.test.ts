@@ -1311,6 +1311,40 @@ requireMember = async () => {};`;
     const factoredGuard = (predicate: string): string =>
         `const predicate = ${predicate};\n    ${inlineGuard(`ctx.db.query("members").withIndex("by_channel", (q) => q.eq("channelId", message.channelId)).filter(predicate).first()`)}`;
 
+    it.each([
+        ["an early caller-chosen return", "(m) => { if (args.skip) return true; return m.userId === ctx.auth.userId && m.channelId === message.channelId; }"],
+        [
+            "two returns that both require the identity",
+            "(m) => { if (m.archived) { return m.userId === ctx.auth.userId && false; } return m.userId === ctx.auth.userId && m.channelId === message.channelId; }",
+        ],
+        ["a return inside a loop", "(m) => { for (const attempt of [1]) { return m.userId === ctx.auth.userId && m.channelId === message.channelId; } }"],
+        ["a return inside a try", "(m) => { try { return m.userId === ctx.auth.userId && m.channelId === message.channelId; } catch { return true; } }"],
+    ])("reports an inline guard whose block filter has %s", (_label, filter) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts an inline guard whose block filter has a single return of the predicate", () => {
+        expect.assertions(1);
+
+        const filter = "(m) => { const channel = message.channelId; return m.userId === ctx.auth.userId && m.channelId === channel; }";
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports an inline guard whose factored block predicate returns early on a caller flag", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(factoredGuard("(m) => { if (args.skip) return true; return m.userId === ctx.auth.userId; }")));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("accepts an inline guard whose filter predicate is factored into a local", () => {
         expect.assertions(1);
 
