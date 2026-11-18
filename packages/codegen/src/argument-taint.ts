@@ -1008,15 +1008,6 @@ const isCallerOnlyInList = (list: TsNode, scope: MatchScope): boolean => {
 };
 
 /**
- * Whether anything in `scope` assigns the binding `declaration` makes, by symbol. Scanned here rather than with
- * `isReassignedBinding`, which takes a parameter inside a `const x = q.filter(…)` initializer for a `const` binding.
- */
-const isAssignedWithin = (scope: TsNode, declaration: TsNode): boolean =>
-    scope
-        .getDescendantsOfKind(SyntaxKind.Identifier)
-        .some((identifier) => isWriteTarget(identifier) && declarationOf(identifier)?.compilerNode === declaration.compilerNode);
-
-/**
  * Whether `binding` takes a column the code names: an identifier or literal key, or a computed key that is a string
  * literal or a module constant. `{ [args.field]: value }` lets the caller choose the column.
  */
@@ -1028,10 +1019,10 @@ const hasStaticKey = (binding: BindingElement): boolean => {
 
 /**
  * Whether `element` and every element enclosing it in its parameter pattern have a static key and no default, and
- * nothing in the callback assigns it (see {@link isAssignedWithin}).
+ * nothing in the callback assigns it.
  */
 const isUndefaultedRowBinding = (element: BindingElement): boolean =>
-    !isAssignedWithin(element.getFirstAncestorByKind(SyntaxKind.Parameter)?.getParent() ?? element, element) &&
+    !isReassignedBinding(element) &&
     [element, ...element.getAncestors().filter((ancestor) => Node.isBindingElement(ancestor))].every(
         (binding) =>
             Node.isBindingElement(binding) && binding.getInitializer() === undefined && binding.getDotDotDotToken() === undefined && hasStaticKey(binding),
@@ -1089,7 +1080,7 @@ const isFilteredRowField = (node: TsNode, comparison: TsNode, predicate: TsNode 
     // The row parameter itself is a field only through an access (`m.userId`), and only while the callback never
     // repoints it (`m = { ...m, userId: uid }`); a name destructured from it (`({ userId }) => userId === uid`) is one
     // when its key is static, no default can replace it and nothing reassigns it.
-    if (Node.isParameterDeclaration(declaration) && isAccess && !isAssignedWithin(declaration.getParent(), declaration)) {
+    if (Node.isParameterDeclaration(declaration) && isAccess && !isReassignedBinding(declaration)) {
         owner = declaration.getParent();
     } else if (Node.isBindingElement(declaration) && isUndefaultedRowBinding(declaration)) {
         owner = declaration.getFirstAncestorByKind(SyntaxKind.Parameter)?.getParent();

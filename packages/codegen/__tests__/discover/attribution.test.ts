@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { SourceFile, VariableDeclaration } from "ts-morph";
+import type { BindingElement, ParameterDeclaration, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, Project, SyntaxKind } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -255,5 +255,41 @@ describe(isReassignedBinding, () => {
 
         expect(source.isDeclarationFile()).toBe(true);
         expect(isReassignedBinding(variableNamed(source, "owner"))).toBe(true);
+    });
+
+    it("sees a reassigned parameter of a callback that a const initializer holds", () => {
+        expect.assertions(3);
+
+        const project = new Project({ useInMemoryFileSystem: true });
+        const source = project.createSourceFile(
+            "/lunora/a.ts",
+            `export const f = (q, other, uid) => {
+    const rows = q.filter(({ m }) => { m = other; return m === uid; });
+    const kept = q.filter(({ k }) => k === uid);
+    const plain = q.filter((p) => { p = other; return p.userId === uid; });
+    return [rows, kept, plain];
+};`,
+        );
+        const element = (name: string) => source.getDescendantsOfKind(SyntaxKind.BindingElement).find((binding) => binding.getName() === name);
+        const parameter = source.getDescendantsOfKind(SyntaxKind.Parameter).find((declaration) => declaration.getName() === "p");
+
+        // The enclosing `const rows` is not the binding's own declaration: a parameter can be reassigned.
+        expect(isReassignedBinding(element("m") as BindingElement)).toBe(true);
+        expect(isReassignedBinding(element("k") as BindingElement)).toBe(false);
+        expect(isReassignedBinding(parameter as ParameterDeclaration)).toBe(true);
+    });
+
+    it("never takes an element of a const destructuring for reassigned", () => {
+        expect.assertions(2);
+
+        const project = new Project({ useInMemoryFileSystem: true });
+        const source = project.createSourceFile(
+            "/lunora/a.ts",
+            `export const f = (row) => { const { a: [b] } = row; let { c } = row; c = 1; return [b, c]; };`,
+        );
+        const element = (name: string) => source.getDescendantsOfKind(SyntaxKind.BindingElement).find((binding) => binding.getName() === name);
+
+        expect(isReassignedBinding(element("b") as BindingElement)).toBe(false);
+        expect(isReassignedBinding(element("c") as BindingElement)).toBe(true);
     });
 });
