@@ -1227,6 +1227,45 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it.each([
+        [
+            "an unrelated array's filter inside a where value",
+            "",
+            "ctx.db.members.findFirst({ where: { userId: args.victim, channelId: (globalThis.unrelated.filter((m) => m.userId === ctx.auth.userId), message.channelId) } })",
+        ],
+        [
+            "an inline predicate handed to another call",
+            "",
+            "ctx.db.members.findFirst({ where: { userId: args.victim, channelId: message.channelId, active: ignore((m) => m.userId === ctx.auth.userId) } })",
+        ],
+        [
+            "a factored predicate handed to another call",
+            "const predicate = (m) => m.userId === ctx.auth.userId;",
+            "ctx.db.members.findFirst({ where: { userId: args.victim, channelId: message.channelId, active: ignore(predicate) } })",
+        ],
+    ])("reports an inline guard whose identity comparison sits in %s", (_label, local, read) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`${local}\n    ${inlineGuard(read)}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts a helper guard named context whose in list holds only the caller", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (context, channelId) => {
+    const row = await context.db.members.findFirst({ where: { userId: { in: [context.auth.userId] }, channelId } });
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("accepts a helper guard whose ctx parameter is named context", () => {
         expect.assertions(1);
 

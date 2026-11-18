@@ -872,6 +872,16 @@ const isOverriddenOnTheWay = (node: TsNode): boolean => {
 /** Which calls count as row reads: the handler's `ctx.db` reads, or a helper's reads through its verified ctx parameter. */
 type ReadCallTest = (call: CallExpression) => boolean;
 
+/**
+ * What a match is judged against: which calls are the row read, which values are the caller's id (`ctx.auth.userId`
+ * for a handler, `<param>.auth.userId` for a helper's verified ctx parameter), and the read's own predicate argument.
+ */
+interface MatchScope {
+    isCaller: (value: TsNode) => boolean;
+    isRead: ReadCallTest;
+    predicate: TsNode | undefined;
+}
+
 /** Whether `use`, past its wrappers, is passed straight to a row read as an argument. */
 const isReadArgument = (use: TsNode, isRead: ReadCallTest): boolean => {
     const wrapped = valueWrapperOf(use);
@@ -955,8 +965,8 @@ const isTopLevelWhereMember = (property: TsNode, isRead: ReadCallTest = isDataba
  * Whether `list` holds nothing but the caller's id and is the value of an `in` with no `NOT` or `OR` above it. A list
  * factored into a never-repointed local (`const ownerIds = [uid]`) is judged at every place the local is used.
  */
-const isCallerOnlyInList = (list: TsNode): boolean => {
-    if (!Node.isArrayLiteralExpression(list) || !list.getElements().every((element) => isCallerId(element))) {
+const isCallerOnlyInList = (list: TsNode, scope: MatchScope): boolean => {
+    if (!Node.isArrayLiteralExpression(list) || !list.getElements().every((element) => scope.isCaller(element))) {
         return false;
     }
 
@@ -974,7 +984,7 @@ const isCallerOnlyInList = (list: TsNode): boolean => {
                 Node.isPropertyAssignment(property) &&
                 staticPropertyName(property.getNameNode()) === "in" &&
                 !sitsInUnpinningBranch(property) &&
-                isTopLevelWhereMember(property) &&
+                isTopLevelWhereMember(property, scope.isRead) &&
                 !isOverriddenOnTheWay(property)
             );
         })
@@ -1026,16 +1036,38 @@ const keepsRowField = (root: Identifier, declaration: TsNode | undefined, callba
 };
 
 /**
+ * Whether `callback` is the predicate of the guarded read itself: the `predicate` argument the read's chain is handed
+ * (`ctx.db.query("m").filter(predicate)`), written inline or held by a `const` local. A callback handed to any other
+ * call (`unrelated.filter((m) => …)` inside a `where` value) filters something else and pins nothing.
+ */
+const isGuardPredicate = (callback: TsNode, predicate: TsNode | undefined): boolean => {
+    const passed = predicate === undefined ? undefined : strippedValue(predicate);
+
+    if (passed === undefined) {
+        return false;
+    }
+
+    if (passed === callback) {
+        return true;
+    }
+
+    const initializer = Node.isIdentifier(passed) ? trustedInitializerOf(passed) : undefined;
+
+    return initializer !== undefined && strippedValue(initializer) === callback;
+};
+
+/**
  * Whether `node` reads a field of the row a filter callback is handed (`m.userId` in `(m) => …`): only then does an
  * identity equality pin the match. Against an args value, a constant or another identity (`uid === args.victim`) it is
  * a check that does not depend on the row at all.
  */
-const isFilteredRowField = (node: TsNode, comparison: TsNode): boolean => {
+const isFilteredRowField = (node: TsNode, comparison: TsNode, predicate: TsNode | undefined): boolean => {
     const field = unwrapExpression(node) ?? node;
     const isAccess = Node.isPropertyAccessExpression(field) || Node.isElementAccessExpression(field);
     const root = isAccess ? memberAccessRootIdentifier(field) : field;
     const declaration = Node.isIdentifier(root) ? declarationOf(root) : undefined;
-    const callback: TsNode | undefined = callbackOf(comparison);
+    const found = callbackOf(comparison);
+    const callback: TsNode | undefined = found !== undefined && isGuardPredicate(found, predicate) ? found : undefined;
     let owner: TsNode | undefined;
 
     // The row parameter itself is a field only through an access (`m.userId`), and only while the callback never
@@ -1056,11 +1088,12 @@ const isFilteredRowField = (node: TsNode, comparison: TsNode): boolean => {
  * an argument of a call that is no negating comparison (`ctx.db.users.get(uid)`, `q.eq("userId", uid)`), or one side
  * of an `===` / `==` a filter callback returns. A `NOT` or `OR` branch above it unpins the match.
  */
-const matchesCallerAt = (value: TsNode, isRead: ReadCallTest): boolean => {
+const matchesCallerAt = (value: TsNode, scope: MatchScope): boolean => {
+    const { isRead, predicate } = scope;
     const parent = value.getParent();
 
     if (Node.isArrayLiteralExpression(parent)) {
-        return isCallerOnlyInList(parent);
+        return isCallerOnlyInList(parent, scope);
     }
 
     if (Node.isPropertyAssignment(parent) || Node.isShorthandPropertyAssignment(parent)) {
@@ -1100,7 +1133,7 @@ const matchesCallerAt = (value: TsNode, isRead: ReadCallTest): boolean => {
     return (
         (operator === SyntaxKind.EqualsEqualsEqualsToken || operator === SyntaxKind.EqualsEqualsToken) &&
         isReturnedPredicate(parent) &&
-        isFilteredRowField(other, parent)
+        isFilteredRowField(other, parent, predicate)
     );
 };
 
@@ -1126,7 +1159,7 @@ const isValuePreservingCall = (call: TsNode, value: TsNode): boolean => {
  * `q.eq("userId", uid)`), or one side of a comparison a filter callback returns. Nested in another column's value
  * expression (`active: uid === args.victim && true`) it decides only that value, not the match.
  */
-const constrainsMatch = (node: TsNode, isRead: ReadCallTest = isDatabaseReadCall): boolean => {
+const constrainsMatch = (node: TsNode, scope: MatchScope): boolean => {
     let current = outermostChainOf(node);
 
     for (let parent = current.getParent(); parent !== undefined; parent = current.getParent()) {
@@ -1151,7 +1184,7 @@ const constrainsMatch = (node: TsNode, isRead: ReadCallTest = isDatabaseReadCall
         current = parent;
     }
 
-    return matchesCallerAt(current, isRead);
+    return matchesCallerAt(current, scope);
 };
 
 /**
@@ -1225,7 +1258,7 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
 
         // Only the caller's id names the caller: `ctx.auth.role` or `ctx.auth.orgId` is shared by everyone who holds it.
         if (isCallerId(outermostChainOf(identifier))) {
-            return constrainsMatch(identifier);
+            return constrainsMatch(identifier, { isCaller: isCallerId, isRead: isDatabaseReadCall, predicate: argument });
         }
 
         const initializer = trustedInitializerOf(identifier);
@@ -1234,7 +1267,7 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
         // A local is judged by what becomes its value: the last operand of a comma, each branch of a conditional or
         // fallback. Every one an identity makes it an alias (`const uid = ctx.auth.userId`), placed where it is used.
         if (values.length > 0 && values.every((value) => isCallerId(value))) {
-            return constrainsMatch(identifier);
+            return constrainsMatch(identifier, { isCaller: isCallerId, isRead: isDatabaseReadCall, predicate: argument });
         }
 
         // A single query object, list or filter predicate (`const filter = { ownerId: uid }`, `const ids = [uid]`,
@@ -1253,7 +1286,12 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
             return false;
         }
 
-        return valueIdentifiersOf(only).some((inner) => isCallerId(outermostChainOf(inner)) && !hasAlternativeWithin(inner, only) && constrainsMatch(inner));
+        return valueIdentifiersOf(only).some(
+            (inner) =>
+                isCallerId(outermostChainOf(inner)) &&
+                !hasAlternativeWithin(inner, only) &&
+                constrainsMatch(inner, { isCaller: isCallerId, isRead: isDatabaseReadCall, predicate: argument }),
+        );
     });
 
 /**
@@ -1885,7 +1923,11 @@ const argumentReadsIdentityOf = (argument: TsNode, parameter: ParameterDeclarati
         (node) =>
             isIdentityReadOf(node, parameter) &&
             !hasAlternativeWithin(node, argument) &&
-            constrainsMatch(node, (call) => isParameterDatabaseRead(call, parameter)),
+            constrainsMatch(node, {
+                isCaller: (value) => isIdentityReadOf(strippedValue(value), parameter),
+                isRead: (call) => isParameterDatabaseRead(call, parameter),
+                predicate: argument,
+            }),
     );
 
 /** The declaration a variable statement makes, when it is a single `const` binding one identifier. */
