@@ -576,6 +576,94 @@ const isReturnedPredicate = (comparison: TsNode): boolean => {
     return (Node.isArrowFunction(parent) && parent.getBody() === current) || Node.isReturnStatement(parent);
 };
 
+/** The `ctx.auth` member that names the caller; `getIdentity` is a method shared by every caller. */
+const CALLER_ID_MEMBER = "userId";
+
+/** `node` without the parentheses, `await`, `!` and type assertions around it, none of which change the value. */
+const strippedValue = (node: TsNode): TsNode => {
+    let current = node;
+
+    for (;;) {
+        const next = Node.isNonNullExpression(current) || Node.isAwaitExpression(current) ? current.getExpression() : unwrapExpression(current);
+
+        if (next === undefined || next === current) {
+            return current;
+        }
+
+        current = next;
+    }
+};
+
+/** Whether `value` is the caller's id itself (`ctx.auth.userId`, or a local bound to it), not merely an expression that mentions it. */
+const isCallerId = (value: TsNode): boolean => {
+    const path = contextTrustPathOf(strippedValue(value));
+
+    return path?.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
+};
+
+/** The `where` operators that match rows other than the value they are given, or the value's complement. */
+const NON_MATCHING_OPERATORS: ReadonlySet<string> = new Set(["contains", "gt", "gte", "isNull", "lt", "lte", "ne", "neq", "not", "notIn"]);
+
+/** The query keys whose branches admit rows the identity does not pin: `NOT` negates, an `OR` arm adds others. */
+const UNPINNING_KEYS: ReadonlySet<string> = new Set(["NOT", "not", "OR"]);
+
+/** Whether a property on the way up from `node` to its query call is a `NOT` or `OR` branch. */
+const sitsInUnpinningBranch = (node: TsNode): boolean => {
+    for (let ancestor = node.getParent(); ancestor !== undefined && !Node.isCallExpression(ancestor); ancestor = ancestor.getParent()) {
+        const key = Node.isPropertyAssignment(ancestor) ? staticPropertyName(ancestor.getNameNode()) : undefined;
+
+        if (key !== undefined && UNPINNING_KEYS.has(key)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Whether `value`, a caller identity past its wrappers, matches the caller where it stands: a column value or
+ * `{ eq: … }` (not `ne`, `notIn` or another non-matching operator), an `in` list holding nothing but the caller's id,
+ * an argument of a call that is no negating comparison (`ctx.db.users.get(uid)`, `q.eq("userId", uid)`), or one side
+ * of an `===` / `==` a filter callback returns. A `NOT` or `OR` branch above it unpins the match.
+ */
+const matchesCallerAt = (value: TsNode): boolean => {
+    const parent = value.getParent();
+
+    if (Node.isArrayLiteralExpression(parent)) {
+        const list = valueWrapperOf(parent).getParent();
+
+        return (
+            Node.isPropertyAssignment(list) &&
+            staticPropertyName(list.getNameNode()) === "in" &&
+            parent.getElements().every((element) => isCallerId(element)) &&
+            !sitsInUnpinningBranch(list)
+        );
+    }
+
+    if (Node.isPropertyAssignment(parent) || Node.isShorthandPropertyAssignment(parent)) {
+        const key = staticPropertyName(parent.getNameNode());
+        const initializer: TsNode | undefined = Node.isPropertyAssignment(parent) ? parent.getInitializer() : value;
+        const isValue = initializer === value;
+
+        return isValue && key !== undefined && !NON_MATCHING_OPERATORS.has(key) && !UNPINNING_KEYS.has(key) && !sitsInUnpinningBranch(parent);
+    }
+
+    if (Node.isCallExpression(parent)) {
+        const callee = parent.getExpression();
+        const method = Node.isPropertyAccessExpression(callee) ? callee.getName() : undefined;
+
+        return parent.getArguments().includes(value) && (method === undefined || !NON_MATCHING_OPERATORS.has(method));
+    }
+
+    if (!Node.isBinaryExpression(parent)) {
+        return false;
+    }
+
+    const operator = parent.getOperatorToken().getKind();
+
+    return (operator === SyntaxKind.EqualsEqualsEqualsToken || operator === SyntaxKind.EqualsEqualsToken) && isReturnedPredicate(parent);
+};
+
 /**
  * Whether the identity read `node` decides which rows a read matches: it is, past wrappers and a fixed fallback, the
  * value of a column in a query object (`ownerId: uid`, `{ eq: uid }`), an argument of a call (`ctx.db.users.get(uid)`,
@@ -607,19 +695,7 @@ const constrainsMatch = (node: TsNode): boolean => {
         current = parent;
     }
 
-    const parent = current.getParent();
-
-    const columnValue: TsNode | undefined = Node.isPropertyAssignment(parent) ? parent.getInitializer() : undefined;
-
-    if (columnValue === current || Node.isShorthandPropertyAssignment(parent)) {
-        return true;
-    }
-
-    if (Node.isCallExpression(parent)) {
-        return parent.getArguments().includes(current);
-    }
-
-    return Node.isBinaryExpression(parent) && EQUALITY_OPERATORS.has(parent.getOperatorToken().getKind()) && isReturnedPredicate(parent);
+    return matchesCallerAt(current);
 };
 
 /**
@@ -718,31 +794,6 @@ const rowFieldReadOf = (source: TsNode): { field: string | undefined; read: TsNo
 
         return { field: undefined, read: current };
     }
-};
-
-/** The `ctx.auth` member that names the caller; `getIdentity` is a method shared by every caller. */
-const CALLER_ID_MEMBER = "userId";
-
-/** `node` without the parentheses, `await`, `!` and type assertions around it, none of which change the value. */
-const strippedValue = (node: TsNode): TsNode => {
-    let current = node;
-
-    for (;;) {
-        const next = Node.isNonNullExpression(current) || Node.isAwaitExpression(current) ? current.getExpression() : unwrapExpression(current);
-
-        if (next === undefined || next === current) {
-            return current;
-        }
-
-        current = next;
-    }
-};
-
-/** Whether `value` is the caller's id itself (`ctx.auth.userId`, or a local bound to it), not merely an expression that mentions it. */
-const isCallerId = (value: TsNode): boolean => {
-    const path = contextTrustPathOf(strippedValue(value));
-
-    return path?.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
 };
 
 /** The value a `key: value` or shorthand `{ key }` property holds; `undefined` for any other member. */

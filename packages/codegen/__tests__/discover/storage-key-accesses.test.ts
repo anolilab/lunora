@@ -752,6 +752,63 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    /** An inline membership guard reading `read`, enforced by the usual `if (!membership)`. */
+    const inlineGuard = (read: string): string => `const membership = await ${read};
+    if (!membership) {
+        throw new Error("forbidden");
+    }`;
+
+    it.each([
+        ["a !== filter", `ctx.db.query("members").filter((m) => m.userId !== ctx.auth.userId && m.channelId === message.channelId).first()`],
+        ["a != filter", `ctx.db.query("members").filter((m) => m.userId != ctx.auth.userId && m.channelId === message.channelId).first()`],
+        ["a ne operator", `ctx.db.members.findFirst({ where: { userId: { ne: ctx.auth.userId }, channelId: message.channelId } })`],
+        ["a not operator", `ctx.db.members.findFirst({ where: { userId: { not: ctx.auth.userId }, channelId: message.channelId } })`],
+        ["a notIn operator", `ctx.db.members.findFirst({ where: { userId: { notIn: [ctx.auth.userId] }, channelId: message.channelId } })`],
+        ["a NOT branch", `ctx.db.members.findFirst({ where: { NOT: { userId: ctx.auth.userId }, channelId: message.channelId } })`],
+        ["an OR arm", `ctx.db.members.findFirst({ where: { OR: [{ userId: ctx.auth.userId }, { userId: args.victim }], channelId: message.channelId } })`],
+        [
+            "an in list with another member",
+            `ctx.db.members.findFirst({ where: { userId: { in: [ctx.auth.userId, args.victim] }, channelId: message.channelId } })`,
+        ],
+        [
+            "a neq index predicate",
+            `ctx.db.query("members").withIndex("by_channel", (q) => q.eq("channelId", message.channelId).neq("userId", ctx.auth.userId)).first()`,
+        ],
+    ])("reports an inline guard whose identity is excluded or widened by %s", (_label, read) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(read)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["an == filter", `ctx.db.query("members").filter((m) => m.userId == ctx.auth.userId && m.channelId === message.channelId).first()`],
+        ["an eq operator", `ctx.db.members.findFirst({ where: { userId: { eq: ctx.auth.userId }, channelId: message.channelId } })`],
+        ["an in list of only the caller", `ctx.db.members.findFirst({ where: { userId: { in: [ctx.auth.userId] }, channelId: message.channelId } })`],
+    ])("accepts an inline guard that matches the caller with %s", (_label, read) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(read)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a helper guard whose filter excludes the caller with !==", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx, channelId) => {
+    const row = await ctx.db.query("members").filter((m) => m.userId !== ctx.auth.userId && m.channelId === channelId).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("accepts an inline guard whose identity default is the identity itself", () => {
         expect.assertions(1);
 
