@@ -601,6 +601,21 @@ const isCallerId = (value: TsNode): boolean => {
     return path?.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
 };
 
+/** The other uses of the local `identifier`: every identifier in its file bound to the same declaration, minus the declaring name. */
+const usesOfLocal = (identifier: Identifier): Identifier[] => {
+    const declaration = declarationOf(identifier);
+
+    return identifier
+        .getSourceFile()
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .filter((use) => use.getText() === identifier.getText() && declarationOf(use) === declaration)
+        .filter((use) => {
+            const parent = use.getParent();
+
+            return !((Node.isVariableDeclaration(parent) || Node.isBindingElement(parent)) && parent.getNameNode() === use);
+        });
+};
+
 /** The `where` operators that match rows other than the value they are given, or the value's complement. */
 const NON_MATCHING_OPERATORS: ReadonlySet<string> = new Set(["contains", "gt", "gte", "isNull", "lt", "lte", "ne", "neq", "not", "notIn"]);
 
@@ -621,6 +636,45 @@ const sitsInUnpinningBranch = (node: TsNode): boolean => {
 };
 
 /**
+ * Whether `list` holds nothing but the caller's id and is the value of an `in` with no `NOT` or `OR` above it. A list
+ * factored into a never-repointed local (`const ownerIds = [uid]`) is judged at every place the local is used.
+ */
+const isCallerOnlyInList = (list: TsNode): boolean => {
+    if (!Node.isArrayLiteralExpression(list) || !list.getElements().every((element) => isCallerId(element))) {
+        return false;
+    }
+
+    const holder = valueWrapperOf(list).getParent();
+    const name = Node.isVariableDeclaration(holder) ? holder.getNameNode() : undefined;
+    const isLocal = Node.isIdentifier(name) && trustedInitializerOf(name) !== undefined;
+    const placements = isLocal ? usesOfLocal(name) : [list];
+
+    return (
+        placements.length > 0 &&
+        placements.every((placement) => {
+            const property = valueWrapperOf(placement).getParent();
+
+            return Node.isPropertyAssignment(property) && staticPropertyName(property.getNameNode()) === "in" && !sitsInUnpinningBranch(property);
+        })
+    );
+};
+
+/**
+ * Whether `node` reads a field of the row a filter callback is handed (`m.userId` in `(m) => …`): only then does an
+ * identity equality pin the match. Against an args value, a constant or another identity (`uid === args.victim`) it is
+ * a check that does not depend on the row at all.
+ */
+const isFilteredRowField = (node: TsNode, comparison: TsNode): boolean => {
+    const field = unwrapExpression(node) ?? node;
+    const root = Node.isPropertyAccessExpression(field) || Node.isElementAccessExpression(field) ? memberAccessRootIdentifier(field) : undefined;
+    const declaration = root === undefined ? undefined : declarationOf(root);
+    const owner: TsNode | undefined = Node.isParameterDeclaration(declaration) ? declaration.getParent() : undefined;
+    const callback: TsNode | undefined = callbackOf(comparison);
+
+    return owner !== undefined && owner === callback;
+};
+
+/**
  * Whether `value`, a caller identity past its wrappers, matches the caller where it stands: a column value or
  * `{ eq: … }` (not `ne`, `notIn` or another non-matching operator), an `in` list holding nothing but the caller's id,
  * an argument of a call that is no negating comparison (`ctx.db.users.get(uid)`, `q.eq("userId", uid)`), or one side
@@ -630,14 +684,7 @@ const matchesCallerAt = (value: TsNode): boolean => {
     const parent = value.getParent();
 
     if (Node.isArrayLiteralExpression(parent)) {
-        const list = valueWrapperOf(parent).getParent();
-
-        return (
-            Node.isPropertyAssignment(list) &&
-            staticPropertyName(list.getNameNode()) === "in" &&
-            parent.getElements().every((element) => isCallerId(element)) &&
-            !sitsInUnpinningBranch(list)
-        );
+        return isCallerOnlyInList(parent);
     }
 
     if (Node.isPropertyAssignment(parent) || Node.isShorthandPropertyAssignment(parent)) {
@@ -664,8 +711,13 @@ const matchesCallerAt = (value: TsNode): boolean => {
     }
 
     const operator = parent.getOperatorToken().getKind();
+    const other = parent.getLeft() === value ? parent.getRight() : parent.getLeft();
 
-    return (operator === SyntaxKind.EqualsEqualsEqualsToken || operator === SyntaxKind.EqualsEqualsToken) && isReturnedPredicate(parent);
+    return (
+        (operator === SyntaxKind.EqualsEqualsEqualsToken || operator === SyntaxKind.EqualsEqualsToken) &&
+        isReturnedPredicate(parent) &&
+        isFilteredRowField(other, parent)
+    );
 };
 
 /**
@@ -719,6 +771,27 @@ const constrainsMatch = (node: TsNode): boolean => {
 };
 
 /**
+ * Whether `use`, a query-object local, is a whole filter: the `where` of a query, an `AND` element, or a `ctx.db` read's
+ * own argument, with no `NOT` or `OR` above it. Any other use (a spread, a negation, a call) fails closed.
+ */
+const isWholeFilterUse = (use: TsNode): boolean => {
+    const wrapped = valueWrapperOf(use);
+    const parent = wrapped.getParent();
+
+    if (Node.isPropertyAssignment(parent) || Node.isShorthandPropertyAssignment(parent)) {
+        return staticPropertyName(parent.getNameNode()) === "where" && !sitsInUnpinningBranch(parent);
+    }
+
+    if (Node.isArrayLiteralExpression(parent)) {
+        const branches = valueWrapperOf(parent).getParent();
+
+        return Node.isPropertyAssignment(branches) && staticPropertyName(branches.getNameNode()) === "AND" && !sitsInUnpinningBranch(branches);
+    }
+
+    return Node.isCallExpression(parent) && parent.getArguments().includes(wrapped) && isDatabaseReadCall(parent);
+};
+
+/**
  * Whether `argument` names the caller's identity, directly or through a local whose initializer does,
  * with no alternative beside it: `ownerId: args.ownerId ?? ctx.auth.userId` selects the caller's row only when
  * nothing is sent, and `ownerId: ctx.auth.userId ?? args.ownerId` selects the caller's choice for an anonymous one.
@@ -736,7 +809,14 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
         const initializer = trustedInitializerOf(identifier);
 
         // A local is either an alias of the identity (`const uid = ctx.auth.userId`), placed where it is used, or a
-        // query object holding it (`const filter = { ownerId: uid }`), placed inside its initializer.
+        // query object holding it (`const filter = { ownerId: uid }`), placed inside its initializer and used only as a
+        // whole filter: `where: { NOT: filter }` negates it however its own initializer reads.
+        const isQueryObject = Node.isObjectLiteralExpression(unwrapExpression(initializer));
+
+        if (isQueryObject && !(Node.isIdentifier(identifier) && usesOfLocal(identifier).every((use) => isWholeFilterUse(use)))) {
+            return false;
+        }
+
         return (
             initializer !== undefined &&
             valueIdentifiersOf(initializer).some((inner) => {
@@ -823,21 +903,6 @@ const propertyValueOf = (property: TsNode | undefined): TsNode | undefined => {
     }
 
     return Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : undefined;
-};
-
-/** The other uses of the local `identifier`: every identifier in its file bound to the same declaration, minus the declaring name. */
-const usesOfLocal = (identifier: Identifier): Identifier[] => {
-    const declaration = declarationOf(identifier);
-
-    return identifier
-        .getSourceFile()
-        .getDescendantsOfKind(SyntaxKind.Identifier)
-        .filter((use) => use.getText() === identifier.getText() && declarationOf(use) === declaration)
-        .filter((use) => {
-            const parent = use.getParent();
-
-            return !((Node.isVariableDeclaration(parent) || Node.isBindingElement(parent)) && parent.getNameNode() === use);
-        });
 };
 
 /** Whether `node`, past any value-preserving wrapper, is passed straight to a `ctx.db` row read as an argument. */

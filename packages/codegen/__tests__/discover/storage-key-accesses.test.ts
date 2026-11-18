@@ -821,6 +821,94 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it.each([
+        ["a Boolean login check", `ctx.db.query("members").filter((m) => Boolean(ctx.auth.userId) && m.channelId === message.channelId).first()`],
+        ["a not operator around String", `ctx.db.members.findFirst({ where: { userId: { not: String(ctx.auth.userId) }, channelId: message.channelId } })`],
+    ])("reports an inline guard that only checks login through %s", (_label, read) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(read)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["an args value", `(m) => ctx.auth.userId === args.victim && m.channelId === message.channelId`],
+        ["a literal", `(m) => ctx.auth.userId === "user_1" && m.channelId === message.channelId`],
+        ["another identity", `(m) => ctx.auth.userId === ctx.auth.userId && m.channelId === message.channelId`],
+    ])("reports an inline guard whose filter compares the identity to %s instead of a row field", (_label, filter) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["row field first", `(m) => m.userId === ctx.auth.userId && m.channelId === message.channelId`],
+        ["identity first", `(m) => ctx.auth.userId === m.userId && m.channelId === message.channelId`],
+    ])("accepts an inline guard whose filter compares the identity to a row field, %s", (_label, filter) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["a NOT branch", "where: { NOT: filter, channelId: message.channelId }"],
+        ["an OR arm", "where: { OR: [filter, { channelId: args.channelId }], channelId: message.channelId }"],
+        ["a spread", "where: { ...filter, channelId: message.channelId }"],
+    ])("reports an inline guard whose named filter is used in %s", (_label, query) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`const filter = { userId: ctx.auth.userId };\n    ${inlineGuard(`ctx.db.members.findFirst({ ${query} })`)}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts an inline guard whose named filter is an AND branch", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                `const filter = { userId: ctx.auth.userId };\n    ${inlineGuard("ctx.db.members.findFirst({ where: { AND: [filter, { channelId: message.channelId }] } })")}`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("accepts an inline guard whose in list of only the caller is held in a local", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                `const ownerIds = [ctx.auth.userId];\n    ${inlineGuard("ctx.db.members.findFirst({ where: { userId: { in: ownerIds }, channelId: message.channelId } })")}`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["another member", "const ownerIds = [ctx.auth.userId, args.victim];", "in"],
+        ["a notIn use", "const ownerIds = [ctx.auth.userId];", "notIn"],
+    ])("reports an inline guard whose in list local holds %s", (_label, local, operator) => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                `${local}\n    ${inlineGuard(`ctx.db.members.findFirst({ where: { userId: { ${operator}: ownerIds }, channelId: message.channelId } })`)}`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("reports a helper guard whose filter excludes a String-wrapped caller with !==", () => {
         expect.assertions(1);
 
