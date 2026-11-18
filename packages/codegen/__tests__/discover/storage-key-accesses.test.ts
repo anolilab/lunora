@@ -995,10 +995,64 @@ requireMember = async () => {};`;
         ["a default", "({ userId = args.victim, channelId }) => userId === ctx.auth.userId && channelId === message.channelId"],
         ["a reassignment", "({ userId, channelId }) => { userId = args.victim; return userId === ctx.auth.userId && channelId === message.channelId; }"],
         ["an args comparison", "({ channelId }) => ctx.auth.userId === args.victim && channelId === message.channelId"],
+        ["an args-computed key", "({ [args.field]: value, channelId }) => value === ctx.auth.userId && channelId === message.channelId"],
     ])("reports an inline guard whose destructured filter has %s", (_label, filter) => {
         expect.assertions(1);
 
         write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a static rename", "({ userId: owner, channelId }) => owner === ctx.auth.userId && channelId === message.channelId"],
+        ["a literal computed key", `({ ["userId"]: owner, channelId }) => owner === ctx.auth.userId && channelId === message.channelId`],
+    ])("accepts an inline guard whose destructured filter takes the column by %s", (_label, filter) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports an inline guard whose filter repoints its row parameter", () => {
+        expect.assertions(1);
+
+        const filter =
+            "(m) => { m = { ...m, userId: ctx.auth.userId, channelId: message.channelId }; return m.userId === ctx.auth.userId && m.channelId === message.channelId; }";
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    /** A guard read keyed to the row by its index, filtered by a predicate held in a local. */
+    const factoredGuard = (predicate: string): string =>
+        `const predicate = ${predicate};\n    ${inlineGuard(`ctx.db.query("members").withIndex("by_channel", (q) => q.eq("channelId", message.channelId)).filter(predicate).first()`)}`;
+
+    it("accepts an inline guard whose filter predicate is factored into a local", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(factoredGuard("(m) => m.active && m.userId === ctx.auth.userId")));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["repoints its row parameter", "(m) => { m = { ...m, userId: ctx.auth.userId }; return m.userId === ctx.auth.userId; }"],
+        ["compares to an args value", "(m) => ctx.auth.userId === args.victim && m.active"],
+    ])("reports an inline guard whose factored predicate %s", (_label, predicate) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(factoredGuard(predicate)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports an inline guard whose factored predicate is also called directly", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`${factoredGuard("(m) => m.userId === ctx.auth.userId")}\n    void predicate;`));
 
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });

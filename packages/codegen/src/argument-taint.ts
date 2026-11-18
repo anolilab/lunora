@@ -462,12 +462,49 @@ const isRequiredOperand = (node: TsNode, callback: FunctionNode | undefined): bo
     return !referencesBinding(value, "args") && valueIdentifiersOf(value).every((identifier) => isRootedIdentifier(identifier, callback));
 };
 
+/** The other uses of the local `identifier`: every identifier in its file bound to the same declaration, minus the declaring name. */
+const usesOfLocal = (identifier: Identifier): Identifier[] => {
+    const declaration = declarationOf(identifier);
+
+    return identifier
+        .getSourceFile()
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .filter((use) => use.getText() === identifier.getText() && declarationOf(use) === declaration)
+        .filter((use) => {
+            const parent = use.getParent();
+
+            return !((Node.isVariableDeclaration(parent) || Node.isBindingElement(parent)) && parent.getNameNode() === use);
+        });
+};
+
 /** The callback `node` sits in: its innermost function, when that function is passed as a call argument. */
 const callbackOf = (node: TsNode): FunctionNode | undefined => {
     const enclosing = enclosingFunctionOf(node);
-    const holder = enclosing?.getParent();
 
-    return enclosing !== undefined && Node.isCallExpression(holder) && holder.getArguments().includes(enclosing) ? enclosing : undefined;
+    if (enclosing === undefined) {
+        return undefined;
+    }
+
+    const holder = valueWrapperOf(enclosing).getParent();
+
+    if (Node.isCallExpression(holder)) {
+        return holder.getArguments().includes(valueWrapperOf(enclosing)) ? enclosing : undefined;
+    }
+
+    // A predicate factored into a `const` (`const predicate = (m) => …; q.filter(predicate)`) is one hop away, as long
+    // as every use of the local hands it to a call.
+    const name = Node.isVariableDeclaration(holder) && isConstDeclaration(holder) ? holder.getNameNode() : undefined;
+    const uses = Node.isIdentifier(name) ? usesOfLocal(name) : [];
+
+    return uses.length > 0 &&
+        uses.every((use) => {
+            const wrapped = valueWrapperOf(use);
+            const call = wrapped.getParent();
+
+            return Node.isCallExpression(call) && call.getArguments().includes(wrapped);
+        })
+        ? enclosing
+        : undefined;
 };
 
 /**
@@ -601,21 +638,6 @@ const isCallerId = (value: TsNode): boolean => {
     return path?.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
 };
 
-/** The other uses of the local `identifier`: every identifier in its file bound to the same declaration, minus the declaring name. */
-const usesOfLocal = (identifier: Identifier): Identifier[] => {
-    const declaration = declarationOf(identifier);
-
-    return identifier
-        .getSourceFile()
-        .getDescendantsOfKind(SyntaxKind.Identifier)
-        .filter((use) => use.getText() === identifier.getText() && declarationOf(use) === declaration)
-        .filter((use) => {
-            const parent = use.getParent();
-
-            return !((Node.isVariableDeclaration(parent) || Node.isBindingElement(parent)) && parent.getNameNode() === use);
-        });
-};
-
 /** The `where` operators that match rows other than the value they are given, or the value's complement. */
 const NON_MATCHING_OPERATORS: ReadonlySet<string> = new Set(["contains", "gt", "gte", "isNull", "lt", "lte", "ne", "neq", "not", "notIn"]);
 
@@ -653,6 +675,35 @@ const isInDatabaseReadArgument = (node: TsNode): boolean => {
             Node.isArrayLiteralExpression(parent) ||
             Node.isPropertyAssignment(parent) ||
             Node.isShorthandPropertyAssignment(parent);
+        // `valueWrapperOf` climbs only through parentheses, `!` and type assertions, which pass the object on unchanged.
+        const isWrapper = valueWrapperOf(current) !== current;
+
+        if (!isQueryPart && !isWrapper) {
+            return false;
+        }
+
+        current = parent;
+    }
+
+    return false;
+};
+
+/**
+ * Whether `node`, a member of a query object, belongs to the initializer of a local (`const filter = { userId: uid }`).
+ * Such a filter is judged at every place it is used (see `isWholeFilterUse`); an object built anywhere else
+ * (`m = { ...m, userId: uid }`) is no query at all.
+ */
+const isInLocalQueryObject = (node: TsNode): boolean => {
+    let current = node;
+
+    for (let parent = current.getParent(); parent !== undefined; parent = current.getParent()) {
+        if (Node.isVariableDeclaration(parent)) {
+            const initializer: TsNode | undefined = parent.getInitializer();
+
+            return initializer === current;
+        }
+
+        const isQueryPart = Node.isObjectLiteralExpression(parent) || Node.isArrayLiteralExpression(parent) || Node.isPropertyAssignment(parent);
         // `valueWrapperOf` climbs only through parentheses, `!` and type assertions, which pass the object on unchanged.
         const isWrapper = valueWrapperOf(current) !== current;
 
@@ -739,19 +790,33 @@ const isWriteTarget = (node: TsNode): boolean => {
 };
 
 /**
- * Whether `element` and every element enclosing it in its parameter pattern have no default, and nothing in the
- * callback assigns it. Scanned here by symbol: `isReassignedBinding` takes a parameter pattern inside a `const x =
- * q.filter(…)` initializer for a `const` binding.
+ * Whether anything in `scope` assigns the binding `declaration` makes, by symbol. Scanned here rather than with
+ * `isReassignedBinding`, which takes a parameter inside a `const x = q.filter(…)` initializer for a `const` binding.
+ */
+const isAssignedWithin = (scope: TsNode, declaration: TsNode): boolean =>
+    scope
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .some((identifier) => isWriteTarget(identifier) && declarationOf(identifier)?.compilerNode === declaration.compilerNode);
+
+/**
+ * Whether `binding` takes a column the code names: an identifier or literal key, or a computed key that is a string
+ * literal or a module constant. `{ [args.field]: value }` lets the caller choose the column.
+ */
+const hasStaticKey = (binding: BindingElement): boolean => {
+    const key = binding.getPropertyNameNode();
+
+    return !Node.isComputedPropertyName(key) || isFixedValue(key.getExpression());
+};
+
+/**
+ * Whether `element` and every element enclosing it in its parameter pattern have a static key and no default, and
+ * nothing in the callback assigns it (see {@link isAssignedWithin}).
  */
 const isUndefaultedRowBinding = (element: BindingElement): boolean =>
-    !(element.getFirstAncestorByKind(SyntaxKind.Parameter)?.getParent() ?? element)
-        .getDescendantsOfKind(SyntaxKind.Identifier)
-        .some(
-            (identifier) =>
-                identifier !== element.getNameNode() && isWriteTarget(identifier) && declarationOf(identifier)?.compilerNode === element.compilerNode,
-        ) &&
+    !isAssignedWithin(element.getFirstAncestorByKind(SyntaxKind.Parameter)?.getParent() ?? element, element) &&
     [element, ...element.getAncestors().filter((ancestor) => Node.isBindingElement(ancestor))].every(
-        (binding) => Node.isBindingElement(binding) && binding.getInitializer() === undefined && binding.getDotDotDotToken() === undefined,
+        (binding) =>
+            Node.isBindingElement(binding) && binding.getInitializer() === undefined && binding.getDotDotDotToken() === undefined && hasStaticKey(binding),
     );
 
 /**
@@ -767,9 +832,10 @@ const isFilteredRowField = (node: TsNode, comparison: TsNode): boolean => {
     const callback: TsNode | undefined = callbackOf(comparison);
     let owner: TsNode | undefined;
 
-    // The row parameter itself is a field only through an access (`m.userId`); a name destructured from it
-    // (`({ userId }) => userId === uid`) is one when no default can replace it and nothing reassigns it.
-    if (Node.isParameterDeclaration(declaration) && isAccess) {
+    // The row parameter itself is a field only through an access (`m.userId`), and only while the callback never
+    // repoints it (`m = { ...m, userId: uid }`); a name destructured from it (`({ userId }) => userId === uid`) is one
+    // when its key is static, no default can replace it and nothing reassigns it.
+    if (Node.isParameterDeclaration(declaration) && isAccess && !isAssignedWithin(declaration.getParent(), declaration)) {
         owner = declaration.getParent();
     } else if (Node.isBindingElement(declaration) && isUndefaultedRowBinding(declaration)) {
         owner = declaration.getFirstAncestorByKind(SyntaxKind.Parameter)?.getParent();
@@ -796,7 +862,14 @@ const matchesCallerAt = (value: TsNode): boolean => {
         const initializer: TsNode | undefined = Node.isPropertyAssignment(parent) ? parent.getInitializer() : value;
         const isValue = initializer === value;
 
-        return isValue && key !== undefined && !NON_MATCHING_OPERATORS.has(key) && !UNPINNING_KEYS.has(key) && !sitsInUnpinningBranch(parent);
+        return (
+            isValue &&
+            key !== undefined &&
+            !NON_MATCHING_OPERATORS.has(key) &&
+            !UNPINNING_KEYS.has(key) &&
+            !sitsInUnpinningBranch(parent) &&
+            (isInDatabaseReadArgument(parent) || isInLocalQueryObject(parent))
+        );
     }
 
     // Only a query takes the identity as a match: an `eq` predicate (`q.eq("userId", uid)`) or a `ctx.db` read
