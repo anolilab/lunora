@@ -286,7 +286,8 @@ clock it runs on, so a test can fire the deadline by hand. The default timer is
 referenced while the drain runs: a drain waiting on a promise with no I/O behind
 it (a stalled shard `waitUntil`) keeps the process alive until the deadline
 fires, instead of letting it exit silently. `NodePlatform.drain()` runs its host
-and registry drains under that one deadline. A `DrainResult`
+and registry drains under that one deadline, repeating until both are idle at the
+same instant, since host work can start shard work after the registry drained. A `DrainResult`
 reports `timedOut` and the `pending` work, one readable label each, still
 running when the deadline passed.
 
@@ -409,7 +410,9 @@ waits until every shard is idle: no `onFetch` or `onAlarm` call in flight (cron
 and scheduled-job deliveries included), no `waitUntil` work pending and no socket
 close handler running. Each pass re-reads every live shard, so work handed to a
 shard after its own drain finished, or a shard opened while draining, is seen;
-it returns only when a full pass finds nothing running, or when its deadline
+Alarm deliveries count until their retry, if any, is written, so a shutdown
+cannot lose a failed alarm. `idle()` answers the same question synchronously.
+It returns only when a full pass finds nothing running, or when its deadline
 passes, logging one line per shard with how many requests, alarms and
 `waitUntil` tasks it still had (never the request or its payload). Await it before `close()`, which does not wait.
 

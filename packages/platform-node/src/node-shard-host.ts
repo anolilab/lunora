@@ -188,6 +188,7 @@ const createAlarms = (
     transaction: { assertOwnTurn: (action: string) => void; inside: () => boolean },
     onAlarm?: () => Promise<void> | void,
     shardKey?: string,
+    trackDelivery: (delivery: Promise<void>) => void = () => {},
 ): { alarms: ShardAlarms; commit: () => void; dispose: () => void; rollback: () => void } => {
     let alarmAt: number | undefined;
     let alarmTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -285,17 +286,23 @@ const createAlarms = (
      * nothing re-armed and the loop that alarm drives (a TTL sweep, a
      * global-shape poll, a scheduler GC) stopped for good.
      */
-    const retryFailedDelivery = (): void => {
+    // `onSettled` runs once the retry is decided and, when there is one, written: a drain waits for it, so a shutdown cannot
+    // close the database between a failed delivery (whose row was already consumed) and the row that retries it.
+    const retryFailedDelivery = (onSettled: () => void = () => {}): void => {
         if (!database.open || alarmAt !== undefined) {
             // Nothing to retry against, or the handler rescheduled
             // before it failed — that alarm owns the next wakeup.
+            onSettled();
+
             return;
         }
 
         // A retry row written inside another task's transaction would vanish
         // with its rollback, and the wakeup with it.
         if (database.inTransaction) {
-            afterTransaction(retryFailedDelivery);
+            afterTransaction(() => {
+                retryFailedDelivery(onSettled);
+            });
 
             return;
         }
@@ -304,6 +311,7 @@ const createAlarms = (
 
         if (attempts > ALARM_RETRY_LIMIT) {
             attempts = 0;
+            onSettled();
 
             return;
         }
@@ -318,12 +326,14 @@ const createAlarms = (
             alarmAt = retryAt;
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `arm` and the delivery steps are mutually recursive (a delivery re-arms, an arm delivers)
             arm(retryAt);
+            onSettled();
 
             return;
         }
 
         attempts = 0;
         armFromRow();
+        onSettled();
     };
 
     /**
@@ -396,14 +406,19 @@ const createAlarms = (
             return;
         }
 
-        (async (): Promise<void> => {
-            await onAlarm?.();
-            attempts = 0;
-        })().catch((error: unknown) => {
-            // eslint-disable-next-line no-console -- the alarm is retried silently, so the log is the only trace of why it failed
-            console.error("[@lunora/platform-node] alarm handler on shard %s threw; retrying with backoff", shardKey ?? "(unnamed)", error);
-            retryFailedDelivery();
-        });
+        // The whole delivery is one tracked unit, the retry write included, so a drain sees the alarm busy until it is.
+        trackDelivery(
+            (async (): Promise<void> => {
+                await onAlarm?.();
+                attempts = 0;
+            })().catch(async (error: unknown) => {
+                // eslint-disable-next-line no-console -- the alarm is retried silently, so the log is the only trace of why it failed
+                console.error("[@lunora/platform-node] alarm handler on shard %s threw; retrying with backoff", shardKey ?? "(unnamed)", error);
+                await new Promise<void>((resolve) => {
+                    retryFailedDelivery(resolve);
+                });
+            }),
+        );
     };
 
     /**
@@ -665,7 +680,14 @@ interface NodeShardHostOptions {
  */
 const createNodeShardHost = (
     options: NodeShardHostOptions = {},
-): { database: Database.Database; dispose: () => void; drain: () => Promise<void>; host: ShardHost; pendingBackground: () => number } => {
+): {
+    database: Database.Database;
+    dispose: () => void;
+    drain: () => Promise<void>;
+    host: ShardHost;
+    pendingAlarms: () => number;
+    pendingBackground: () => number;
+} => {
     const database = new Database(options.path ?? ":memory:");
 
     database.pragma("journal_mode = WAL");
@@ -703,12 +725,17 @@ const createNodeShardHost = (
     };
 
     const sql = createSql(database, assertOwnTurn);
+    /** Alarm deliveries still running, each until its retry (if any) is written; `drain()` waits for them. */
+    const deliveries = new Set<Promise<void>>();
     const {
         alarms,
         commit: commitAlarms,
         dispose: disposeAlarms,
         rollback: rollbackAlarms,
-    } = createAlarms(database, { assertOwnTurn, inside: () => transactionScope.getStore() === true }, options.onAlarm, options.shardKey);
+    } = createAlarms(database, { assertOwnTurn, inside: () => transactionScope.getStore() === true }, options.onAlarm, options.shardKey, (delivery) => {
+        deliveries.add(delivery);
+        delivery.finally(() => deliveries.delete(delivery)).catch(() => undefined);
+    });
 
     /**
      * Background work handed to `waitUntil`, held until it settles.
@@ -854,9 +881,9 @@ const createNodeShardHost = (
      * that spawns more background work is picked up by the next loop.
      */
     const drain = async (): Promise<void> => {
-        while (background.size > 0) {
+        while (background.size > 0 || deliveries.size > 0) {
             // eslint-disable-next-line no-await-in-loop -- sequential is the point: each pass drains the set as it stood, and background work that spawned more background work is picked up by the next iteration. Hoisting the await out would settle only the first generation.
-            await Promise.all(background);
+            await Promise.all([...background, ...deliveries]);
         }
     };
 
@@ -870,7 +897,7 @@ const createNodeShardHost = (
 
     // How many `waitUntil` promises are unsettled, so a registry drain can tell an idle shard from one that gained work after
     // its own drain resolved.
-    return { database, dispose, drain, host, pendingBackground: () => background.size };
+    return { database, dispose, drain, host, pendingAlarms: () => deliveries.size, pendingBackground: () => background.size };
 };
 
 export type { NodeShardHostOptions };

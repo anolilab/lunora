@@ -266,9 +266,9 @@ describe("shard drain passes", () => {
     });
 
     it("runs the whole platform drain under one deadline, so one firing ends both the host and the shard waits", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        vi.spyOn(console, "error").mockImplementation(() => {});
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
         // Keeps only the last callback it was given, as a simple injected clock does: a second deadline would replace the first.
         const { fire, timer } = manualTimer();
@@ -286,9 +286,129 @@ describe("shard drain passes", () => {
             fire();
 
             await expect(drained).resolves.toStrictEqual({ pending: ["waitUntil work on the platform host"], timedOut: true });
+            // Logged before the caller closes anything, so the cut-off work is on record.
+            expect(printed(logged)).toContainEqual(
+                expect.stringContaining("platform drain deadline passed with work still running: waitUntil work on the platform host"),
+            );
         } finally {
             never.release();
             platform.close();
+        }
+    });
+
+    it("does not report idle while a shard request that host work started after the registry drained is still running", async () => {
+        expect.assertions(1);
+
+        const hostGate = deferred();
+        const requestGate = deferred();
+        const events: string[] = [];
+        const platform = createNodePlatform({
+            onFetch: async () => {
+                await requestGate.promise;
+                events.push("request done");
+
+                return new Response("ok");
+            },
+        });
+
+        try {
+            // Host background work that, once released, hands a request to a shard the registry already found idle, as a due
+            // job's delivery does. The host work itself finishes at once.
+            platform.shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await hostGate.promise;
+                    resolveShard(platform.directory, "late")
+                        .fetch(new Request("https://shard.internal/rpc"))
+                        .catch(() => undefined);
+                })(),
+            );
+
+            const drained = platform.drain().then(() => events.push("drained"));
+
+            hostGate.release();
+            await turn();
+            requestGate.release();
+            await drained;
+
+            expect(events).toStrictEqual(["request done", "drained"]);
+        } finally {
+            platform.close();
+        }
+    });
+
+    it("keeps a failed alarm's retry when shutdown follows it, so the alarm fires after a restart", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-retry-"));
+        const arrived = deferred();
+        const failAlarm = deferred();
+        const releaseTransaction = deferred();
+        const transactionOpen = deferred();
+        const first = createNodeShardRegistry({
+            directory,
+            onAlarm: async () => {
+                arrived.release();
+                await failAlarm.promise;
+
+                throw new Error("alarm failed");
+            },
+        });
+
+        try {
+            const { shard } = first.shardFor("a");
+
+            await shard.alarms.set(Date.now());
+            await vi.advanceTimersByTimeAsync(0);
+            await arrived.promise;
+
+            // Another task's transaction is open when the handler fails, so the retry row has to wait for it to end.
+            const transaction = shard.transaction(async () => {
+                transactionOpen.release();
+                await releaseTransaction.promise;
+            });
+
+            await transactionOpen.promise;
+
+            // As a shutdown does: close the moment the drain reports the shard idle.
+            const shutDown = async (): Promise<void> => {
+                await first.drain({ timer: () => () => {} });
+                first.close();
+            };
+            const drained = shutDown();
+
+            failAlarm.release();
+            await turn();
+            releaseTransaction.release();
+            // A close that came too early ends this transaction's connection under it; that is the failure under test.
+            await transaction.catch(() => undefined);
+            // The deferred retry write runs on its own short timer once the transaction has ended.
+            await vi.advanceTimersByTimeAsync(50);
+            await drained;
+        } finally {
+            first.close();
+        }
+
+        const fired = deferred();
+        const second = createNodeShardRegistry({
+            directory,
+            onAlarm: () => {
+                fired.release();
+            },
+        });
+
+        try {
+            // Opening the shard re-arms its persisted alarm; the retry backoff is well under a second.
+            second.shardFor("a");
+            await vi.advanceTimersByTimeAsync(1000);
+
+            await expect(fired.promise).resolves.toBeUndefined();
+        } finally {
+            second.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
         }
     });
 

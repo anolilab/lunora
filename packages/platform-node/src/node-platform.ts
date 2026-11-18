@@ -334,7 +334,7 @@ export const createNodePlatform = <
     // resource cannot be added to one and forgotten in the other.
     const teardown: (() => void)[] = [];
 
-    const { database, dispose: disposeShard, drain, host: shard } = createNodeShardHost(options);
+    const { database, dispose: disposeShard, drain, host: shard, pendingAlarms, pendingBackground } = createNodeShardHost(options);
 
     teardown.push(disposeShard);
 
@@ -462,11 +462,32 @@ export const createNodePlatform = <
                         armed = false;
                     };
                 };
-                const [hostSettled, shards] = await Promise.all([settlesBefore(drain(), deadline), registry.drain({ timer: sharedTimer })]);
 
-                deadline.cancel();
+                try {
+                    for (;;) {
+                        // eslint-disable-next-line no-await-in-loop -- each pass waits for what the last one let start
+                        const [hostSettled, shards] = await Promise.all([settlesBefore(drain(), deadline), registry.drain({ timer: sharedTimer })]);
 
-                return hostSettled ? shards : { pending: ["waitUntil work on the platform host", ...shards.pending], timedOut: true };
+                        if (!hostSettled || shards.timedOut) {
+                            const pending = [...(hostSettled ? [] : ["waitUntil work on the platform host"]), ...shards.pending];
+
+                            if (!hostSettled) {
+                                // eslint-disable-next-line no-console -- the drain gives up on this work, so the log is the only record of it
+                                console.error("[@lunora/platform-node] platform drain deadline passed with work still running: %s", pending.join(", "));
+                            }
+
+                            return { pending, timedOut: true };
+                        }
+
+                        // Host work can start shard work after the registry's drain already finished (a due job's delivery),
+                        // so the drain is done only when both are idle at the same instant, checked synchronously.
+                        if (pendingBackground() === 0 && pendingAlarms() === 0 && registry.idle()) {
+                            return { pending: [], timedOut: false };
+                        }
+                    }
+                } finally {
+                    deadline.cancel();
+                }
             },
             globalTables,
             kv,

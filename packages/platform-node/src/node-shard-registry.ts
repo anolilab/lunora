@@ -237,6 +237,12 @@ export interface NodeShardRegistry {
     drain: (options?: DrainOptions) => Promise<DrainResult>;
 
     /**
+     * Whether every shard is idle right now (nothing a {@link NodeShardRegistry.drain} would wait for). Synchronous, so a caller
+     * that drained several things can confirm all of them are still idle at one instant before it closes anything.
+     */
+    idle: () => boolean;
+
+    /**
      * Every shard key this registry knows about — the set `@lunora/runtime`'s
      * query coordinator fans out over.
      *
@@ -256,16 +262,23 @@ export interface NodeShardRegistry {
 export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}): NodeShardRegistry => {
     const live = new Map<
         string,
-        { dispose: () => void; drain: () => Promise<void> | undefined; drainHost: () => Promise<void>; pendingBackground: () => number; shard: NodeShard }
+        {
+            dispose: () => void;
+            drain: () => Promise<void> | undefined;
+            drainHost: () => Promise<void>;
+            pendingAlarms: () => number;
+            pendingBackground: () => number;
+            shard: NodeShard;
+        }
     >();
 
     /**
-     * `onFetch` and `onAlarm` calls still running, with the shard and the kind of call, so {@link NodeShardRegistry.drain} can wait
-     * for them and say what it cut off. Never the request itself: its URL or body can carry a secret.
+     * `onFetch` calls still running, with their shard, so {@link NodeShardRegistry.drain} can wait for them and say what it cut
+     * off. Never the request itself: its URL or body can carry a secret. Alarms are tracked by their host, through the retry.
      */
-    const inFlight = new Map<Promise<unknown>, { kind: "alarm" | "request"; shardKey: string }>();
+    const inFlight = new Map<Promise<unknown>, { shardKey: string }>();
 
-    const track = async <T>(call: { kind: "alarm" | "request"; shardKey: string }, work: () => Promise<T> | T): Promise<T> => {
+    const track = async <T>(call: { shardKey: string }, work: () => Promise<T> | T): Promise<T> => {
         const running = Promise.resolve().then(work);
         // Tracking only: the caller still receives `running` and its rejection.
         const settled = running.then(
@@ -320,9 +333,11 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             dispose: disposeHost,
             drain: drainHost,
             host,
+            pendingAlarms,
             pendingBackground,
         } = createNodeShardHost({
-            onAlarm: async () => track({ kind: "alarm", shardKey: key }, () => options.onAlarm?.(shard)),
+            // The host tracks each alarm delivery through its retry write, which a wrapper here would settle before.
+            onAlarm: () => options.onAlarm?.(shard),
             path,
             shardKey: key,
         });
@@ -337,7 +352,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             sockets: socketHost.socket,
         };
 
-        live.set(key, { dispose: disposeHost, drain: socketHost.drain, drainHost, pendingBackground, shard });
+        live.set(key, { dispose: disposeHost, drain: socketHost.drain, drainHost, pendingAlarms, pendingBackground, shard });
         known.add(key);
 
         return shard;
@@ -354,9 +369,58 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
                     return new Response(key);
                 }
 
-                return track({ kind: "request", shardKey: key }, () => onFetch(request, shard));
+                return track({ shardKey: key }, () => onFetch(request, shard));
             },
         };
+    };
+
+    // What is still running, across every shard live now: re-read on each pass, so a shard opened during the last
+    // pass, or one that gained background work after its own drain resolved, is seen.
+    const pendingWork = (): { labels: string[]; waits: Promise<unknown>[] } => {
+        const counts = new Map<string, ShardWorkCounts>();
+        const countsFor = (shardKey: string): ShardWorkCounts => {
+            let entry = counts.get(shardKey);
+
+            if (entry === undefined) {
+                entry = { alarms: 0, background: 0, closing: false, requests: 0 };
+                counts.set(shardKey, entry);
+            }
+
+            return entry;
+        };
+        const waits: Promise<unknown>[] = [...inFlight.keys()];
+
+        for (const call of inFlight.values()) {
+            countsFor(call.shardKey).requests += 1;
+        }
+
+        for (const [key, entry] of live) {
+            const closing = entry.drain();
+            const background = entry.pendingBackground();
+            const alarmDeliveries = entry.pendingAlarms();
+
+            if (closing !== undefined) {
+                countsFor(key).closing = true;
+                waits.push(closing);
+            }
+
+            if (background > 0) {
+                countsFor(key).background = background;
+            }
+
+            if (alarmDeliveries > 0) {
+                countsFor(key).alarms = alarmDeliveries;
+            }
+
+            if (background > 0 || alarmDeliveries > 0) {
+                waits.push(entry.drainHost());
+            }
+        }
+
+        // One line per shard: its key and how much of each kind of work is left, so a cut-off drain is attributable.
+        const labels = [...counts].map(([key, pending]) => describeShardWork(key, pending));
+
+        return { labels, waits };
     };
 
     return {
@@ -376,47 +440,6 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         },
         drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
             const deadline = startDrainDeadline(drainOptions);
-
-            // What is still running, across every shard live now: re-read on each pass, so a shard opened during the last
-            // pass, or one that gained background work after its own drain resolved, is seen.
-            const pendingWork = (): { labels: string[]; waits: Promise<unknown>[] } => {
-                const counts = new Map<string, ShardWorkCounts>();
-                const countsFor = (shardKey: string): ShardWorkCounts => {
-                    let entry = counts.get(shardKey);
-
-                    if (entry === undefined) {
-                        entry = { alarms: 0, background: 0, closing: false, requests: 0 };
-                        counts.set(shardKey, entry);
-                    }
-
-                    return entry;
-                };
-                const waits: Promise<unknown>[] = [...inFlight.keys()];
-
-                for (const call of inFlight.values()) {
-                    countsFor(call.shardKey)[call.kind === "alarm" ? "alarms" : "requests"] += 1;
-                }
-
-                for (const [key, entry] of live) {
-                    const closing = entry.drain();
-                    const background = entry.pendingBackground();
-
-                    if (closing !== undefined) {
-                        countsFor(key).closing = true;
-                        waits.push(closing);
-                    }
-
-                    if (background > 0) {
-                        countsFor(key).background = background;
-                        waits.push(entry.drainHost());
-                    }
-                }
-
-                // One line per shard: its key and how much of each kind of work is left, so a cut-off drain is attributable.
-                const labels = [...counts].map(([key, pending]) => describeShardWork(key, pending));
-
-                return { labels, waits };
-            };
 
             try {
                 // Done only when a full pass over every shard finds nothing running, not when the work one pass saw settles.
@@ -445,6 +468,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             // as `unknown`, so this is a legitimate if degenerate choice.
             idForName: (name) => name,
         },
+        idle: () => pendingWork().waits.length === 0,
         listShardKeys: () => [...known],
         shardFor,
     };

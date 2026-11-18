@@ -330,6 +330,7 @@ interface NodeShardRegistry {
     close: () => void;
     directory: DirectShardDirectory;
     drain: (options?: DrainOptions) => Promise<DrainResult>;
+    idle: () => boolean;
     listShardKeys: (table?: string) => ReadonlyArray<string>;
     shardFor: (key: string) => NodeShard;
 }
@@ -510,6 +511,7 @@ const createNodeShardHost: (options?: NodeShardHostOptions) => {
     dispose: () => void;
     drain: () => Promise<void>;
     host: ShardHost;
+    pendingAlarms: () => number;
     pendingBackground: () => number;
 };
 ```
