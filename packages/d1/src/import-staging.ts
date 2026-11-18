@@ -157,14 +157,33 @@ const ensureStaging = async (exec: D1Exec): Promise<void> => {
     );
 };
 
-/** Drop expired sessions in a state this module knows, and their staged rows. A row in any other state is never swept. */
+/** Run `statements` as one D1 round trip when the exec can batch, one at a time otherwise. */
+const runAll = async (exec: D1Exec, statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>): Promise<void> => {
+    if (exec.batch) {
+        await exec.batch(statements);
+
+        return;
+    }
+
+    for (const { params, sql } of statements) {
+        // eslint-disable-next-line no-await-in-loop -- the no-batch fallback runs in order
+        await exec.run(sql, params);
+    }
+};
+
+/**
+ * Drop expired sessions in a state this module knows, and their staged rows. A row in any other state is never swept.
+ * Rows and marker go in one batch: a marker left without its rows would let a commit prune every scoped table empty.
+ */
 const sweep = async (exec: D1Exec, now: number): Promise<void> => {
     await ensureStaging(exec);
-    await exec.run(
-        `DELETE FROM "${STAGE_TABLE}" WHERE session IN (SELECT session FROM "${SESSION_TABLE}" WHERE expires_at < ? AND state IN ('staging', 'committed'))`,
-        [now],
-    );
-    await exec.run(`DELETE FROM "${SESSION_TABLE}" WHERE expires_at < ? AND state IN ('staging', 'committed')`, [now]);
+    await runAll(exec, [
+        {
+            params: [now],
+            sql: `DELETE FROM "${STAGE_TABLE}" WHERE session IN (SELECT session FROM "${SESSION_TABLE}" WHERE expires_at < ? AND state IN ('staging', 'committed'))`,
+        },
+        { params: [now], sql: `DELETE FROM "${SESSION_TABLE}" WHERE expires_at < ? AND state IN ('staging', 'committed')` },
+    ]);
 };
 
 interface SessionRecord {
@@ -192,20 +211,6 @@ const readSession = async (exec: D1Exec, session: string, generation: string): P
     }
 
     return typeof row["result"] === "string" ? { generation, result: JSON.parse(row["result"]) as StagedCommitResult, state } : { generation, state };
-};
-
-/** Run `statements` as one D1 round trip when the exec can batch, one at a time otherwise. */
-const runAll = async (exec: D1Exec, statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>): Promise<void> => {
-    if (exec.batch) {
-        await exec.batch(statements);
-
-        return;
-    }
-
-    for (const { params, sql } of statements) {
-        // eslint-disable-next-line no-await-in-loop -- the no-batch fallback runs in order
-        await exec.run(sql, params);
-    }
 };
 
 interface StageGlobalArgs {
@@ -330,6 +335,13 @@ const pruneTable = async (writer: DatabaseWriterLike, exec: D1Exec, session: str
     }
 };
 
+/** Whether `session` still has a staged row. */
+const holdsStagedRows = async (exec: D1Exec, session: string): Promise<boolean> => {
+    const hits = await exec.all(`SELECT 1 FROM "${STAGE_TABLE}" WHERE session = ? LIMIT 1`, [session]);
+
+    return hits.length > 0;
+};
+
 /**
  * Swap the session's staged rows in for `tables`: overwrite or insert each, then
  * prune. Retry-safe — see the module doc for what holds on a failure. `staged`
@@ -351,7 +363,9 @@ const commitStagedGlobalRows = async (
         return record.result;
     }
 
-    if (args.staged && record === undefined) {
+    // A session that staged rows must still hold them: with none left the prune below would empty every scoped
+    // table. The marker alone is not proof — a cleanup run without `batch()` can drop the rows and fail before it.
+    if (args.staged && (record === undefined || !(await holdsStagedRows(exec, args.session)))) {
         throw new GlobalImportStagingError("IMPORT_SESSION_EXPIRED", `import session "${args.session}" has no staged .global() rows (expired, or aborted)`);
     }
 

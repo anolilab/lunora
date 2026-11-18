@@ -832,6 +832,69 @@ describe("d1 admin export/import globals", () => {
             await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "edited since" });
         });
 
+        it("refuses a commit whose marker outlived its staged rows, rather than pruning the table empty", async () => {
+            expect.assertions(2);
+
+            await stageGlobalRows(harness.exec, schema, {
+                generation: "g1",
+                rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }],
+                session: "s10",
+                tables: ["settings"],
+            });
+            // What a cleanup without `batch()` leaves when it fails between its two deletes.
+            await harness.exec.run(`DELETE FROM "__lunora_import_stage__" WHERE session = 's10'`, []);
+
+            await expect(
+                commitStagedGlobalRows(writer, harness.exec, schema, { generation: "g1", session: "s10", staged: true, tables: ["settings"] }),
+            ).rejects.toMatchObject({
+                code: "IMPORT_SESSION_EXPIRED",
+            });
+            await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "edited since" });
+        });
+
+        it("sweeps an expired session's rows and marker in one batch, so a failed sweep drops neither", async () => {
+            expect.assertions(2);
+
+            await stageGlobalRows(
+                harness.exec,
+                schema,
+                { generation: "g1", rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }], session: "s11", tables: ["settings"] },
+                0,
+            );
+
+            const markerDelete = (sql: string): boolean => sql.startsWith(`DELETE FROM "__lunora_import_session__"`);
+            // A batch is all-or-nothing on D1; the stand-in applies it in a transaction that the marker delete fails.
+            const batchingExec: typeof harness.exec = {
+                ...harness.exec,
+                batch: async (statements) => {
+                    await harness.exec.run("BEGIN", []);
+
+                    try {
+                        for (const { params, sql } of statements) {
+                            if (markerDelete(sql)) {
+                                throw new Error("D1 unavailable");
+                            }
+
+                            // eslint-disable-next-line no-await-in-loop -- statements of one batch apply in order
+                            await harness.exec.run(sql, params);
+                        }
+
+                        await harness.exec.run("COMMIT", []);
+                    } catch (error: unknown) {
+                        await harness.exec.run("ROLLBACK", []);
+
+                        throw error;
+                    }
+                },
+                run: (sql, params) => (markerDelete(sql) ? Promise.reject(new Error("D1 unavailable")) : harness.exec.run(sql, params)),
+            };
+
+            await expect(stageGlobalRows(batchingExec, schema, { generation: "g1", rows: [], session: "other", tables: ["settings"] })).rejects.toThrow(
+                "D1 unavailable",
+            );
+            await expect(stagedCount()).resolves.toBe(1);
+        });
+
         it("empties the tables when the session staged no row for them", async () => {
             expect.assertions(1);
 
