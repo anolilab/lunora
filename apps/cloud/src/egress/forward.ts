@@ -90,6 +90,12 @@ interface WalkRules {
 interface Hop {
     /** Streamed, so only the first hop can carry it: see the module comment. */
     body: ReadableStream<Uint8Array> | null;
+
+    /**
+     * The tenant's Cloudflare fetch options (`cacheTtl`, `cacheEverything`, …). A hop is
+     * rebuilt from its URL, which on Workers starts with no `cf`, so each hop is given it again.
+     */
+    cf: RequestInit["cf"];
     followed: number;
     headers: Headers;
     method: string;
@@ -136,13 +142,20 @@ const nextHop = (hop: Hop, method: string, target: string): Hop => {
         headers.delete("cookie");
     }
 
-    return { body: null, followed: hop.followed + 1, headers, method, url: target };
+    return { body: null, cf: hop.cf, followed: hop.followed + 1, headers, method, url: target };
 };
 
 /** Fetch one hop; if it redirects, check the target origin before following it. */
 const walk = async (hop: Hop, rules: WalkRules): Promise<Response> => {
     // `duplex` is required by Node's fetch for a streamed body and ignored by Workers.
-    const init: RequestInit & { duplex?: "half" } = { body: hop.body, duplex: "half", headers: hop.headers, method: hop.method, redirect: "manual" };
+    const init: RequestInit & { duplex?: "half" } = {
+        body: hop.body,
+        duplex: "half",
+        headers: hop.headers,
+        method: hop.method,
+        redirect: "manual",
+        ...(hop.cf === undefined ? {} : { cf: hop.cf }),
+    };
     const response = await rules.fetchImpl(await rules.prepare(new Request(hop.url, init)));
     const target = nextLocation(response, hop.url);
     const denied = deniedTarget(target, rules.allowed);
@@ -198,7 +211,14 @@ export const forwardWithEgress = async (
     // Walk the redirects ourselves. The body is streamed, not buffered, and each
     // hop is an explicit manual fetch.
     return walk(
-        { body: request.body, followed: 0, headers: new Headers(request.headers), method: request.method, url: request.url },
+        {
+            body: request.body,
+            cf: (request as { cf?: RequestInit["cf"] }).cf,
+            followed: 0,
+            headers: new Headers(request.headers),
+            method: request.method,
+            url: request.url,
+        },
         { allowed, fetchImpl, maxRedirects: enforcing ? MAX_EGRESS_REDIRECTS : MAX_UNPOLICED_REDIRECTS, prepare },
     );
 };
