@@ -120,7 +120,7 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@lunora/platform-node": ">=1.0.0-alpha.218 <2.0.0-0",
+        "@lunora/platform-node": ">=1.0.0-alpha.220 <2.0.0-0",
         "esbuild": ">=0.25.0",
         "mysql2": "*",
         "pg": "*"

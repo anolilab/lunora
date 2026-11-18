@@ -511,7 +511,12 @@ const startPlannedWorker = async (
 ): Promise<WorkerProcess | undefined> => {
     try {
         if (plan.nodeHost === true) {
-            const worker = await (options.startNodeWorker ?? startNodeDevWorker)({ logger, port: plan.workerPort, projectRoot: cwd });
+            const worker = await (options.startNodeWorker ?? startNodeDevWorker)({
+                codegenWatch: plan.runsCodegenWatch,
+                logger,
+                port: plan.workerPort,
+                projectRoot: cwd,
+            });
 
             onNodeWorker(worker.reload);
 
@@ -679,8 +684,12 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         noteIpv4LoopbackFallback(plan, logger);
 
-        // Set once the Node host is up; until then a settled run (the startup one) has nothing to reload.
+        // Set once the Node host is up. A run that settles before the host starts loading is already in what it loads; an edit's
+        // run that settles while it loads may have rewritten `_generated/*` after the host read it, so it reloads once the host
+        // is up. The startup run wrote its output before the worker was started, so it is never the reason for one.
         let reloadNodeWorker: (() => void) | undefined;
+        let nodeWorkerStarting = false;
+        let settledWhileNodeWorkerStarted = false;
 
         if (plan.runsCodegenWatch) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({
@@ -689,8 +698,12 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
                 jsonLogs: options.jsonLogs,
                 logger,
                 lunoraDirectory: resolveSchemaDirectory(cwd),
-                onSettled: () => {
-                    reloadNodeWorker?.();
+                onSettled: ({ startup }) => {
+                    if (reloadNodeWorker !== undefined) {
+                        reloadNodeWorker();
+                    } else if (nodeWorkerStarting && !startup) {
+                        settledWhileNodeWorkerStarted = true;
+                    }
                 },
                 projectRoot: cwd,
                 target,
@@ -780,8 +793,14 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         ensureSidecarGenerated(plan, options, cwd, logger, target);
 
         const spawn = options.startWorker ?? defaultWorkerSpawner;
+        nodeWorkerStarting = plan.nodeHost === true;
+
         const worker = await startPlannedWorker(plan, options, spawn, cwd, logger, (reload) => {
             reloadNodeWorker = reload;
+
+            if (settledWhileNodeWorkerStarted) {
+                reload();
+            }
         });
 
         if (worker === undefined) {

@@ -23,20 +23,26 @@
  * read from the dev env; and each `hyperdrive` binding, built from `DATABASE_URL`.
  */
 import type { FSWatcher } from "node:fs";
-import { existsSync, realpathSync, watch } from "node:fs";
+import { existsSync, realpathSync, statSync, watch } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
 import { resolveLocalWorkerEnv, resolveSchemaDirectory } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { codegenRequested } from "./lifecycle";
-import type { DevCommandOptions, DevCommandPlan, NodeDevWorker, NodeDevWorkerInputs } from "./types";
+import type { DevCommandOptions, DevCommandPlan, NodeAppHost, NodeDevWorker, NodeDevWorkerInputs, PlatformNode } from "./types";
 
 /** Where the shard databases persist between sessions; `.lunora/` is already the dev server's gitignored state directory. */
 const NODE_DEV_STATE_DIRECTORY = join(".lunora", "node");
 
 /** How long a burst of edits outside `lunora/` is coalesced into one reload. */
 const RELOAD_DEBOUNCE_MS = 100;
+
+/**
+ * How long a reload or a stop waits for the previous version's in-flight work (its `waitUntil` promises, shard requests and
+ * alarms) before closing it anyway. The port is closed for that long, so it is short: a dev loop waits on a save, not a deploy.
+ */
+const NODE_DEV_DRAIN_TIMEOUT_MS = 5000;
 
 /**
  * Wrangler keys that declare a binding this host does not compose in dev. Each is named once at startup, so a request
@@ -161,30 +167,6 @@ const planNodeDevServer = (inputs: { cwd: string; options: DevCommandOptions; st
     };
 };
 
-/** A composed app on the project's `@lunora/platform-node` (`createNodeAppHost`). */
-interface NodeAppHost {
-    close: () => Promise<void>;
-    fetch: (request: Request) => Promise<Response>;
-}
-
-/**
- * The slice of the project's copy of `@lunora/platform-node` this file calls, loaded through the same jiti instance
- * as the app so both share one module graph. Declared rather than imported: the package is resolved from the project
- * at run time, and importing its types would pull its whole dependency tree into this package's declarations.
- */
-interface PlatformNode {
-    createNodeAppHost: (options: {
-        crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
-        dataDirectory?: string;
-        durableObjects: ReadonlyArray<DurableObjectBinding>;
-        env?: Record<string, unknown>;
-        worker: Record<string, unknown>;
-    }) => NodeAppHost;
-    createNodeHttpServer: (options: { fetch: (request: Request) => Promise<Response>; port?: number }) => Promise<{ close: () => Promise<void> }>;
-    createNodeHyperdrive: (url?: string) => unknown;
-    createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, unknown>;
-}
-
 /** The string values of a dev env, which are what a secret or `DATABASE_URL` can be read from. */
 const stringValues = (env: Record<string, unknown>): Record<string, string> =>
     Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
@@ -210,13 +192,20 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     let platform: PlatformNode;
 
     try {
-        platform = await jiti.import<PlatformNode>("@lunora/platform-node");
+        platform = inputs.platform ?? (await jiti.import<PlatformNode>("@lunora/platform-node"));
     } catch (error: unknown) {
         throw new Error(
             `--target node runs the app on @lunora/platform-node, which this project cannot load (${errorMessage(error)}). Install it as a dev dependency.`,
             {
                 cause: error,
             },
+        );
+    }
+
+    // The peer range admits only releases that have it, but a project can pin an older one and skip the peer check.
+    if (typeof (platform as Partial<PlatformNode>).createNodeAppHost !== "function") {
+        throw new TypeError(
+            "--target node needs a @lunora/platform-node that exports createNodeAppHost (1.0.0-alpha.220 or later); upgrade it in this project",
         );
     }
 
@@ -241,30 +230,51 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         watchers = [];
     };
 
-    // Every project file the last load evaluated outside `lunora/`; the codegen watcher already covers the rest.
-    const watchLoadedSources = (): void => {
+    const scheduleReload = (): void => {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the reload and the watch reference each other
+            reload();
+        }, RELOAD_DEBOUNCE_MS);
+    };
+
+    // Every project file the last load evaluated. Files under `lunora/` are left to the codegen watcher when it runs, whose
+    // settled run reloads after `_generated/*` is rewritten; without it (`--no-codegen`) nothing else would see them.
+    const watchLoadedSources = (loadStartedAt: number): void => {
         unwatch();
 
+        let changedDuringLoad = false;
+
         for (const path of Object.keys(jiti.cache)) {
-            if (isProjectSource(path) && !isUnder(path, schemaDirectory)) {
-                const watcher = watch(path, () => {
-                    clearTimeout(debounce);
-                    debounce = setTimeout(() => {
-                        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the reload and the watch reference each other
-                        reload();
-                    }, RELOAD_DEBOUNCE_MS);
-                });
+            if (isProjectSource(path) && !(inputs.codegenWatch && isUnder(path, schemaDirectory))) {
+                const watcher = watch(path, scheduleReload);
 
                 // A deleted file raises an error event; the next load re-reads the set, so it is only dropped here.
                 watcher.on("error", () => {
                     watcher.close();
                 });
                 watchers.push(watcher);
+
+                // A watcher reports only what happens after it starts, and the load read this file before then: an edit in
+                // between would otherwise go unseen until the next save.
+                try {
+                    changedDuringLoad ||= statSync(path).mtimeMs > loadStartedAt;
+                } catch {
+                    // Deleted since the load; its watcher's error event already dropped it.
+                }
             }
+        }
+
+        if (changedDuringLoad) {
+            scheduleReload();
         }
     };
 
     const load = async (): Promise<Record<string, unknown>> => {
+        // The wall clock the file system stamps mtimes with, read without `Date`: a clock an app or a test moves would make every
+        // file look changed, or none.
+        const loadStartedAt = performance.timeOrigin + performance.now();
+
         // Only the project's own modules are evicted: packages under node_modules load natively once and stay, so a reload
         // re-evaluates the app and nothing else.
         for (const path of Object.keys(jiti.cache)) {
@@ -278,7 +288,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             return await jiti.import<Record<string, unknown>>(project.entry);
         } finally {
             // Also after a failed load: the file that broke it is in the set, and its next save is the fix.
-            watchLoadedSources();
+            watchLoadedSources(loadStartedAt);
         }
     };
 
@@ -337,12 +347,21 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         }
     };
 
+    // The host closes whether or not the listener did: its shard databases must not stay open under the next version.
     const shutdown = async (): Promise<void> => {
         const previous = running;
 
         running = undefined;
-        await previous?.server.close();
-        await previous?.host.close();
+
+        try {
+            await previous?.server.close();
+        } finally {
+            const drained = await previous?.host.close({ timeoutMs: NODE_DEV_DRAIN_TIMEOUT_MS });
+
+            if (drained?.timedOut === true) {
+                logger.warn(`node: closed the previous version with work still running: ${drained.pending.join(", ")}`);
+            }
+        }
     };
 
     try {
@@ -352,6 +371,9 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
 
         throw error;
     }
+
+    // After serving, not in `prepare`: a reload opens shards only once the previous version has closed them.
+    running?.host.rearmPersistedAlarms();
 
     logger.info(`node: serving ${relative(projectRoot, project.entry)} on @lunora/platform-node at http://localhost:${String(port)}`);
 
@@ -383,15 +405,24 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             return;
         }
 
-        await shutdown();
+        try {
+            await shutdown();
+        } catch (error: unknown) {
+            // Still serving the new version: if the old listener kept the port, `serve` fails below and says so.
+            logger.error(`node: closing the previous version failed: ${errorMessage(error)}`);
+        }
 
         try {
             await serve(host);
-            logger.info("node: reloaded");
         } catch (error: unknown) {
-            logger.error(`node: could not serve the reloaded worker: ${errorMessage(error)}`);
-            settle(1);
+            // The session stays up: the next save reloads again, which is the developer's chance to free the port.
+            logger.error(`node: could not serve the reloaded worker, nothing is serving until the next change: ${errorMessage(error)}`);
+
+            return;
         }
+
+        host.rearmPersistedAlarms();
+        logger.info("node: reloaded");
     };
 
     const reload = (): void => {

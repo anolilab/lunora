@@ -413,6 +413,8 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     // writes that land as the hook exits.
                     hookRunning = true;
 
+                    let hookFailed = false;
+
                     try {
                         // `stdoutToStderr` for the same reason `deploy` passes
                         // it: `lunora dev` turns on JSON logging whenever an AI
@@ -438,13 +440,18 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                         if (hook.ran) {
                             settledAt = Date.now();
                         }
+
+                        hookFailed = hook.error !== undefined;
                     } finally {
                         hookRunning = false;
                     }
 
                     // After the hook, so a listener that reads generated output reads the finished copy. A failed
-                    // codegen run `continue`s past this: nothing it would read has changed.
-                    options.onSettled?.();
+                    // codegen run `continue`s past this: nothing it would read has changed. A failed hook skips it too:
+                    // the output it left may be half-written, and the running app keeps serving until the next edit.
+                    if (!hookFailed) {
+                        options.onSettled?.({ startup: next.reason === "startup" });
+                    }
                 }
             } catch (error: unknown) {
                 // `runOnce` reports rather than throws, so this is the
@@ -700,10 +707,11 @@ export interface CodegenWatcherOptions {
     lunoraDirectory?: string;
 
     /**
-     * Called after each run whose codegen succeeded (startup included), once `postcodegen` has finished. A dev
+     * Called after each run whose codegen and `postcodegen` both succeeded, `startup` set for the run the watcher starts with
+     * (an edit queued behind it folds into it and clears the flag). A dev
      * server that loads `_generated/*` itself reloads here rather than on the raw file event, which fires mid-write.
      */
-    onSettled?: () => void;
+    onSettled?: (run: { startup: boolean }) => void;
     /** Project root containing the `lunora/` directory. */
     projectRoot: string;
     /** Process spawner for the `postcodegen` hook. Injectable so tests need no real subprocess. */

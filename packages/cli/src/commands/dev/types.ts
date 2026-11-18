@@ -23,9 +23,38 @@ interface NodeDevWorker extends WorkerProcess {
     reload: () => void;
 }
 
+/** A composed app on the project's `@lunora/platform-node` (`createNodeAppHost`). */
+interface NodeAppHost {
+    close: (options?: { timeoutMs?: number }) => Promise<{ pending: string[]; timedOut: boolean }>;
+    fetch: (request: Request) => Promise<Response>;
+    rearmPersistedAlarms: () => string[];
+}
+
+/**
+ * The slice of the project's copy of `@lunora/platform-node` the Node dev worker calls, loaded through the same jiti instance
+ * as the app so both share one module graph. Declared rather than imported: the package is resolved from the project at run
+ * time, and importing its types would pull its whole dependency tree into this package's declarations.
+ */
+interface PlatformNode {
+    createNodeAppHost: (options: {
+        crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
+        dataDirectory?: string;
+        durableObjects: ReadonlyArray<{ className: string; name: string }>;
+        env?: Record<string, unknown>;
+        worker: Record<string, unknown>;
+    }) => NodeAppHost;
+    createNodeHttpServer: (options: { fetch: (request: Request) => Promise<Response>; port?: number }) => Promise<{ close: () => Promise<void> }>;
+    createNodeHyperdrive: (url?: string) => unknown;
+    createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, unknown>;
+}
+
 /** What starts a {@link NodeDevWorker}. */
 interface NodeDevWorkerInputs {
+    /** Whether the codegen watcher runs and reloads the worker on a settled run; without it the worker watches `lunora/` itself. */
+    codegenWatch: boolean;
     logger: Logger;
+    /** Injection seam for tests — defaults to the project's own `@lunora/platform-node`. */
+    platform?: PlatformNode;
     port: number;
     projectRoot: string;
 }
@@ -232,8 +261,10 @@ export type {
     DevTunnelRequest,
     LongLivedDescriptor,
     LongLivedSpawner,
+    NodeAppHost,
     NodeDevWorker,
     NodeDevWorkerInputs,
+    PlatformNode,
     WorkerProcess,
     WorkerSpawner,
 };

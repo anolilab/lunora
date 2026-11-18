@@ -483,15 +483,20 @@ on that port) would be left pointing at nothing. Free 8787, or pass
 With `"target": "node"` in `lunora.config.*` (or `--target node`), there is no
 `wrangler dev`: the CLI serves the worker entry `wrangler.jsonc` names in `main`
 on [`@lunora/platform-node`](/packages/platform-node/), in its own process, on
-the same worker port. Install `@lunora/platform-node` as a dev dependency first.
+the same worker port. Install `@lunora/platform-node` (1.0.0-alpha.220 or later)
+as a dev dependency first.
 
 ```bash
 lunora dev --target node         # codegen watch + Studio + the app on the Node host
 ```
 
 Codegen watches `lunora/` as usual, and the app reloads after each finished
-codegen run and when a file the entry loaded from outside `lunora/` changes. A
-reload restarts the listener, so open sockets and streams reconnect. Studio
+codegen run (not after a failed `postcodegen`) and when a file the entry loaded
+from outside `lunora/` changes; with `--no-codegen` the files it loaded under
+`lunora/` are watched too. A reload restarts the listener, so open sockets and
+streams reconnect, and the previous version gets 5 s to finish its in-flight
+work before it is closed anyway. A reload that cannot bind the port is logged
+and retried on the next change. Studio
 works against it (data browser, logs, live subscriptions). Durable Object
 bindings, vars, declared crons, Secrets Store secrets (read from `.dev.vars` or
 the shell) and Hyperdrive (built from `DATABASE_URL`) are bound; any other
@@ -499,8 +504,8 @@ declared binding is named in a startup warning. `--remote` is refused, `--inspec
 framework project still gets this standalone stack, so start its frontend dev
 server separately. Shard data persists in `.lunora/node/`.
 
-`lunora deploy --target node` is still refused: there is no deploy artifact for
-a Node app yet.
+`lunora deploy --target node` writes a container build context instead; see
+"Deploying to Node" under `lunora deploy`.
 
 #### The two ports wrangler takes
 

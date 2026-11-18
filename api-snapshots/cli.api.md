@@ -228,6 +228,7 @@ interface DevCommandOptions {
     startCelldSession?: typeof startCelldDevSession;
     startCodegen?: typeof startCodegenWatch;
     startHyperdrive?: typeof startLocalHyperdrive;
+    startNodeWorker?: (inputs: NodeDevWorkerInputs) => Promise<NodeDevWorker>;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
@@ -248,6 +249,7 @@ interface DevCommandPlan {
     flavor: DevFlavor;
     frameworkHint?: string;
     ipv4LoopbackForced: boolean;
+    nodeHost?: true;
     remote: RemotePlan;
     runsCodegenWatch: boolean;
     serviceConfigCleanup?: () => void;
@@ -1042,6 +1044,9 @@ interface CodegenWatcherOptions {
     lazyFunctions?: CodegenOptions["lazyFunctions"];
     logger: Logger;
     lunoraDirectory?: string;
+    onSettled?: (run: {
+        startup: boolean;
+    }) => void;
     projectRoot: string;
     spawner?: Spawner;
     target?: string;
@@ -1287,6 +1292,21 @@ interface LongLivedDescriptor {
 type LongLivedSpawner = (descriptor: LongLivedDescriptor, onLine: (line: string, kind: "stderr" | "stdout") => void, onError?: (error: Error) => void) => WorkerProcess;
 ```
 
+### `NodeAppHost` (interface)
+
+```ts
+interface NodeAppHost {
+    close: (options?: {
+        timeoutMs?: number;
+    }) => Promise<{
+        pending: string[];
+        timedOut: boolean;
+    }>;
+    fetch: (request: Request) => Promise<Response>;
+    rearmPersistedAlarms: () => string[];
+}
+```
+
 ### `NodeContainerOutput` (interface)
 
 ```ts
@@ -1294,6 +1314,26 @@ interface NodeContainerOutput {
     directory: string;
     files: ReadonlyArray<string>;
     image?: string;
+}
+```
+
+### `NodeDevWorker` (interface)
+
+```ts
+interface NodeDevWorker extends WorkerProcess {
+    reload: () => void;
+}
+```
+
+### `NodeDevWorkerInputs` (interface)
+
+```ts
+interface NodeDevWorkerInputs {
+    codegenWatch: boolean;
+    logger: Logger;
+    platform?: PlatformNode;
+    port: number;
+    projectRoot: string;
 }
 ```
 
@@ -1357,6 +1397,31 @@ interface PailLogger {
     info: (message: string) => void;
     success: (message: string) => void;
     warn: (message: string) => void;
+}
+```
+
+### `PlatformNode` (interface)
+
+```ts
+interface PlatformNode {
+    createNodeAppHost: (options: {
+        crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
+        dataDirectory?: string;
+        durableObjects: ReadonlyArray<{
+            className: string;
+            name: string;
+        }>;
+        env?: Record<string, unknown>;
+        worker: Record<string, unknown>;
+    }) => NodeAppHost;
+    createNodeHttpServer: (options: {
+        fetch: (request: Request) => Promise<Response>;
+        port?: number;
+    }) => Promise<{
+        close: () => Promise<void>;
+    }>;
+    createNodeHyperdrive: (url?: string) => unknown;
+    createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, unknown>;
 }
 ```
 

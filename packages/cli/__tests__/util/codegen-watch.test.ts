@@ -639,6 +639,38 @@ describe("startCodegenWatch", () => {
             rmSync(workdir, { force: true, recursive: true });
         });
 
+        it("calls onSettled after a run whose hook succeeded, and not after one whose hook failed", async () => {
+            expect.assertions(2);
+
+            codegenSucceeds();
+
+            const workdir = projectWithPostCodegen();
+            const { logger } = silentLogger();
+            const settledAfterSuccess = vi.fn<(run: { startup: boolean }) => void>();
+            const settledAfterFailure = vi.fn<(run: { startup: boolean }) => void>();
+
+            await startCodegenWatch({
+                logger,
+                lunoraDirectory: ".",
+                onSettled: settledAfterSuccess,
+                projectRoot: workdir,
+                spawner: createRecordingSpawner().spawner,
+            }).close();
+            // A failed hook can leave generated output half-written; a dev server reloading on it would serve that.
+            await startCodegenWatch({
+                logger,
+                lunoraDirectory: ".",
+                onSettled: settledAfterFailure,
+                projectRoot: workdir,
+                spawner: createRecordingSpawner(1).spawner,
+            }).close();
+
+            expect(settledAfterSuccess).toHaveBeenCalledTimes(1);
+            expect(settledAfterFailure).not.toHaveBeenCalled();
+
+            rmSync(workdir, { force: true, recursive: true });
+        });
+
         it("reports a failing hook and still regenerates on the next change", async () => {
             // `hasAssertions`, not a count: both assertions run inside
             // `vi.waitFor`, which retries them an indeterminate number of times.

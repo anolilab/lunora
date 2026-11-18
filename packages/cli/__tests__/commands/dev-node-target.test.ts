@@ -1,15 +1,19 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } from "@lunora/platform-node";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDevCommand } from "../../src/commands/dev/handler";
 import { startNodeDevWorker } from "../../src/commands/dev/node-dev-server";
-import type { NodeDevWorker } from "../../src/commands/dev/types";
+import type { NodeDevWorker, PlatformNode } from "../../src/commands/dev/types";
 import { findAvailablePort } from "../../src/util/free-port";
 import type { Logger } from "../../src/util/logger";
+
+/** The project's real `@lunora/platform-node`, which a test wraps to inject a failure. */
+const realPlatform = { createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } as unknown as PlatformNode;
 
 /** This package's node_modules: the fixture links it so `@lunora/*` resolve to the workspace builds. */
 const PACKAGE_NODE_MODULES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "node_modules");
@@ -143,19 +147,24 @@ const callQuery = async (origin: string, functionPath: string, args: Record<stri
     return response.json();
 };
 
-/** Start `lunora dev --target node` on `workdir` and resolve once it serves; `stop` ends it and resolves with its result. */
-const startDev = async (workdir: string) => {
+/**
+ * Start `lunora dev --target node` on `workdir` and resolve once it serves; `stop` ends it and resolves with its result.
+ * `firstReload` is armed before the start, so a reload the start itself triggers is not missed.
+ */
+const startDev = async (workdir: string, options: { codegen?: boolean; platform?: PlatformNode } = {}) => {
     const port = await findAvailablePort(18_870);
     const { errors, logger, next } = milestoneLogger();
     const serving = next("node: serving");
+    const firstReload = next("node: reloaded");
     let worker: NodeDevWorker | undefined;
 
     const run = runDevCommand({
+        codegen: options.codegen,
         cwd: workdir,
         logger,
         studio: false,
         startNodeWorker: async (inputs) => {
-            worker = await startNodeDevWorker(inputs);
+            worker = await startNodeDevWorker({ ...inputs, platform: options.platform });
 
             return worker;
         },
@@ -171,6 +180,8 @@ const startDev = async (workdir: string) => {
     await Promise.race([serving, ended]);
 
     return {
+        errors,
+        firstReload,
         next,
         origin: `http://localhost:${String(port)}`,
         stop: async () => {
@@ -282,5 +293,240 @@ export default crons;
         } finally {
             await expect(dev.stop()).resolves.toMatchObject({ code: 0 });
         }
+    });
+
+    it("reloads on a file under lunora/ when the codegen watcher is off", async () => {
+        expect.assertions(2);
+
+        writeFixture(workdir);
+
+        // A first session generates `_generated/*`; the second runs without codegen over it.
+        const generating = await startDev(workdir);
+
+        await generating.stop();
+
+        const dev = await startDev(workdir, { codegen: false });
+
+        try {
+            const reloaded = dev.next("node: reloaded");
+
+            writeFileSync(join(workdir, "lunora", "notes.ts"), notesSource("v2"), "utf8");
+            await reloaded;
+
+            await expect(callQuery(dev.origin, "notes:greeting")).resolves.toStrictEqual({ result: "v2" });
+        } finally {
+            await expect(dev.stop()).resolves.toMatchObject({ code: 0 });
+        }
+    });
+
+    it("reloads when a file the load read changed before its watcher started", async () => {
+        expect.assertions(1);
+
+        writeFixture(workdir);
+
+        // A modification time after the load began stands in for an edit landing between the read and the watch.
+        const later = new Date(Date.now() + 60_000);
+
+        utimesSync(join(workdir, "src", "worker.ts"), later, later);
+
+        const dev = await startDev(workdir);
+
+        try {
+            await dev.firstReload;
+
+            await expect(callQuery(dev.origin, "notes:greeting")).resolves.toStrictEqual({ result: "v1" });
+        } finally {
+            await dev.stop();
+        }
+    });
+
+    it("keeps the session up when the reloaded listener cannot bind, and serves on the next change", async () => {
+        // `hasAssertions`: the error check runs inside `vi.waitFor`, which retries it an indeterminate number of times.
+        expect.hasAssertions();
+
+        writeFixture(workdir);
+
+        let listeners = 0;
+        const platform: PlatformNode = {
+            ...realPlatform,
+            createNodeHttpServer: async (options) => {
+                listeners += 1;
+
+                // The second listener is the first reload's.
+                if (listeners === 2) {
+                    throw new Error("listen EADDRINUSE");
+                }
+
+                return realPlatform.createNodeHttpServer(options);
+            },
+        };
+        const dev = await startDev(workdir, { platform });
+
+        try {
+            const reloaded = dev.next("node: reloaded");
+
+            writeFileSync(join(workdir, "lunora", "notes.ts"), notesSource("v2"), "utf8");
+            // Logged as an error, which the milestone logger does not resolve on.
+            await vi.waitFor(() => {
+                expect(dev.errors.join(" ")).toContain("could not serve the reloaded worker");
+            });
+
+            writeFileSync(join(workdir, "lunora", "notes.ts"), notesSource("v3"), "utf8");
+            await reloaded;
+
+            await expect(callQuery(dev.origin, "notes:greeting")).resolves.toStrictEqual({ result: "v3" });
+        } finally {
+            await expect(dev.stop()).resolves.toMatchObject({ code: 0 });
+        }
+    });
+
+    it("closes the previous host and keeps reloading when its listener fails to close", async () => {
+        expect.assertions(3);
+
+        writeFixture(workdir);
+
+        const hostCloses = vi.fn<() => void>();
+        let listeners = 0;
+        const platform: PlatformNode = {
+            ...realPlatform,
+            createNodeAppHost: (options) => {
+                const host = realPlatform.createNodeAppHost(options);
+
+                return {
+                    ...host,
+                    close: async (closeOptions) => {
+                        hostCloses();
+
+                        return host.close(closeOptions);
+                    },
+                };
+            },
+            createNodeHttpServer: async (options) => {
+                listeners += 1;
+
+                const server = await realPlatform.createNodeHttpServer(options);
+
+                // The first listener closes, then reports a failure, as a close that errors after releasing the port would.
+                return listeners === 1
+                    ? {
+                          close: async () => {
+                              await server.close();
+
+                              throw new Error("close failed");
+                          },
+                      }
+                    : server;
+            },
+        };
+        const dev = await startDev(workdir, { platform });
+
+        try {
+            const reloaded = dev.next("node: reloaded");
+
+            writeFileSync(join(workdir, "lunora", "notes.ts"), notesSource("v2"), "utf8");
+            await reloaded;
+
+            expect(hostCloses).toHaveBeenCalledTimes(1);
+            await expect(callQuery(dev.origin, "notes:greeting")).resolves.toStrictEqual({ result: "v2" });
+        } finally {
+            await expect(dev.stop()).resolves.toMatchObject({ code: 0 });
+        }
+    });
+
+    it("refuses a @lunora/platform-node without createNodeAppHost, naming the upgrade", async () => {
+        expect.assertions(1);
+
+        writeFixture(workdir);
+
+        const { logger } = milestoneLogger();
+        const older = { ...realPlatform, createNodeAppHost: undefined };
+
+        await expect(
+            startNodeDevWorker({
+                codegenWatch: false,
+                logger,
+                platform: older as unknown as PlatformNode,
+                port: await findAvailablePort(18_870),
+                projectRoot: workdir,
+            }),
+        ).rejects.toThrow(/createNodeAppHost \(1\.0\.0-alpha\.220 or later\)/u);
+    });
+});
+
+describe("lunora dev --target node codegen settlements", () => {
+    let workdir: string;
+
+    beforeEach(() => {
+        workdir = realpathSync(mkdtempSync(join(tmpdir(), "lunora-cli-node-dev-settle-")));
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    /** Run `lunora dev` with a fake codegen watcher and a fake Node worker, settling one run at `when`. */
+    const runWithFakes = async (when: "before-start" | "during-start", startup = false) => {
+        const run = { startup };
+
+        const reload = vi.fn<() => void>();
+        let onSettled: ((settled: { startup: boolean }) => void) | undefined;
+        let exit: (code: number) => void = () => {};
+        const exited = new Promise<number>((resolve) => {
+            exit = resolve;
+        });
+        const { logger } = milestoneLogger();
+
+        const dev = runDevCommand({
+            cwd: workdir,
+            logger,
+            startCodegen: (options) => {
+                ({ onSettled } = options);
+
+                if (when === "before-start") {
+                    onSettled?.(run);
+                }
+
+                return { close: async () => {}, watchAvailable: true } as never;
+            },
+            startNodeWorker: async () => {
+                if (when === "during-start") {
+                    onSettled?.(run);
+                }
+
+                // Stops as soon as it is up: the reload call is all this test reads.
+                queueMicrotask(() => {
+                    exit(0);
+                });
+
+                return { exited, kill: () => {}, reload };
+            },
+            studio: false,
+            target: "node",
+            waitForInterrupt: async () => 0,
+            workerPort: await findAvailablePort(18_900),
+        });
+
+        await dev;
+
+        return reload;
+    };
+
+    it("reloads once the host is up for a run that settled while it was loading", async () => {
+        expect.assertions(1);
+
+        await expect(runWithFakes("during-start")).resolves.toHaveBeenCalledTimes(1);
+    });
+
+    it("does not reload for a run that settled before the host started loading", async () => {
+        expect.assertions(1);
+
+        await expect(runWithFakes("before-start")).resolves.not.toHaveBeenCalled();
+    });
+
+    it("does not reload for the startup run, which wrote its output before the host started loading", async () => {
+        expect.assertions(1);
+
+        await expect(runWithFakes("during-start", true)).resolves.not.toHaveBeenCalled();
     });
 });
