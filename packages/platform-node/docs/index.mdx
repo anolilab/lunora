@@ -399,8 +399,10 @@ Delivery is at-least-once, narrowed:
   reservation and the row insert run in one `BEGIN IMMEDIATE` transaction, after
   the body has been validated and encoded. So no process on the file ever sees a
   reservation without its row, and a failed enqueue leaves nothing behind. The
-  record is refreshed when a delivery takes the key and kept as long as the sent
-  record. Once it lapses, the key still belongs to the oldest queued, retrying or
+  record lives as long as the key's delivery history, 15 days from its last
+  delivery: one horizon for all of a key's evidence. So a key reused with new
+  content within 15 days is refused at enqueue, not accepted and then dropped as
+  a late repeat. Once it lapses, the key still belongs to the oldest queued, retrying or
   parked row that carries it, judged by that row's own stored content. So
   `mailer.queue()` and `queue.send()` throw for a key with different content for as
   long as any row of the original is live. Content is compared on the fields the
@@ -423,9 +425,18 @@ Delivery is at-least-once, narrowed:
   through an index.
 - The dedupe window is measured on the host clock (`now`), the same clock the
   queue and the ledger use.
-- A redelivery 15 or more days after it was queued is refused and logged as
-  `lunora.mail.send_evidence_expired`, whatever brought it back, because its
-  attempt marks have expired.
+- A redelivery of a key 15 or more days after the key's first delivery is
+  refused and logged as `lunora.mail.send_evidence_expired`, whatever brought it
+  back. The clock runs from that first attempt, not from the enqueue: a row first
+  polled long after it was queued is a fresh first attempt, and its transient
+  failure is retried. A key's delivery history is kept for as long as any queued,
+  retrying or parked row still carries the key, and it resets only for a row
+  queued after it had already expired. So a duplicate of an already-sent mail,
+  left pending through a long gap, is refused rather than sent as a first send.
+- A failure after the provider accepted a send (updating the key's content record,
+  or releasing its claim) is logged as its own error,
+  `lunora.mail.content_record_failed` or `lunora.mail.claim_release_failed`. It is
+  never a refusal, never retries the send, and never stops the rest of the batch.
 - A crash after the provider accepted a send, and before its key was recorded,
   still redelivers. Only a provider that dedupes on the key (Resend) drops that
   repeat.
@@ -437,6 +448,9 @@ stacks, and retried three times. The delivery that parks it is logged as the err
 outcome-unknown failure waits 180 seconds before the retry, counted from the
 failure, not from the start of a slow batch. A refused or malformed
 send is logged as an error and dropped, because a retry could mail a second copy.
+Two hosts on one database connection cannot declare the same queue name:
+`createNodeQueueHost` throws for the second. That includes the mail host's
+`lunora-mail`, in either order. A second process on the same file is not detected.
 `deadLetters.requeue(id)` revives only a parked mail send and keeps its attempt
 count, so a send that may already have landed is refused rather than mailed again
 once Resend's window has passed. It throws for a send queued 15 or more days ago,

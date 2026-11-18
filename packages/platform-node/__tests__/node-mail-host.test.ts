@@ -893,7 +893,8 @@ describe(createNodeMailHost, () => {
             // A claim a crashed process never released.
             database.prepare("INSERT INTO _lunora_mail_claims (key, message_id, expires_at) VALUES ('crashed', 'gone', ?)").run(clock.now() - 1);
 
-            clock.advance(25 * 60 * 60 * 1000);
+            // Past the 15-day horizon a key record now shares with its delivery history.
+            clock.advance(16 * 24 * 60 * 60 * 1000);
             await mail.mailer.queue({ idempotencyKey: "new-key", subject: "New", text: "2", to: "ada@example.com" });
             await mail.poll();
 
@@ -1636,6 +1637,173 @@ describe(createNodeMailHost, () => {
             expect(() =>
                 createNodePlatform({ mail: { env: PRODUCTION, path: `${shardPath} `, transport: scriptedTransport(["ok"]) }, path: shardPath }),
             ).toThrow(/shard database/u);
+        });
+    });
+
+    describe("thirteenth review", () => {
+        const DAY_MS = 24 * 60 * 60 * 1000;
+
+        it("refuses at enqueue a key reused with new content days after it was sent", async () => {
+            expect.assertions(2);
+
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "order-9", subject: "Order", text: "Shipped", to: "ada@example.com" });
+            await mail.poll();
+            clock.advance(3 * DAY_MS);
+
+            // Inside the key's 15-day history: accepted, it would be dropped as a late repeat of the old send.
+            await expect(mail.mailer.queue({ idempotencyKey: "order-9", subject: "Order", text: "Cancelled", to: "ada@example.com" })).rejects.toThrow(
+                /already queued with different content/u,
+            );
+
+            expect(transport.sent.map((payload) => payload.text)).toStrictEqual(["Shipped"]);
+        });
+
+        it("refuses a same-key row left pending past the evidence horizon, after another row of the key was sent", async () => {
+            expect.assertions(2);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+            const reset = { idempotencyKey: "reset-zoe", subject: "Reset", text: "Link", to: "zoe@example.com" };
+
+            await mail.mailer.queue(reset);
+            await mail.poll();
+            // The same mail queued again, then nothing polls for 16 days: the key's history and sent record lapse.
+            await mail.mailer.queue(reset);
+            clock.advance(16 * DAY_MS);
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(1);
+            expect(error.mock.calls.map(([line]) => logged(line).event)).toContain("lunora.mail.send_evidence_expired");
+        });
+
+        /** An app queue host and the mail host, each declaring `lunora-mail`, on one connection. */
+        const lunoraMailHosts = (): { app: () => unknown; mail: () => unknown } => {
+            const database = freshDatabase();
+
+            return {
+                app: () =>
+                    createNodeQueueHost(database, {
+                        onBatch: () => undefined,
+                        queues: { outbox: defineQueue({ handler: () => undefined, name: "lunora-mail" }) },
+                    }),
+                mail: () => createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: scriptedTransport(["ok"]) }),
+            };
+        };
+
+        it("refuses the mail host on a connection where an app queue already declares lunora-mail", () => {
+            expect.assertions(1);
+
+            const { app, mail } = lunoraMailHosts();
+
+            app();
+
+            expect(mail).toThrow(/"lunora-mail" is already declared/u);
+        });
+
+        it("refuses an app queue named lunora-mail on a connection the mail host already uses", () => {
+            expect.assertions(1);
+
+            const { app, mail } = lunoraMailHosts();
+
+            mail();
+
+            expect(app).toThrow(/"lunora-mail" is already declared/u);
+        });
+
+        it("logs a failed content update after a send as its own error, never as a refusal", async () => {
+            expect.assertions(4);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const database = freshDatabase();
+            const sent: SendPayload[] = [];
+            const transport: MailTransport = {
+                send: async (payload) => {
+                    sent.push(payload);
+                    // Once the provider has the mail, the key's content update fails (a busy database, say).
+                    database.exec("CREATE TEMP TRIGGER keys_busy BEFORE UPDATE ON main._lunora_mail_keys BEGIN SELECT RAISE(ABORT, 'keys busy'); END");
+
+                    return { id: "sent-1" };
+                },
+            };
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "after-1", subject: "Hi", text: "Hi", to: "ada@example.com" });
+            await mail.poll();
+            await mail.poll();
+
+            const events = error.mock.calls.map(([line]) => logged(line).event);
+
+            expect(sent).toHaveLength(1);
+            expect(events).toContain("lunora.mail.content_record_failed");
+            expect(events).not.toContain("lunora.mail.send_refused");
+            expect(database.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get()).toStrictEqual({ n: 0 });
+        });
+
+        it("logs a failed claim release and still delivers the rest of the batch", async () => {
+            expect.assertions(2);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const database = freshDatabase();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "batch-1", subject: "One", text: "1", to: "ada@example.com" });
+            await mail.mailer.queue({ idempotencyKey: "batch-2", subject: "Two", text: "2", to: "bob@example.com" });
+            database.exec("CREATE TEMP TRIGGER claims_stuck BEFORE DELETE ON main._lunora_mail_claims BEGIN SELECT RAISE(ABORT, 'claims stuck'); END");
+            await mail.poll();
+
+            expect(transport.sent.map((payload) => payload.subject)).toStrictEqual(["One", "Two"]);
+            expect(error.mock.calls.map(([line]) => logged(line).event)).toContain("lunora.mail.claim_release_failed");
+        });
+    });
+
+    describe("fourteenth review", () => {
+        it("retries a row first polled long after it was queued, measuring evidence from its first attempt", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const transport = scriptedTransport([new Error("connection refused"), "ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "late-1", subject: "Hi", text: "Hi", to: "ada@example.com" });
+            // Nothing polls for 16 days; then the first attempt fails transiently.
+            clock.advance(16 * 24 * 60 * 60 * 1000);
+            await mail.poll();
+            await mail.poll();
+
+            // Its first attempt was moments ago, so its evidence is fresh: retried and sent, not expired.
+            expect(transport.sent).toHaveLength(2);
+            expect(error.mock.calls.map(([line]) => logged(line).event)).not.toContain("lunora.mail.send_evidence_expired");
+        });
+    });
+
+    describe("fifteenth review", () => {
+        it("keeps a registry directory's trailing space, as the registry itself does", () => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-dirspace-"));
+
+            // "shards " is a real directory name: only database filenames are trimmed.
+            const shards = join(directory, "shards ");
+
+            mkdirSync(shards);
+
+            expect(() =>
+                createNodePlatform({
+                    directory: shards,
+                    mail: { env: PRODUCTION, path: join(shards, "mail.sqlite3"), transport: scriptedTransport(["ok"]) },
+                    path: join(directory ?? "", "shard.sqlite3"),
+                }),
+            ).toThrow(/shard registry's directory/u);
         });
     });
 });

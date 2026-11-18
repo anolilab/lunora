@@ -103,9 +103,11 @@ const deliverableCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCronJ
  * for one not created yet, its directory) exists, so `./a/../shard.sqlite3` and a
  * symlink to it name the same database.
  */
-const canonicalPath = (path: string): string => {
-    // better-sqlite3 opens `filename.trim()`, so a path with a stray space names the trimmed file.
-    const resolved = resolve(path.trim());
+const canonicalPath = (path: string, { databaseFile }: { databaseFile: boolean }): string => {
+    // better-sqlite3 opens `filename.trim()`, so a database filename with a stray space names the
+    // trimmed file. A directory is used exactly as given (the shard registry joins it untrimmed),
+    // so only a database filename is trimmed.
+    const resolved = resolve(databaseFile ? path.trim() : path);
 
     try {
         return realpathSync(resolved);
@@ -134,7 +136,7 @@ const sameFile = (a: string, b: string): boolean => {
 
         return first.dev === second.dev && first.ino === second.ino;
     } catch {
-        return canonicalPath(a) === canonicalPath(b);
+        return canonicalPath(a, { databaseFile: true }) === canonicalPath(b, { databaseFile: true });
     }
 };
 
@@ -179,7 +181,7 @@ const REGISTRY_SHARD_SUFFIX = ".sqlite3";
  * `shard.transaction()`, so mail would stall every shard request it overlapped.
  */
 const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptions, "directory" | "globalTablesPath" | "path">): void => {
-    const mail = canonicalPath(mailPath);
+    const mail = canonicalPath(mailPath, { databaseFile: true });
     const owners: [string, string | undefined][] = [
         ["the shard database (`path`)", platform.path],
         ["the .global() store (`globalTablesPath`)", platform.globalTablesPath],
@@ -200,7 +202,7 @@ const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptio
         return;
     }
 
-    if (mail.endsWith(REGISTRY_SHARD_SUFFIX) && dirname(mail) === canonicalPath(directory)) {
+    if (mail.endsWith(REGISTRY_SHARD_SUFFIX) && dirname(mail) === canonicalPath(directory, { databaseFile: false })) {
         throw new LunoraError(
             "VALIDATION_ERROR",
             `@lunora/platform-node: mail.path "${mailPath}" is a ${REGISTRY_SHARD_SUFFIX} file inside the shard registry's directory "${directory}", which would open it as a shard — move it out of that directory`,

@@ -200,6 +200,9 @@ const preparedSendOf = (host: object, exportName: string): PreparedSend => {
     return prepared;
 };
 
+/** The queue names each database connection's hosts declared, so a second host cannot take one. */
+const declaredOnConnection = new WeakMap<Database.Database, Set<string>>();
+
 /** One declared queue, resolved from its `defineQueue` result. */
 interface CompiledQueue {
     definition: QueueDefinition;
@@ -344,6 +347,25 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
     });
 
     const declared = new Set(compiled.map((queue) => queue.name));
+
+    // Two hosts on one connection would both claim a name's rows, each settling the other's. That
+    // includes the mail host, which declares `lunora-mail` on the connection it is given. Only one
+    // connection is visible here, so two processes on one file are not detected.
+    const taken = declaredOnConnection.get(database) ?? new Set<string>();
+    const clash = [...declared].find((name) => taken.has(name));
+
+    if (clash !== undefined) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: queue "${clash}" is already declared by another host on this database connection, and both would claim its rows — give it another name, or a connection of its own`,
+        );
+    }
+
+    for (const name of declared) {
+        taken.add(name);
+    }
+
+    declaredOnConnection.set(database, taken);
     const declaredJson = JSON.stringify([...declared]);
 
     // Checked once, at construction, because both failures are silent at runtime:

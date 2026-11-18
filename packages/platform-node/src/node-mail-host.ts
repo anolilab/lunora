@@ -84,8 +84,14 @@ const MAIL_EVIDENCE_TTL_MS = 15 * 86_400_000;
  */
 const ROW_KEY_SQL = "CASE WHEN content_type = 'json' AND json_valid(CAST(body AS TEXT)) THEN json_extract(CAST(body AS TEXT), '$.idempotencyKey') END";
 
-/** How long a key remembers the content it was first queued with: the ledger's default sent TTL. */
-const MAIL_KEY_CONTENT_TTL_MS = 86_400_000;
+/**
+ * How long a key remembers the content it was first queued with: as long as its
+ * delivery history and attempt marks, one horizon for all of a key's evidence.
+ * At 24 hours, a key used one to fifteen days earlier took new content at
+ * enqueue and the new mail was then dropped as a late repeat of the old send;
+ * now the reuse is refused at enqueue, where the producer sees it.
+ */
+const MAIL_KEY_CONTENT_TTL_MS = MAIL_EVIDENCE_TTL_MS;
 
 /** How deep a logged error's `cause` chain is followed. */
 const MAX_CAUSE_DEPTH = 3;
@@ -265,6 +271,9 @@ const fingerprintOf = (body: unknown): string => {
 
 /** One delivery at a time per idempotency key, and one content per key, across polls and processes on the file. */
 interface KeyClaims {
+    /** When the key was first delivered, while its history lives; `undefined` for a key never delivered. */
+    firstDeliveredAt: (key: string) => number | undefined;
+
     /** Keep the key's content record at least as long as the sent record a successful send just wrote. */
     keepContent: (key: string) => void;
 
@@ -289,7 +298,7 @@ interface KeyClaims {
      * delivery holds it, `"conflict"` when the key names different content, or
      * the key's delivery number when taken.
      */
-    take: (key: string, fingerprint: string, messageId: string) => TakeOutcome;
+    take: (key: string, fingerprint: string, messageId: string, enqueuedAt: number) => TakeOutcome;
 }
 
 /**
@@ -300,6 +309,9 @@ interface KeyClaims {
  * the first row's, so a definite failure there could hide an outcome-unknown one.
  * Row attempts still drive the queue's retry budget.
  */
+/** The named parameters of the delivery-history upsert (better-sqlite3 binds `@name`, not `?NNN`). */
+type NextDeliveryParameters = { enqueued: number; excluded: string; expires: number; key: string; now: number };
+
 type TakeOutcome = { delivery: number; firstDeliveredAt: number; outcome: "taken" } | { outcome: "busy" } | { outcome: "conflict" };
 
 /**
@@ -347,15 +359,41 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
     );
     const pruneClaims = database.prepare<[number]>("DELETE FROM _lunora_mail_claims WHERE expires_at <= ?");
     const pruneContent = database.prepare<[number]>("DELETE FROM _lunora_mail_keys WHERE expires_at <= ?");
-    const pruneDeliveries = database.prepare<[number]>("DELETE FROM _lunora_mail_deliveries WHERE expires_at <= ?");
-    const nextDelivery = database.prepare<[string, number, number, number, number], { delivery: number; first_at: number }>(
-        `INSERT INTO _lunora_mail_deliveries (key, delivery, first_at, expires_at) VALUES (?, 1, ?, ?)
-         ON CONFLICT (key) DO UPDATE SET
-             delivery = CASE WHEN _lunora_mail_deliveries.expires_at <= ? THEN 1 ELSE _lunora_mail_deliveries.delivery + 1 END,
-             first_at = CASE WHEN _lunora_mail_deliveries.expires_at <= ? THEN excluded.first_at ELSE _lunora_mail_deliveries.first_at END,
-             expires_at = excluded.expires_at
-         RETURNING delivery, first_at`,
-    );
+    // A key's delivery history outlives its own expiry for as long as any queued, retrying or
+    // parked row still carries the key: that row's sends are judged against it, and a history
+    // dropped under it would make a duplicate of an already-sent mail look like a first send.
+    // It resets only once it has expired with no other live row of the key left. Both
+    // statements read the queue table, which the queue host creates after these claims, so
+    // they are prepared on first use.
+    const otherLiveRowOfKey = `EXISTS (SELECT 1 FROM _lunora_queue_messages WHERE queue = '${MAIL_QUEUE_NAME}' AND state IN ('pending', 'dead') AND ${ROW_KEY_SQL} = _lunora_mail_deliveries.key AND id <> @excluded)`;
+    // Named parameters: better-sqlite3 binds anonymous `?` and `@name`, not numbered `?NNN`.
+    let pruneDeliveriesStatement: Database.Statement<[{ excluded: string; now: number }]> | undefined;
+    let nextDeliveryStatement: Database.Statement<[NextDeliveryParameters], { delivery: number; first_at: number }> | undefined;
+    const pruneDeliveries = (now: number): void => {
+        pruneDeliveriesStatement ??= database.prepare<[{ excluded: string; now: number }]>(
+            `DELETE FROM _lunora_mail_deliveries WHERE NOT ${otherLiveRowOfKey} AND expires_at <= @now`,
+        );
+        // No row is being delivered here, so no id is excluded from "another live row".
+        pruneDeliveriesStatement.run({ excluded: "", now });
+    };
+    // A history resets only for a row queued after it had already expired: a new use of the key
+    // past the horizon. The row being delivered, retrying, or a duplicate queued while the
+    // evidence lived, keeps counting from the key's first delivery, as does any other live row.
+    const nextDelivery = (key: string, now: number, messageId: string, enqueuedAt: number): { delivery: number; first_at: number } | undefined => {
+        const reset = `_lunora_mail_deliveries.expires_at <= @now AND @enqueued >= _lunora_mail_deliveries.expires_at AND NOT ${otherLiveRowOfKey}`;
+
+        nextDeliveryStatement ??= database.prepare<[NextDeliveryParameters], { delivery: number; first_at: number }>(
+            `INSERT INTO _lunora_mail_deliveries (key, delivery, first_at, expires_at) VALUES (@key, 1, @now, @expires)
+             ON CONFLICT (key) DO UPDATE SET
+                 delivery = CASE WHEN ${reset} THEN 1 ELSE _lunora_mail_deliveries.delivery + 1 END,
+                 first_at = CASE WHEN ${reset} THEN excluded.first_at ELSE _lunora_mail_deliveries.first_at END,
+                 expires_at = excluded.expires_at
+             RETURNING delivery, first_at`,
+        );
+
+        return nextDeliveryStatement.get({ enqueued: enqueuedAt, excluded: messageId, expires: now + MAIL_EVIDENCE_TTL_MS, key, now });
+    };
+    const readFirstDelivery = database.prepare<[string], { first_at: number }>("SELECT first_at FROM _lunora_mail_deliveries WHERE key = ?");
     const extendContent = database.prepare<[number, string]>("UPDATE _lunora_mail_keys SET expires_at = max(expires_at, ?) WHERE key = ?");
     let prunedAt = Number.NEGATIVE_INFINITY;
 
@@ -394,7 +432,7 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
         if (now - prunedAt >= LEDGER_PRUNE_INTERVAL_MS) {
             pruneClaims.run(now);
             pruneContent.run(now);
-            pruneDeliveries.run(now);
+            pruneDeliveries(now);
             prunedAt = now;
         }
     };
@@ -420,7 +458,7 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
         return "queued";
     });
 
-    const takeInTransaction = database.transaction((key: string, fingerprint: string, messageId: string): TakeOutcome => {
+    const takeInTransaction = database.transaction((key: string, fingerprint: string, messageId: string, enqueuedAt: number): TakeOutcome => {
         const now = clock();
 
         pruneDue(now);
@@ -439,12 +477,13 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
         // starts (up to the lease), and `keepContent` then extends it to the sent record's life.
         writeContent.run(key, fingerprint, Math.max(now + MAIL_KEY_CONTENT_TTL_MS, now + MAIL_VISIBILITY_TIMEOUT_MS));
 
-        const numbered = nextDelivery.get(key, now, now + MAIL_EVIDENCE_TTL_MS, now, now);
+        const numbered = nextDelivery(key, now, messageId, enqueuedAt);
 
         return { delivery: numbered?.delivery ?? 1, firstDeliveredAt: numbered?.first_at ?? now, outcome: "taken" };
     });
 
     return {
+        firstDeliveredAt: (key) => readFirstDelivery.get(key)?.first_at,
         keepContent: (key) => {
             extendContent.run(clock() + MAIL_KEY_CONTENT_TTL_MS, key);
         },
@@ -452,7 +491,7 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
             drop.run(key, messageId);
         },
         reserve: (key, fingerprint, insert) => reserveInTransaction.immediate(key, fingerprint, insert),
-        take: (key, fingerprint, messageId) => takeInTransaction.immediate(key, fingerprint, messageId),
+        take: (key, fingerprint, messageId, enqueuedAt) => takeInTransaction.immediate(key, fingerprint, messageId, enqueuedAt),
     };
 };
 
@@ -636,7 +675,7 @@ const claimFor = (consumer: MailConsumer, message: MessageBatchLike["messages"][
     }
 
     try {
-        return consumer.claims.take(key, fingerprintOf(message.body), message.id);
+        return consumer.claims.take(key, fingerprintOf(message.body), message.id, message.timestamp.getTime());
     } catch (error) {
         settleFailure(message, new MailSendError({ cause: error, message: `@lunora/mail: could not claim idempotency key "${key}"`, retryable: true }));
 
@@ -644,16 +683,17 @@ const claimFor = (consumer: MailConsumer, message: MessageBatchLike["messages"][
     }
 };
 
+/** Run bookkeeping that follows a delivery, logging its failure as its own event instead of failing the message. */
+const afterSend = (message: MessageBatchLike["messages"][number], event: string, work: () => void): void => {
+    try {
+        work();
+    } catch (error) {
+        logFailure("error", event, message.attempts, error);
+    }
+};
+
 /** Deliver one message under its key's claim, and settle it on its own outcome. */
 const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messages"][number]): Promise<void> => {
-    // Every route back into delivery passes here: a retry, a lapsed lease, a requeue. Past the
-    // attempt marks' lifetime the ledger can no longer say whether an earlier attempt landed.
-    if (message.attempts > 1 && consumer.clock() - message.timestamp.getTime() >= MAIL_EVIDENCE_TTL_MS) {
-        refuse(message, "lunora.mail.send_evidence_expired", "an earlier delivery may have been sent, and its record in the sent ledger has expired");
-
-        return;
-    }
-
     const key = idempotencyKeyOf(message.body);
     const claimed = claimFor(consumer, message, key);
 
@@ -682,10 +722,13 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
         return;
     }
 
-    // The key's history, not this row's: an earlier row may have sent it. Its first delivery is
-    // when the provider may first have seen the key, so the dedupe window and the attempt
-    // marks' lifetime both run from whichever is earlier.
-    const sinceMs = Math.min(message.timestamp.getTime(), claimed.firstDeliveredAt);
+    // Every route back into delivery passes here: a retry, a lapsed lease, a requeue, or a row
+    // left pending while nothing polled. The key's history decides, not this row's age: an
+    // earlier row may have sent the key, and the provider can first have seen it at the key's
+    // first delivery, never at an enqueue. So the attempt marks' lifetime and the dedupe window
+    // both run from that first delivery. A row first polled long after it was queued is a
+    // fresh first attempt, and its transient failure is retried like any other.
+    const sinceMs = claimed.firstDeliveredAt;
 
     if (claimed.delivery > 1 && consumer.clock() - sinceMs >= MAIL_EVIDENCE_TTL_MS) {
         if (key !== undefined) {
@@ -707,21 +750,30 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
     const enqueuedAt = new Date(Date.now() - (consumer.clock() - sinceMs));
 
     try {
-        await consumeQueuedSend(consumer.mailer, message.body, { attempts: claimed.delivery, enqueuedAt, sent: consumer.sent });
+        try {
+            await consumeQueuedSend(consumer.mailer, message.body, { attempts: claimed.delivery, enqueuedAt, sent: consumer.sent });
+        } catch (error) {
+            settleFailure(message, error);
 
-        // The sent record now lives 24 hours from this send, not from the enqueue: the content
-        // record has to as well, or a different message reusing the key in between would pass
-        // the content check and then be acked as already sent.
-        if (key !== undefined) {
-            consumer.claims.keepContent(key);
+            return;
         }
 
+        // Sent: nothing past this point is a send failure. An error here must neither be logged
+        // as a refusal nor retry a message the provider already accepted.
         message.ack();
-    } catch (error) {
-        settleFailure(message, error);
+
+        if (key !== undefined) {
+            afterSend(message, "lunora.mail.content_record_failed", () => {
+                consumer.claims.keepContent(key);
+            });
+        }
     } finally {
         if (key !== undefined) {
-            consumer.claims.release(key, message.id);
+            // Non-fatal: an unreleased claim lapses with the row's lease. Thrown, it ended the
+            // batch early and left the messages after this one for a redelivery.
+            afterSend(message, "lunora.mail.claim_release_failed", () => {
+                consumer.claims.release(key, message.id);
+            });
         }
     }
 };
@@ -850,8 +902,8 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
     const revive = database.prepare<[number, string, string]>(
         "UPDATE _lunora_queue_messages SET state = 'pending', visible_at = ? WHERE id = ? AND queue = ? AND state = 'dead'",
     );
-    const parkedAt = database.prepare<[string, string], { enqueued_at: number }>(
-        "SELECT enqueued_at FROM _lunora_queue_messages WHERE id = ? AND queue = ? AND state = 'dead'",
+    const parkedAt = database.prepare<[string, string], { body: Buffer; enqueued_at: number }>(
+        "SELECT body, enqueued_at FROM _lunora_queue_messages WHERE id = ? AND queue = ? AND state = 'dead'",
     );
     const inFlight = new Set<Promise<number>>();
 
@@ -863,11 +915,15 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         }
 
         // Refused here, loudly, rather than revived and then refused by `deliver`: the operator
-        // asking is the one who needs to know the send cannot be replayed safely.
-        if (clock() - row.enqueued_at >= MAIL_EVIDENCE_TTL_MS) {
+        // asking is the one who needs to know the send cannot be replayed safely. Measured on the
+        // clock `deliver` uses, the key's first delivery; a parked row always has one.
+        const key = idempotencyKeyOf(JSON.parse(row.body.toString("utf8")) as unknown);
+        const since = (key === undefined ? undefined : consumer.claims.firstDeliveredAt(key)) ?? row.enqueued_at;
+
+        if (clock() - since >= MAIL_EVIDENCE_TTL_MS) {
             throw new LunoraError(
                 "VALIDATION_ERROR",
-                `@lunora/platform-node: parked mail ${id} was queued 15 or more days ago, so the record of whether an earlier attempt was sent has expired — check the provider's logs and queue it again if it never arrived`,
+                `@lunora/platform-node: parked mail ${id} was first attempted 15 or more days ago, so the record of whether an earlier attempt was sent has expired — check the provider's logs and queue it again if it never arrived`,
             );
         }
 
