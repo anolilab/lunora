@@ -267,23 +267,39 @@ fn file_name_of(url: &str) -> String {
     url::Url::parse(url).map(|url| url.path().trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_owned()).unwrap_or_default()
 }
 
-/// Verify an envelope against `trusted`, and with `artifacts_dir` the `hostd` and Caddy files in
-/// it against what the manifest pins. Returns the lines to print: `ok {file}` per file, then a summary.
-pub fn verify_manifest(envelope_path: &Path, artifacts_dir: Option<&Path>, trusted: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
+/// Verify an envelope against `trusted`, with `artifacts_dir` the `hostd` and Caddy files in it,
+/// and with `celld_dir` the upstream celld downloads, against what the manifest pins. celld is
+/// copied from `release-pins.json` unhashed, so a stale pin signs fine and only fails on a box.
+/// Returns the lines to print: `ok {file}` per file, then a summary.
+pub fn verify_manifest(
+    envelope_path: &Path,
+    artifacts_dir: Option<&Path>,
+    celld_dir: Option<&Path>,
+    trusted: &BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
     let shown = envelope_path.display();
     let Envelope { manifest, .. } =
         verify_envelope(&read_json(envelope_path)?, trusted).map_err(|error| format!("{shown}: {}: {}", error.code, error.message))?;
     let mut lines = Vec::new();
+    let directories = [
+        (artifacts_dir, manifest.hostd.artifacts.iter().chain(&manifest.caddy.artifacts).collect::<Vec<_>>()),
+        (celld_dir, manifest.celld.artifacts.iter().collect()),
+    ];
 
-    if let Some(directory) = artifacts_dir {
+    for (directory, artifacts) in directories {
+        let Some(directory) = directory else { continue };
         let directory = absolute(directory)?;
 
-        for artifact in manifest.hostd.artifacts.iter().chain(&manifest.caddy.artifacts) {
+        for artifact in artifacts {
             let file = directory.join(file_name_of(&artifact.url));
 
             verify_artifact(&file, &artifact.sha256, artifact.size).map_err(|error| format!("{}: {}: {}", file.display(), error.code, error.message))?;
             lines.push(format!("ok {}", file.display()));
         }
+    }
+
+    if let Some(directory) = artifacts_dir {
+        let directory = absolute(directory)?;
 
         if let Some(installer) = &manifest.installer {
             let file = directory.join(file_name_of(&installer.url));
@@ -506,7 +522,7 @@ mod tests {
             })
         );
 
-        let lines = verify_manifest(&out, Some(&release.artifacts), &trusted).unwrap();
+        let lines = verify_manifest(&out, Some(&release.artifacts), None, &trusted).unwrap();
 
         assert_eq!(lines.len(), 6);
         assert!(lines[4].ends_with("install.sh"));
@@ -514,13 +530,49 @@ mod tests {
 
         std::fs::write(release.artifacts.join("caddy-linux-x64.gz"), "caddy linux-x65").unwrap();
 
-        assert!(verify_manifest(&out, Some(&release.artifacts), &trusted).unwrap_err().contains("caddy-linux-x64.gz: HASH_MISMATCH: "));
+        assert!(verify_manifest(&out, Some(&release.artifacts), None, &trusted).unwrap_err().contains("caddy-linux-x64.gz: HASH_MISMATCH: "));
 
         std::fs::write(release.artifacts.join("caddy-linux-x64.gz"), "caddy linux-x64").unwrap();
         std::fs::write(release.artifacts.join(INSTALLER), "#!/usr/bin/env bash\n#\n").unwrap();
 
-        assert!(verify_manifest(&out, Some(&release.artifacts), &trusted).unwrap_err().contains("install.sh: "));
-        assert!(verify_manifest(&out, None, &BTreeMap::new()).unwrap_err().contains("manifest.json: UNKNOWN_KEY: "));
+        assert!(verify_manifest(&out, Some(&release.artifacts), None, &trusted).unwrap_err().contains("install.sh: "));
+        assert!(verify_manifest(&out, None, None, &BTreeMap::new()).unwrap_err().contains("manifest.json: UNKNOWN_KEY: "));
+    }
+
+    #[test]
+    fn verifies_the_pinned_celld_downloads() {
+        let release = release();
+        let trusted = trusting(&release.key);
+        let celld = release._dir.path().join("celld");
+        let pins = read_json(&release.package.join("release-pins.json")).unwrap();
+        let mut downloads = Vec::new();
+
+        std::fs::create_dir_all(&celld).unwrap();
+
+        // Pin what this test writes, as a fresh upstream download would match the real pins.
+        let mut repinned = pins.clone();
+
+        for (index, artifact) in pins["celld"]["artifacts"].as_array().unwrap().iter().enumerate() {
+            let file = celld.join(file_name_of(artifact["url"].as_str().unwrap()));
+            let bytes = format!("celld {index}");
+
+            std::fs::write(&file, &bytes).unwrap();
+            repinned["celld"]["artifacts"][index]["sha256"] = json!(crate::release::sha256_file(&file).unwrap());
+            repinned["celld"]["artifacts"][index]["size"] = json!(bytes.len());
+            downloads.push(file);
+        }
+
+        std::fs::write(release.package.join("release-pins.json"), serde_json::to_string(&repinned).unwrap()).unwrap();
+        make_manifest(&options(&release), &release.package, Some(&pem_of(&release.key)), &trusted, "2026-10-06T08:00:00.000Z").unwrap();
+
+        let out = release.artifacts.join("manifest.json");
+        let lines = verify_manifest(&out, None, Some(&celld), &trusted).unwrap();
+
+        assert_eq!(lines[..2], downloads.iter().map(|file| format!("ok {}", file.display())).collect::<Vec<_>>());
+
+        std::fs::write(&downloads[1], "celld 2").unwrap();
+
+        assert!(verify_manifest(&out, None, Some(&celld), &trusted).unwrap_err().contains("celld-aarch64-unknown-linux-gnu.gz: HASH_MISMATCH: "));
     }
 
     #[test]

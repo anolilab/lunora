@@ -502,7 +502,8 @@ not need them. The byte-level format, for implementations in any language, is
   and Caddy entries are hashed from the built files in `--artifacts-dir`
   (`lunora-hostd-<platform>`, `caddy-<platform>.gz`), celld entries and the
   Caddy version + module list come from `release-pins.json`. `hostd-release verify` checks
-  an envelope (and, with `--artifacts-dir`, the hostd and Caddy files). It
+  an envelope (and, with `--artifacts-dir`, the hostd and Caddy files; with
+  `--celld-dir`, the celld downloads the manifest pins). It
   refuses to sign while an input is missing or a placeholder, or when the
   signature does not verify against a key pinned in
   `trusted-release-keys.json`.

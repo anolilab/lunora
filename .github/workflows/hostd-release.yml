@@ -402,10 +402,22 @@
                       --artifacts-dir dist/release \
                       --out dist/release/manifest.json
 
-            # What a box will do, done once before anything is published.
+            # What a box will do, done once before anything is published. celld's hashes
+            # are copied from release-pins.json, not computed, so the upstream files are
+            # fetched and checked too: a stale pin would otherwise sign a release no box
+            # can install. Kept out of dist/release: they are not attested or published.
             - "name": "Verify the manifest and binaries"
               "working-directory": "apps/hostd"
-              "run": "target/release/hostd-release verify dist/release/manifest.json --artifacts-dir dist/release"
+              "shell": "bash"
+              "run": |
+                  set -euo pipefail
+
+                  mkdir -p dist/celld
+                  jq -r '.manifest.celld.artifacts[].url' dist/release/manifest.json | while read -r url; do
+                      curl -fsSL --retry 3 -o "dist/celld/${url##*/}" "${url}"
+                  done
+
+                  target/release/hostd-release verify dist/release/manifest.json --artifacts-dir dist/release --celld-dir dist/celld
 
             - "name": "Attest build provenance"
               "uses": "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8" # v4.2.2

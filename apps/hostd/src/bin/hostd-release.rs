@@ -17,9 +17,10 @@ Usage:
       lunora-hostd-{platform} and caddy-{platform}.gz in --artifacts-dir
       (default dist/release). The key is HOSTD_RELEASE_SIGNING_KEY, an Ed25519
       PKCS#8 PEM; signing is refused unless it verifies against a pinned key.
-  hostd-release verify <manifest.json> [--artifacts-dir <dir>]
+  hostd-release verify <manifest.json> [--artifacts-dir <dir>] [--celld-dir <dir>]
       (also: manifest --verify <manifest.json>) Verify a manifest against the
-      pinned keys and, with --artifacts-dir, the hostd and Caddy files in it.
+      pinned keys and, with --artifacts-dir, the hostd and Caddy files in it;
+      with --celld-dir, the celld downloads it pins.
   hostd-release public-key <ed25519-key.pem>
       Print the key id and the entries to commit for a private or public key.
   hostd-release latest-pointer --version <version> [--current latest.json] --out latest.json
@@ -37,8 +38,8 @@ fn value(parser: &mut lexopt::Parser) -> Result<String, String> {
     text(parser.value().map_err(|error| error.to_string())?)
 }
 
-fn verify(envelope: &Path, artifacts_dir: Option<&Path>) -> Result<String, String> {
-    verify_manifest(envelope, artifacts_dir, trusted_keys()).map(|lines| lines.join("\n"))
+fn verify(envelope: &Path, artifacts_dir: Option<&Path>, celld_dir: Option<&Path>) -> Result<String, String> {
+    verify_manifest(envelope, artifacts_dir, celld_dir, trusted_keys()).map(|lines| lines.join("\n"))
 }
 
 fn manifest(parser: &mut lexopt::Parser) -> Result<String, String> {
@@ -58,7 +59,7 @@ fn manifest(parser: &mut lexopt::Parser) -> Result<String, String> {
     }
 
     match verify_path {
-        Some(envelope) => verify(&envelope, options.artifacts_dir.as_deref()),
+        Some(envelope) => verify(&envelope, options.artifacts_dir.as_deref(), None),
         None => {
             let signing_key = std::env::var("HOSTD_RELEASE_SIGNING_KEY").ok();
 
@@ -68,19 +69,20 @@ fn manifest(parser: &mut lexopt::Parser) -> Result<String, String> {
 }
 
 fn verify_command(parser: &mut lexopt::Parser) -> Result<String, String> {
-    let (mut envelope, mut artifacts_dir) = (None, None);
+    let (mut envelope, mut artifacts_dir, mut celld_dir) = (None, None, None);
 
     while let Some(argument) = parser.next().map_err(|error| error.to_string())? {
         match argument {
             Long("artifacts-dir") => artifacts_dir = Some(PathBuf::from(value(parser)?)),
+            Long("celld-dir") => celld_dir = Some(PathBuf::from(value(parser)?)),
             Value(path) if envelope.is_none() => envelope = Some(PathBuf::from(path)),
             other => return Err(other.unexpected().to_string()),
         }
     }
 
-    let envelope = envelope.ok_or("usage: hostd-release verify <manifest.json> [--artifacts-dir <dir>]")?;
+    let envelope = envelope.ok_or("usage: hostd-release verify <manifest.json> [--artifacts-dir <dir>] [--celld-dir <dir>]")?;
 
-    verify(&envelope, artifacts_dir.as_deref())
+    verify(&envelope, artifacts_dir.as_deref(), celld_dir.as_deref())
 }
 
 fn public_key(parser: &mut lexopt::Parser) -> Result<String, String> {
