@@ -827,7 +827,10 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
 
     if (claimed.delivery > 1 && consumer.clock() - sinceMs >= MAIL_EVIDENCE_TTL_MS) {
         if (key !== undefined) {
-            consumer.claims.release(key, message.id);
+            // Non-fatal, as after a send: thrown, it rejected the batch and redelivered the rest of it.
+            afterSend(message, "lunora.mail.claim_release_failed", () => {
+                consumer.claims.release(key, message.id);
+            });
         }
 
         // As unknown as an `outcome_unknown` send, so parked the same way: the provider's logs decide.

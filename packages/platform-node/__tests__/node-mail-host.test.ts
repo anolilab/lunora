@@ -2192,4 +2192,35 @@ describe(createNodeMailHost, () => {
             expect(mail.deadLetters.list()).toStrictEqual([]);
         });
     });
+
+    describe("twenty-second review", () => {
+        it("sends the rest of a batch when a claim release fails on a row whose evidence expired", async () => {
+            expect.assertions(3);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const database = freshDatabase();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
+            const reset = { idempotencyKey: "reset-yan", subject: "Reset", text: "Link", to: "yan@example.com" };
+
+            await mail.mailer.queue(reset);
+            await mail.poll();
+            // The same mail again, past the evidence horizon, then other mail behind it in the batch.
+            await mail.mailer.queue(reset);
+            clock.advance(16 * 24 * 60 * 60 * 1000);
+            await mail.mailer.queue({ idempotencyKey: "welcome-yan", subject: "Welcome", text: "Hi", to: "yan@example.com" });
+            database.exec(
+                "CREATE TRIGGER refuse_release BEFORE DELETE ON _lunora_mail_claims WHEN OLD.key = 'reset-yan' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END",
+            );
+            await mail.poll();
+
+            const events = error.mock.calls.map(([line]) => logged(line).event);
+
+            // Logged on its own; the welcome mail behind it is sent in the same poll, not redelivered.
+            expect(transport.sent.map((payload) => payload.subject)).toStrictEqual(["Reset", "Welcome"]);
+            expect(events).toContain("lunora.mail.claim_release_failed");
+            expect(mail.deadLetters.list()).toMatchObject([{ body: { idempotencyKey: "reset-yan" }, reason: "evidence_expired" }]);
+        });
+    });
 });
