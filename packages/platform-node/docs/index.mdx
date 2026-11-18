@@ -228,7 +228,9 @@ so mail written on it during a mutation would be rolled back with it, and the
 ack and sent record lost would mail the message again. Construction throws when
 `mail.path` names the shard's file, the `globalTablesPath` file, or a `.sqlite3`
 file inside the registry `directory` (which would be opened as a shard). Paths
-are compared after `path.resolve` and `realpath`.
+are compared after `path.resolve` and `realpath`, and existing files by device and
+inode, so a hard link to one of those files is refused too. SQLite names its WAL
+after the path, so two names for one database would each keep a WAL of their own.
 
 Run exactly one process with `crons`: it owns the declared set. Processes do
 not notify each other when a row changes, so a server only sees another

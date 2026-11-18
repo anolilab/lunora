@@ -13,7 +13,7 @@
  * need to guess at that shape.
  */
 
-import { realpathSync } from "node:fs";
+import { readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -117,6 +117,23 @@ const canonicalPath = (path: string): string => {
     }
 };
 
+/**
+ * Whether two paths name one file. Device and inode when both exist, because
+ * `realpath` resolves symlinks but not hard links: a hard link to the shard's file
+ * is another path to the same database. Canonical paths otherwise, for a file not
+ * created yet, which no hard link can point at.
+ */
+const sameFile = (a: string, b: string): boolean => {
+    try {
+        const first = statSync(a);
+        const second = statSync(b);
+
+        return first.dev === second.dev && first.ino === second.ino;
+    } catch {
+        return canonicalPath(a) === canonicalPath(b);
+    }
+};
+
 /** The suffix the shard registry reads as a shard database in its `directory`. */
 const REGISTRY_SHARD_SUFFIX = ".sqlite3";
 
@@ -134,7 +151,7 @@ const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptio
     ];
 
     for (const [owner, ownerPath] of owners) {
-        if (ownerPath !== undefined && ownerPath !== ":memory:" && ownerPath !== "" && canonicalPath(ownerPath) === mail) {
+        if (ownerPath !== undefined && ownerPath !== ":memory:" && ownerPath !== "" && sameFile(ownerPath, mailPath)) {
             throw new LunoraError(
                 "VALIDATION_ERROR",
                 `@lunora/platform-node: mail.path "${mailPath}" is ${owner} "${ownerPath}" — give mail a database file of its own`,
@@ -142,10 +159,34 @@ const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptio
         }
     }
 
-    if (platform.directory !== undefined && mail.endsWith(REGISTRY_SHARD_SUFFIX) && dirname(mail) === canonicalPath(platform.directory)) {
+    const { directory } = platform;
+
+    if (directory === undefined) {
+        return;
+    }
+
+    if (mail.endsWith(REGISTRY_SHARD_SUFFIX) && dirname(mail) === canonicalPath(directory)) {
         throw new LunoraError(
             "VALIDATION_ERROR",
-            `@lunora/platform-node: mail.path "${mailPath}" is a ${REGISTRY_SHARD_SUFFIX} file inside the shard registry's directory "${platform.directory}", which would open it as a shard — move it out of that directory`,
+            `@lunora/platform-node: mail.path "${mailPath}" is a ${REGISTRY_SHARD_SUFFIX} file inside the shard registry's directory "${directory}", which would open it as a shard — move it out of that directory`,
+        );
+    }
+
+    // A hard link outside the directory to one of its shard files passes the check above.
+    let entries: string[];
+
+    try {
+        entries = readdirSync(directory).filter((entry) => entry.endsWith(REGISTRY_SHARD_SUFFIX));
+    } catch {
+        return;
+    }
+
+    const shared = entries.find((entry) => sameFile(join(directory, entry), mailPath));
+
+    if (shared !== undefined) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: mail.path "${mailPath}" is the same file as the shard registry's shard "${join(directory, shared)}" — give mail a database file of its own`,
         );
     }
 };

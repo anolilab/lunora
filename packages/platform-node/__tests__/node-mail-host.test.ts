@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1441,6 +1441,47 @@ describe(createNodeMailHost, () => {
 
             expect(announced).toContain("(NODE_ENV=test selects dev capture; LUNORA_MAIL_CAPTURE=yes was ignored, as only 1, true, 0 or false are read)");
             expect(announced).not.toMatch(/\(LUNORA_MAIL_CAPTURE=yes selects/u);
+        });
+    });
+
+    describe("ninth review", () => {
+        it.each([
+            ["the shard's file", "path", "shard database"],
+            ["the .global() store's file", "globalTablesPath", "globalTablesPath"],
+            ["a registry shard file, linked from outside its directory", "directory", "shard registry's shard"],
+        ])("refuses a mail.path hard-linked to %s", (_label, owner, named) => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-hardlink-"));
+
+            const root = directory;
+            const shards = join(root, "shards");
+
+            mkdirSync(shards);
+
+            // The file another host already uses, and a hard link to it: another path, the same inode,
+            // which realpath does not resolve.
+            const target = owner === "directory" ? join(shards, "tenant.sqlite3") : join(root, "owned.sqlite3");
+
+            new Database(target).close();
+
+            const mailPath = join(root, "mail.sqlite3");
+
+            linkSync(target, mailPath);
+
+            const owners: Record<string, { directory?: string; globalTablesPath?: string; path?: string }> = {
+                directory: { directory: shards },
+                globalTablesPath: { globalTablesPath: target },
+                path: { path: target },
+            };
+
+            expect(() =>
+                createNodePlatform({
+                    path: join(root, "shard.sqlite3"),
+                    ...owners[owner],
+                    mail: { env: PRODUCTION, path: mailPath, transport: scriptedTransport(["ok"]) },
+                }),
+            ).toThrow(new RegExp(named.replaceAll(".", String.raw`\.`), "u"));
         });
     });
 });
