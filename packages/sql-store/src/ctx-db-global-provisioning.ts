@@ -25,8 +25,6 @@
  * that depends on earlier DDL cannot ride it.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-global-provisioning" sits beside "ctx-db-migrations", the established module naming in this package. */
-
 import type { SchemaLike } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";

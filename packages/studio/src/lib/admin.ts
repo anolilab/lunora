@@ -850,8 +850,6 @@ export interface ReactorsResult {
     reactors: ReactorMetadata[];
 }
 
-/* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
-
 /**
  * Lifecycle state of a workflow instance, hand-mirroring `@lunora/do`'s
  * `WorkflowInstanceState` (itself mirrored from `@lunora/workflow`).
@@ -868,12 +866,14 @@ export type WorkflowInstanceState =
     | "waiting"
     | "waitingForPause";
 
+// eslint-disable-next-line no-secrets/no-secrets -- a reserved admin RPC name, not a credential
 /** Payload of a `__lunora_admin__:createWorkflowInstance` call: the new instance id and its initial status. */
 export interface CreateWorkflowInstanceResult {
     id: string;
     status: WorkflowInstanceState;
 }
 
+// eslint-disable-next-line no-secrets/no-secrets -- a reserved admin RPC name, not a credential
 /** Payload of a `__lunora_admin__:getWorkflowInstanceStatus` call: the instance's current status plus output/error when present. */
 export interface WorkflowInstanceStatusResult {
     error?: { message: string; name: string };
@@ -881,7 +881,6 @@ export interface WorkflowInstanceStatusResult {
     output?: unknown;
     status: WorkflowInstanceState;
 }
-/* eslint-enable no-secrets/no-secrets */
 
 /**
  * Severity of a buffered log entry, mirroring `@lunora/do`'s `LogLevel` — the

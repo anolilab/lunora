@@ -102,17 +102,14 @@ interface FunctionWithMaskedTables {
     readonly maskedTables?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
-/* eslint-disable no-secrets/no-secrets -- JSDoc names a code reference (`Object.values(LUNORA_FUNCTIONS)`), not a secret */
-
 /**
  * Build the project-wide masked-column registry from the registered functions
- * (pass `Object.values(LUNORA_FUNCTIONS)`) — the mask-column twin of
+ * (pass the values of `LUNORA_FUNCTIONS`) — the mask-column twin of
  * `buildRlsReadRegistry`. Unions every function's `.use(mask(...))` columns
  * per table: a column masked by ANY registered function counts as masked in
  * the registry — there is no "which procedure would this shape have gone
  * through" question to narrow by, so the union is the only safe answer.
  */
-/* eslint-enable no-secrets/no-secrets */
 const buildMaskRegistry = (functions: Iterable<unknown>): MaskRegistry => {
     const registry = new Map<string, Set<string>>();
 

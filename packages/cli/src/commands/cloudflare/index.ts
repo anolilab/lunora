@@ -1,5 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- the tool table quotes `<build|push|images|list|info|delete>`-style subcommand lists, not credentials. */
-
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import TARGET_OPTION from "../../util/deploy-target";

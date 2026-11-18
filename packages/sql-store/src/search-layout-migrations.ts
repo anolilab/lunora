@@ -10,8 +10,6 @@
  *   what it could not finish.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- `SqlCtxExec` is this package's established exec type name. */
-
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { analyzedSearchText, countSearchTokens, FTS_ID_COLUMN, FTS_TOKEN_COLUMN } from "@lunora/search-core";
 import type { SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";

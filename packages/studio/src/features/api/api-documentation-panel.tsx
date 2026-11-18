@@ -1,4 +1,3 @@
-/* eslint-disable unicorn/prevent-abbreviations -- "API", "Fn", and "Docs" are the domain terms for this API-docs panel; the file name and default-export name are fixed by the studio's tab wiring. */
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
@@ -13,6 +12,7 @@ import type { FunctionDescriptor, FunctionKind } from "../../lib/types";
 import type { SnippetInput } from "./api-documentation-snippets";
 import { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, splitPath } from "./api-documentation-snippets";
 
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `ApiDocsPanel` is public API (exported from the package root); renaming it breaks consumers
 interface ApiDocsPanelProps {
     /**
      * Registered functions to document. Mirrors the list the Functions tab's
@@ -80,7 +80,7 @@ const SnippetBlock = ({ code, label, testId }: SnippetBlockProps): ReactElement 
     );
 };
 
-interface FunctionDocProps {
+interface FunctionDocumentationProps {
     readonly file: string;
     readonly fn: string;
     readonly kind: FunctionKind;
@@ -91,7 +91,7 @@ interface FunctionDocProps {
  * Mounted with a `key` of the function path so a new selection remounts it —
  * that resets the active tab to React without a state-syncing effect.
  */
-const FunctionDoc = ({ file, fn, kind }: FunctionDocProps): ReactElement => {
+const FunctionDocumentation = ({ file, fn, kind }: FunctionDocumentationProps): ReactElement => {
     const t = useT();
     const [tab, setTab] = useState<SnippetTab>("react");
 
@@ -137,7 +137,7 @@ const FunctionDoc = ({ file, fn, kind }: FunctionDocProps): ReactElement => {
 };
 
 /** Right-pane body for a selected table: the typed data-model usage. */
-const TableDoc = ({ name }: { readonly name: string }): ReactElement => {
+const TableDocumentation = ({ name }: { readonly name: string }): ReactElement => {
     const t = useT();
     const code = buildTableSnippet(name);
 
@@ -217,6 +217,7 @@ const groupByFile = (functionList: ReadonlyArray<FunctionDescriptor>): ReadonlyA
  * types this browser never loads, the same way Supabase's usage snippets show
  * placeholders.
  */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `ApiDocsPanel` is public API (exported from the package root); renaming it breaks consumers
 const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactElement => {
     const t = useT();
     const client = useStudioClient();
@@ -322,12 +323,12 @@ const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactE
                 )}
 
                 {selected?.kind === "fn" && selectedFunction !== undefined && selectedSplit !== undefined && (
-                    <FunctionDoc file={selectedSplit.file} fn={selectedSplit.fn} key={selectedFunction.path} kind={selectedFunction.kind} />
+                    <FunctionDocumentation file={selectedSplit.file} fn={selectedSplit.fn} key={selectedFunction.path} kind={selectedFunction.kind} />
                 )}
 
                 {selected?.kind === "fn" && selectedFunction === undefined && <EmptyState testId="api-empty" title={t("API usage snippets")} />}
 
-                {selected?.kind === "table" && <TableDoc name={selected.name} />}
+                {selected?.kind === "table" && <TableDocumentation name={selected.name} />}
             </div>
         </div>
     );

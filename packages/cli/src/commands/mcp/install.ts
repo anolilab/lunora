@@ -1,5 +1,3 @@
-/* eslint-disable unicorn/prevent-abbreviations -- "docs" is public API here: the `lunora-docs` server name, the `--docs-only` / `--docs-url` flags, and the `lunora_*_docs` tools. Renaming these identifiers to "documentation" would diverge from what users type. */
-
 /**
  * `lunora mcp install` — wire Lunora's MCP servers into an editor's config.
  *

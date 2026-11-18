@@ -16,8 +16,6 @@
  * if/else, and adding a fourth would have meant finding all three.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "search-layout" sits beside "ctx-db-search", the established module naming in this package. */
-
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import {
     analyzedSearchText,

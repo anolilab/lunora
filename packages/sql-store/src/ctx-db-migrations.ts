@@ -13,9 +13,6 @@
  * `ctx-db-migrations.ts` holds the identical cluster.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-migrations" mirrors its parent "ctx-db.ts", the established module name in this package. */
-/* eslint-disable no-restricted-syntax -- `sql\`…\`` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
-
 import { LunoraError } from "@lunora/errors";
 import type { RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { aggregateTableName, rankTableName, sortColumnName } from "@lunora/shard-engine";
@@ -438,15 +435,15 @@ const globalTableIndexSpecs = (tableName: string, definition: SchemaLike["tables
     const specs: GlobalIndexSpec[] = [];
 
     for (const index of definition.indexes) {
-        const refs = index.fields.map((field) => indexRef(field));
-        const fields = sql.join(refs, sql`, `);
+        const references = index.fields.map((field) => indexRef(field));
+        const fields = sql.join(references, sql`, `);
         const unique = index.unique ?? false;
 
         specs.push({
             columns: unique || sortKeys === undefined ? fields : sql`${fields}, ${sortKeys}`,
             kind: "declared",
             name: `${tableName}_${index.name}`,
-            refs,
+            refs: references,
             table: tableName,
             unique,
         });
@@ -1083,6 +1080,7 @@ const runSqlAggregateMigrations = async (exec: SqlCtxExec, schema: SchemaLike, d
  * — and number/real columns everywhere — index in full.
  */
 const rankIndexColumn = (dialect: SqlDialect, column: string, direction: "ASC" | "DESC", needsPrefix: boolean): SQL => {
+    // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
     const reference = dialect.name === "mysql" && needsPrefix ? sql`${sql.identifier(column)}(191)` : sql`${sql.identifier(column)}`;
 
     return sql`${reference} ${sql.raw(direction)}`;

@@ -1,8 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
 
-/* eslint-disable no-secrets/no-secrets -- this file repeatedly quotes the `WorkerOptions` field name `allowUnauthenticatedShardAccess`, not a credential */
-
 /**
  * The two callees that can carry the opt-in: the `@lunora/vite` plugin factory
  * (`vite.config.*`, the class-A path) and the generated `defineApp()` builder's
@@ -14,7 +12,7 @@ const OPT_IN_CALLEES: ReadonlySet<string> = new Set(["extend", "lunora"]);
  * Flags an app that opts into `allowUnauthenticatedShardAccess: true` while its
  * schema has an RLS gap (no `.rls("required")`, or a `.public()` table).
  *
- * `allowUnauthenticatedShardAccess` (a `WorkerOptions` field consumed by
+ * allowUnauthenticatedShardAccess (a `WorkerOptions` field consumed by
  * `createWorker(...)`) turns off the fail-closed default that denies a shard
  * lookup for a request with no verified identity. That is a deliberate, opt-in
  * posture switch — appropriate for a public/anonymous-first shard resolver — but
@@ -46,6 +44,7 @@ const allowUnauthenticatedShardAccessEnabled: Lint = {
     level: "WARN",
     name: "allow_unauthenticated_shard_access_enabled",
     remediation:
+        // eslint-disable-next-line no-secrets/no-secrets -- the advice quotes a WorkerOptions field name, not a credential
         "Prefer `authorizeShard` / `authorizeFanOut` (which take precedence over `allowUnauthenticatedShardAccess` and let you allow specific unauthenticated cases) over the blanket opt-out. If the app genuinely needs open shard access, enforce `.rls(\"required\")` on the schema with no `.public()` tables so a missing identity still can't read another tenant's rows.",
     run: (context) => {
         if (context.configCalls === undefined) {

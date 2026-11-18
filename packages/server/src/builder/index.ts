@@ -47,18 +47,16 @@ interface BuilderState {
     x402?: X402ProcedureConfig;
 }
 
-/* eslint-disable jsdoc/check-indentation -- intentional bullet list naming each field the decorated context adds */
-
 /**
  * Decorate the per-call context for the middleware chain with the two things a
  * `.use()` step needs and the raw dispatch context does not carry:
  *
  * - `ctx.meta` — the procedure's declared `.meta(...)` payload, so middleware
- *   reads the policy it is supposed to enforce (`ctx.meta.rateLimit`, …)
- *   instead of having it hard-wired at each `.use()` site.
+ * reads the policy it is supposed to enforce (`ctx.meta.rateLimit`, …)
+ * instead of having it hard-wired at each `.use()` site.
  * - `ctx.args` — the call's arguments, so a middleware can gate on the payload
- *   (`@lunora/auth`'s Turnstile and email-gate middlewares both read a field
- *   out of it). Without this a `.use()` step is blind to what it is guarding.
+ * (`@lunora/auth`'s Turnstile and email-gate middlewares both read a field
+ * out of it). Without this a `.use()` step is blind to what it is guarding.
  *
  * A procedure with at least one `.use()` step or a `.meta()` payload gets this
  * clone, so `ctx` inside its handler is a spread copy rather than the dispatch
@@ -76,7 +74,6 @@ interface BuilderState {
  * write from middleware ever turns up as a real problem — that costs a clone
  * per call, this does not.
  */
-/* eslint-enable jsdoc/check-indentation */
 const withCallContext = (context: unknown, meta: Record<string, unknown> | undefined, args: Record<string, unknown>, middlewareCount: number): unknown => {
     // Nothing can read `ctx.args`/`ctx.meta` without a `.use()` step — the
     // handler receives `args` as its own parameter — so a procedure with no

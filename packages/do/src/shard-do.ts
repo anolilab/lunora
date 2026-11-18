@@ -1988,10 +1988,9 @@ const cloneArgsOnFirstUse = (args: Record<string, unknown>): (() => Record<strin
 };
 
 /** Canonical string of EVERY {@link SubscriptionIdentity} field: sockets share a live-query run only when it is equal. */
-/* eslint-disable unicorn/no-null -- stableStringify folds absent fields to an explicit null */
 const subscriptionIdentityKey = (identity: SubscriptionIdentity): string =>
+    // eslint-disable-next-line unicorn/no-null -- stableStringify folds absent fields to an explicit null
     stableStringify({ claims: identity.identity ?? null, ip: identity.ip ?? null, system: false, userId: identity.userId ?? null });
-/* eslint-enable unicorn/no-null */
 
 /**
  * Hard server-side ceiling on rows written per bulk admin call — `deleteRows`,

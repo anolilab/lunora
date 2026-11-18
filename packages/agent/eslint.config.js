@@ -27,6 +27,16 @@ export default createConfig(
             "**/eslint.config.js",
         ],
     },
+    // Agent code runs in Workers and Durable Objects, never under Node, so `crypto` is
+    // workerd's Web Crypto global; eslint-plugin-n's Node-version data flags it
+    // conservatively. Every other builtin stays checked. ESLint replaces rule options
+    // wholesale, so this is the whole option set, matching @lunora/auth's.
+    {
+        files: ["src/**/*.ts"],
+        rules: {
+            "n/no-unsupported-features/node-builtins": ["error", { ignores: ["crypto", "CryptoKey", "SubtleCrypto"] }],
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code. Source
     // files still enforce all of these.
     {

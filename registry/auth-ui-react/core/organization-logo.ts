@@ -1,12 +1,10 @@
-/* eslint-disable no-secrets/no-secrets -- JSDoc names the `<OrganizationSettingsCard>` component, not a credential. */
-
 /**
  * Organization logo upload — the org-side counterpart to `avatar.ts`.
  *
  * Same shape and the same reasoning: better-auth stores `organization.logo` as a
  * string, so where the bytes live is the app's decision and comes in through
- * `avatar.upload`. Without an upload handler `<OrganizationSettingsCard>`'s URL
- * field is still the fallback, and this card doesn't render.
+ * `avatar.upload`. Without an upload handler the URL field in
+ * `<OrganizationSettingsCard>` is still the fallback, and this card doesn't render.
  *
  * It is a separate controller rather than a parameter on the avatar one because
  * the save call differs — `organization.update` against a specific org, not

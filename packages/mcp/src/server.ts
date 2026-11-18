@@ -1,4 +1,4 @@
-/* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases". Ours qualifies: we dispatch tools defined with plain JSON Schema and bridge structured results ourselves, which avoids McpServer's per-tool zod dependency. */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -27,6 +27,7 @@ const SERVER_NAME = "lunora";
  * over HTTP RPC. No WebSocket is opened (the tools never subscribe), so this is
  * safe to run as a short-lived stdio process.
  */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     const client = resolveClient(options);
     const allowWrites = options.allowWrites ?? false;
@@ -43,6 +44,7 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     // Its own gate, not folded into observability: log lines and raw table rows
     // are different data classes, and one opt-in must not silently grant both.
     const allowDataReads = options.allowDataReads === true && hasAdminToken;
+    // eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
     const server = new Server({ name: SERVER_NAME, version: options.version ?? pkg.version }, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {

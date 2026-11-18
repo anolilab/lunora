@@ -1,5 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- JSDoc quotes the `KEY="<placeholder>"` .dev.vars grammar, not a credential. */
-
 import { randomBytes } from "node:crypto";
 import { existsSync, linkSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -668,7 +666,7 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
 /**
  * The block of text that represents a single {@link SecretEntry} in a
  * `.dev.vars.example` file: a comment block (description + docs URL) followed
- * by the `KEY="<placeholder>"` assignment.
+ * by the `KEY="…"` assignment holding its placeholder.
  *
  * Written through the dev-variables-format grammar so the format stays
  * consistent with every other reader/writer. The value is always a placeholder

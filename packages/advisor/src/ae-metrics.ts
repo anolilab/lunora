@@ -1,5 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- false positive: `loadAnalyticsRuntimeMetrics` is a function name in prose, not a credential */
-
 /**
  * Analytics-Engine-derived feed for the runtime lints — QUARANTINED design note,
  * **not exported** from `@lunora/advisor`'s package root (plan 225 / ADVISOR-01).
@@ -22,7 +20,7 @@
  * It never shipped a writer: nothing in the runtime calls
  * `ctx.analytics.track("lunora.index.hit" | "lunora.shard.request" |
  * "lunora.table.scan", …)`, so the `{@link AE_METRIC_EVENTS}` this reader queries
- * for are never populated, and `loadAnalyticsRuntimeMetrics` always returns
+ * for are never populated, and loadAnalyticsRuntimeMetrics always returns
  * `shardTraffic` and `tableScans` empty against a live AE dataset. `indexHits`
  * is empty too UNLESS the caller passes `options.declaredIndexes` — then it's
  * every declared index with `reads: 0` (a real "zero reads observed" fact, not

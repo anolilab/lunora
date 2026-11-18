@@ -36,22 +36,20 @@ interface MetricDefinition {
     label: string;
 }
 
-/* eslint-disable no-secrets/no-secrets -- GraphQL Analytics dataset and field names, not credentials */
-
 /**
- * The datasets queried, and the provenance of each name: `workersInvocationsAdaptive.sum.requests`
- * and `datetime_geq` — Cloudflare's "Querying Workers metrics" tutorial;
- * `durableObjectsInvocationsAdaptiveGroups.sum.requests` — the Durable Objects GraphQL page;
- * `d1AnalyticsAdaptiveGroups.sum.rowsRead/rowsWritten` and `datetimeHour_geq` — the query wrangler
- * itself sends. Unpublished: the fields `cpuTimeUs`, `activeTime` and the periodic dataset's
+ * The datasets queried, and the provenance of each name: the Workers dataset's `sum.requests`
+ * and `datetime_geq` — Cloudflare's "Querying Workers metrics" tutorial; the Durable Objects
+ * invocations dataset's `sum.requests` — the Durable Objects GraphQL page; the D1 dataset's
+ * `sum.rowsRead`/`sum.rowsWritten` and `datetimeHour_geq` — the query wrangler itself sends. Unpublished: the fields `cpuTimeUs`, `activeTime` and the periodic dataset's
  * `rowsRead`/`rowsWritten` (introspection gates them), and the `date_geq` filter and the exclusive
  * `_lt` upper bounds (not introspected — a rejected filter makes that metric unavailable).
  */
 const WORKERS_DATASET = "workersInvocationsAdaptive";
+// eslint-disable-next-line no-secrets/no-secrets -- a Cloudflare GraphQL Analytics dataset name, not a credential
 const DO_INVOCATIONS_DATASET = "durableObjectsInvocationsAdaptiveGroups";
 const DO_PERIODIC_DATASET = "durableObjectsPeriodicGroups";
+// eslint-disable-next-line no-secrets/no-secrets -- a Cloudflare GraphQL Analytics dataset name, not a credential
 const D1_DATASET = "d1AnalyticsAdaptiveGroups";
-/* eslint-enable no-secrets/no-secrets */
 
 /** The metrics `lunora cloudflare alerts` reports. */
 const METRICS: ReadonlyArray<MetricDefinition> = [

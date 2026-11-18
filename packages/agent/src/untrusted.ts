@@ -74,7 +74,6 @@ const renderHeaders = (headers: Headers | Readonly<Record<string, string>>): str
  */
 const wrapUntrusted = (value: string, headers?: Headers | Readonly<Record<string, string>>): string => {
     // workerd provides the Web Crypto global; agent code runs in Workers, never under Node.
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- the global is Web Crypto on workerd, not a Node builtin
     const tag = `untrusted-data-${crypto.randomUUID()}`;
     const parts = headers === undefined ? [] : ["Headers:", ...renderHeaders(headers), "", "Body:"];
 
