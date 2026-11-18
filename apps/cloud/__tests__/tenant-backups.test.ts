@@ -805,6 +805,31 @@ describe("tenant backup mutations", () => {
         await expect(beginBackup.handler(ctx, { organizationId: "org_1", projectId: "p_a" } as never)).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
+    /** A `.global()` page stops at 1000 rows; the running operation sits past a full page of history. */
+    it("refuses a backup while an operation runs behind a full page of finished ones", async () => {
+        const at = 1_700_000_000_000;
+        const history = Array.from({ length: 1000 }, (_, index) => backupRow(`b_${String(index)}`, "p_a", at - DAY_MS - index));
+        const { ctx } = makeCtx(
+            {
+                deployments: [live],
+                members: [owner("org_1")],
+                projects: [project],
+                tenantBackups: [...history, backupRow("b_run", "p_a", at - 1000, { status: "running" })],
+            },
+            { now: at },
+        );
+        const tenantBackups = ctx.db.tenantBackups as unknown as { findMany: (args: unknown) => Promise<{ isDone: boolean; page: unknown[] }> };
+        const { findMany } = tenantBackups;
+
+        tenantBackups.findMany = async (args) => {
+            const result = await findMany(args);
+
+            return { ...result, isDone: result.page.length <= 1000, page: result.page.slice(0, 1000) };
+        };
+
+        await expect(beginBackup.handler(ctx, { organizationId: "org_1", projectId: "p_a" } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
     it("stores a restore's per-table deletions and still lists a pre-staging restore's conflict counts", async () => {
         const running = backupRow("r_new", "p_a", 1_700_000_000_000, { operation: "restore", status: "running", trigger: "manual" });
         const settled = backupRow("r_done", "p_a", 1_650_000_000_000, {

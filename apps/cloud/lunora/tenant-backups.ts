@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import { activeOperation, tenantBackupKey } from "../src/backup/tenant-policy";
+import { activeOperation, OPERATION_STALE_MS, tenantBackupKey } from "../src/backup/tenant-policy";
 import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
@@ -70,12 +70,6 @@ const toView = (row: BackupRow): BackupView => {
     };
 };
 
-const projectRows = async (context: QueryContext, projectId: Id<"projects">): Promise<BackupRow[]> => {
-    const { page } = await context.db.tenantBackups.findMany({ where: { projectId } });
-
-    return page;
-};
-
 /**
  * The project's live production deployment with a usable admin token, as a
  * router target. Backups are of production data only: a preview runs on its own
@@ -110,7 +104,12 @@ const productionTarget = async (context: QueryContext, projectId: Id<"projects">
 
 /** Refuse when the project already has a backup or restore in flight. */
 const assertIdle = async (context: QueryContext, projectId: Id<"projects">, now: number): Promise<void> => {
-    const busy = activeOperation(await projectRows(context, projectId), projectId, now);
+    // Only the rows that can be in flight, filtered in the query: a page of the project's
+    // whole history stops at 1000 rows, and a running operation past it went unseen.
+    const { page: running } = await context.db.tenantBackups.findMany({
+        where: { createdAt: { gt: now - OPERATION_STALE_MS }, projectId, status: "running" },
+    });
+    const busy = activeOperation(running, projectId, now);
 
     if (busy) {
         throw new LunoraError("CONFLICT", `a ${busy.operation} of this project is already running — try again when it finishes`);
