@@ -1,7 +1,7 @@
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
-import type { ImportDeclaration, Project, SourceFile } from "ts-morph";
+import type { CallExpression, ImportDeclaration, ImportEqualsDeclaration, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { descendantsOfKind, listLunoraSourceFiles } from "./ast";
@@ -41,6 +41,37 @@ interface CloudflareModuleImport {
  */
 const loadsAtRuntime = (declaration: ImportDeclaration): boolean => !declaration.isTypeOnly();
 
+/** `import env = require("m")`'s module, the TypeScript CommonJS form a `.cts` helper uses; none when type-only. */
+const requireEqualsSpecifier = (declaration: ImportEqualsDeclaration): string | undefined => {
+    const reference = declaration.getModuleReference();
+
+    if (declaration.isTypeOnly() || !Node.isExternalModuleReference(reference)) {
+        return undefined;
+    }
+
+    const expression = reference.getExpression();
+
+    return expression !== undefined && Node.isStringLiteral(expression) ? expression.getLiteralValue() : undefined;
+};
+
+/**
+ * The module an `import("…")` or `require("…")` call loads, when its argument is a
+ * literal. A dynamic import fails only when it runs (the mail starter's
+ * `cloudflare:email` send), but it still names a module the target does not have,
+ * so it is refused with the rest; a `require` is what a `.cjs` or `.cts` helper the
+ * walk reaches loads with. A backtick literal with no substitutions is as static
+ * as a quoted one.
+ */
+const loadCallSpecifier = (call: CallExpression): string | undefined => {
+    const callee = call.getExpression();
+    const [argument] = call.getArguments();
+    const loads = callee.getKind() === SyntaxKind.ImportKeyword || (Node.isIdentifier(callee) && callee.getText() === "require");
+
+    return loads && argument !== undefined && (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))
+        ? argument.getLiteralValue()
+        : undefined;
+};
+
 /**
  * The module specifiers a file loads at runtime, in source order, each once:
  * static imports, re-exports and `import("…")` calls with a literal argument.
@@ -69,19 +100,12 @@ const runtimeSpecifiersOf = (sourceFile: SourceFile): string[] => {
         }
     }
 
-    // A dynamic import fails only when it runs (the mail starter's `cloudflare:email` send), but
-    // it still names a module the target does not have, so it is refused with the rest.
-    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
-        const [argument] = call.getArguments();
+    for (const declaration of descendantsOfKind(sourceFile, SyntaxKind.ImportEqualsDeclaration)) {
+        note(requireEqualsSpecifier(declaration));
+    }
 
-        // A backtick literal with no substitutions is as static as a quoted one: import(`cloudflare:email`).
-        if (
-            call.getExpression().getKind() === SyntaxKind.ImportKeyword &&
-            argument !== undefined &&
-            (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))
-        ) {
-            note(argument.getLiteralValue());
-        }
+    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
+        note(loadCallSpecifier(call));
     }
 
     return [...found];
@@ -121,13 +145,32 @@ const resolveRelative = (fromFile: string, specifier: string): string[] => {
 /**
  * Codegen's own output and installed packages are never the app's to fix: a
  * relative import into `_generated/` (which loads `cloudflare:workers` itself for
- * a sharded schema) or `node_modules` is not followed.
+ * a sharded schema) or `node_modules` is not followed. Judged on the path from the
+ * project root, never the absolute one, so a checkout that happens to live under
+ * a directory with either name (`/tmp/_generated/app`) is still walked. A `..`
+ * segment, for an import that leaves the root, is not a directory name.
  */
-const isOutsideAppCode = (path: string): boolean => path.split(sep).some((segment) => segment === "_generated" || segment === "node_modules");
+const isOutsideAppCode = (root: string, path: string): boolean =>
+    relative(root, path)
+        .split(sep)
+        .some((segment) => segment === "_generated" || segment === "node_modules");
 
 /** The app files a module's relative specifiers may reach, outside `_generated/` and `node_modules`. */
-const appFilesReachedFrom = (filePath: string, specifiers: ReadonlyArray<string>): string[] =>
-    specifiers.flatMap((specifier) => (specifier.startsWith(".") ? resolveRelative(filePath, specifier) : [])).filter((file) => !isOutsideAppCode(file));
+const appFilesReachedFrom = (root: string, filePath: string, specifiers: ReadonlyArray<string>): string[] =>
+    specifiers.flatMap((specifier) => (specifier.startsWith(".") ? resolveRelative(filePath, specifier) : [])).filter((file) => !isOutsideAppCode(root, file));
+
+/**
+ * One key per file: its real path, so a file reached through a symlinked
+ * directory and through its own path is walked once, and a link back into an
+ * ancestor cannot make the walk go round forever.
+ */
+const fileKey = (path: string): string => {
+    try {
+        return realpathSync(path);
+    } catch {
+        return path;
+    }
+};
 
 /**
  * Every app module the worker bundle would load from `lunora/` that loads a
@@ -145,8 +188,11 @@ const appFilesReachedFrom = (filePath: string, specifiers: ReadonlyArray<string>
 const discoverCloudflareModuleImports = (project: Project, lunoraDirectory: string): CloudflareModuleImport[] => {
     // Paths are shown from the project root, so the `lunora/` prefix tells the reader where to look.
     const root = dirname(lunoraDirectory);
-    const pending = [...listLunoraSourceFiles(lunoraDirectory)];
-    const seen = new Set(pending);
+    // The lister leaves out the root `schema.ts`, which `discoverSchema` reads on its own, but
+    // the generated shard imports it, so it and whatever it imports are in the bundle too.
+    const rootSchema = join(lunoraDirectory, "schema.ts");
+    const pending = [...listLunoraSourceFiles(lunoraDirectory), ...(isFile(rootSchema) ? [rootSchema] : [])];
+    const seen = new Set(pending.map((file) => fileKey(file)));
     const found: CloudflareModuleImport[] = [];
 
     for (let filePath = pending.shift(); filePath !== undefined; filePath = pending.shift()) {
@@ -157,9 +203,11 @@ const discoverCloudflareModuleImports = (project: Project, lunoraDirectory: stri
             found.push({ module: relative(root, filePath) || basename(filePath), specifiers: cloudflare });
         }
 
-        for (const file of appFilesReachedFrom(filePath, specifiers)) {
-            if (!seen.has(file)) {
-                seen.add(file);
+        for (const file of appFilesReachedFrom(root, filePath, specifiers)) {
+            const key = fileKey(file);
+
+            if (!seen.has(key)) {
+                seen.add(key);
                 pending.push(file);
             }
         }

@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1264,6 +1264,69 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             write("send.ts", `import { binding } from "./helper";\n\nexport const use = () => binding();\n`);
 
             expect(cloudflareRefusals()[0]?.message).toContain("lunora/helper.tsx (cloudflare:workers)");
+        });
+
+        it("scans the root schema.ts, which the generated shard imports", () => {
+            expect.assertions(1);
+
+            // The lister skips the root schema (discoverSchema reads it on its own); the bundle does not.
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+
+            writeFileSync(
+                schemaPath,
+                `import { env } from "cloudflare:workers";\n\nexport const schemaEnv = () => env;\n${readFileSync(schemaPath, "utf8")}`,
+                "utf8",
+            );
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/schema.ts (cloudflare:workers)");
+        });
+
+        it.each([
+            ["a require() call", "legacy.cjs", `const { env } = require("cloudflare:workers");\nmodule.exports = { env };\n`, "./legacy.cjs"],
+            ["an import = require() declaration", "legacy.cts", `import workers = require("cloudflare:workers");\nexport = workers;\n`, "./legacy"],
+        ])("collects %s, the CommonJS form a helper loads cloudflare:workers with", (_label, file, source, specifier) => {
+            expect.assertions(1);
+
+            writeNested(file, source);
+            write("send.ts", `import legacy from "${specifier}";\n\nexport const use = () => legacy;\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain(`lunora/${file} (cloudflare:workers)`);
+        });
+
+        it("follows imports in a checkout that itself lives under a directory named _generated", () => {
+            expect.assertions(1);
+
+            // The exclusion is for the project's own _generated/, judged from the project root.
+            const parent = mkdtempSync(join(tmpdir(), "lunora-generated-parent-"));
+            const project = join(parent, "_generated", "app");
+
+            try {
+                cpSync(join(fixtureRoot, "lunora"), join(project, "lunora"), { recursive: true });
+                writeFileSync(join(project, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+                writeFileSync(join(project, "lunora", "view.tsx"), LOADS_ENV, "utf8");
+                writeFileSync(join(project, "lunora", "send.ts"), `import { binding } from "./view";\n\nexport const use = () => binding();\n`, "utf8");
+
+                const { platformDiagnostics } = runCodegen({ projectRoot: project, wranglerQueueProducers: [] });
+                const refusal = platformDiagnostics.find((entry) => entry.message.includes("cloudflare:"));
+
+                expect(refusal?.message).toContain("lunora/view.tsx (cloudflare:workers)");
+            } finally {
+                rmSync(parent, { force: true, recursive: true });
+            }
+        });
+
+        it("walks a file reached through a symlinked directory once, by its real path", () => {
+            expect.assertions(1);
+
+            writeNested("shared/env.tsx", LOADS_ENV);
+            symlinkSync(join(workdir, "lunora", "shared"), join(workdir, "lunora", "linked"));
+            write(
+                "send.ts",
+                `import { binding } from "./shared/env";\nimport { binding as again } from "./linked/env";\n\nexport const use = () => [binding(), again()];\n`,
+            );
+
+            // One file, one entry: not shared/env.tsx and linked/env.tsx as two modules.
+            expect(cloudflareRefusals()[0]?.message.match(/\(cloudflare:workers\)/gu)).toHaveLength(1);
         });
 
         it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
