@@ -1,7 +1,7 @@
 import type { ReturnOf } from "@lunora/client";
 import { useMutation, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -199,6 +199,8 @@ const AlertRulesCard = ({
 }): ReactElement => {
     const setRuleEnabled = useMutation(api.alerts.setRuleEnabled);
     const deleteRule = useMutation(api.alerts.deleteRule);
+    // Keyed once per update: a search per rendered rule is rules × progress rows, a million at the page caps.
+    const progressByRule = useMemo(() => new Map(progress?.map((row) => [row.ruleId, row])), [progress]);
 
     return (
         <Card>
@@ -222,7 +224,7 @@ const AlertRulesCard = ({
                                     </span>
                                     {/* The one value shown at size: a rule is its condition. */}
                                     <span className="font-mono text-base whitespace-nowrap tabular-nums">
-                                        <RuleCondition progress={progress?.find((row) => row.ruleId === rule._id)} rule={rule} />
+                                        <RuleCondition progress={progressByRule.get(rule._id)} rule={rule} />
                                     </span>
                                     <StatusBadge tone={rule.enabled ? "success" : "neutral"}>{rule.enabled ? "on" : "off"}</StatusBadge>
                                     <RowActions>
