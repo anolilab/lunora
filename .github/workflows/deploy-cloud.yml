@@ -78,11 +78,11 @@
         # secrets" step fans them out to each Worker through `--secrets-file`. Optional
         # ones left unset on the environment are left unset on the Worker.
         "environment": "cloud-${{ inputs.target || (github.ref_type == 'tag' && 'production' || 'staging') }}"
+        # The Cloudflare credentials are set on the wrangler steps alone, not on the
+        # job: setup actions, dependency install scripts and the repo's own build
+        # and verify commands all run here and need no token that edits the cell.
         "outputs":
             "target": "${{ steps.target.outputs.name }}"
-        "env":
-            "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
-            "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
@@ -235,6 +235,9 @@
             # step above; its health probe is the last step of this job.
             - "name": "Deploy the control plane"
               "working-directory": "apps/cloud"
+              "env":
+                  "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+                  "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
               "run": |
                   pnpm exec wrangler deploy -c dist/server/wrangler.json --secrets-file "${RUNNER_TEMP}/secrets-control-plane.json"
 
@@ -245,6 +248,8 @@
             - "name": "Deploy the Outbound Worker"
               "working-directory": "apps/cloud"
               "env":
+                  "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+                  "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
                   "TARGET": "${{ steps.target.outputs.name }}"
               "run": |
                   pnpm exec wrangler deploy -c outbound.wrangler.jsonc --env "${TARGET}" --secrets-file "${RUNNER_TEMP}/secrets-outbound.json"
@@ -252,6 +257,8 @@
             - "name": "Deploy the dispatcher"
               "working-directory": "apps/cloud"
               "env":
+                  "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+                  "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
                   "TARGET": "${{ steps.target.outputs.name }}"
               "run": |
                   pnpm exec wrangler deploy -c dispatcher.wrangler.jsonc --env "${TARGET}" --secrets-file "${RUNNER_TEMP}/secrets-dispatcher.json"
@@ -259,6 +266,8 @@
             - "name": "Deploy the tail consumer"
               "working-directory": "apps/cloud"
               "env":
+                  "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+                  "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
                   "TARGET": "${{ steps.target.outputs.name }}"
               "run": |
                   pnpm exec wrangler deploy -c tail.wrangler.jsonc --env "${TARGET}" --secrets-file "${RUNNER_TEMP}/secrets-tail.json"
