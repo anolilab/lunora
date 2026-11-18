@@ -1018,24 +1018,29 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 };
             });
             const keep = new Set(rows.map((row) => row.key));
-            const stale = selectCrons.all().filter((row) => row.key.startsWith(DECLARED_CRON_PREFIX) && !keep.has(row.key));
 
-            database.transaction(() => {
-                for (const row of stale) {
-                    deleteCron.run(row.key);
-                }
+            // The stale-row read is inside the write transaction, and IMMEDIATE takes the
+            // write lock before it: read outside, two processes starting with different
+            // maps would each miss the other's rows and both sets would survive. Under
+            // the lock the replace is atomic, so the last writer's set is the only one left.
+            database
+                .transaction(() => {
+                    for (const row of selectCrons.all()) {
+                        if (row.key.startsWith(DECLARED_CRON_PREFIX) && !keep.has(row.key)) {
+                            deleteCron.run(row.key);
+                        }
+                    }
 
-                for (const row of rows) {
-                    upsertCron.run(row.key, row.expression, row.function_path, row.args);
-                }
-            })();
+                    for (const row of rows) {
+                        upsertCron.run(row.key, row.expression, row.function_path, row.args);
+                    }
+                })
+                .immediate();
 
-            for (const row of stale) {
-                const timer = cronTimers.get(row.key);
-
-                if (timer !== undefined) {
+            for (const [key, timer] of cronTimers) {
+                if (key.startsWith(DECLARED_CRON_PREFIX) && !keep.has(key)) {
                     clearTimeout(timer);
-                    cronTimers.delete(row.key);
+                    cronTimers.delete(key);
                 }
             }
 

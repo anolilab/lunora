@@ -9,6 +9,7 @@ import { createNodeSchedulerHost } from "../src/node-scheduler-host";
 import { createNodeShardHost } from "../src/node-shard-host";
 
 const CRON_ROW_READ = "SELECT * FROM _lunora_scheduler_crons WHERE key = ?";
+const CRON_SET_READ = "SELECT * FROM _lunora_scheduler_crons";
 
 /** Forward every member of `target` except `override`'s, binding methods to `target`. */
 const forwardExcept = <T extends object>(target: T, override: PropertyKey, replacement: unknown): T =>
@@ -451,6 +452,62 @@ describe("createNodeSchedulerHost", () => {
             } finally {
                 host.dispose();
                 database.close();
+            }
+        });
+
+        it("replaces the declared set atomically, so a declare racing another leaves only the last writer's set", () => {
+            expect.assertions(3);
+
+            const directory = mkdtempSync(join(tmpdir(), "lunora-declare-race-"));
+            const path = join(directory, "scheduler.sqlite3");
+            const realA = new Database(path);
+            const realB = new Database(path);
+            const hostB = createNodeSchedulerHost(realB);
+            let racing = false;
+            const setReadsOutsideTransaction: boolean[] = [];
+
+            // Another process's declare runs in the gap after A reads the declared set. The gap
+            // only exists when that read is outside A's write transaction: inside it, B could not
+            // write until A committed, so the race cannot start there.
+            const all = (statement: Database.Statement) => (): unknown[] => {
+                const result = statement.all();
+
+                if (racing) {
+                    setReadsOutsideTransaction.push(!realA.inTransaction);
+
+                    if (!realA.inTransaction) {
+                        racing = false;
+                        hostB.declareCrons([{ args: {}, expression: "0 4 * * *", functionPath: "reports:b", name: "b" }]);
+                    }
+                }
+
+                return result;
+            };
+            const databaseA = forwardExcept(realA, "prepare", (source: string): Database.Statement => {
+                const statement = realA.prepare(source);
+
+                return source === CRON_SET_READ ? forwardExcept(statement, "all", all(statement)) : statement;
+            });
+            const hostA = createNodeSchedulerHost(databaseA);
+
+            try {
+                racing = true;
+                hostA.declareCrons([{ args: {}, expression: "0 3 * * *", functionPath: "reports:a", name: "a" }]);
+
+                const keys = realA
+                    .prepare<[], { key: string }>("SELECT key FROM _lunora_scheduler_crons ORDER BY key")
+                    .all()
+                    .map((row) => row.key);
+
+                expect(keys).toStrictEqual(["declared:a"]);
+                expect(setReadsOutsideTransaction.length).toBeGreaterThan(0);
+                expect(setReadsOutsideTransaction).not.toContain(true);
+            } finally {
+                hostA.dispose();
+                hostB.dispose();
+                realA.close();
+                realB.close();
+                rmSync(directory, { force: true, recursive: true });
             }
         });
 

@@ -40,6 +40,14 @@ describe(createNodeSecretBindings, () => {
         await expect(createNodeSecretBindings([name], {})[name]?.get()).rejects.toThrow(name);
     });
 
+    it.each([["LUNORA_ADMIN_TOKEN"], ["LUNORA_SCHEDULER_SECRET"], ["LUNORA_ORIGIN_URL"]])("refuses %s, which the runtime reads as a plain string", (name) => {
+        expect.assertions(1);
+
+        expect(() => createNodeSecretBindings(["STRIPE_KEY", name], { [name]: "x", STRIPE_KEY: "sk" })).toThrow(
+            expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.stringContaining(name) }),
+        );
+    });
+
     it("exposes only get, so ctx.secrets does not mistake it for a KV or R2 binding", () => {
         expect.assertions(1);
 
@@ -51,12 +59,12 @@ describe(createNodeSecretBindings, () => {
     it("reads process.env when no source is given", async () => {
         expect.assertions(1);
 
-        process.env.LUNORA_NODE_SECRETS_TEST = "from-process-env";
+        process.env.APP_NODE_SECRETS_TEST = "from-process-env";
 
         try {
-            await expect(createNodeSecretBindings(["LUNORA_NODE_SECRETS_TEST"]).LUNORA_NODE_SECRETS_TEST?.get()).resolves.toBe("from-process-env");
+            await expect(createNodeSecretBindings(["APP_NODE_SECRETS_TEST"]).APP_NODE_SECRETS_TEST?.get()).resolves.toBe("from-process-env");
         } finally {
-            delete process.env.LUNORA_NODE_SECRETS_TEST;
+            delete process.env.APP_NODE_SECRETS_TEST;
         }
     });
 });

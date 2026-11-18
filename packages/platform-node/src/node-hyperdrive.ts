@@ -19,16 +19,20 @@ const LEADING_SLASH = /^\//u;
 /** An IPv6 literal keeps its brackets in `hostname`; a driver's `host` option wants the bare address. */
 const BRACKETED_HOST = /^\[(.*)\]$/u;
 
-/** `sslmode` / `ssl-mode` values that do not require TLS, so dropping them loses nothing. */
-const NON_REQUIRING_SSL_MODES: ReadonlySet<string> = new Set(["allow", "disable", "disabled", "prefer", "preferred"]);
+/**
+ * `sslmode` / `ssl-mode` values that turn TLS off, the only ones dropping loses
+ * nothing. `prefer` and `allow` still negotiate TLS, which the discrete fields
+ * cannot ask for either.
+ */
+const SSL_OFF_MODES: ReadonlySet<string> = new Set(["disable", "disabled"]);
 const SSL_OFF_VALUES: ReadonlySet<string> = new Set(["0", "false"]);
 const SEPARATORS = /[-_]/gu;
 
 /**
- * The query parameters that require or configure TLS: any `ssl*` option
- * (`sslmode`, `ssl-mode`, `ssl`, `sslrootcert`, `sslcert`, `sslkey`, …) except a
- * mode or flag that turns TLS off or makes it opportunistic. Names only: values
- * such as `sslpassword` are secret.
+ * The query parameters that ask for or configure TLS: any `ssl*` option
+ * (`sslmode`, `ssl-mode`, `ssl`, `sslrootcert`, `sslcert`, `sslkey`, …) except an
+ * explicit off (`sslmode=disable`, `ssl-mode=DISABLED`, `ssl=false`, `ssl=0`).
+ * Names only: values such as `sslpassword` are secret.
  */
 const tlsOptionNames = (parameters: URLSearchParams): string[] =>
     [...parameters.entries()]
@@ -37,7 +41,7 @@ const tlsOptionNames = (parameters: URLSearchParams): string[] =>
             const setting = value.toLowerCase();
 
             if (key === "sslmode") {
-                return !NON_REQUIRING_SSL_MODES.has(setting);
+                return !SSL_OFF_MODES.has(setting);
             }
 
             return key.startsWith("ssl") && !(key === "ssl" && SSL_OFF_VALUES.has(setting));
@@ -45,7 +49,7 @@ const tlsOptionNames = (parameters: URLSearchParams): string[] =>
         .map(([name]) => name);
 
 /**
- * The binding for a URL that requires TLS. The discrete fields cannot say so,
+ * The binding for a URL that asks for TLS. The discrete fields cannot say so,
  * and Cloudflare's binding has no TLS field to mirror (Hyperdrive handles TLS to
  * the origin itself), so a driver built from them would connect without it.
  * They throw instead; `connectionString`, which keeps the query, is unchanged.
@@ -90,9 +94,10 @@ const DEFAULT_PORTS: Readonly<Record<string, number>> = {
  * socket directory in a `host` query parameter (`postgres:///db?host=/var/run/postgresql`),
  * which becomes the binding's `host`.
  *
- * A URL that requires TLS (`sslmode=require`, `ssl=true`, `sslrootcert=…`) gets
- * a binding whose discrete fields throw: they cannot carry the TLS requirement,
- * so a pool built from them would silently connect without it. Build the driver
+ * A URL with any TLS option other than an explicit off (`sslmode=prefer` or
+ * `require`, `ssl=true`, `sslrootcert=…`) gets a binding whose discrete fields
+ * throw: they cannot carry it, so a pool built from them would silently connect
+ * without TLS. `sslmode=disable` and `ssl=false` keep them. Build the driver
  * from `connectionString`, which keeps every query option.
  * @param url A `postgres://`, `postgresql://`, `mysql://` or `mariadb://` URL; `DATABASE_URL` unless given.
  */

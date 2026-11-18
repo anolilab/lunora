@@ -1,5 +1,13 @@
 import { LunoraError } from "@lunora/errors";
 
+/**
+ * The prefix of the env vars Lunora's runtime reads as plain strings
+ * (`LUNORA_ADMIN_TOKEN`, `LUNORA_SCHEDULER_SECRET`, `LUNORA_ORIGIN_URL`, …).
+ * They are read across many modules with no single list, so the whole prefix is
+ * refused rather than a list that would drift.
+ */
+const RUNTIME_ENV_PREFIX = "LUNORA_";
+
 /** The shape `ctx.secrets` reads off `env[name]`: a Cloudflare Secrets Store secret binding. */
 export interface NodeSecretBinding {
     get: () => Promise<string>;
@@ -14,7 +22,8 @@ export interface NodeSecretBinding {
  * same reason a wrangler config lists `secrets_store_secrets[]`: `ctx.secrets`
  * reaches only what was granted to it. It also keeps the bindings off names the
  * env already carries as plain strings (`LUNORA_ADMIN_TOKEN` and the like),
- * which the runtime reads as strings and a binding object would break.
+ * which the runtime reads as strings and a binding object would break; a
+ * `LUNORA_*` name is refused for that reason.
  *
  * The value is read when `get()` is called, so an unused secret never has to be
  * set. An unset or empty variable rejects the call.
@@ -24,8 +33,17 @@ export interface NodeSecretBinding {
 export const createNodeSecretBindings = (
     names: ReadonlyArray<string>,
     source: Readonly<Record<string, string | undefined>> = process.env,
-): Record<string, NodeSecretBinding> =>
-    Object.fromEntries(
+): Record<string, NodeSecretBinding> => {
+    const reserved = names.filter((name) => name.startsWith(RUNTIME_ENV_PREFIX));
+
+    if (reserved.length > 0) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: ${reserved.join(", ")} cannot be a ctx.secrets binding — Lunora reads ${RUNTIME_ENV_PREFIX}* env vars as plain strings, and a binding object spread over one would replace it (an admin token would stop working). Keep it a plain env value, or read your own secret under another name`,
+        );
+    }
+
+    return Object.fromEntries(
         names.map((name) => [
             name,
             {
@@ -43,3 +61,4 @@ export const createNodeSecretBindings = (
             },
         ]),
     );
+};

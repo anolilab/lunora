@@ -108,7 +108,11 @@ describe(createNodeHyperdrive, () => {
         ["postgres://u@h/db?sslmode=verify-full&sslrootcert=/etc/ca.pem", "sslmode, sslrootcert"],
         ["postgres://u@h/db?ssl=true", "ssl"],
         ["mysql://u@h/db?ssl-mode=REQUIRED", "ssl-mode"],
-    ])("refuses the discrete fields of %s, which cannot carry its TLS requirement", (url, names) => {
+        // Opportunistic modes still negotiate TLS, which the discrete fields cannot ask for.
+        ["postgres://u@h/db?sslmode=prefer", "sslmode"],
+        ["postgres://u@h/db?sslmode=allow", "sslmode"],
+        ["mysql://u@h/db?ssl-mode=PREFERRED", "ssl-mode"],
+    ])("refuses the discrete fields of %s, which cannot carry its TLS option", (url, names) => {
         expect.assertions(3);
 
         const binding = createNodeHyperdrive(url);
@@ -118,12 +122,15 @@ describe(createNodeHyperdrive, () => {
         expect(() => binding.port).toThrow(/connectionString/u);
     });
 
-    it.each(["postgres://u@h/db?sslmode=disable", "postgres://u@h/db?sslmode=prefer", "postgres://u@h/db?ssl=false", "mysql://u@h/db?ssl-mode=PREFERRED"])(
-        "keeps the discrete fields of %s, whose TLS setting requires nothing",
+    it.each(["postgres://u@h/db?sslmode=disable", "postgres://u@h/db?ssl=false", "postgres://u@h/db?ssl=0", "mysql://u@h/db?ssl-mode=DISABLED"])(
+        "keeps the discrete fields of %s, which turns TLS off explicitly",
         (url) => {
-            expect.assertions(1);
+            expect.assertions(2);
 
-            expect(createNodeHyperdrive(url).host).toBe("h");
+            const binding = createNodeHyperdrive(url);
+
+            expect(binding.host).toBe("h");
+            expect(binding.connectionString).toBe(url);
         },
     );
 
