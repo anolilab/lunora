@@ -62,7 +62,7 @@ interface TenantFanoutRouteDeps {
      */
     dispatchScheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
 
-    /** Whether the deployment is paused; a paused tenant hands every forwarded message back for retry. */
+    /** Whether the deployment is paused; a paused tenant has its queue handler hold every forwarded message. */
     isPaused: () => Promise<boolean>;
 
     /** The app's forwarded-batch handler, off `WorkerOptions`. Absent when the app declares no queues. */
@@ -154,16 +154,11 @@ const buildTenantFanoutRoutes = (
                 };
             });
 
-        if (await isPaused()) {
-            // Held for the pause's delay, as a native consumer holds it: retried at
-            // once, a paused tenant spent every delivery attempt within seconds.
-            return Response.json({
-                retry: messages.map((message) => message.id),
-                retryDelays: Object.fromEntries(messages.map((message) => [message.id, PAUSED_QUEUE_RETRY_SECONDS])),
-            });
-        }
-
-        const result = await queueHandler({ messages, queue }, env, context);
+        // Paused, the handler holds the batch as a native consumer does: a fresh
+        // delayed copy per message, the original acked. Answered as a delayed retry
+        // instead, each hold spent one of the platform's delivery attempts, and a
+        // pause past `max_retries` holds dead-lettered work that never ran.
+        const result = await queueHandler({ messages, queue }, env, context, (await isPaused()) ? { holdSeconds: PAUSED_QUEUE_RETRY_SECONDS } : undefined);
 
         return Response.json({ retry: result?.retry ?? [], ...(result?.retryDelays === undefined ? {} : { retryDelays: result.retryDelays }) });
     };

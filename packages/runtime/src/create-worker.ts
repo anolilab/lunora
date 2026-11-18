@@ -721,11 +721,18 @@ interface QueueForwardResult {
  * Workers can't be queue consumers, so a platform-owned consumer fans batches in
  * here; return the ids to retry. Env-driven side effects
  * (sending mail, etc.) belong in the app's handler.
+ *
+ * `hold.holdSeconds` is set while the deployment is paused, as
+ * {@link TriggerTrace.holdSeconds} is for the native `queue()` entry: the handler
+ * holds each message back that long instead of running it — a fresh delayed copy
+ * sent through its own producer binding, then acked, so a long pause spends none
+ * of the platform's delivery attempts.
  */
 type QueueForwardHandler = (
     batch: QueueForwardBatch,
     env: unknown,
     context: ExecutionContextLike,
+    hold?: { holdSeconds: number },
 ) => Promise<QueueForwardResult | undefined> | QueueForwardResult | undefined;
 
 /**

@@ -1777,7 +1777,9 @@ interface QueueForwardBatch {
 ### `QueueForwardHandler` (type)
 
 ```ts
-type QueueForwardHandler = (batch: QueueForwardBatch, env: unknown, context: ExecutionContextLike) => Promise<QueueForwardResult | undefined> | QueueForwardResult | undefined;
+type QueueForwardHandler = (batch: QueueForwardBatch, env: unknown, context: ExecutionContextLike, hold?: {
+    holdSeconds: number;
+}) => Promise<QueueForwardResult | undefined> | QueueForwardResult | undefined;
 ```
 
 ### `QueueForwardMessage` (interface)

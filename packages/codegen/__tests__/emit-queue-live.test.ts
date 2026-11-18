@@ -46,7 +46,16 @@ describe("generated worker options — forwarded queue batches", () => {
 
         const emitted = emit(false);
 
-        expect(emitted).toContain("queueHandler: (forwarded: Parameters<typeof dispatchForwardedQueueBatch>[0], queueEnv: unknown)");
+        expect(emitted).toContain("queueHandler: (forwarded: Parameters<typeof dispatchForwardedQueueBatch>[0], queueEnv: unknown");
         expect(emitted).toContain("dispatchForwardedQueueBatch(forwarded, LUNORA_QUEUE_REGISTRY, {");
+    });
+
+    it("hands a paused deployment's hold to the forwarded batch, as to the native consumer", () => {
+        expect.assertions(2);
+
+        const emitted = emit(false);
+
+        expect(emitted).toContain("_context: ExecutionContextLike, hold?: { holdSeconds: number }): ReturnType<typeof dispatchForwardedQueueBatch> =>");
+        expect(emitted).toContain("holdSeconds: hold?.holdSeconds,");
     });
 });

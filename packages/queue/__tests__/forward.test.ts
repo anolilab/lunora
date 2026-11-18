@@ -169,4 +169,25 @@ describe(dispatchForwardedQueueBatch, () => {
 
         expect(result).toStrictEqual({ retry: ["m2"] });
     });
+
+    it("holds a paused tenant's batch as acked copies, so the platform spends no delivery attempt", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => void>();
+        const send = vi.fn<(body: unknown, options?: unknown) => Promise<void>>(async () => undefined);
+
+        const result = await dispatchForwardedQueueBatch(
+            { messages: [{ attempts: 3, body: { to: "a" }, id: "m1" }], queue: "queue-email" },
+            registryOf(handler),
+            {
+                env: { LUNORA_ADMIN_TOKEN: "tok", QUEUE_EMAIL: { send } },
+                holdSeconds: 300,
+            },
+        );
+
+        expect(send).toHaveBeenCalledWith(expect.anything(), { contentType: "json", delaySeconds: 300 });
+        // Nothing to retry: a retry, however delayed, is one of the platform's attempts.
+        expect(result).toStrictEqual({ retry: [] });
+        expect(handler).not.toHaveBeenCalled();
+    });
 });
