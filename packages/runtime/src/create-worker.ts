@@ -712,6 +712,8 @@ interface QueueForwardBatch {
 /** Outcome of a forwarded batch: the ids to retry (everything else is acked). */
 interface QueueForwardResult {
     retry?: ReadonlyArray<string>;
+    /** The delay, in seconds, each retried id asked for; one absent here is retried at once. */
+    retryDelays?: Readonly<Record<string, number>>;
 }
 
 /**

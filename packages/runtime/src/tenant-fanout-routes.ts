@@ -22,6 +22,7 @@
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { readLooseJsonBody } from "./body-readers";
 import type { QueueForwardHandler, ScheduledControllerLike } from "./create-worker";
+import { PAUSED_QUEUE_RETRY_SECONDS } from "./deployment-pause";
 import { LunoraError } from "./errors";
 
 // Admin-gated HTTP entrypoint that runs a cron expression's jobs exactly as the
@@ -110,7 +111,8 @@ const buildTenantFanoutRoutes = (
      * `POST /_lunora/queue` — process a forwarded queue batch (the WfP workaround
      * for queue consumers). Admin-gated; the body is
      * `{ "queue": "name", "messages": [{ "id": "...", "body": ..., "attempts": 1 }] }`. Returns
-     * `{ "retry": [ids] }` so the platform consumer can retry only the failures.
+     * `{ "retry": [ids], "retryDelays": { id: seconds } }` so the platform consumer
+     * can retry only the failures, each after the delay it asked for.
      */
     const handleQueueDispatch = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
         assertAdmin(request);
@@ -153,12 +155,17 @@ const buildTenantFanoutRoutes = (
             });
 
         if (await isPaused()) {
-            return Response.json({ retry: messages.map((message) => message.id) });
+            // Held for the pause's delay, as a native consumer holds it: retried at
+            // once, a paused tenant spent every delivery attempt within seconds.
+            return Response.json({
+                retry: messages.map((message) => message.id),
+                retryDelays: Object.fromEntries(messages.map((message) => [message.id, PAUSED_QUEUE_RETRY_SECONDS])),
+            });
         }
 
         const result = await queueHandler({ messages, queue }, env, context);
 
-        return Response.json({ retry: result?.retry ?? [] });
+        return Response.json({ retry: result?.retry ?? [], ...(result?.retryDelays === undefined ? {} : { retryDelays: result.retryDelays }) });
     };
 
     return {

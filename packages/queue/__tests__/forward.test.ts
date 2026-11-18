@@ -93,6 +93,56 @@ describe(dispatchForwardedQueueBatch, () => {
         expect(result).toStrictEqual({ retry: ["m2"] });
     });
 
+    it("answers the delay each retry asked for, so the platform does not redeliver it at once", async () => {
+        expect.assertions(1);
+
+        const registry = registryOf((_context, batch) => {
+            const [first, second, third] = batch.messages;
+
+            first?.retry({ delaySeconds: 30 });
+            second?.retry();
+            third?.retry({ delaySeconds: 60 });
+            third?.ack();
+        });
+
+        const result = await dispatchForwardedQueueBatch(
+            {
+                messages: [
+                    { body: 1, id: "m1" },
+                    { body: 2, id: "m2" },
+                    { body: 3, id: "m3" },
+                ],
+                queue: "queue-email",
+            },
+            registry,
+            { env: {} },
+        );
+
+        expect(result).toStrictEqual({ retry: ["m1", "m2"], retryDelays: { m1: 30 } });
+    });
+
+    it("answers retryAll's delay for every message", async () => {
+        expect.assertions(1);
+
+        const registry = registryOf((_context, batch) => {
+            batch.retryAll({ delaySeconds: 45 });
+        });
+
+        const result = await dispatchForwardedQueueBatch(
+            {
+                messages: [
+                    { body: 1, id: "m1" },
+                    { body: 2, id: "m2" },
+                ],
+                queue: "queue-email",
+            },
+            registry,
+            { env: {} },
+        );
+
+        expect(result).toStrictEqual({ retry: ["m1", "m2"], retryDelays: { m1: 45, m2: 45 } });
+    });
+
     it("retries every unacked message when the handler fails the batch", async () => {
         expect.assertions(1);
 

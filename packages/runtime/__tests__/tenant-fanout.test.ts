@@ -196,6 +196,22 @@ describe("createWorker — the tenant queue fan-out endpoint", () => {
         ]);
     });
 
+    it("passes back the delay each retry asked for", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queueHandler: () => {
+                return { retry: ["m1"], retryDelays: { m1: 30 } };
+            },
+            shardDO: shardNamespace(),
+        });
+
+        const response = await worker.fetch(post(QUEUE_PATH, { messages: [{ body: 1, id: "m1" }], queue: "jobs" }), {}, fakeContext);
+
+        await expect(response.json()).resolves.toStrictEqual({ retry: ["m1"], retryDelays: { m1: 30 } });
+    });
+
     it("answers an empty retry list when the handler returns nothing", async () => {
         expect.assertions(1);
 

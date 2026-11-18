@@ -114,4 +114,38 @@ describe(deliverQueueBatch, () => {
 
         expect(forwarded).toStrictEqual([{ attempts: 4, body: "b", id: "m1" }]);
     });
+
+    it("retries each message after the delay its tenant asked for, within Cloudflare's ceiling", async () => {
+        expect.assertions(1);
+
+        const retried: [string, unknown][] = [];
+        const dispatch: NonNullable<TargetFleet["dispatch"]> = () => async () =>
+            Response.json({ retry: ["m1", "m2", "m3"], retryDelays: { m1: 30, m3: 999_999 } });
+        const message = (id: string) => {
+            return {
+                ack: () => undefined,
+                body: id,
+                id,
+                retry: (options?: { delaySeconds?: number }) => {
+                    retried.push([id, options]);
+                },
+            };
+        };
+
+        await deliverQueueBatch(
+            { messages: [message("m1"), message("m2"), message("m3")], queue: tenantResourceName("shop", { binding: "JOBS", type: "queue_producer" }) },
+            {
+                dispatches: new Map([["cloudflare-wfp" as const, dispatch]]),
+                live: [{ adminToken: "admin", alias: "shop", organizationId: "org_ok", projectId: "p_shop", scriptName: "shop", target: "cloudflare-wfp" }],
+                now: Date.UTC(2026, 9, 9, 12),
+                store: memoryStore({ organizations: [{ _id: "org_ok", plan: "pro" }] }),
+            },
+        );
+
+        expect(retried).toStrictEqual([
+            ["m1", { delaySeconds: 30 }],
+            ["m2", undefined],
+            ["m3", { delaySeconds: 43_200 }],
+        ]);
+    });
 });

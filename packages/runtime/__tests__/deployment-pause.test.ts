@@ -672,7 +672,10 @@ describe("createWorker — deployment pause", () => {
 
         const held = await worker.fetch(forward(), {}, fakeContext);
 
-        await expect(held.json()).resolves.toStrictEqual({ retry: ["m1", "m2"] });
+        await expect(held.json()).resolves.toStrictEqual({
+            retry: ["m1", "m2"],
+            retryDelays: { m1: PAUSED_QUEUE_RETRY_SECONDS, m2: PAUSED_QUEUE_RETRY_SECONDS },
+        });
         expect(queueHandler).not.toHaveBeenCalled();
 
         await worker.fetch(setPaused(false), {}, fakeContext);

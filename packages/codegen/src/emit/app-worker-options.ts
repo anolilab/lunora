@@ -617,7 +617,7 @@ const buildQueueConsumerLines = (options: ResolvedAppOptions): string[] => {
         `                }),`,
         // A Workers-for-Platforms tenant cannot be a queue consumer: the platform drains its
         // queues and forwards each batch to `POST /_lunora/queue`, which answers 400 without this.
-        `            queueHandler: ${asyncPrefix}(forwarded: Parameters<typeof dispatchForwardedQueueBatch>[0], queueEnv: unknown): Promise<{ retry: string[] }> =>`,
+        `            queueHandler: ${asyncPrefix}(forwarded: Parameters<typeof dispatchForwardedQueueBatch>[0], queueEnv: unknown): ReturnType<typeof dispatchForwardedQueueBatch> =>`,
         `                dispatchForwardedQueueBatch(forwarded, ${queueRegistryExpression(options)}, {`,
         ...queueCaptureLines(options),
         `                }),`,

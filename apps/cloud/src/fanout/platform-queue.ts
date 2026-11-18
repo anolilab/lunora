@@ -84,17 +84,32 @@ const forwardBodies = (batch: QueueBatchLike, queue: string): { body: string; id
 };
 
 /**
+ * The delay a tenant asked a retry to wait, in whole seconds within Cloudflare's
+ * ceiling, or `undefined` for none: the reply is tenant-written, and a delay the
+ * broker refuses would throw out of the whole batch.
+ */
+const retryDelayOf = (delays: unknown, id: string): number | undefined => {
+    const delay = typeof delays === "object" && delays !== null && Object.hasOwn(delays, id) ? (delays as Record<string, unknown>)[id] : undefined;
+
+    return typeof delay === "number" && Number.isFinite(delay) && delay > 0 ? Math.min(Math.ceil(delay), HELD_RETRY_DELAY_SECONDS) : undefined;
+};
+
+/**
  * Forward a batch to its tenant's `/_lunora/queue` endpoint, gated by its admin
  * token, in as many requests as its size needs ({@link forwardBodies}). Returns
- * the message ids to retry: those the tenant asked to retry, and every message
- * of a request that failed.
+ * the message ids to retry, each with the delay it asked for: those the tenant
+ * asked to retry, and every message of a request that failed (with none).
  *
  * The tenant knows its queues by declared name and binding, never by this
  * platform's per-project queue name, so the alias prefix is stripped and the
  * binding (in its resource form) is what the tenant's registry resolves.
  */
-const dispatchQueueBatch = async (dispatch: TenantDispatch, target: { adminToken: string; resourceRef: string }, batch: QueueBatchLike): Promise<string[]> => {
-    const retry: string[] = [];
+const dispatchQueueBatch = async (
+    dispatch: TenantDispatch,
+    target: { adminToken: string; resourceRef: string },
+    batch: QueueBatchLike,
+): Promise<Map<string, number | undefined>> => {
+    const retry = new Map<string, number | undefined>();
 
     for (const { body, ids } of forwardBodies(batch, bindingOfResourceName(batch.queue) ?? batch.queue)) {
         try {
@@ -106,11 +121,17 @@ const dispatchQueueBatch = async (dispatch: TenantDispatch, target: { adminToken
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
-            const result = await readJson<{ retry?: unknown }>(response);
+            const result = await readJson<{ retry?: unknown; retryDelays?: unknown }>(response);
 
-            retry.push(...(Array.isArray(result.retry) ? result.retry : []).filter((id): id is string => typeof id === "string"));
+            for (const id of Array.isArray(result.retry) ? result.retry : []) {
+                if (typeof id === "string") {
+                    retry.set(id, retryDelayOf(result.retryDelays, id));
+                }
+            }
         } catch {
-            retry.push(...ids);
+            for (const id of ids) {
+                retry.set(id, undefined);
+            }
         }
     }
 
@@ -189,15 +210,17 @@ export const deliverQueueBatch = async (batch: QueueBatchLike, ports: QueueDeliv
 
     // No live release (or token) owns this queue: acked, since retrying an
     // undeliverable message would only loop until it hits the retry limit.
-    let retry = new Set<string>();
-
-    if (target) {
-        retry = new Set(await dispatchQueueBatch(target.dispatch, target, batch));
-    }
+    const retry = target ? await dispatchQueueBatch(target.dispatch, target, batch) : new Map<string, number | undefined>();
 
     for (const message of batch.messages) {
         if (retry.has(message.id)) {
-            message.retry();
+            const delaySeconds = retry.get(message.id);
+
+            if (delaySeconds === undefined) {
+                message.retry();
+            } else {
+                message.retry({ delaySeconds });
+            }
         } else {
             message.ack();
         }

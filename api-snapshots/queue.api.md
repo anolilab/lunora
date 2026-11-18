@@ -44,6 +44,15 @@ interface ForwardedQueueBatch {
 }
 ```
 
+### `ForwardedQueueResult` (interface)
+
+```ts
+interface ForwardedQueueResult {
+    retry: string[];
+    retryDelays?: Record<string, number>;
+}
+```
+
 ### `FunctionReference` (interface)
 
 ```ts
@@ -369,9 +378,7 @@ const defineTopic: <Payload = unknown>() => TopicDefinition<Payload>;
 ### `dispatchForwardedQueueBatch` (const)
 
 ```ts
-const dispatchForwardedQueueBatch: (forwarded: ForwardedQueueBatch, registry: QueueRegistry, options: DispatchOptions) => Promise<{
-    retry: string[];
-}>;
+const dispatchForwardedQueueBatch: (forwarded: ForwardedQueueBatch, registry: QueueRegistry, options: DispatchOptions) => Promise<ForwardedQueueResult>;
 ```
 
 ### `dispatchQueueBatch` (const)

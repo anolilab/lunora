@@ -1795,6 +1795,7 @@ interface QueueForwardMessage {
 ```ts
 interface QueueForwardResult {
     retry?: ReadonlyArray<string>;
+    retryDelays?: Readonly<Record<string, number>>;
 }
 ```
 

@@ -259,10 +259,12 @@ export calls it.
 
 ### `dispatchForwardedQueueBatch`
 
-**Type:** `(forwarded: ForwardedQueueBatch, registry: QueueRegistry, options: DispatchOptions) => Promise<{ retry: string[] }>`
+**Type:** `(forwarded: ForwardedQueueBatch, registry: QueueRegistry, options: DispatchOptions) => Promise<ForwardedQueueResult>`
 
 Runs a batch a platform consumer forwarded to `POST /_lunora/queue` through the
-same handlers, and answers the ids to redeliver. The generated `queueHandler`
+same handlers, and answers the ids to redeliver. `retryDelays` carries the delay,
+in seconds, of each retry that asked for one (`message.retry({ delaySeconds })`),
+so the platform retries it after that delay. The generated `queueHandler`
 calls it. `forwarded.queue` may be the declared queue name or its producer
 binding, upper-case or in the lower-case, dash-separated form a platform names
 its per-binding queue after.

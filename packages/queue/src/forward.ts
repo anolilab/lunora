@@ -39,14 +39,48 @@ const resolveForwardedQueue = (queue: string, registry: QueueRegistry): string =
     return match === undefined ? queue : match[0];
 };
 
+/** What a forwarded batch answers: the ids to retry, and the delay each retry asked for, in seconds. */
+interface ForwardedQueueResult {
+    retry: string[];
+    retryDelays?: Record<string, number>;
+}
+
+/** The answer for `retry`, with the delays of those ids only. */
+const answer = (retry: string[], delays: ReadonlyMap<string, number>): ForwardedQueueResult => {
+    const retryDelays = Object.fromEntries(
+        retry.flatMap((id) => {
+            const delay = delays.get(id);
+
+            return delay === undefined ? [] : [[id, delay] as const];
+        }),
+    );
+
+    return Object.keys(retryDelays).length === 0 ? { retry } : { retry, retryDelays };
+};
+
 /**
  * Dispatch a forwarded batch and answer the ids to retry. A message the handler
  * left alone is acked, as Cloudflare acks one on a clean return; when the
  * handler fails the whole batch, every message it did not ack is retried.
- * Delays asked for on a retry are dropped: the forward protocol carries only ids.
  */
-const dispatchForwardedQueueBatch = async (forwarded: ForwardedQueueBatch, registry: QueueRegistry, options: DispatchOptions): Promise<{ retry: string[] }> => {
+const dispatchForwardedQueueBatch = async (
+    forwarded: ForwardedQueueBatch,
+    registry: QueueRegistry,
+    options: DispatchOptions,
+): Promise<ForwardedQueueResult> => {
     const outcomes = new Map<string, "ack" | "retry">();
+    // Carried back so the platform consumer retries with it: dropped, a declined
+    // dispatch came straight back inside its claim and spent an attempt per round.
+    const delays = new Map<string, number>();
+    const retry = (id: string, delaySeconds: number | undefined): void => {
+        outcomes.set(id, "retry");
+
+        if (delaySeconds === undefined) {
+            delays.delete(id);
+        } else {
+            delays.set(id, delaySeconds);
+        }
+    };
     const receivedAt = new Date();
     const messages: MessageLike[] = forwarded.messages.map((message) => {
         return {
@@ -57,8 +91,8 @@ const dispatchForwardedQueueBatch = async (forwarded: ForwardedQueueBatch, regis
             attempts: message.attempts ?? 1,
             body: message.body,
             id: message.id,
-            retry: () => {
-                outcomes.set(message.id, "retry");
+            retry: (retryOptions) => {
+                retry(message.id, retryOptions?.delaySeconds);
             },
             timestamp: receivedAt,
         };
@@ -71,9 +105,9 @@ const dispatchForwardedQueueBatch = async (forwarded: ForwardedQueueBatch, regis
         },
         messages,
         queue: resolveForwardedQueue(forwarded.queue, registry),
-        retryAll: () => {
+        retryAll: (retryOptions) => {
             for (const message of messages) {
-                outcomes.set(message.id, "retry");
+                retry(message.id, retryOptions?.delaySeconds);
             }
         },
     };
@@ -88,11 +122,17 @@ const dispatchForwardedQueueBatch = async (forwarded: ForwardedQueueBatch, regis
         // eslint-disable-next-line no-console -- no injected logger on the dispatch path; the batch is answered, not thrown
         console.error(`@lunora/queue: forwarded batch on queue "${forwarded.queue}" failed (${body.code}: ${body.message}); retrying its unacked messages.`);
 
-        return { retry: messages.filter((message) => outcomes.get(message.id) !== "ack").map((message) => message.id) };
+        return answer(
+            messages.filter((message) => outcomes.get(message.id) !== "ack").map((message) => message.id),
+            delays,
+        );
     }
 
-    return { retry: messages.filter((message) => outcomes.get(message.id) === "retry").map((message) => message.id) };
+    return answer(
+        messages.filter((message) => outcomes.get(message.id) === "retry").map((message) => message.id),
+        delays,
+    );
 };
 
-export type { ForwardedQueueBatch };
+export type { ForwardedQueueBatch, ForwardedQueueResult };
 export { dispatchForwardedQueueBatch };
