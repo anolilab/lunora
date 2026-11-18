@@ -38,7 +38,7 @@ import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "./jobs";
 import type { SessionAttachment, SessionEffect } from "./session";
 import { livenessOf, openSession, receiveFrame, REVOKED_MESSAGE } from "./session";
 import type { BoxSession } from "./session-client";
-import { loadBox, markOffline, markSeen, recordHello, routesForBox, SEEN_WRITE_INTERVAL_MS, sessionBoxOf, updateFleets } from "./session-store";
+import { isRevoked, loadBox, markOffline, markSeen, recordHello, routesForBox, SEEN_WRITE_INTERVAL_MS, sessionBoxOf, updateFleets } from "./session-store";
 import { boxDomainOf, manifestUrlOf } from "./urls";
 import { MAX_REPORT_AGE_MS, recordBoxReport } from "./usage";
 
@@ -683,6 +683,20 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
         const release = page[0] as undefined | { releaseId: string; versions: BoxVersions };
 
         if (release === undefined || versionKey(release.versions) === versionKey(running)) {
+            return;
+        }
+
+        // Read again right before sending: a revoke, a re-pointed intent or a superseding reconnect can land
+        // while D1 answers, and a revoke's `close` may not have reached this object yet. `revokedAt` decides.
+        const fresh = await loadBox(database, boxId);
+
+        if (
+            fresh === null ||
+            isRevoked(fresh) ||
+            fresh.desiredReleaseId !== release.releaseId ||
+            (fresh.allowDowngrade === true) !== (box.allowDowngrade === true) ||
+            !this.readySockets().includes(socket)
+        ) {
             return;
         }
 

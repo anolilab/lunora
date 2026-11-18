@@ -377,6 +377,35 @@ describe("rolling a release out", () => {
         expect(versionKey(versionsOf(envelope))).toBe("hostd 1.1.0 / celld v0.7.0 / caddy v2.11.6");
     });
 
+    it("sends no upgrade to a box revoked while its release was looked up", async () => {
+        const key = await boxKey();
+        const { envelope } = signedRelease();
+        const records = memoryStore({
+            boxes: [boxRow(key, { desiredReleaseId: "hostd-v1_1_0" })],
+            hostdReleases: [{ _id: "rel_1", envelope: JSON.stringify(envelope), releaseId: "hostd-v1_1_0", versions: versionsOf(envelope) }],
+            projects: [],
+        });
+        const { findMany } = records;
+
+        // The revoke lands in D1 while the session waits on the release row; its `close` has not reached the session yet.
+        Object.assign(records, {
+            findMany: async (table: string, options: Parameters<typeof findMany>[1]): ReturnType<typeof findMany> => {
+                const result = await findMany(table, options);
+
+                if (table === "hostdReleases") {
+                    await records.patch("boxes", "box_1", { revokedAt: 1, status: "revoked" });
+                }
+
+                return result;
+            },
+        });
+
+        const state = fakeState();
+        const socket = await handshake(new TestBoxSession(state, records, { LUNORA_ORIGIN_URL: "https://cloud.test/" }), state, key, "box_1");
+
+        expect(socket.received().some((frame) => frame.type === "job")).toBe(false);
+    });
+
     it("hands a reconnecting box a rollback it missed with allowDowngrade", async () => {
         const key = await boxKey();
         const { envelope } = signedRelease();
