@@ -38,7 +38,7 @@ import { createNodeSchedulerHost } from "./node-scheduler-host";
 import type { NodeShardHostOptions } from "./node-shard-host";
 import { createNodeShardHost } from "./node-shard-host";
 import type { NodeShardRegistryOptions } from "./node-shard-registry";
-import { createNodeShardRegistry } from "./node-shard-registry";
+import { createNodeShardRegistry, SHARD_FILE_SUFFIX } from "./node-shard-registry";
 import { createNodeSocketHost } from "./node-socket-host";
 import type { NodeWorkflowHost } from "./node-workflow-host";
 import { createNodeWorkflowHost } from "./node-workflow-host";
@@ -167,9 +167,6 @@ const refuseNonDurableMailPath = (mailPath: string): void => {
     }
 };
 
-/** The suffix the shard registry reads as a shard database in its `directory`. */
-const REGISTRY_SHARD_SUFFIX = ".sqlite3";
-
 /**
  * Refuse a mail file that is one the platform already opens: the shard's, the
  * `.global()` store's, or one the shard registry would list as a shard. Each
@@ -198,10 +195,10 @@ const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptio
         return;
     }
 
-    if (mail.endsWith(REGISTRY_SHARD_SUFFIX) && dirname(mail) === canonicalPath(directory, { databaseFile: false })) {
+    if (mail.endsWith(SHARD_FILE_SUFFIX) && dirname(mail) === canonicalPath(directory, { databaseFile: false })) {
         throw new LunoraError(
             "VALIDATION_ERROR",
-            `@lunora/platform-node: mail.path "${mailPath}" is a ${REGISTRY_SHARD_SUFFIX} file inside the shard registry's directory "${directory}", which would open it as a shard — move it out of that directory`,
+            `@lunora/platform-node: mail.path "${mailPath}" is a ${SHARD_FILE_SUFFIX} file inside the shard registry's directory "${directory}", which would open it as a shard — move it out of that directory`,
         );
     }
 
@@ -209,7 +206,7 @@ const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptio
     let entries: string[];
 
     try {
-        entries = readdirSync(directory).filter((entry) => entry.endsWith(REGISTRY_SHARD_SUFFIX));
+        entries = readdirSync(directory).filter((entry) => entry.endsWith(SHARD_FILE_SUFFIX));
     } catch {
         return;
     }
