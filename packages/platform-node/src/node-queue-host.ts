@@ -361,11 +361,6 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         );
     }
 
-    for (const name of declared) {
-        taken.add(name);
-    }
-
-    declaredOnConnection.set(database, taken);
     const declaredJson = JSON.stringify([...declared]);
 
     // Checked once, at construction, because both failures are silent at runtime:
@@ -646,6 +641,15 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
     };
 
     preparedSends.set(host, preparedByQueue);
+
+    // Reserved last, after every construction check above has passed and with nothing left that
+    // can throw: a rejected construction (a dead-letter queue that names itself or nothing) must
+    // not leave its names taken, or a corrected retry on the same connection would be refused.
+    for (const name of declared) {
+        taken.add(name);
+    }
+
+    declaredOnConnection.set(database, taken);
 
     return host;
 };
