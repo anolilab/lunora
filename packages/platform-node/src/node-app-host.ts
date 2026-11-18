@@ -1,26 +1,29 @@
 /**
  * A worker module served on this host: the module a `wrangler.jsonc` `main`
  * points at, its default export the request handler and each Durable Object
- * class a named export, composed over one shard registry per binding.
+ * class a named export, composed over one `createNodePlatform` per binding.
  *
  * This is the composition the package's tests write by hand (`createWorker`
  * over `createNodeShardNamespace(registry.directory)`, one `ShardDO` kept per
  * shard), lifted to take the app's own entry instead. `lunora dev --target
  * node` serves through it; an operator's own process can too.
  *
- * Only Durable Object bindings and plain vars reach `env`. Queues, `.global()`
- * tables, buckets and workflows are composed by `createNodePlatform`, which
- * takes the app's declarations rather than its wrangler config, so they are
+ * Only Durable Object bindings and the caller's `env` reach the worker. The
+ * declared crons (`LUNORA_CRONS`) are armed on the shard binding's platform and
+ * delivered to its shards. Queues, `.global()` tables, buckets and workflows
+ * take the app's declarations rather than its wrangler config, so they are
  * left for the caller to add through `env`.
  */
 
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 
+import type { NodeCronJob, NodePlatform } from "./node-platform";
+import { createNodePlatform } from "./node-platform";
 import { createNodeShardNamespace } from "./node-shard-namespace";
-import type { NodeShard, NodeShardRegistry } from "./node-shard-registry";
-import { createNodeShardRegistry } from "./node-shard-registry";
+import type { NodeShard } from "./node-shard-registry";
 import { bindShardSockets, createNodeShardState } from "./node-shard-state";
 
 /** One `durable_objects.bindings[]` entry: the `env` key and the exported class behind it. */
@@ -51,6 +54,13 @@ interface WorkerHandler {
 /** Options for {@link createNodeAppHost}. */
 interface NodeAppHostOptions {
     /**
+     * The app's declared crons — the generated `LUNORA_CRONS` map. Armed on the {@link NodeAppHostOptions.shardBinding} platform and
+     * delivered to its default shard, as `createNodePlatform`'s `crons` are. The map is the whole declared set, so a host built
+     * without a job an earlier one declared deletes it.
+     */
+    crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
+
+    /**
      * Directory the shard databases live in, one subdirectory per binding. Omit for in-memory shards, which lose every row when the
      * host closes.
      */
@@ -59,6 +69,9 @@ interface NodeAppHostOptions {
     durableObjects: ReadonlyArray<NodeAppDurableObjectBinding>;
     /** Plain values for `env`: vars, dev vars, and any binding the caller composes itself. A Durable Object binding of the same name wins. */
     env?: Record<string, unknown>;
+
+    /** The Durable Object binding whose shards run functions, which is where crons fire. Defaults to `SHARD`. */
+    shardBinding?: string;
     /** The imported worker module. */
     worker: Record<string, unknown>;
 }
@@ -66,8 +79,8 @@ interface NodeAppHostOptions {
 /** A worker module composed over this host. */
 interface NodeAppHost {
     /**
-     * Wait for every `waitUntil` promise to settle, then close every shard registry. A shard database is released only after its
-     * sockets have drained. Safe to call more than once.
+     * Wait for every `waitUntil` promise to settle, then close every platform, cron timers included. A shard database is released only
+     * after its sockets have drained. Safe to call more than once.
      */
     close: () => Promise<void>;
     /** The worker's `fetch`, bound to the composed `env`. Hand it to `createNodeHttpServer`. */
@@ -77,7 +90,7 @@ interface NodeAppHost {
 const isWorkerHandler = (value: unknown): value is WorkerHandler =>
     typeof value === "object" && value !== null && typeof (value as { fetch?: unknown }).fetch === "function";
 
-/** Compose `worker` over one in-process shard registry per Durable Object binding. */
+/** Compose `worker` over one in-process platform per Durable Object binding. */
 const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
     const handler = options.worker["default"];
 
@@ -86,8 +99,22 @@ const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
     }
 
     const env: Record<string, unknown> = { ...options.env };
-    const registries: NodeShardRegistry[] = [];
+    const platforms: NodePlatform[] = [];
     const pending = new Set<Promise<unknown>>();
+    const shardBinding = options.shardBinding ?? "SHARD";
+    const declaresCrons = Object.values(options.crons ?? {}).some((jobs) => jobs.length > 0);
+
+    if (declaresCrons && !options.durableObjects.some((binding) => binding.name === shardBinding)) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: the app declares crons, but no Durable Object binding is named ${shardBinding} to run them on`,
+        );
+    }
+
+    // Each binding's platform database is a file directly in it, opened before anything else would create the directory.
+    if (options.dataDirectory !== undefined) {
+        mkdirSync(options.dataDirectory, { recursive: true });
+    }
 
     for (const binding of options.durableObjects) {
         const DurableObject = options.worker[binding.className];
@@ -119,16 +146,24 @@ const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
             return instance;
         };
 
-        const registry = createNodeShardRegistry({
+        // The shard databases sit in the binding's directory; the platform's own database (scheduler and cron rows) sits beside it, never
+        // inside, where the registry would read it back as a shard.
+        const platform = createNodePlatform({
+            crons: binding.name === shardBinding ? options.crons : undefined,
             directory: options.dataDirectory === undefined ? undefined : join(options.dataDirectory, binding.name),
-            onAlarm: async (shard) => {
-                await instanceFor(shard).alarm?.();
+            // The registry passes the shard whose alarm came due. The platform's own database has no app alarm, so a call without one is
+            // not an app event.
+            onAlarm: async (shard?: NodeShard) => {
+                if (shard !== undefined) {
+                    await instanceFor(shard).alarm?.();
+                }
             },
             onFetch: async (request, shard) => instanceFor(shard).fetch(request),
+            path: options.dataDirectory === undefined ? undefined : join(options.dataDirectory, `${binding.name}.platform.sqlite3`),
         });
 
-        registries.push(registry);
-        env[binding.name] = createNodeShardNamespace(registry.directory);
+        platforms.push(platform);
+        env[binding.name] = createNodeShardNamespace(platform.directory);
     }
 
     const context = {
@@ -144,8 +179,8 @@ const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
         close: async () => {
             await Promise.all(pending);
 
-            for (const registry of registries.splice(0)) {
-                registry.close();
+            for (const platform of platforms.splice(0)) {
+                platform.close();
             }
         },
         fetch: async (request) => handler.fetch(request, env, context),

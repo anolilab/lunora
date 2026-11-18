@@ -17,7 +17,7 @@ import { lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from "no
 import { basename, dirname, join, resolve } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
-import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
+import type { DirectShardDirectory, PlatformCapabilities, R2BucketLike, SchedulerHost, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
 import Database from "better-sqlite3";
 
@@ -425,7 +425,7 @@ export interface NodePlatform<
      */
     close: (options?: { force?: boolean }) => void;
     /** In-process shard directory (see `createNodeShardRegistry` for what it can and cannot do). */
-    directory: ShardDirectory;
+    directory: DirectShardDirectory;
 
     /**
      * The scheduler dispatch route, served in-process: `Request` in, shard

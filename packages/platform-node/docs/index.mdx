@@ -170,12 +170,19 @@ resolves `@lunora/platform-node` from the project and serves the worker entry
   entry exports (`createNodeAppHost`). Shard data persists in `.lunora/node/`.
 - `env` carries the wrangler `vars`, `.dev.vars` (or `.env`) and
   `WORKER_ENV=development`, assembled the way `wrangler dev` does it.
+- Declared crons (`_generated/crons.ts`) are armed on the `SHARD` binding's
+  scheduler and delivered to its default shard, as `createNodePlatform`'s
+  `crons` are. A schedule edit applies on the reload codegen triggers.
+- Each `secrets_store_secrets` binding is bound through
+  `createNodeSecretBindings`, reading `.dev.vars` (or `.env`) and then the
+  shell. Each `hyperdrive` binding is built from `DATABASE_URL` by
+  `createNodeHyperdrive`; without one it stays unbound and a startup warning
+  says so.
 - Studio runs against the Node worker: the data browser, logs and live
   subscriptions work through its proxy.
 
-Only Durable Objects and vars are bound. Any other declared binding (D1,
-queues, R2, workflows, Hyperdrive, Secrets Store and the Cloudflare product
-bindings) is named in a startup warning and is absent from `env`. `--remote`
+Any other declared binding (D1, queues, R2, workflows and the Cloudflare
+product bindings) is named in a startup warning and is absent from `env`. `--remote`
 is refused and `--inspector-port` is ignored, since there is no `wrangler dev`.
 The Vite and framework flavors are not used: the worker always runs in the
 CLI's own process.
@@ -348,10 +355,13 @@ stops them waiting for the rest.
 **Type:** `(options: NodeAppHostOptions) => NodeAppHost`
 
 Composes a worker module (the one `wrangler.jsonc`'s `main` names) over one
-in-process shard registry per Durable Object binding, with one instance of the
-exported class per shard for the life of the host. `fetch` is the worker's own,
-bound to that `env`; `close` waits for `waitUntil` work, then closes every
-registry. `lunora dev --target node` serves apps through it.
+`createNodePlatform` per Durable Object binding, with one instance of the
+exported class per shard for the life of the host. `crons` (the generated
+`LUNORA_CRONS` map) is armed on the `shardBinding` platform (default `SHARD`)
+and delivered to its default shard; a host that declares crons without that
+binding throws. `fetch` is the worker's own, bound to that `env`; `close` waits
+for `waitUntil` work, then closes every platform, cron timers included.
+`lunora dev --target node` serves apps through it.
 
 ### `createNodeHttpServer`
 
