@@ -1143,10 +1143,46 @@ describe("lunora deploy --target node", () => {
             expect(deployed).toMatchObject({ code: 0 });
             // esbuild renames a clashing `join` (join4) and prints 1000 as 1e3.
             expect(bundle).toMatch(/mail: \{ env, path: join\d*\(dataDirectory, "mail\.sqlite3"\) \}/u);
-            expect(bundle).toContain("env[CONFIG.mailQueue] = platform.mail.queue");
+            expect(bundle).toMatch(/for \(const (\w+) of CONFIG\.mailQueues\) \{\s*env\[\1\] = platform\.mail\.queue;/u);
             expect(bundle).toMatch(/setInterval\(pollMail, 1e3\)/u);
             expect(bundle).toMatch(/"requiredEnv": \[[^\]]*"MAIL_FROM",\s*"RESEND_API_KEY"/u);
             expect(readme).toContain("queue producer is bound to a durable mail queue in `mail.sqlite3`");
+        });
+
+        it("names an app's lunora-mail consumer as unbound, since the mail host consumes that queue", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, {
+                wrangler: { queues: { consumers: [{ queue: "lunora-mail" }], producers: [{ binding: "MAIL_QUEUE", queue: "lunora-mail" }] } },
+            });
+
+            const { logger, warnings } = recordingLogger();
+
+            await expect(runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" })).resolves.toMatchObject({
+                code: 0,
+            });
+            // The worker's queue() handler for it never runs in the container: the deploy says so.
+            expect(warnings.join("\n")).toContain("queues.consumers lunora-mail (the mail host consumes it; the worker's queue handler never runs for it)");
+        });
+
+        it("binds the platform mail queue under every producer binding that targets lunora-mail", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, {
+                wrangler: {
+                    queues: {
+                        producers: [
+                            { binding: "MAIL_QUEUE", queue: "lunora-mail" },
+                            { binding: "NOTIFY_MAIL", queue: "lunora-mail" },
+                        ],
+                    },
+                },
+            });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+            // Either name the app reads reaches the same durable queue, not just the first one declared.
+            expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).toMatch(/"mailQueues": \[\s*"MAIL_QUEUE",\s*"NOTIFY_MAIL"\s*\]/u);
         });
 
         it(

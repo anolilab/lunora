@@ -887,14 +887,16 @@ Every shard, the scheduler, the crons and queued mail live in SQLite files under
 writable by uid 1000) and run one container per volume.
 
 An app that queues mail (its wrangler config has a `queues.producers[]` entry
-for the `lunora-mail` queue, as the `mail` starter writes) gets that producer
-bound to `@lunora/platform-node`'s durable mail queue, in `mail.sqlite3` beside
-the shard directories. The server polls it every second and delivers through
-Resend, so it also reads `MAIL_FROM` and `RESEND_API_KEY` and refuses to start
-while either is unset (unless the app declares it as a var or secret). A failed
-send is retried and then parked, never dropped, and a shutdown waits for a poll
-in flight. The `queues` section is then composed, not reported unbound, as long
-as it declares only that queue.
+for the `lunora-mail` queue, as the `mail` starter writes) gets every such
+producer binding bound to `@lunora/platform-node`'s durable mail queue, in
+`mail.sqlite3` beside the shard directories. The server polls it every second and
+delivers through Resend, so it also reads `MAIL_FROM` and `RESEND_API_KEY` and
+refuses to start while either is unset (unless the app declares it as a var or
+secret). A failed send is retried and then parked, never dropped, and a shutdown
+waits for a poll in flight. A `lunora-mail` producer is composed; a
+`lunora-mail` consumer is reported unbound, since the mail host consumes that
+queue and the worker's own queue handler never runs for it. Any other queue
+leaves `queues` unbound.
 
 On SIGTERM or SIGINT the server stops accepting connections, waits for the
 responses in flight at that moment to be written (a request still arriving on an
