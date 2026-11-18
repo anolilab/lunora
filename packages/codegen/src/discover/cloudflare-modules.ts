@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import type { CallExpression, ImportDeclaration, ImportEqualsDeclaration, Project, SourceFile } from "ts-morph";
@@ -8,6 +8,9 @@ import { descendantsOfKind, listLunoraSourceFiles } from "./ast";
 
 /** The scheme of the Workers runtime's built-in modules: `cloudflare:workers`, `cloudflare:email`, `cloudflare:sockets`, … */
 const CLOUDFLARE_SCHEME = "cloudflare:";
+
+/** Type declarations, never bundled: `.d.ts`, and the module-format `.d.mts` and `.d.cts`. */
+const DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"] as const;
 
 /** Every extension the worker bundle takes, tried in this order for an extensionless specifier. */
 const BUNDLED_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const;
@@ -55,30 +58,20 @@ const requireEqualsSpecifier = (declaration: ImportEqualsDeclaration): string | 
 };
 
 /**
- * Whether an identifier is bound in its own file: a local `function require()`,
- * a variable, a parameter or an import of that name. Such a `require` is the
- * file's own function, not the CommonJS loader, which comes from the global or
- * `module` scope and so has no declaration in the file. Only called for an
- * identifier spelled `require`, so the type checker is reached for those alone.
- */
-const isLocalBinding = (identifier: Node): boolean => {
-    const sourceFile = identifier.getSourceFile();
-
-    return (identifier.getSymbol()?.getDeclarations() ?? []).some((declaration) => declaration.getSourceFile() === sourceFile);
-};
-
-/**
  * The module an `import("…")` or `require("…")` call loads, when its argument is a
  * literal. A dynamic import fails only when it runs (the mail starter's
  * `cloudflare:email` send), but it still names a module the target does not have,
  * so it is refused with the rest; a `require` is what a `.cjs` or `.cts` helper the
- * walk reaches loads with. A backtick literal with no substitutions is as static
+ * walk reaches loads with. Any callee spelled `require` counts, whatever binds it:
+ * a loader made locally (`const require = createRequire(import.meta.url)`) loads
+ * the module as surely as the global one, so this fails closed, and a local
+ * function of that name that loads nothing is refused until it is renamed. A backtick literal with no substitutions is as static
  * as a quoted one.
  */
 const loadCallSpecifier = (call: CallExpression): string | undefined => {
     const callee = call.getExpression();
     const [argument] = call.getArguments();
-    const loads = callee.getKind() === SyntaxKind.ImportKeyword || (Node.isIdentifier(callee) && callee.getText() === "require" && !isLocalBinding(callee));
+    const loads = callee.getKind() === SyntaxKind.ImportKeyword || (Node.isIdentifier(callee) && callee.getText() === "require");
 
     return loads && argument !== undefined && (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))
         ? argument.getLiteralValue()
@@ -133,8 +126,48 @@ const isFile = (path: string): boolean => {
     }
 };
 
+/** Every string target in a `package.json` `exports` value: its `"."` entry, or top-level conditions. */
+const exportTargets = (value: unknown): string[] => {
+    if (typeof value === "string") {
+        return [value];
+    }
+
+    if (value === null || typeof value !== "object") {
+        return [];
+    }
+
+    const entries = value as Record<string, unknown>;
+    const root = Object.hasOwn(entries, ".") ? entries["."] : value;
+
+    return typeof root === "string" ? [root] : Object.values(root as Record<string, unknown>).flatMap((target) => exportTargets(target));
+};
+
 /**
- * Every file a relative specifier may name: the exact path, a TypeScript source
+ * The entrypoints a local package directory's `package.json` names (`main`,
+ * `module`, and every `exports` target), each tried with the bundled extensions.
+ * All of them, not the one a bundler's condition order picks, for the same
+ * fail-closed reason as sibling files. Empty when the directory has none.
+ */
+const packageEntrypoints = (directory: string): string[] => {
+    let manifest: Record<string, unknown>;
+
+    try {
+        manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as Record<string, unknown>;
+    } catch {
+        return [];
+    }
+
+    const declared = [manifest.main, manifest.module].filter((entry): entry is string => typeof entry === "string");
+
+    return [...declared, ...exportTargets(manifest.exports)].flatMap((entry) => {
+        const target = resolve(directory, entry);
+
+        return [target, ...BUNDLED_EXTENSIONS.map((extension) => target + extension)].filter((candidate) => isFile(candidate));
+    });
+};
+
+/**
+ * Every file a specifier's resolved base path may name: the exact path, a TypeScript source
  * written as its emitted extension, the path with each bundled extension, and a
  * directory's `index`. All of them, not the first that exists, so the answer does
  * not depend on matching the bundler's resolution order (esbuild tries `.tsx`
@@ -143,8 +176,7 @@ const isFile = (path: string): boolean => {
  * when only the other one is bundled, which an explicit extension fixes. Empty
  * when nothing matches, which the build itself reports.
  */
-const resolveRelative = (fromFile: string, specifier: string): string[] => {
-    const base = resolve(dirname(fromFile), specifier);
+const candidatesFor = (base: string): string[] => {
     const written = BUNDLED_EXTENSIONS.find((extension) => base.endsWith(extension));
     const candidates = [
         ...(written === undefined ? [] : [base, ...(SOURCE_FOR_EMITTED[written] ?? []).map((source) => base.slice(0, -written.length) + source)]),
@@ -152,7 +184,39 @@ const resolveRelative = (fromFile: string, specifier: string): string[] => {
         ...BUNDLED_EXTENSIONS.map((extension) => join(base, `index${extension}`)),
     ];
 
-    return candidates.filter((candidate) => isFile(candidate));
+    return [...new Set([...candidates.filter((candidate) => isFile(candidate)), ...packageEntrypoints(base)])];
+};
+
+/** Every file a relative specifier may name, by {@link candidatesFor}. */
+const resolveRelative = (fromFile: string, specifier: string): string[] => candidatesFor(resolve(dirname(fromFile), specifier));
+
+/**
+ * The path an alias specifier named, recovered from the one file TypeScript
+ * resolved it to, so it can be expanded like a relative specifier: the resolved
+ * extension is stripped when the specifier had none (TypeScript picks `.ts` over
+ * a `.tsx` sibling, the bundler may not), and a directory the specifier named is
+ * restored when TypeScript answered with its `index` file.
+ */
+const aliasBase = (resolvedFile: string, specifier: string): string => {
+    const written = BUNDLED_EXTENSIONS.find((extension) => specifier.endsWith(extension));
+    const declaration = DECLARATION_EXTENSIONS.find((extension) => resolvedFile.endsWith(extension));
+
+    // TypeScript answers `@shared/bridge.js` with `bridge.d.ts` when it has one, but the bundle
+    // loads the implementation: back to the path the specifier named, so `bridge.js` is reached.
+    if (declaration !== undefined) {
+        const stem = resolvedFile.slice(0, -declaration.length);
+
+        return written === undefined ? stem : stem + written;
+    }
+
+    if (written !== undefined) {
+        return resolvedFile;
+    }
+
+    const extension = BUNDLED_EXTENSIONS.find((candidate) => resolvedFile.endsWith(candidate)) ?? "";
+    const stem = resolvedFile.slice(0, resolvedFile.length - extension.length);
+
+    return basename(stem) === "index" && !specifier.endsWith("index") ? dirname(stem) : stem;
 };
 
 /**
@@ -178,16 +242,25 @@ const isOutsideAppCode = (root: string, path: string): boolean =>
  * helper outside `lunora/`, or outside the project root, is followed either way.
  */
 const resolveAlias = (project: Project, filePath: string, specifier: string): string[] => {
+    // TypeScript 6 resolves `package.json` `imports` (`#lunora/*`) under its default options too,
+    // so a project with no tsconfig needs no second resolution mode.
     const resolved = ts.resolveModuleName(specifier, filePath, project.getCompilerOptions(), project.getModuleResolutionHost()).resolvedModule;
 
-    return resolved === undefined || resolved.isExternalLibraryImport === true ? [] : [resolved.resolvedFileName];
+    if (resolved === undefined || resolved.isExternalLibraryImport === true) {
+        return [];
+    }
+
+    // Every file the named path may be, as for a relative import, plus the one TypeScript picked.
+    return [...new Set([resolved.resolvedFileName, ...candidatesFor(aliasBase(resolved.resolvedFileName, specifier))])];
 };
 
 /**
  * Whether the walk follows into a file, for a relative and an alias target alike:
- * anything but a declaration file, `node_modules` or `_generated/` output.
+ * anything but a declaration file (`.d.ts`, `.d.mts`, `.d.cts`), `node_modules` or
+ * `_generated/` output.
  */
-const isFollowable = (root: string, file: string): boolean => !file.endsWith(".d.ts") && !isOutsideAppCode(root, file);
+const isFollowable = (root: string, file: string): boolean =>
+    !DECLARATION_EXTENSIONS.some((extension) => file.endsWith(extension)) && !isOutsideAppCode(root, file);
 
 /** The files a module's specifiers may reach, relative or through an alias, that the walk follows. */
 const appFilesReachedFrom = (project: Project, root: string, filePath: string, specifiers: ReadonlyArray<string>): string[] =>

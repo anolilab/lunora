@@ -1387,13 +1387,106 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             }
         });
 
-        it("does not count a call to the file's own function named require as a loader", () => {
+        it("refuses a require() through a loader made with createRequire", () => {
             expect.assertions(1);
 
-            // A local declaration shadows the CommonJS loader; this loads nothing.
+            // A local binding, and a real loader all the same.
+            write(
+                "loader.ts",
+                `import { createRequire } from "node:module";\n\nconst require = createRequire(import.meta.url);\n\nexport const workers = require("cloudflare:workers");\n`,
+            );
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/loader.ts (cloudflare:workers)");
+        });
+
+        it("refuses a call to the file's own function named require, failing closed until it is renamed", () => {
+            expect.assertions(1);
+
+            // It loads nothing, but a callee named require is counted whatever binds it.
             write("local.ts", `function require(name: string): string {\n    return name;\n}\n\nexport const label = require("cloudflare:workers");\n`);
 
-            expect(cloudflareRefusals()).toStrictEqual([]);
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/local.ts (cloudflare:workers)");
+        });
+
+        it("expands an extensionless alias target to every sibling, as a relative import is", () => {
+            expect.assertions(1);
+
+            // TypeScript resolves `@shared/helper` to the clean .ts; the bundler may take the .tsx.
+            const parent = mkdtempSync(join(tmpdir(), "lunora-alias-siblings-"));
+            const project = join(parent, "app");
+
+            try {
+                cpSync(join(fixtureRoot, "lunora"), join(project, "lunora"), { recursive: true });
+                mkdirSync(join(parent, "shared"));
+                writeFileSync(join(parent, "shared", "helper.ts"), "export const binding = () => undefined;\n", "utf8");
+                writeFileSync(join(parent, "shared", "helper.tsx"), LOADS_ENV, "utf8");
+                writeFileSync(join(project, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+                writeFileSync(
+                    join(project, "tsconfig.json"),
+                    `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", paths: { "@shared/*": ["../shared/*"] }, target: "ES2022" } })}\n`,
+                    "utf8",
+                );
+                writeFileSync(join(project, "lunora", "send.ts"), `import { binding } from "@shared/helper";\n\nexport const use = () => binding();\n`, "utf8");
+
+                const { platformDiagnostics } = runCodegen({ projectRoot: project, wranglerQueueProducers: [] });
+                const refusal = platformDiagnostics.find((entry) => entry.message.includes("cloudflare:"));
+
+                expect(refusal?.message).toContain("../shared/helper.tsx (cloudflare:workers)");
+            } finally {
+                rmSync(parent, { force: true, recursive: true });
+            }
+        });
+
+        it.each([
+            ["main", { main: "./entry.tsx" }, "entry.tsx"],
+            ['exports["."]', { exports: { ".": { import: "./esm.tsx" } } }, "esm.tsx"],
+        ])("follows a local package directory's %s entrypoint", (_label, manifest, entry) => {
+            expect.assertions(1);
+
+            // `./localpkg` names a directory whose package.json, not an index file, says what it loads.
+            writeNested("localpkg/package.json", `${JSON.stringify({ name: "localpkg", ...manifest })}\n`);
+            writeNested(`localpkg/${entry}`, LOADS_ENV);
+            write("send.ts", `import { binding } from "./localpkg";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain(`lunora/localpkg/${entry} (cloudflare:workers)`);
+        });
+
+        it("follows a package.json imports alias in a project with no tsconfig", () => {
+            expect.assertions(1);
+
+            // No tsconfig: the default resolution mode ignores `imports`, which the bundler still reads.
+            writeFileSync(
+                join(workdir, "package.json"),
+                `${JSON.stringify({
+                    // The packages the fixture schema's generated code imports, which a declared package.json is checked for.
+                    dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" },
+                    imports: { "#helpers/*": "./lunora/helpers/*" },
+                    name: "imports-app",
+                    type: "module",
+                })}\n`,
+                "utf8",
+            );
+            writeNested("helpers/env.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "#helpers/env.tsx";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helpers/env.tsx (cloudflare:workers)");
+        });
+
+        it("follows an alias TypeScript answers with a declaration file to the implementation it declares", () => {
+            expect.assertions(1);
+
+            // `@shared/bridge.js` resolves to bridge.d.ts for TypeScript; the bundle loads bridge.js.
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", paths: { "@shared/*": ["./shared/*"] }, target: "ES2022" } })}\n`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "shared"));
+            writeFileSync(join(workdir, "shared", "bridge.d.ts"), "export declare const binding: () => unknown;\n", "utf8");
+            writeFileSync(join(workdir, "shared", "bridge.js"), LOADS_ENV, "utf8");
+            write("send.ts", `import { binding } from "@shared/bridge.js";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("shared/bridge.js (cloudflare:workers)");
         });
 
         it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
