@@ -156,7 +156,7 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
 
         // Last, after the checks that name a field, and here so `queue()` refuses the message at
         // enqueue instead of the consumer retrying it into the dead-letter queue.
-        assertHasContent({ html, text });
+        assertHasContent({ html, text }, options_.react !== undefined);
 
         return {
             // Drop an empty optional recipient list rather than carrying `[]` into

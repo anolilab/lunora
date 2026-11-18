@@ -170,10 +170,22 @@ const assertValidIdempotencyKey = (key: unknown): void => {
  * Refuse a message with neither `text` nor `html`, before anything is queued or sent. Providers
  * refuse it too, but `@visulima/email` reports that as a plain error with no status, which reads
  * as transient: the message was retried until it reached the dead-letter queue. Empty strings
- * count as missing, as they do there.
+ * count as missing, as they do there, unless `rendered` says the content came from a
+ * `react` element.
  */
-const assertHasContent = (payload: { html?: string; text?: string }): void => {
-    if (!payload.text && !payload.html) {
+const assertHasContent = (payload: { html?: unknown; text?: unknown }, rendered = false): void => {
+    // A body is JSON from an untrusted caller as often as typed code: a number or an object is
+    // refused by name here, where truthiness alone let it through to be dropped downstream.
+    for (const field of ["html", "text"] as const) {
+        if (payload[field] !== undefined && typeof payload[field] !== "string") {
+            throw new MailSendError({ message: `@lunora/mail: \`${field}\` must be a string, got ${typeof payload[field]}`, retryable: false });
+        }
+    }
+
+    const hasText = typeof payload.text === "string" && payload.text !== "";
+    const hasHtml = typeof payload.html === "string" && payload.html !== "";
+
+    if (!hasText && !hasHtml && !rendered) {
         throw new MailSendError({ message: "@lunora/mail: a message needs `text` or `html` content (or `react` to render them)", retryable: false });
     }
 };

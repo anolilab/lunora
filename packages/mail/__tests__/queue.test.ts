@@ -46,6 +46,24 @@ const noopMailer = (): Mailer => {
 };
 
 describe("queued send content", () => {
+    it.each([
+        ["a number as html", { html: 42 }, /`html` must be a string, got number/u],
+        ["an object as text", { text: { body: "Hi" } }, /`text` must be a string, got object/u],
+        ["a non-string html beside a valid text", { html: true, text: "Hi" }, /`html` must be a string, got boolean/u],
+    ])("refuses %s at enqueue, as final", async (_label, content, message) => {
+        expect.assertions(3);
+
+        const { messages, queue } = captureQueue();
+        const { transport } = captureTransport();
+        const mailer = createMailer({ from: "noreply@x.test", queue, transport });
+        // Untrusted JSON as often as typed code: truthy, but not content a provider can send.
+        const error = await mailer.queue({ subject: "Hi", to: "a@x.test", ...(content as object) }).catch((error_: unknown) => error_);
+
+        expect(isRetryableMailError(error)).toBe(false);
+        expect(String(error)).toMatch(message);
+        expect(messages).toStrictEqual([]);
+    });
+
     it("refuses a message with neither text nor html at enqueue, as final", async () => {
         expect.assertions(3);
 
