@@ -235,10 +235,10 @@ describe("a catalog install's badge follows its deployment", () => {
         expect(store.rows("catalogInstalls")).toHaveLength(1);
     });
 
-    it("removes a catalog install's row when its deployment is superseded by a status update", async () => {
+    it("removes a catalog install's row when a status update fails its deployment", async () => {
         const store = storeWith(catalogProject, { userId: "user_owner" });
 
-        await updateStatus.handler(store.ctx, { id: "dep_catalog" as Id<"deployments">, status: "superseded" });
+        await updateStatus.handler(store.ctx, { id: "dep_catalog" as Id<"deployments">, status: "failed" });
 
         expect(store.rows("catalogInstalls")).toStrictEqual([]);
     });

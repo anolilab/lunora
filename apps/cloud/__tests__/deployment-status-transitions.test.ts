@@ -46,6 +46,13 @@ const isPerformed = (from: Status, to: Status): boolean => PERFORMED.some(([a, b
 /** Every other pair of statuses: the moves the table must refuse. */
 const REFUSED: ReadonlyArray<Move> = STATUSES.flatMap((from) => STATUSES.filter((to) => !isPerformed(from, to)).map((to): Move => [from, to]));
 
+/** The phases the orchestrator reports through `updateStatus`; every other status has its own writer. */
+const REPORTED: ReadonlyArray<Status> = ["provisioning", "verifying", "live", "failed"];
+
+type ReportedMove = readonly [Status, "failed" | "live" | "provisioning" | "verifying"];
+
+const isReported = (move: Move): move is ReportedMove => REPORTED.includes(move[1]);
+
 const deploymentRow = (status: Status): Row => {
     return {
         _id: "dep_1",
@@ -118,7 +125,7 @@ describe("updateStatus against the deployment transition table", () => {
         expect([...table].toSorted(byMove)).toStrictEqual([...PERFORMED].toSorted(byMove));
     });
 
-    it.each(PERFORMED)("allows %s -> %s and writes the new status", async (from, to) => {
+    it.each(PERFORMED.filter(isReported))("allows %s -> %s and writes the new status", async (from, to) => {
         const { ctx, patched } = makeCtx(deploymentRow(from));
 
         await updateStatus.handler(ctx, { id: ID, status: to });
@@ -127,7 +134,7 @@ describe("updateStatus against the deployment transition table", () => {
         expect(patched[0]?.patch).toMatchObject({ status: to });
     });
 
-    it.each(REFUSED)("refuses %s -> %s with a CONFLICT naming both statuses, and writes nothing", async (from, to) => {
+    it.each(REFUSED.filter(isReported))("refuses %s -> %s with a CONFLICT naming both statuses, and writes nothing", async (from, to) => {
         const { ctx, patched } = makeCtx(deploymentRow(from));
 
         await expect(updateStatus.handler(ctx, { id: ID, status: to })).rejects.toMatchObject({
@@ -136,6 +143,16 @@ describe("updateStatus against the deployment transition table", () => {
         });
         expect(patched).toHaveLength(0);
     });
+
+    it.each(["destroyed", "superseded", "queued", "building"] as const)(
+        "refuses a request to move a live deployment to %s, which is not a phase the orchestrator reports",
+        async (to) => {
+            const { ctx, patched } = makeCtx(deploymentRow("live"));
+
+            await expect(updateStatus.handler(ctx, { id: ID, status: to } as never)).rejects.toThrow(/status/u);
+            expect(patched).toHaveLength(0);
+        },
+    );
 
     it("refuses a destroyed deployment being brought back to live", async () => {
         const { ctx, patched } = makeCtx(deploymentRow("destroyed"));

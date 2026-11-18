@@ -850,9 +850,9 @@ export const closePreview = internalMutation
     });
 
 /**
- * Advance a deployment's lifecycle (queued → provisioning → verifying → live, or
- * → failed). A move the transition table (`src/deploy/status-transitions.ts`) does not
- * list is refused with a CONFLICT. Driven by the deploy orchestrator as it works through the
+ * Advance a deployment's lifecycle (provisioning → verifying → live, or → failed). A move
+ * the transition table (`src/deploy/status-transitions.ts`) does not list is refused with a
+ * CONFLICT. Driven by the deploy orchestrator as it works through the
  * provisioner's progress events, authorized by the same `deployKey` (CI) or a
  * member session (dashboard).
  *
@@ -869,16 +869,11 @@ export const updateStatus = mutation
         bundleHash: v.optional(boundedString(LIMITS.name)),
         deployKey: v.optional(boundedString(LIMITS.token)),
         id: v.id("deployments"),
-        status: v.union(
-            v.literal("queued"),
-            v.literal("provisioning"),
-            v.literal("building"),
-            v.literal("verifying"),
-            v.literal("live"),
-            v.literal("superseded"),
-            v.literal("failed"),
-            v.literal("destroyed"),
-        ),
+        // Only the phases the orchestrator reports (`reportProgress` in release-core.ts). A deploy key
+        // reaches this mutation, and `destroyed` would elect the alias's tenant for teardown while
+        // `superseded` would take a live release down; those moves belong to activate, rollback,
+        // the prune and the project/organization deletes, which authorize them on their own terms.
+        status: v.union(v.literal("provisioning"), v.literal("verifying"), v.literal("live"), v.literal("failed")),
         url: v.optional(boundedString(LIMITS.url)),
     })
     .mutation(async ({ ctx: context, args: { bundleHash, deployKey, id, status, url } }): Promise<void> => {

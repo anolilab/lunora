@@ -3685,15 +3685,7 @@
                       "status": {
                         "anyOf": [
                           {
-                            "const": "queued",
-                            "type": "string"
-                          },
-                          {
                             "const": "provisioning",
-                            "type": "string"
-                          },
-                          {
-                            "const": "building",
                             "type": "string"
                           },
                           {
@@ -3705,15 +3697,7 @@
                             "type": "string"
                           },
                           {
-                            "const": "superseded",
-                            "type": "string"
-                          },
-                          {
                             "const": "failed",
-                            "type": "string"
-                          },
-                          {
-                            "const": "destroyed",
                             "type": "string"
                           }
                         ]

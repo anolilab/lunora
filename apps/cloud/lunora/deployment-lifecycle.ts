@@ -53,20 +53,18 @@ export const installBadgeOf = (context: MutationContext): InstallBadgeStore => {
 /**
  * The side effects of a deployment entering `status`, run after `updateStatus`
  * has written it. The phase timestamp is stamped in that same write, from
- * `PHASE_TIMESTAMP`. The catalog badge ends, and a failure is announced, only on a
- * crossing into the status, never on a same-status re-write.
+ * `PHASE_TIMESTAMP`. The catalog badge ends, and a failure is announced, only on the
+ * crossing into `failed`, never on a same-status re-write.
  */
 export const onEnter = async (context: MutationContext, id: Id<"deployments">, existing: DeploymentRow, status: DeploymentStatus): Promise<void> => {
-    if ((status === "superseded" || status === "failed") && existing.status !== status) {
-        await endInstallBadge(installBadgeOf(context), existing);
-    }
-
     // Notify the org's `deploy` rules, but only on the transition INTO failed.
     // The orchestrator re-drives this mutation as it works through the
     // provisioner's events, and a deployment that is already failed can be
     // written again by a retry — firing on the state rather than the crossing
     // would page somebody once per attempt for one broken release.
     if (status === "failed" && existing.status !== "failed") {
+        await endInstallBadge(installBadgeOf(context), existing);
+
         const project = (await context.db.get("projects", existing.projectId)) as null | { name: string };
 
         await fireDeployAlerts(context, existing.organizationId, `deployment:${id}`, {
