@@ -170,9 +170,10 @@ export const enforceDunning = internalMutation.mutation(async ({ ctx: context })
 
             return {
                 counter: "recovered",
+                // `null`, not `undefined`: the store refuses an explicitly-undefined patch.
                 patch: {
-                    paymentFailedAt: undefined,
-                    ...(organization.suspendedReason === "dunning" ? { suspendedAt: undefined, suspendedReason: undefined } : {}),
+                    paymentFailedAt: null,
+                    ...(organization.suspendedReason === "dunning" ? { suspendedAt: null, suspendedReason: null } : {}),
                 },
             };
         }

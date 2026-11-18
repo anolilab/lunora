@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { enforceDunning } from "../lunora/billing";
 import { DUNNING_GRACE_MS, evaluateDunning } from "../src/billing/dunning";
+import { makeCtx } from "./_helpers/fake-ctx";
 
 /** Dunning state machine (GAPS.md C2). */
 
@@ -44,5 +46,39 @@ describe(evaluateDunning, () => {
 
     it("ignores canceled subscriptions (no failure, no coverage)", () => {
         expect(evaluateDunning({ now: NOW, subscriptionStates: ["canceled"] })).toStrictEqual({ phase: "ok" });
+    });
+});
+
+/**
+ * The recovery path clears its markers through a store that refuses an
+ * explicitly-undefined patch (the ctx double does too): an `undefined` there
+ * threw, so a recovered organization stayed suspended.
+ */
+describe("billing.enforceDunning recovery", () => {
+    it("clears the failure marker and lifts its own suspension once payment recovers", async () => {
+        const { ctx, ops } = makeCtx(
+            {
+                organizations: [{ _id: "org_1", paymentFailedAt: NOW - DUNNING_GRACE_MS * 2, suspendedAt: NOW - 1, suspendedReason: "dunning" }],
+                payment_subscriptions: [{ _id: "sub_1", referenceId: "org_1", state: "active" }],
+            },
+            { now: NOW },
+        );
+
+        await expect(enforceDunning.handler(ctx, {})).resolves.toStrictEqual({ graced: 0, recovered: 1, suspended: 0 });
+        expect(ops).toStrictEqual([{ id: "org_1", kind: "patch", patch: { paymentFailedAt: null, suspendedAt: null, suspendedReason: null } }]);
+    });
+
+    it("keeps a suspension that is not its own when payment recovers", async () => {
+        const { ctx, ops } = makeCtx(
+            {
+                organizations: [{ _id: "org_1", paymentFailedAt: NOW - 1, suspendedAt: NOW - 1, suspendedReason: "spend_cap" }],
+                payment_subscriptions: [{ _id: "sub_1", referenceId: "org_1", state: "active" }],
+            },
+            { now: NOW },
+        );
+
+        await enforceDunning.handler(ctx, {});
+
+        expect(ops).toStrictEqual([{ id: "org_1", kind: "patch", patch: { paymentFailedAt: null } }]);
     });
 });
