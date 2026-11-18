@@ -89,7 +89,9 @@ const createChannelRequest = async (body: Record<string, unknown>): Promise<{ id
 export const NotificationsSection = ({ organizationId }: { organizationId: OrgId }): ReactElement => {
     const channelState = useQuery(api.notifications.channels, { organizationId });
     const canManage = channelState?.canManage === true;
-    const deliveries = useQuery(api.notifications.deliveries, canManage ? { organizationId } : "skip");
+    // Not gated on `canManage`: the query does its own role check and answers a non-manager with an
+    // empty list, so running it alongside `channels` saves a round trip and cannot surface an error.
+    const deliveries = useQuery(api.notifications.deliveries, { organizationId });
     const updateChannel = useMutation(api.notifications.updateChannel);
     const deleteChannel = useMutation(api.notifications.deleteChannel);
     const sendTest = useMutation(api.notifications.sendTest);
