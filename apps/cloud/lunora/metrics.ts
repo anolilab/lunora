@@ -5,7 +5,7 @@ import type { MetricSeries } from "../src/telemetry/metrics-read";
 import { createMetricsReader, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry/metrics-read";
 import { action, internalMutation, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
-import { assertMember, assertRowInOrg, authorizeTelemetryKey } from "./authz";
+import { assertMember, assertRowInOrg, assertTelemetryInKeyProject, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
@@ -139,6 +139,8 @@ export const ingest = mutation
         if (args.deploymentId !== undefined) {
             await assertRowInOrg(context, "deployments", args.deploymentId, args.organizationId, "deployment");
         }
+
+        await assertTelemetryInKeyProject(context, key, { deploymentId: args.deploymentId });
 
         const { now } = context;
 

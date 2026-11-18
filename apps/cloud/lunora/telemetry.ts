@@ -7,7 +7,7 @@ import type { Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server";
 import { absentForNull } from "./absent";
-import { assertRowInOrg, authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
+import { assertRowInOrg, assertTelemetryInKeyProject, authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
@@ -282,6 +282,8 @@ export const ingest = mutation
             if (args.deploymentId !== undefined) {
                 await assertRowInOrg(context, "deployments", args.deploymentId, args.organizationId, "deployment");
             }
+
+            await assertTelemetryInKeyProject(context, key, { deploymentId: args.deploymentId });
 
             // Persist every span as an observation (Traces). Additive to the error
             // fold below — the same OTLP payload feeds both. Best-effort per row so

@@ -6,7 +6,7 @@ import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
-import { assertMember, authorizeTelemetryKey } from "./authz";
+import { assertMember, assertTelemetryInKeyProject, authorizeTelemetryKey } from "./authz";
 import { servingDeployment } from "./deployments";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -175,7 +175,9 @@ export const ingest = mutation
         scriptName: boundedString(LIMITS.name),
     })
     .mutation(async ({ ctx: context, args: { deployKey, lines, organizationId, scriptName } }): Promise<{ ingested: number }> => {
-        await authorizeTelemetryKey(context, organizationId, deployKey);
+        const key = await authorizeTelemetryKey(context, organizationId, deployKey);
+
+        await assertTelemetryInKeyProject(context, key, { scriptName });
 
         if (lines.length > MAX_BATCH) {
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_BATCH)} lines)`);

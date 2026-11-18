@@ -169,6 +169,39 @@ export const authorizeTelemetryKey = defineIdentityGuard(
 );
 
 /**
+ * Refuse telemetry a project-scoped key would attribute to another project of its
+ * organization: a deployment of that project, or a script name that project owns.
+ * An organization-wide key (the platform's injected ingest key among them) reaches
+ * every project. A script name nobody owns names no sibling, so it passes.
+ */
+export const assertTelemetryInKeyProject = async (
+    context: QueryContext,
+    key: Pick<DeployKeyRow, "projectId">,
+    target: { deploymentId?: Id<"deployments">; scriptName?: string },
+): Promise<void> => {
+    if (key.projectId == null) {
+        return;
+    }
+
+    if (target.deploymentId !== undefined) {
+        const deployment = await context.db.get("deployments", target.deploymentId);
+
+        if (deployment?.projectId !== key.projectId) {
+            throw new LunoraError("FORBIDDEN", "a project-scoped key may only send telemetry for a deployment of its own project");
+        }
+    }
+
+    if (target.scriptName !== undefined) {
+        const { page } = await context.db.aliasOwnership.findMany({ where: { alias: target.scriptName } });
+        const owner = page.at(0)?.projectId;
+
+        if (owner !== undefined && owner !== key.projectId) {
+            throw new LunoraError("FORBIDDEN", "a project-scoped key may only send telemetry for a script of its own project");
+        }
+    }
+};
+
+/**
  * Resolve a deploy key to its owning org from the key ALONE (no org supplied) —
  * for the standard OTLP endpoints, where a stock OpenTelemetry exporter presents
  * only an `Authorization: Bearer &lt;key>` header and no body auth fields. Matches
