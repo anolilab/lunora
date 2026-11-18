@@ -2,7 +2,15 @@ import { MAX_RELEASE_ALIAS_LENGTH, RELEASE_ALIAS_PATTERN } from "@lunora/config/
 import { describe, expect, it } from "vitest";
 
 import type { ProvisionJob } from "../containers/provision/plan.mjs";
-import { ALIAS_PATTERN, assetRelativePath, DEFAULT_COMPATIBILITY_DATE, MAX_ALIAS_LENGTH, PlanError, planJob } from "../containers/provision/plan.mjs";
+import {
+    ALIAS_PATTERN,
+    assetRelativePath,
+    DEFAULT_COMPATIBILITY_DATE,
+    MAX_ALIAS_LENGTH,
+    PlanError,
+    planJob,
+    RETAINED_RESOURCE_TYPES,
+} from "../containers/provision/plan.mjs";
 import type { BindingRequirement } from "../src/provision-contract";
 import { BINDING_SUPPORT as BINDING_SUPPORT_BY_TARGET, tenantResourceName } from "../src/provision-contract";
 
@@ -488,5 +496,17 @@ describe(assetRelativePath, () => {
         expect.assertions(1);
 
         expect(() => assetRelativePath(path)).toThrow(PlanError);
+    });
+});
+
+describe("retained resource types", () => {
+    it("keeps every data-bearing resource a release drops, and retires its queue consumer", () => {
+        expect([...RETAINED_RESOURCE_TYPES].toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "Cloudflare.D1Database",
+            "Cloudflare.KV.Namespace",
+            "Cloudflare.Queues.Queue",
+            "Cloudflare.R2.Bucket",
+        ]);
+        expect(RETAINED_RESOURCE_TYPES.has("Cloudflare.Queues.Consumer")).toBe(false);
     });
 });

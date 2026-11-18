@@ -511,4 +511,13 @@ const planJob = (job, options) => {
     };
 };
 
-export { ALIAS_PATTERN, assetRelativePath, DEFAULT_COMPATIBILITY_DATE, MAX_ALIAS_LENGTH, PlanError, planJob };
+/**
+ * The persisted resource types the project stack keeps when a release stops
+ * declaring them: the ones that hold data a rollback needs. A queue consumer
+ * holds none, and kept it would go on draining the queue into a release with no
+ * handler for it, retrying each message until it is dropped. Retired instead,
+ * the queue keeps its messages and a rollback attaches the consumer again.
+ */
+const RETAINED_RESOURCE_TYPES = new Set(["Cloudflare.D1Database", "Cloudflare.KV.Namespace", "Cloudflare.Queues.Queue", "Cloudflare.R2.Bucket"]);
+
+export { ALIAS_PATTERN, assetRelativePath, DEFAULT_COMPATIBILITY_DATE, MAX_ALIAS_LENGTH, PlanError, planJob, RETAINED_RESOURCE_TYPES };

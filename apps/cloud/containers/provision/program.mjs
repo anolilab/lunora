@@ -25,7 +25,9 @@ import { AnalyticsEngine, D1, Images, KV, providers, Queues, R2, state, Workers,
 import { makeHttpStateStore } from "alchemy/State/HttpStateStore";
 import { State } from "alchemy/State/State";
 import { Effect, Layer, Option, Redacted } from "effect";
+
 /* eslint-enable import/no-unresolved */
+import { RETAINED_RESOURCE_TYPES } from "./plan.mjs";
 
 /** @typedef {import("./plan.mjs").Plan & { assetsDirectory: string, workerMain: string }} ProgramPlan */
 
@@ -65,8 +67,8 @@ const declareResource = (resource) => {
 };
 
 /**
- * Declare again a resource this stack already owns but this job does not
- * mention, with the props it was last deployed with.
+ * Declare again a data-bearing resource this stack already owns but this job
+ * does not mention, with the props it was last deployed with.
  * @param {string} resourceType The type Alchemy persisted on the state row.
  * @param {string} id The row's logical id.
  * @param {import("alchemy/State/ResourceState").Props} props The row's persisted props.
@@ -79,9 +81,6 @@ const redeclare = (resourceType, id, props) => {
         }
         case "Cloudflare.KV.Namespace": {
             return KV.Namespace(id, props);
-        }
-        case "Cloudflare.Queues.Consumer": {
-            return Queues.Consumer(id, /** @type {Queues.ConsumerProps} */ (props));
         }
         case "Cloudflare.Queues.Queue": {
             return Queues.Queue(id, props);
@@ -101,8 +100,10 @@ const redeclare = (resourceType, id, props) => {
  *
  * Additive on purpose. A release that drops a binding must not delete the
  * resource: a rollback re-provisions a retained release that still binds it,
- * and it holds data. So every resource already in this stack's state is declared again with
- * its persisted props; resources are only ever removed by destroying the stack.
+ * and it holds data. So every data-bearing resource already in this stack's
+ * state is declared again with its persisted props (`RETAINED_RESOURCE_TYPES`);
+ * those are only ever removed by destroying the stack. A queue consumer the
+ * release no longer declares is not, so Alchemy detaches it.
  * @param {import("./plan.mjs").ProjectStack} project The project declarations.
  * @returns {Effect.Effect<void, unknown, import("alchemy/Cloudflare").Providers>} The stack body.
  */
@@ -138,7 +139,13 @@ const projectStack = (project) =>
         for (const fqn of yield* store.list({ stack: project.stackName, stage: plan.stage })) {
             const row = yield* store.get({ fqn, stack: project.stackName, stage: plan.stage });
 
-            if (row !== undefined && "resourceType" in row && row.props !== undefined && !declared.has(row.logicalId)) {
+            if (
+                row !== undefined &&
+                "resourceType" in row &&
+                RETAINED_RESOURCE_TYPES.has(row.resourceType) &&
+                row.props !== undefined &&
+                !declared.has(row.logicalId)
+            ) {
                 const declaration = redeclare(row.resourceType, row.logicalId, row.props);
 
                 if (declaration !== undefined) {
