@@ -100,6 +100,12 @@ interface DeployCommandOptions {
     healthFetch?: HealthFetch;
     /** Injectable inter-attempt delay for `--health-check`; injected in tests to skip the real wait. */
     healthSleep?: (ms: number) => Promise<void>;
+
+    /**
+     * `--image <name>`: with `--target node`, also `docker build` the written container context under this tag when a Docker engine
+     * answers. Nothing is pushed.
+     */
+    image?: string;
     /** Set to `false` to disable interactive spinners (test injection). */
     interactive?: boolean;
 
@@ -256,7 +262,15 @@ interface DeployedIdentity {
  * The `--format json` payload: where the thing went, and every verdict the
  * pre-deploy pipeline reached on the way. `code` and `error` are the envelope's.
  */
+/** What `lunora deploy --target node` wrote, and the image it built when `--image` was given and Docker answered. */
+interface NodeContainerOutput {
+    directory: string;
+    files: ReadonlyArray<string>;
+    image?: string;
+}
+
 interface DeployCommandData {
+    container?: NodeContainerOutput;
     deployment?: DeployedIdentity;
     healthCheck?: { error?: string; ok: boolean; url: string };
     mintedSecretsFile?: string;
@@ -269,6 +283,7 @@ interface DeployCommandData {
 
 interface DeployCommandResult {
     code: number;
+    container?: NodeContainerOutput;
     /** What was deployed and where — set once the wrangler invocation completed. */
     deployment?: DeployedIdentity;
     descriptor: SpawnDescriptor | undefined;
@@ -302,4 +317,4 @@ interface DeployCommandResult {
     };
 }
 
-export type { DeployCommandData, DeployCommandOptions, DeployCommandResult, DeployedIdentity };
+export type { DeployCommandData, DeployCommandOptions, DeployCommandResult, DeployedIdentity, NodeContainerOutput };

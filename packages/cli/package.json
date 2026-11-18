@@ -101,8 +101,12 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/do": "^1.0.0-alpha.287",
         "@lunora/payment": "^1.0.0-alpha.274",
+        "@lunora/platform-node": "^1.0.0-alpha.218",
+        "@lunora/server": "^1.0.0-alpha.276",
         "@lunora/testing": "^1.0.0-alpha.338",
+        "@lunora/values": "^1.0.0-alpha.95",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/semver": "catalog:types",
@@ -115,10 +119,18 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@lunora/platform-node": ">=1.0.0-alpha.218 <2.0.0-0",
+        "esbuild": ">=0.25.0",
         "mysql2": "*",
         "pg": "*"
     },
     "peerDependenciesMeta": {
+        "@lunora/platform-node": {
+            "optional": true
+        },
+        "esbuild": {
+            "optional": true
+        },
         "mysql2": {
             "optional": true
         },
