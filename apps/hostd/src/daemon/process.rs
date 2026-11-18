@@ -379,14 +379,15 @@ mod tests {
         assert_eq!(stubborn.restarts(), 0);
     }
 
-    /// Gone, or a zombie waiting for init to reap it: either way no longer running.
+    /// Gone, or a zombie waiting for init to reap it: either way no longer running. A zombie can be reaped between
+    /// the signal-0 check and reading its stat, so a stat that is no longer there counts as gone too.
     fn is_gone(pid: libc::pid_t) -> bool {
         // SAFETY: signal 0 only checks that the pid exists.
         let exists = unsafe { libc::kill(pid, 0) } == 0;
 
         !exists
             || std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')))
+                .map_or(true, |stat| stat.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')))
     }
 
     #[tokio::test]
@@ -412,16 +413,18 @@ mod tests {
 
         parent.stop(Duration::from_secs(5)).await;
 
-        // The signal is sent before `stop` returns; the grandchild's exit is the kernel's to finish.
+        // The signal is sent before `stop` returns; the grandchild's exit is the kernel's to finish. The loop's own
+        // answer is kept: asking again after it could race the zombie's reaping.
+        let mut gone = false;
+
         for _ in 0..200 {
             if is_gone(grandchild) {
+                gone = true;
                 break;
             }
 
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-
-        let gone = is_gone(grandchild);
 
         if !gone {
             // SAFETY: clean up the stray sleep this test started.
