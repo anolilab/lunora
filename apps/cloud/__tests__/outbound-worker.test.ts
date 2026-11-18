@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { readLineage } from "../src/dispatcher/lineage";
 import outbound from "../src/outbound/worker";
 
 /**
@@ -62,5 +63,26 @@ describe("outbound Worker egress composition", () => {
             expect.stringMatching(/^v1\.1\./),
             expect.stringMatching(/^v1\.1\./),
         ]);
+    });
+
+    it("signs a redirect hop for the host it reaches, so the dispatcher there accepts it", async () => {
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(new Response(null, { headers: { location: "https://www.tenant.example/y" }, status: 301 }))
+            .mockResolvedValue(new Response("ok", { status: 200 }));
+
+        const response = await outbound.fetch(new Request("https://tenant.example/x"), {
+            LUNORA_LINEAGE_SECRET: "test-secret",
+            lineage: "0.00112233445566778899aabbccddeeff",
+        });
+
+        expect(response.status).toBe(200);
+
+        const last = fetchSpy.mock.calls.at(-1)?.[0] as Request;
+
+        expect(last.url).toBe("https://www.tenant.example/y");
+        await expect(readLineage(last.headers.get("x-lunora-lineage"), "test-secret", Date.now(), "www.tenant.example")).resolves.toMatchObject({
+            status: "valid",
+        });
     });
 });

@@ -5,11 +5,15 @@ import type { EgressPolicy } from "./policy";
  * after lineage stamping. Pure: the upstream `fetch` is injected, so the rules
  * are testable without a network.
  *
- * - `undefined` or `off`/`report` policy: the request goes out unchanged.
- * - `enforce`: a request to a listed origin goes out with `redirect: "manual"`;
- *   each `Location` is checked before it is followed, up to
- *   {@link MAX_EGRESS_REDIRECTS} hops. A denied origin never reaches the network
- *   and gets the 403 body from the plan.
+ * - `undefined` or `off`/`report` policy: any origin is reached.
+ * - `enforce`: only a listed origin is reached; each `Location` is checked
+ *   before it is followed, up to {@link MAX_EGRESS_REDIRECTS} hops. A denied
+ *   origin never reaches the network and gets the 403 body from the plan.
+ *
+ * Either way a followed redirect is walked here with `redirect: "manual"`, never
+ * by `fetch`, so `prepare` runs on every hop: the lineage header is signed for
+ * the host it is sent to, and one stamped for the first host would be refused
+ * by the dispatcher on the next.
  *
  * The body is streamed to the first hop and never buffered. A stream can be
  * sent once, so a redirect that must resend a body (307/308, or a 301/302 that
@@ -17,8 +21,11 @@ import type { EgressPolicy } from "./policy";
  * is returned to the tenant, which may follow it itself.
  */
 
-/** Followed redirects per request (plan 477 §4.4). */
+/** Followed redirects per request under an enforcing policy (plan 477 §4.4). */
 export const MAX_EGRESS_REDIRECTS = 5;
+
+/** Followed redirects without a policy: the fetch spec's own limit, so walking them here changes nothing. */
+const MAX_UNPOLICED_REDIRECTS = 20;
 
 export type FetchLike = (request: Request) => Promise<Response>;
 
@@ -31,7 +38,7 @@ const BODY_HEADERS: ReadonlyArray<string> = ["content-encoding", "content-langua
 export const egressDenied = (origin: string): Response => Response.json({ error: "egress_denied", origin }, { status: 403 });
 
 /** Refused when the walk would exceed the hop cap. */
-const redirectLimit = (): Response => Response.json({ error: "egress_redirect_limit", max: MAX_EGRESS_REDIRECTS }, { status: 502 });
+const redirectLimit = (max: number): Response => Response.json({ error: "egress_redirect_limit", max }, { status: 502 });
 
 const originOf = (url: string): string => new URL(url).origin;
 
@@ -58,8 +65,8 @@ const nextLocation = (response: Response, from: string): string | undefined => {
  * The 403 for a redirect target outside the allowed origins, or `undefined` when there is no target
  * or it is allowed. Every redirect target is checked through here, so the rule exists once.
  */
-const deniedTarget = (target: string | undefined, allowed: ReadonlySet<string>): Response | undefined => {
-    if (target === undefined) {
+const deniedTarget = (target: string | undefined, allowed: ReadonlySet<string> | undefined): Response | undefined => {
+    if (target === undefined || allowed === undefined) {
         return undefined;
     }
 
@@ -67,6 +74,17 @@ const deniedTarget = (target: string | undefined, allowed: ReadonlySet<string>):
 
     return allowed.has(origin) ? undefined : egressDenied(origin);
 };
+
+/** Rewrites each hop's request before it is sent (the Outbound Worker stamps lineage here). */
+export type PrepareHop = (request: Request) => Promise<Request>;
+
+/** What a walk enforces: `allowed` is `undefined` when any origin may be reached. */
+interface WalkRules {
+    allowed: ReadonlySet<string> | undefined;
+    fetchImpl: FetchLike;
+    maxRedirects: number;
+    prepare: PrepareHop;
+}
 
 /** One request in a redirect walk. `followed` counts the redirects already taken to reach it. */
 interface Hop {
@@ -122,12 +140,12 @@ const nextHop = (hop: Hop, method: string, target: string): Hop => {
 };
 
 /** Fetch one hop; if it redirects, check the target origin before following it. */
-const walk = async (hop: Hop, allowed: ReadonlySet<string>, fetchImpl: FetchLike): Promise<Response> => {
+const walk = async (hop: Hop, rules: WalkRules): Promise<Response> => {
     // `duplex` is required by Node's fetch for a streamed body and ignored by Workers.
     const init: RequestInit & { duplex?: "half" } = { body: hop.body, duplex: "half", headers: hop.headers, method: hop.method, redirect: "manual" };
-    const response = await fetchImpl(new Request(hop.url, init));
+    const response = await rules.fetchImpl(await rules.prepare(new Request(hop.url, init)));
     const target = nextLocation(response, hop.url);
-    const denied = deniedTarget(target, allowed);
+    const denied = deniedTarget(target, rules.allowed);
 
     if (denied !== undefined) {
         return denied;
@@ -145,34 +163,42 @@ const walk = async (hop: Hop, allowed: ReadonlySet<string>, fetchImpl: FetchLike
         return response;
     }
 
-    if (hop.followed === MAX_EGRESS_REDIRECTS) {
-        return redirectLimit();
+    if (hop.followed === rules.maxRedirects) {
+        return redirectLimit(rules.maxRedirects);
     }
 
-    return walk(nextHop(hop, method, target), allowed, fetchImpl);
+    return walk(nextHop(hop, method, target), rules);
 };
 
-export const forwardWithEgress = async (request: Request, policy: EgressPolicy | undefined, fetchImpl: FetchLike): Promise<Response> => {
-    if (policy?.mode !== "enforce") {
-        return fetchImpl(request);
-    }
+const unchanged: PrepareHop = (request) => Promise.resolve(request);
 
-    const allowed = new Set(policy.origins);
+export const forwardWithEgress = async (
+    request: Request,
+    policy: EgressPolicy | undefined,
+    fetchImpl: FetchLike,
+    prepare: PrepareHop = unchanged,
+): Promise<Response> => {
+    const enforcing = policy?.mode === "enforce";
+    const allowed = enforcing ? new Set(policy.origins) : undefined;
     const first = originOf(request.url);
 
-    if (!allowed.has(first)) {
+    // Refused before `prepare`, so a denied request is never stamped.
+    if (allowed !== undefined && !allowed.has(first)) {
         return egressDenied(first);
     }
 
     // The tenant asked to see redirects itself, or to fail on them. Check where a 3xx points
     // before it is returned, so it cannot be used to reach a denied host.
     if (request.redirect !== "follow") {
-        const response = await fetchImpl(request);
+        const response = await fetchImpl(await prepare(request));
 
         return deniedTarget(nextLocation(response, request.url), allowed) ?? response;
     }
 
     // Walk the redirects ourselves. The body is streamed, not buffered, and each
     // hop is an explicit manual fetch.
-    return walk({ body: request.body, followed: 0, headers: new Headers(request.headers), method: request.method, url: request.url }, allowed, fetchImpl);
+    return walk(
+        { body: request.body, followed: 0, headers: new Headers(request.headers), method: request.method, url: request.url },
+        { allowed, fetchImpl, maxRedirects: enforcing ? MAX_EGRESS_REDIRECTS : MAX_UNPOLICED_REDIRECTS, prepare },
+    );
 };

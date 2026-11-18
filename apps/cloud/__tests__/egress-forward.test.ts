@@ -240,21 +240,21 @@ describe(forwardWithEgress, () => {
         expect(upstream.mock.calls[0]?.[0].redirect).toBe("error");
     });
 
-    it("forwards to any origin in report mode, and does not walk redirects", async () => {
+    it("forwards to any origin in report mode", async () => {
         const upstream = scriptedUpstream(new Response("ok", { status: 200 }));
         const response = await forwardWithEgress(new Request("https://evil.example.net/x"), { mode: "report", origins: [], v: 1 }, upstream);
 
         expect(response.status).toBe(200);
         expect(upstream).toHaveBeenCalledTimes(1);
-        expect(upstream.mock.calls[0]?.[0].redirect).toBe("follow");
+        expect(upstream.mock.calls[0]?.[0].url).toBe("https://evil.example.net/x");
     });
 
-    it("forwards everything when there is no policy", async () => {
-        const upstream = scriptedUpstream(new Response("ok", { status: 200 }));
-        const request = new Request("https://evil.example.net/x");
+    it("forwards everything when there is no policy, following a redirect to any origin", async () => {
+        const upstream = scriptedUpstream(redirect("https://elsewhere.example.org/y"), new Response("ok", { status: 200 }));
 
-        await forwardWithEgress(request, undefined, upstream);
+        const response = await forwardWithEgress(new Request("https://evil.example.net/x"), undefined, upstream);
 
-        expect(upstream).toHaveBeenCalledWith(request);
+        expect(response.status).toBe(200);
+        expect(upstream.mock.calls.map(([request]) => request.url)).toStrictEqual(["https://evil.example.net/x", "https://elsewhere.example.org/y"]);
     });
 });

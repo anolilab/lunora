@@ -35,9 +35,13 @@ export default {
             }
         }
 
-        // Then lineage is stamped, and the policy is enforced on the stamped request.
-        const stamped = await stampLineage(request, env, Date.now());
-
-        return forwardWithEgress(stamped, policy, (outgoing) => fetch(outgoing));
+        // Lineage is stamped on every hop, after the policy has allowed it: the header is
+        // signed for the host it goes to, so a redirect to another host needs a fresh one.
+        return forwardWithEgress(
+            request,
+            policy,
+            (outgoing) => fetch(outgoing),
+            (hop) => stampLineage(hop, env, Date.now()),
+        );
     },
 };
