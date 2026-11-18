@@ -172,7 +172,10 @@ export interface NodePlatform<
     dispatch: (request: Request) => Promise<Response>;
 
     /**
-     * Wait for every promise handed to `shard.waitUntil` to settle.
+     * Wait for every promise handed to `shard.waitUntil` to settle, and for the
+     * registry's shards to go idle (`NodeShardRegistry.drain`): in-flight
+     * `onFetch` and `onAlarm` calls, including cron and scheduled-job
+     * deliveries, and each shard's own `waitUntil` work.
      *
      * Separate from `close()` because the two answer different questions:
      * `close()` releases handles and stays synchronous (it backs
@@ -432,7 +435,13 @@ export const createNodePlatform = <
             close,
             directory,
             dispatch: (request) => dispatch(request),
-            drain,
+            // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
+            // would let `close()` dispose a database a handler is still writing.
+            drain: async () => {
+                await drain();
+                await registry.drain();
+                await drain();
+            },
             globalTables,
             kv,
             objectStorage,

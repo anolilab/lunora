@@ -187,6 +187,7 @@ const createAlarms = (
     database: Database.Database,
     transaction: { assertOwnTurn: (action: string) => void; inside: () => boolean },
     onAlarm?: () => Promise<void> | void,
+    shardKey?: string,
 ): { alarms: ShardAlarms; commit: () => void; dispose: () => void; rollback: () => void } => {
     let alarmAt: number | undefined;
     let alarmTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -398,7 +399,9 @@ const createAlarms = (
         (async (): Promise<void> => {
             await onAlarm?.();
             attempts = 0;
-        })().catch(() => {
+        })().catch((error: unknown) => {
+            // eslint-disable-next-line no-console -- the alarm is retried silently, so the log is the only trace of why it failed
+            console.error(`[@lunora/platform-node] alarm handler on shard ${shardKey ?? "(unnamed)"} threw; retrying with backoff`, error);
             retryFailedDelivery();
         });
     };
@@ -705,7 +708,7 @@ const createNodeShardHost = (
         commit: commitAlarms,
         dispose: disposeAlarms,
         rollback: rollbackAlarms,
-    } = createAlarms(database, { assertOwnTurn, inside: () => transactionScope.getStore() === true }, options.onAlarm);
+    } = createAlarms(database, { assertOwnTurn, inside: () => transactionScope.getStore() === true }, options.onAlarm, options.shardKey);
 
     /**
      * Background work handed to `waitUntil`, held until it settles.
@@ -825,9 +828,11 @@ const createNodeShardHost = (
         transaction,
         waitUntil: (promise) => {
             const tracked = promise
-                .catch(() => {
-                    // Swallowed on purpose — see `background`. Background work
-                    // that fails has no caller left to tell.
+                .catch((error: unknown) => {
+                    // Background work that fails has no caller left to tell, so the log is the only place it surfaces;
+                    // the error object carries its stack and cause.
+                    // eslint-disable-next-line no-console -- background work has no caller left to tell, so the log is the only trace of its failure
+                    console.error(`[@lunora/platform-node] work handed to waitUntil on shard ${options.shardKey ?? "(unnamed)"} failed`, error);
                 })
                 .finally(() => {
                     background.delete(tracked);

@@ -616,12 +616,16 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 succeedClaimedJob.run(attempts, completedAt, id, claim.stamp());
                 sweepTerminal.run(completedAt - TERMINAL_RETENTION_MS);
             }
-        } catch {
+        } catch (error: unknown) {
             await outsideForeignTransaction();
 
-            // Delivery failed. The catch is bare because *why* it failed is the
-            // handler's business; all this loop decides is whether any budget is
-            // left. `closed` is checked too: `dispose()` cleared `jobTimers` and
+            // Logged with the error object (its stack and cause): the retry below is silent, and a job that keeps failing
+            // would otherwise be parked with nothing on record saying why. All this loop decides is whether any budget is
+            // left.
+            // eslint-disable-next-line no-console -- the retry is silent, so the log is the only trace of why the job failed
+            console.error(`[@lunora/platform-node] scheduled job ${row.function_path} (${id}) failed on attempt ${String(attempts)}`, error);
+
+            // `closed` is checked too: `dispose()` cleared `jobTimers` and
             // may have run while this dispatch was in flight, and a re-arm after
             // that would mint a fresh timer nothing would ever clear.
             if (closed || !isOpen()) {

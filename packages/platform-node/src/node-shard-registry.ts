@@ -198,6 +198,14 @@ export interface NodeShardRegistry {
     directory: DirectShardDirectory;
 
     /**
+     * Wait until every shard is idle: no `onFetch` or `onAlarm` call in flight (a cron or scheduled job's delivery is one), no
+     * promise handed to a shard's `waitUntil` pending, and no socket close handler still running. Work that starts more work is
+     * waited for too. A graceful shutdown awaits this, then calls {@link NodeShardRegistry.close}; `close()` alone does not wait
+     * for any of it.
+     */
+    drain: () => Promise<void>;
+
+    /**
      * Every shard key this registry knows about — the set `@lunora/runtime`'s
      * query coordinator fans out over.
      *
@@ -215,7 +223,25 @@ export interface NodeShardRegistry {
 
 /** Build the in-process shard registry. */
 export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}): NodeShardRegistry => {
-    const live = new Map<string, { dispose: () => void; drain: () => Promise<void> | undefined; shard: NodeShard }>();
+    const live = new Map<string, { dispose: () => void; drain: () => Promise<void> | undefined; drainHost: () => Promise<void>; shard: NodeShard }>();
+
+    /** `onFetch` and `onAlarm` calls still running, so {@link NodeShardRegistry.drain} can wait for them. */
+    const inFlight = new Set<Promise<unknown>>();
+
+    const track = async <T>(work: () => Promise<T> | T): Promise<T> => {
+        const running = Promise.resolve().then(work);
+        // Tracking only: the caller still receives `running` and its rejection.
+        const settled = running.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        inFlight.add(settled);
+
+        settled.finally(() => inFlight.delete(settled)).catch(() => undefined);
+
+        return running;
+    };
 
     /**
      * Keys known to exist, whether or not their shard is currently live.
@@ -255,9 +281,10 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         const {
             database,
             dispose: disposeHost,
+            drain: drainHost,
             host,
         } = createNodeShardHost({
-            onAlarm: () => options.onAlarm?.(shard),
+            onAlarm: async () => track(() => options.onAlarm?.(shard)),
             path,
             shardKey: key,
         });
@@ -272,7 +299,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             sockets: socketHost.socket,
         };
 
-        live.set(key, { dispose: disposeHost, drain: socketHost.drain, shard });
+        live.set(key, { dispose: disposeHost, drain: socketHost.drain, drainHost, shard });
         known.add(key);
 
         return shard;
@@ -283,11 +310,13 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             fetch: async (request) => {
                 const shard = shardFor(key);
 
-                if (options.onFetch === undefined) {
+                const { onFetch } = options;
+
+                if (onFetch === undefined) {
                     return new Response(key);
                 }
 
-                return options.onFetch(request, shard);
+                return track(() => onFetch(request, shard));
             },
         };
     };
@@ -306,6 +335,25 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             }
 
             live.clear();
+        },
+        drain: async () => {
+            let busy = true;
+
+            // A pass can start more work (a request's `waitUntil`, a fetch that background work makes), so passes repeat until one
+            // begins with nothing in flight and ends that way.
+            while (busy) {
+                const entries = [...live.values()];
+                const closing = entries.flatMap((entry) => {
+                    const pending = entry.drain();
+
+                    return pending === undefined ? [] : [pending];
+                });
+
+                busy = inFlight.size > 0 || closing.length > 0;
+                // eslint-disable-next-line no-await-in-loop -- each pass waits for the work that existed when it began
+                await Promise.all([...inFlight, ...closing, ...entries.map(async (entry) => entry.drainHost())]);
+                busy ||= inFlight.size > 0;
+            }
         },
         directory: {
             get: (id) => stubFor(String(id)),

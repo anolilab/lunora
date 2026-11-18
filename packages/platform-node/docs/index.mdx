@@ -206,7 +206,8 @@ file. The `queues`, `workflows`, `objectStorage` and `globalTables` members are
 
 The object `createNodePlatform` returns. It exposes `shard`, `kv`, `sockets`,
 `scheduler`, `directory`, `dispatch`, `capabilities`, `drain`, `close` and
-`[Symbol.dispose]`, plus the optional `queues`, `workflows`, `objectStorage` and
+`[Symbol.dispose]`. `drain` also drains the registry's shards (see
+`createNodeShardRegistry`), plus the optional `queues`, `workflows`, `objectStorage` and
 `globalTables` members described above.
 
 ### `NodePlatformOptions`
@@ -280,7 +281,11 @@ holds `BEGIN IMMEDIATE` open across the awaits of an async closure.
 **Type:** `(options: NodeHttpServerOptions) => Promise<NodeHttpServer>`
 
 Serves an app worker's `fetch` over `node:http` and resolves once the server is
-listening. `fetch` is required. `host` defaults to the loopback interface.
+listening. `fetch` is required. `host` defaults to the loopback interface. A
+handler that throws is answered with 500 and logged with its error. `drain()`
+waits until every response in progress is written or its client is gone; event
+streams and WebSockets are not waited for, and `close()` ends them. A graceful
+shutdown refuses new requests in its `fetch`, awaits `drain()`, then `close()`.
 
 ### `createNodeHyperdrive`
 
@@ -380,7 +385,10 @@ itself.
 
 Builds the in-process shard registry. `directory` names the folder that holds one
 SQLite file per shard. Omit it for in-memory shards, which do not survive a
-restart. `onAlarm` and `onFetch` are the registry's delivery hooks.
+restart. `onAlarm` and `onFetch` are the registry's delivery hooks. `drain()`
+waits until every shard is idle: no `onFetch` or `onAlarm` call in flight (cron
+and scheduled-job deliveries included), no `waitUntil` work pending and no socket
+close handler running. Await it before `close()`, which does not wait.
 
 ### `createNodeShardState`
 

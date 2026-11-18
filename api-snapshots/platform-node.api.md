@@ -101,6 +101,7 @@ interface NodeGlobalStoreOptions {
 ```ts
 interface NodeHttpServer {
     close: () => Promise<void>;
+    drain: () => Promise<void>;
     origin: string;
 }
 ```
@@ -298,6 +299,7 @@ interface NodeShardHostOptions {
 interface NodeShardRegistry {
     close: () => void;
     directory: DirectShardDirectory;
+    drain: () => Promise<void>;
     listShardKeys: (table?: string) => ReadonlyArray<string>;
     shardFor: (key: string) => NodeShard;
 }

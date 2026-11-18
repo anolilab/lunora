@@ -180,7 +180,10 @@ const toRequest = (incoming: IncomingMessage, origin: string, signal: AbortSigna
 // A helper rather than an inline `outgoing.destroyed` check: TypeScript would narrow that property after an early return and then flag the loop's later re-check as always truthy.
 const isDisconnected = (outgoing: ServerResponse): boolean => outgoing.destroyed;
 
-const writeResponse = async (response: Response, outgoing: ServerResponse): Promise<void> => {
+/** An event stream is endless by design, so a draining server closes it rather than waiting for it to end. */
+const isEventStream = (response: Response): boolean => (response.headers.get("content-type") ?? "").toLowerCase().startsWith("text/event-stream");
+
+const writeResponse = async (response: Response, outgoing: ServerResponse, onEventStream: () => void): Promise<void> => {
     // An unhandled 'error' event throws, and a socket write error must not take the process down. Destroying the response is what
     // fires 'close', which cancels the body and ends any wait for drain below.
     outgoing.on("error", () => {
@@ -210,6 +213,10 @@ const writeResponse = async (response: Response, outgoing: ServerResponse): Prom
     }
 
     outgoing.writeHead(response.status, headers);
+
+    if (isEventStream(response)) {
+        onEventStream();
+    }
 
     if (response.body === null) {
         outgoing.end();
@@ -347,6 +354,8 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
     // Raw sockets whose upgrade is still awaiting the worker. They are not in `webSockets.clients` yet, so `close` reaches them here.
     const pendingUpgrades = new Set<Duplex>();
     const server = createServer();
+    /** Every response still being produced or written; see {@link NodeHttpServer.drain}. */
+    const responses = new Set<Promise<void>>();
     // The origin every request URL is built on, for plain requests and upgrades alike. The client's Host header is never read:
     // the configured public origin, or else the bound address.
     const requestOrigin = (): string => configured ?? `http://${urlHost(host)}:${String((server.address() as AddressInfo).port)}`;
@@ -354,6 +363,16 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
     server.on("request", (incoming, outgoing) => {
         const origin = requestOrigin();
         const abort = new AbortController();
+        // Settles once the response is fully written or the connection is gone, or once it turns out to be an event stream.
+        let settle: () => void = () => {};
+        const settled = new Promise<void>((resolve) => {
+            settle = resolve;
+        });
+
+        responses.add(settled);
+
+        settled.then(() => responses.delete(settled)).catch(() => undefined);
+        outgoing.once("close", settle);
 
         // A client that disconnects before the response is complete will never read it, so the handler's signal fires
         // and the shard can stop work for it. A finished response is not an abort.
@@ -378,8 +397,14 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
         Promise.resolve()
             .then(() => options.fetch(request))
             .then(
-                (response) => writeResponse(response, outgoing),
-                () => {
+                (response) => writeResponse(response, outgoing, settle),
+                (error: unknown) => {
+                    // eslint-disable-next-line no-console -- the client only sees a 500, so the log is where the error, its stack and its cause surface
+                    console.error(
+                        `[@lunora/platform-node] the fetch handler threw for ${incoming.method ?? "GET"} ${incoming.url ?? "/"}; answered 500`,
+                        error,
+                    );
+
                     if (!outgoing.headersSent) {
                         outgoing.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
                     }
@@ -484,6 +509,12 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             });
             await Promise.all(socketsClosed);
         },
+        drain: async () => {
+            while (responses.size > 0) {
+                // eslint-disable-next-line no-await-in-loop -- a response that settles can be followed by one that arrived meanwhile
+                await Promise.all(responses);
+            }
+        },
         origin: `http://${urlHost(host)}:${String(port)}`,
     };
 };
@@ -511,6 +542,13 @@ export interface NodeHttpServerOptions {
 export interface NodeHttpServer {
     /** Stop accepting connections and end every open one, streams included. */
     close: () => Promise<void>;
+
+    /**
+     * Wait until every HTTP response in progress has been written to the end, or its client has gone. Event streams
+     * (`text/event-stream`) and WebSockets are endless by design and are not waited for; {@link NodeHttpServer.close} ends them.
+     * New requests keep being served meanwhile, so a graceful shutdown refuses them in its `fetch` first, then drains, then closes.
+     */
+    drain: () => Promise<void>;
     /** The `http://host:port` origin the server answers on. */
     origin: string;
 }
