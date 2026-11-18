@@ -134,12 +134,13 @@ describe("lunora verify", () => {
             // `verify` is the documented CI/pre-deploy gate, and it resolves and
             // validates the deploy target immediately before running codegen with
             // it. Dropping the one output that depends on that target let an app
-            // whose nightly cron can never fire on this host verify clean.
+            // using a binding this host does not have verify clean. Node has no
+            // Images binding, so `ctx.images` stands in for any unsupported feature.
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
             writeFileSync(
-                join(workdir, "lunora", "crons.ts"),
-                `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
+                join(workdir, "lunora", "thumbnails.ts"),
+                `import { action } from "@lunora/server";\n\nexport const thumbnail = action({ args: {}, handler: async (ctx) => ctx.images.info(new ReadableStream()) });\n`,
                 "utf8",
             );
             const { logger, recorded } = recordingLogger();
@@ -147,7 +148,7 @@ describe("lunora verify", () => {
             const result = await runVerifyCommand({ cwd: workdir, logger, typecheck: false });
 
             expect(result.code).toBe(1);
-            expect(result.errors.some((error) => error.includes("cron"))).toBe(true);
+            expect(result.errors.some((error) => error.toLowerCase().includes("images"))).toBe(true);
             expect(recorded.errors.join("\n")).toContain("platform_unsupported_feature");
         });
 
@@ -161,8 +162,8 @@ describe("lunora verify", () => {
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
             writeFileSync(
-                join(workdir, "lunora", "crons.ts"),
-                `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
+                join(workdir, "lunora", "thumbnails.ts"),
+                `import { action } from "@lunora/server";\n\nexport const thumbnail = action({ args: {}, handler: async (ctx) => ctx.images.info(new ReadableStream()) });\n`,
                 "utf8",
             );
             writeFileSync(
@@ -175,7 +176,7 @@ describe("lunora verify", () => {
             const result = await runVerifyCommand({ cwd: workdir, logger, typecheck: false });
 
             expect(result.code).toBe(1);
-            expect(result.errors.some((error) => error.includes("cron"))).toBe(true);
+            expect(result.errors.some((error) => error.toLowerCase().includes("images"))).toBe(true);
             expect(result.errors.some((error) => error.toLowerCase().includes("browser"))).toBe(true);
         });
 
