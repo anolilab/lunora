@@ -76,9 +76,11 @@ export const teardownPorts = (
     return {
         aliasInUse: async (alias) => {
             // `alias` is the script name every release of it is created under (`deployments.create`).
+            // A legacy row has no `alias` and is known by that script name alone, as
+            // everywhere else teardown names a deployment (`alias ?? scriptName`).
             const rows = await drainTable<TeardownRow>(database, "deployments", { where: { scriptName: alias } });
 
-            return rows.some((row) => row.status !== "destroyed" && row.alias === alias);
+            return rows.some((row) => row.status !== "destroyed" && (row.alias ?? row.scriptName) === alias);
         },
         deleteRelease: ports.deleteRelease,
         destroy: async (target) => {
@@ -113,8 +115,8 @@ export const teardownPorts = (
             // `destroyWorker` flips to `true` for an alias-less row, which is the one
             // case this function exists to prevent.
             for (const row of rows) {
-                if (row.status !== "destroyed" && row.alias != null) {
-                    aliveAliases.add(row.alias);
+                if (row.status !== "destroyed") {
+                    aliveAliases.add(row.alias ?? row.scriptName);
                 }
             }
 

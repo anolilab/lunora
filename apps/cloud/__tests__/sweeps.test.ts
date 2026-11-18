@@ -232,6 +232,19 @@ describe(teardownPorts, () => {
         await expect(ports.aliasInUse("b")).resolves.toBe(true);
     });
 
+    it("counts a live legacy deployment, known by its script name alone, as using its alias", async () => {
+        const database = fakeControlPlaneDb({
+            deployments: [
+                { _id: "gone", alias: "a", kind: "preview", projectId: "prj_1", scriptName: "a", status: "destroyed" },
+                { _id: "legacy", alias: null, kind: "production", projectId: "prj_1", scriptName: "a", status: "live" },
+            ],
+        });
+        const ports = teardownPorts(database, noop, 1000, everyTarget);
+
+        await expect(ports.aliasInUse("a")).resolves.toBe(true);
+        await expect(ports.listPending()).resolves.toStrictEqual([expect.objectContaining({ alias: "a", destroyWorker: false, id: "gone" })]);
+    });
+
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000, everyTarget);
