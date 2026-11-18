@@ -595,6 +595,33 @@ describe("admin import — staged replace", () => {
     });
 });
 
+describe("admin import — staged replace of a section its header does not declare", () => {
+    afterEach(closeCluster);
+
+    it("refuses the record at staging rather than dropping it unread at a commit that reports success", async () => {
+        expect.assertions(3);
+
+        await seed();
+
+        const stores = createStores();
+        const cache = stores.kv.get("CACHE")!;
+
+        cache.set("kept", { value: new TextEncoder().encode("edited since") });
+
+        const worker = workerWith({ ...stores.options });
+        const response = await postImport(worker, "?mode=replace&tables=messages&stage=undeclared", [
+            { doc: { format: 2, sections: [] }, table: "$lunora" },
+            message("m1", "c1", "as snapshotted"),
+            { doc: { key: "kept", namespace: "CACHE", value: Buffer.from("as snapshotted").toString("base64") }, table: "$kv" },
+        ]);
+        const committed = await postSession(worker, "commit", "undeclared");
+
+        await expect(response.json()).resolves.toMatchObject({ errors: [expect.objectContaining({ code: "BAD_ROW", table: "$kv" })] });
+        expect(committed.status).toBe(409);
+        expect(Buffer.from(cache.get("kept")!.value).toString()).toBe("edited since");
+    });
+});
+
 describe("admin import — staged replace with an auth row the store refuses", () => {
     afterEach(closeCluster);
 
@@ -904,6 +931,7 @@ describe("admin import — staged replace of chunked sections", () => {
         const target = createStores();
         const worker = workerWith({ ...target.options, storageDelete: undefined });
         const response = await postImport(worker, "?mode=replace&tables=messages&stage=unstaged", [
+            { doc: { format: 2, sections: ["kv"] }, table: "$lunora" },
             { doc: { data: "AQ==", key: "big", namespace: "CACHE", offset: 0 }, table: "$kv" },
         ]);
         const committed = await postSession(worker, "commit", "unstaged");

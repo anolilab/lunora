@@ -53,6 +53,9 @@ type ReplaceSection = "auth" | "kv" | "storage";
 
 const REPLACE_SECTIONS: ReadonlyArray<ReplaceSection> = ["auth", "kv", "storage"];
 
+/** The `$`-table a section's records are staged under. */
+const SECTION_TABLE: Readonly<Record<ReplaceSection, string>> = { auth: AUTH_TABLE, kv: KV_TABLE, storage: STORAGE_TABLE };
+
 /** Where a staged session's chunks live — never under the append import's `_lunora/restore/`. */
 const SESSION_STAGING_PREFIX = "_lunora/restore-session/";
 
@@ -300,18 +303,31 @@ const stageStorageRow = async (options: WorkerOptions, ref: SessionRef, row: Sec
  * Validate one request's section records and stage what the commit needs:
  * records for the root shard, and chunks under the session's prefix. Any
  * failure to stage a record is a refused row, never silently skipped.
+ *
+ * `declared` is what the session's earlier requests' headers declared. The
+ * commit replaces only declared sections, so a record of any other section is
+ * refused here: staged, it would be dropped unread by a commit that reports success.
  */
 const stageSectionRows = async (
     options: WorkerOptions,
     ref: SessionRef,
     rows: ReadonlyArray<SectionRow>,
+    declared: ReadonlyArray<string>,
 ): Promise<{ errors: ImportRowError[]; rows: StagedSectionRow[]; sections: ReplaceSection[]; storage: boolean }> => {
     const errors: ImportRowError[] = [];
     const staged: StagedSectionRow[] = [];
+    const sections = headerSections(rows);
+    const replaced = new Set<string>([...declared, ...sections]);
     let storage = false;
 
     for (const row of rows) {
         let record: StagedSectionRow | undefined;
+        const section = REPLACE_SECTIONS.find((name) => SECTION_TABLE[name] === row.table);
+
+        if (section !== undefined && !replaced.has(section)) {
+            stageError(errors, row, "BAD_ROW", `the snapshot header does not declare the \`${section}\` section, so this record would never be restored`);
+            continue;
+        }
 
         try {
             switch (row.table) {
@@ -343,7 +359,7 @@ const stageSectionRows = async (
         }
     }
 
-    return { errors, rows: staged, sections: headerSections(rows), storage };
+    return { errors, rows: staged, sections, storage };
 };
 
 /** Why this worker cannot replace `section` exactly, or `undefined` when it can. */
@@ -642,9 +658,6 @@ const commitSection = async (
         }
     }
 };
-
-/** The `$`-table a section's records are staged under. */
-const SECTION_TABLE: Readonly<Record<ReplaceSection, string>> = { auth: AUTH_TABLE, kv: KV_TABLE, storage: STORAGE_TABLE };
 
 export type { ReplaceSection, SectionStepResult, SessionRef, StagedSectionRow };
 export { commitSection, dropStagedObjects, prepareAuth, REPLACE_SECTIONS, SECTION_TABLE, sectionUnsupported, SESSION_STAGING_PREFIX, stageSectionRows };

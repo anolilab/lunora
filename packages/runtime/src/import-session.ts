@@ -323,7 +323,7 @@ const stageImport = async (request: Request, context: ImportSessionContext, sess
     }
 
     const ref = refOf(opened.manifest);
-    const sections = await stageSectionRows(options, ref, bucket.sectionRows);
+    const sections = await stageSectionRows(options, ref, bucket.sectionRows, opened.manifest.sections);
     const errors = [...bucket.errors, ...sections.errors];
     const failed: ImportShardFailure[] = [];
     const staged: Record<string, number> = {};
