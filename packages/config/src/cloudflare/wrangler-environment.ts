@@ -117,7 +117,9 @@ const mergeWranglerEnvironment = (wrangler: WranglerConfig, environment: string 
         return { merged: wrangler, unverifiedKeys: [] };
     }
 
-    const envBlock = wrangler.env?.[environment];
+    // An own key only: `env.constructor` and the rest of `Object.prototype` are not environments, and reading them through the
+    // prototype would pass the declared-environment check with every binding dropped.
+    const envBlock = wrangler.env !== undefined && Object.hasOwn(wrangler.env, environment) ? wrangler.env[environment] : undefined;
 
     if (envBlock === undefined) {
         const declared = Object.keys(wrangler.env ?? {}).toSorted((a, b) => a.localeCompare(b));

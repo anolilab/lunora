@@ -2,9 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createNodeAppHost } from "../src/node-app-host";
+import { checkNodeAppHost, createNodeAppHost } from "../src/node-app-host";
 import type { NodeShardState } from "../src/node-shard-state";
 
 /** A Durable Object that counts in its shard's SQLite, so a count that survives a new host proves the database persisted. */
@@ -38,6 +39,27 @@ const worker = {
             env.COUNTER.getByName(new URL(request.url).pathname.slice(1)).fetch(request),
     },
 };
+
+/** The declared cron rows the shard binding's platform database holds, as `name → function path`. */
+const declaredCrons = (dataDirectory: string, binding = "SHARD"): Record<string, string> => {
+    const database = new Database(join(dataDirectory, `${binding}.platform.sqlite3`), { readonly: true });
+
+    try {
+        const rows = database.prepare<[], { function_path: string; key: string }>("SELECT key, function_path FROM _lunora_scheduler_crons").all();
+
+        return Object.fromEntries(rows.map((row) => [row.key, row.function_path]));
+    } finally {
+        database.close();
+    }
+};
+
+/** A shard class that answers every call, for hosts whose test reads stored state rather than responses. */
+class Quiet {
+    // eslint-disable-next-line class-methods-use-this -- answers without state
+    public async fetch(): Promise<Response> {
+        return Response.json({ result: null });
+    }
+}
 
 describe(createNodeAppHost, () => {
     let directory: string;
@@ -407,5 +429,67 @@ describe(createNodeAppHost, () => {
         } finally {
             await host.close();
         }
+    });
+
+    it("refuses a binding whose export cannot be constructed, before building anything", () => {
+        expect.assertions(2);
+
+        const options = {
+            durableObjects: [{ className: "Arrow", name: "COUNTER" }],
+            worker: {
+                Arrow: () => {
+                    return {};
+                },
+                default: worker.default,
+            },
+        };
+
+        expect(() => {
+            checkNodeAppHost(options);
+        }).toThrow(/cannot construct/u);
+        expect(() => createNodeAppHost(options)).toThrow(/cannot construct/u);
+    });
+
+    it("deletes the crons an earlier host declared when the next one declares none", async () => {
+        expect.assertions(2);
+
+        const dataDirectory = join(directory, "state");
+        const base = { dataDirectory, durableObjects: [{ className: "Quiet", name: "SHARD" }], worker: { default: worker.default, Quiet } };
+
+        await createNodeAppHost({ ...base, crons: { "0 * * * *": [{ functionPath: "reports:sweep", name: "sweep" }] } }).close();
+
+        expect(Object.values(declaredCrons(dataDirectory))).toStrictEqual(["reports:sweep"]);
+
+        await createNodeAppHost(base).close();
+
+        expect(declaredCrons(dataDirectory)).toStrictEqual({});
+    });
+
+    it("leaves the declared crons as they were when a candidate host is refused", async () => {
+        expect.assertions(2);
+
+        const dataDirectory = join(directory, "state");
+        const appWorker = { default: worker.default, Quiet };
+
+        await createNodeAppHost({
+            crons: { "0 * * * *": [{ functionPath: "reports:a", name: "sweep" }] },
+            dataDirectory,
+            durableObjects: [{ className: "Quiet", name: "SHARD" }],
+            worker: appWorker,
+        }).close();
+
+        // SHARD comes first, so a host that built bindings in order would have rewritten the row before reaching the missing one.
+        expect(() =>
+            createNodeAppHost({
+                crons: { "0 * * * *": [{ functionPath: "reports:b", name: "sweep" }] },
+                dataDirectory,
+                durableObjects: [
+                    { className: "Quiet", name: "SHARD" },
+                    { className: "Missing", name: "OTHER" },
+                ],
+                worker: appWorker,
+            }),
+        ).toThrow(/names class Missing/u);
+        expect(Object.values(declaredCrons(dataDirectory))).toStrictEqual(["reports:a"]);
     });
 });

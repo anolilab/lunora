@@ -870,3 +870,5 @@ export const createNodePlatform = <
         throw error;
     }
 };
+
+export { walkDeclaredCrons };

@@ -171,7 +171,12 @@ resolves `@lunora/platform-node` from the project and serves the worker entry
   reload restarts the listener, so open sockets and streams reconnect. The
   previous version gets 5 s to finish its in-flight work and is then closed
   anyway, with a warning naming what was cut off. A reload that fails to load
-  keeps the previous version serving; one that cannot bind the port logs it,
+  keeps the previous version serving, as does one refused by
+  `checkNodeAppHost`: the new host is only built once the previous one has
+  drained, so two schedulers never run over the same database. A reload waits
+  out a running codegen run, is refused while the last `postcodegen` hook has
+  failed, and is dropped if a codegen run started during its load (that run's
+  own reload follows). One that cannot bind the port logs it,
   and nothing serves until a later reload succeeds, since the previous version
   held the same port and databases.
 - `CLOUDFLARE_ENV` selects a wrangler environment, as for `wrangler dev`: its
@@ -360,6 +365,18 @@ be written), one readable label each. Each failure is also logged with its cause
 when it happens, and drains wait with settled semantics, so one failure never
 stops them waiting for the rest.
 
+### `checkNodeAppHost`
+
+**Type:** `(options: NodeAppHostOptions) => void`
+
+Throws what `createNodeAppHost` would refuse for the same options (no default
+`fetch` handler, a binding whose export is missing or cannot be constructed with
+`new`, crons with no shard binding or a workflow target) without opening a
+database or arming a timer. `createNodeAppHost` runs it before building
+anything, so a refused composition leaves stored state, cron rows included, as
+it was. A caller replacing a running host runs it first and keeps the running
+host when it throws; `lunora dev --target node` does.
+
 ### `createNodeAppHost`
 
 **Type:** `(options: NodeAppHostOptions) => NodeAppHost`
@@ -368,9 +385,9 @@ Composes a worker module (the one `wrangler.jsonc`'s `main` names) over one
 `createNodePlatform` per Durable Object binding, with one instance of the
 exported class per shard for the life of the host. `crons` (the generated
 `LUNORA_CRONS` map) is armed on the `shardBinding` platform (default `SHARD`)
-and delivered to its default shard; a host that declares crons without that
-binding throws, and a binding that cannot be composed closes the platforms
-built before it. `fetch` is the worker's own, bound to that `env`. `close(options?)`
+and delivered to its default shard. The map is the whole declared set: an
+omitted one declares none, and the jobs an earlier host declared are deleted. A
+host that declares crons without that binding throws. `fetch` is the worker's own, bound to that `env`. `close(options?)`
 drains under one deadline (`DrainOptions`, 30 s by default) the worker's
 `waitUntil` work and every platform (shard requests, alarms, cron deliveries and
 each shard's own `waitUntil` work), then force-closes every platform, cron timers

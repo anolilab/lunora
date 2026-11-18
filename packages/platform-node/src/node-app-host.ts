@@ -23,7 +23,7 @@ import { LunoraError } from "@lunora/errors";
 import type { Drainable, DrainOptions, DrainResult } from "./drain-deadline";
 import { drainTimeoutMs, drainTogether, settlesBefore, startDrainDeadline } from "./drain-deadline";
 import type { NodeCronJob, NodePlatform } from "./node-platform";
-import { createNodePlatform } from "./node-platform";
+import { createNodePlatform, walkDeclaredCrons } from "./node-platform";
 import { createNodeShardNamespace } from "./node-shard-namespace";
 import type { NodeShard } from "./node-shard-registry";
 import { bindShardSockets, createNodeShardState } from "./node-shard-state";
@@ -209,21 +209,15 @@ const createBindingPlatform = (
     env: Record<string, unknown>,
     shardBinding: string,
 ): NodePlatform => {
-    const DurableObject = options.worker[binding.className];
-
-    if (typeof DurableObject !== "function") {
-        throw new LunoraError(
-            "VALIDATION_ERROR",
-            `@lunora/platform-node: Durable Object binding ${binding.name} names class ${binding.className}, which the worker module does not export`,
-        );
-    }
-
-    const instanceFor = createInstanceFactory(DurableObject as DurableObjectClass, env);
+    // Checked by `checkNodeAppHost` before any binding is built.
+    const instanceFor = createInstanceFactory(options.worker[binding.className] as DurableObjectClass, env);
 
     // The shard databases sit in the binding's directory; the platform's own database (scheduler and cron rows) sits beside it,
     // never inside, where the registry would read it back as a shard.
     return createNodePlatform({
-        crons: binding.name === shardBinding ? options.crons : undefined,
+        // The map is the whole declared set, so an omitted one declares none and deletes what an earlier host declared. Other
+        // bindings pass `undefined`, which leaves the declared rows alone.
+        crons: binding.name === shardBinding ? (options.crons ?? {}) : undefined,
         directory: options.dataDirectory === undefined ? undefined : join(options.dataDirectory, binding.name),
         // The registry passes the shard whose alarm came due. The platform's own database has no app alarm, so a call without one
         // is not an app event.
@@ -237,34 +231,78 @@ const createBindingPlatform = (
     });
 };
 
-/** Compose `worker` over one in-process platform per Durable Object binding. */
-const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
-    const handler = options.worker["default"];
+/** Whether `value` can be called with `new`, checked without calling it: `Reflect.construct` refuses a non-constructor target first. */
+const isConstructor = (value: unknown): boolean => {
+    if (typeof value !== "function") {
+        return false;
+    }
 
-    if (!isWorkerHandler(handler)) {
+    try {
+        Reflect.construct(String, [], value);
+
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * Throw what `createNodeAppHost` would refuse for `options`, without opening a database or arming a timer: the default export,
+ * every binding's class, and the declared crons. `createNodeAppHost` runs it before building anything, so a refused composition
+ * changes no stored state (cron rows included); a caller replacing a running host runs it first, so a refused candidate leaves
+ * that host serving.
+ */
+const checkNodeAppHost = (options: NodeAppHostOptions): void => {
+    if (!isWorkerHandler(options.worker["default"])) {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the worker module has no default export with a `fetch` handler");
     }
 
-    const env: Record<string, unknown> = { ...options.env };
-    const platforms: NodePlatform[] = [];
-    const tracker = createWaitUntilTracker();
-    const shardBinding = options.shardBinding ?? "SHARD";
-    const declaresCrons = Object.values(options.crons ?? {}).some((jobs) => jobs.length > 0);
+    for (const binding of options.durableObjects) {
+        const exported = options.worker[binding.className];
 
-    if (declaresCrons && !options.durableObjects.some((binding) => binding.name === shardBinding)) {
+        if (exported === undefined) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: Durable Object binding ${binding.name} names class ${binding.className}, which the worker module does not export`,
+            );
+        }
+
+        if (!isConstructor(exported)) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: Durable Object binding ${binding.name} names ${binding.className}, which the worker module exports as something \`new\` cannot construct`,
+            );
+        }
+    }
+
+    const shardBinding = options.shardBinding ?? "SHARD";
+    const declared = walkDeclaredCrons(options.crons ?? {});
+
+    if (declared.length > 0 && !options.durableObjects.some((binding) => binding.name === shardBinding)) {
         throw new LunoraError(
             "VALIDATION_ERROR",
             `@lunora/platform-node: the app declares crons, but no Durable Object binding is named ${shardBinding} to run them on`,
         );
     }
+};
+
+/** Compose `worker` over one in-process platform per Durable Object binding. */
+const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
+    checkNodeAppHost(options);
+
+    const handler = options.worker["default"] as WorkerHandler;
+    const env: Record<string, unknown> = { ...options.env };
+    const platforms: NodePlatform[] = [];
+    const tracker = createWaitUntilTracker();
+    const shardBinding = options.shardBinding ?? "SHARD";
 
     // Each binding's platform database is a file directly in it, opened before anything else would create the directory.
     if (options.dataDirectory !== undefined) {
         mkdirSync(options.dataDirectory, { recursive: true });
     }
 
-    // A binding that cannot be composed (a missing class, a cron this host refuses) throws with earlier platforms already open and
-    // their cron timers armed; nothing returned could close them, so they are closed here.
+    // A binding that still fails to build (a database that cannot be opened) throws with earlier platforms already open and their
+    // timers armed; nothing returned could close them, so they are closed here.
     try {
         for (const binding of options.durableObjects) {
             const platform = createBindingPlatform(binding, options, env, shardBinding);
@@ -308,4 +346,4 @@ const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
 };
 
 export type { NodeAppDurableObjectBinding, NodeAppHost, NodeAppHostOptions };
-export { createNodeAppHost };
+export { checkNodeAppHost, createNodeAppHost };

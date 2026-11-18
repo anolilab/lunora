@@ -52,7 +52,7 @@
 export type { Drainable, DrainOptions, DrainResult, DrainTimer } from "./drain-deadline";
 export { DEFAULT_DRAIN_TIMEOUT_MS, drainTogether } from "./drain-deadline";
 export type { NodeAppDurableObjectBinding, NodeAppHost, NodeAppHostOptions } from "./node-app-host";
-export { createNodeAppHost } from "./node-app-host";
+export { checkNodeAppHost, createNodeAppHost } from "./node-app-host";
 export type { NodeDispatchInvocation, NodeDispatchRouteOptions } from "./node-dispatch-route";
 export { createNodeDispatchRoute, NODE_SCHEDULER_DISPATCH_PATH } from "./node-dispatch-route";
 export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";

@@ -542,6 +542,12 @@ interface ShardSocketHooks {
 const bindShardSockets: (shard: ShardSocketHooks, inbound: Pick<NodeShard["inbound"], "onClose" | "onMessage">) => void;
 ```
 
+### `checkNodeAppHost` (const)
+
+```ts
+const checkNodeAppHost: (options: NodeAppHostOptions) => void;
+```
+
 ### `createNodeAppHost` (const)
 
 ```ts

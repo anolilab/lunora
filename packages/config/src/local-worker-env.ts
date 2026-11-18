@@ -81,7 +81,9 @@ const booleanFlag = (processEnv: Record<string, string | undefined>, name: strin
 
 /** The active scope: an `env.<name>` block when it exists, else the top level, as wrangler falls back. */
 const activeScope = (config: LocalWorkerEnvOptions["config"], environment: string | undefined): WorkerEnvScope => {
-    const block = environment === undefined ? undefined : config?.env?.[environment];
+    const environments = config?.env ?? undefined;
+    // An own key only, as `mergeWranglerEnvironment` reads it: `constructor` names no environment.
+    const block = environment !== undefined && environments !== undefined && Object.hasOwn(environments, environment) ? environments[environment] : undefined;
 
     return block ?? config ?? {};
 };
