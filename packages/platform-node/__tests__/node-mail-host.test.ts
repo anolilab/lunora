@@ -445,4 +445,368 @@ describe(createNodeMailHost, () => {
             expect(transport.sent).toHaveLength(1);
         });
     });
+
+    describe("second review", () => {
+        const countRows = (database: Database.Database, table: string): unknown => database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get();
+
+        it("sends one copy when overlapping polls claim two rows with the same idempotency key", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const gate = blockingTransport();
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport: gate.transport });
+
+            await mail.mailer.queue({ idempotencyKey: "otp-ada", subject: "Code", text: "1234", to: "ada@example.com" });
+
+            const first = mail.poll();
+
+            await gate.entered;
+            await mail.mailer.queue({ idempotencyKey: "otp-ada", subject: "Code", text: "1234", to: "ada@example.com" });
+            // Claims the second row while the first send of the same key is still in flight.
+            await mail.poll();
+
+            gate.release();
+            await first;
+            clock.advance(180_000);
+            // The retried duplicate now finds the key in the ledger and is acked unsent.
+            await mail.poll();
+
+            expect(gate.sent).toHaveLength(1);
+            expect(countRows(database, "_lunora_queue_messages")).toStrictEqual({ n: 0 });
+        });
+
+        it("measures the dedupe window on the host clock when it runs behind wall time", async () => {
+            expect.assertions(1);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            // Two days behind the wall clock: the send is three minutes old on the host clock.
+            const clock = startClock();
+
+            clock.advance(-48 * 60 * 60 * 1000);
+
+            const unknown = new MailSendError({ message: "socket hang up", outcomeUnknown: true, retryable: false });
+            const transport = scriptedTransport([unknown, "ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport: { ...transport, dedupesOnIdempotencyKey: true } });
+
+            await mail.mailer.queue({ subject: "Code", text: "1234", to: "ada@example.com" });
+            await mail.poll();
+            clock.advance(180_000);
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(2);
+        });
+
+        it("refuses a late replay when only the host clock has moved past the dedupe window", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const unknown = new MailSendError({ message: "socket hang up", outcomeUnknown: true, retryable: false });
+            const transport = scriptedTransport([unknown, unknown, unknown, unknown, "ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport: { ...transport, dedupesOnIdempotencyKey: true } });
+
+            await mail.mailer.queue({ subject: "Reset", text: "Link", to: "ada@example.com" });
+
+            for (let delivery = 0; delivery < 4; delivery += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
+                await mail.poll();
+                clock.advance(180_000);
+            }
+
+            const [parked] = mail.deadLetters.list();
+
+            clock.advance(25 * 60 * 60 * 1000);
+
+            expect(mail.deadLetters.requeue(parked?.id ?? "")).toBe(true);
+
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(4);
+        });
+
+        it("prunes the sent ledger through an index, at most once a minute", async () => {
+            expect.assertions(3);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport: scriptedTransport(["ok"]) });
+            const plan = database.prepare<[number], { detail: string }>("EXPLAIN QUERY PLAN DELETE FROM _lunora_mail_sent WHERE expires_at <= ?").all(0);
+
+            expect(plan.map((row) => row.detail).join(" ")).toContain("_lunora_mail_sent_expires");
+
+            const sendOne = async (subject: string): Promise<void> => {
+                await mail.mailer.queue({ subject, text: "Hi", to: "ada@example.com" });
+                await mail.poll();
+            };
+
+            await sendOne("First");
+            database.prepare("INSERT INTO _lunora_mail_sent (key, value, expires_at) VALUES ('stale', 'x', ?)").run(clock.now() - 1);
+            clock.advance(1000);
+            await sendOne("Second");
+
+            // Pruned a second ago, so this write leaves the expired row for the next minute.
+            expect(database.prepare("SELECT key FROM _lunora_mail_sent WHERE key = 'stale'").get()).toStrictEqual({ key: "stale" });
+
+            clock.advance(60_000);
+            await sendOne("Third");
+
+            expect(database.prepare("SELECT key FROM _lunora_mail_sent WHERE key = 'stale'").get()).toBeUndefined();
+        });
+
+        it("keeps the app's queue host from resetting a parked mail send", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-app-requeue-"));
+
+            const jobs = defineQueue({ handler: () => undefined, maxBatchTimeout: 0 });
+
+            using platform = createNodePlatform({
+                mail: { env: PRODUCTION, now: startClock().now, transport: scriptedTransport([new Error("connection refused")]) },
+                onQueueBatch: () => undefined,
+                path: join(directory, "shard.sqlite3"),
+                queues: { jobs },
+            });
+
+            await platform.mail?.mailer.queue({ subject: "Reset", text: "Link", to: "ada@example.com" });
+
+            for (let delivery = 0; delivery < 4; delivery += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
+                await platform.mail?.poll();
+            }
+
+            const [parked] = platform.mail?.deadLetters.list() ?? [];
+
+            // The app host would reset its attempts to 0, which skips the late-redelivery check.
+            expect(platform.queues?.deadLetters.requeue(parked?.id ?? "")).toBe(false);
+            expect(platform.mail?.deadLetters.list()).toMatchObject([{ attempts: 4 }]);
+        });
+    });
+
+    describe("third review", () => {
+        it("refuses, loudly, a reused idempotency key whose content differs", async () => {
+            expect.assertions(3);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "invite-42", subject: "Invite", text: "Join team A", to: "ada@example.com" });
+            await mail.poll();
+            await mail.mailer.queue({ idempotencyKey: "invite-42", subject: "Invite", text: "Join team B", to: "bob@example.com" });
+            await mail.poll();
+
+            expect(transport.sent.map((payload) => payload.to)).toStrictEqual(["ada@example.com"]);
+            expect(error).toHaveBeenCalledTimes(1);
+            expect(logged(error.mock.calls[0]?.[0])).toMatchObject({ event: "lunora.mail.idempotency_key_conflict" });
+        });
+
+        it("records a key as sent only once the transport has confirmed the send", async () => {
+            expect.assertions(3);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            const transport = scriptedTransport([new Error("connection refused"), "ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
+            const sentRecord = (): unknown => database.prepare("SELECT value FROM _lunora_mail_sent WHERE key = 'receipt-7'").get();
+
+            await mail.mailer.queue({ idempotencyKey: "receipt-7", subject: "Receipt", text: "Thanks", to: "ada@example.com" });
+            await mail.poll();
+
+            // The failed attempt left marks under their own keys, never the key itself.
+            expect(sentRecord()).toBeUndefined();
+
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(2);
+            expect(sentRecord()).toStrictEqual({ value: "msg-2" });
+        });
+
+        it("cannot collide an attempt mark with a real idempotency key", async () => {
+            expect.assertions(2);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            // The shape of an attempt mark. Keys are visible ASCII only, so no producer can mint it, and a
+            // raw body carrying it is refused before the ledger is read, rather than acked as sent.
+            await mail.mailer.queue({ idempotencyKey: "foo", subject: "Hi", text: "Hi", to: "ada@example.com" });
+            await mail.queue.send({ idempotencyKey: "sending 1 foo", subject: "Hi", text: "Hi", to: "bob@example.com" });
+            await mail.poll();
+
+            expect(transport.sent.map((payload) => payload.to)).toStrictEqual(["ada@example.com"]);
+            expect(logged(error.mock.calls[0]?.[0])).toMatchObject({ event: "lunora.mail.send_refused" });
+        });
+
+        it("refuses to requeue parked mail once its attempt record in the ledger has expired", async () => {
+            expect.assertions(3);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+            // Both clocks move together here, so this isolates the 15-day evidence lifetime from the
+            // host-clock fix: only Date is faked, the mailer's deadline timer stays real.
+            vi.useFakeTimers({ toFake: ["Date"] });
+            vi.setSystemTime(new Date("2026-11-18T09:00:00Z"));
+
+            const unknown = new MailSendError({ message: "socket hang up", outcomeUnknown: true, retryable: false });
+            const transport = scriptedTransport([unknown, unknown, unknown, unknown, "ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, transport: { ...transport, dedupesOnIdempotencyKey: true } });
+
+            await mail.mailer.queue({ subject: "Reset", text: "Link", to: "ada@example.com" });
+
+            for (let delivery = 0; delivery < 4; delivery += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
+                await mail.poll();
+                vi.setSystemTime(Date.now() + 180_000);
+            }
+
+            const [parked] = mail.deadLetters.list();
+
+            vi.setSystemTime(Date.now() + 16 * 86_400_000);
+
+            expect(() => mail.deadLetters.requeue(parked?.id ?? "")).toThrow(/15 or more days/u);
+
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(4);
+            expect(mail.deadLetters.list()).toHaveLength(1);
+        });
+
+        it("refuses a redelivery older than the ledger's attempt record, whatever route brought it back", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            vi.useFakeTimers({ toFake: ["Date"] });
+            vi.setSystemTime(new Date("2026-11-18T09:00:00Z"));
+
+            const unknown = new MailSendError({ message: "socket hang up", outcomeUnknown: true, retryable: false });
+            const transport = scriptedTransport([unknown, "ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, transport: { ...transport, dedupesOnIdempotencyKey: true } });
+
+            await mail.mailer.queue({ subject: "Reset", text: "Link", to: "ada@example.com" });
+            await mail.poll();
+            // The process was down for 16 days; the retry is due the moment it polls again.
+            vi.setSystemTime(Date.now() + 16 * 86_400_000);
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(1);
+            expect(error.mock.calls.map(([line]) => logged(line).event)).toContain("lunora.mail.send_evidence_expired");
+        });
+
+        it("lets only one of two hosts on one file send a key while the other's send is in flight", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            const path = database.name;
+            const gate = blockingTransport();
+            const other = scriptedTransport(["ok"]);
+            // Two processes' worth of state: separate connections, one file.
+            const first = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport: gate.transport });
+            const secondDatabase = new Database(path);
+            const second = createNodeMailHost(secondDatabase, { env: PRODUCTION, now: clock.now, transport: other });
+
+            await first.mailer.queue({ idempotencyKey: "otp-bob", subject: "Code", text: "9876", to: "bob@example.com" });
+
+            const sending = first.poll();
+
+            await gate.entered;
+            await second.mailer.queue({ idempotencyKey: "otp-bob", subject: "Code", text: "9876", to: "bob@example.com" });
+            await second.poll();
+
+            expect(other.sent).toStrictEqual([]);
+
+            gate.release();
+            await sending;
+            clock.advance(180_000);
+            await second.poll();
+            secondDatabase.close();
+
+            // The second host's retry found the key in the shared ledger and acked it unsent.
+            expect(gate.sent.length + other.sent.length).toBe(1);
+        });
+    });
+
+    describe("fourth review", () => {
+        it("waits the full outcome-unknown delay after a send that failed late in a slow batch", async () => {
+            expect.assertions(3);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const sent: SendPayload[] = [];
+            const transport: MailTransport = {
+                dedupesOnIdempotencyKey: true,
+                send: async (payload) => {
+                    sent.push(payload);
+
+                    if (payload.subject === "Slow") {
+                        // A send that took 200 s of host time: past the 180 s retry delay.
+                        clock.advance(200_000);
+
+                        return { id: "slow" };
+                    }
+
+                    if (sent.filter((entry) => entry.subject === "Late").length === 1) {
+                        throw new MailSendError({ message: "socket hang up", outcomeUnknown: true, retryable: false });
+                    }
+
+                    return { id: "late" };
+                },
+            };
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ subject: "Slow", text: "1", to: "ada@example.com" });
+            await mail.mailer.queue({ subject: "Late", text: "2", to: "bob@example.com" });
+            await mail.poll();
+
+            // Right after the batch: 200 s since it began, 0 s since "Late" failed.
+            await expect(mail.poll()).resolves.toBe(0);
+
+            clock.advance(180_000);
+            await mail.poll();
+
+            expect(sent.map((payload) => payload.subject)).toStrictEqual(["Slow", "Late", "Late"]);
+            await expect(mail.poll()).resolves.toBe(0);
+        });
+
+        it("honours delaySeconds on the mail queue and refuses the options it cannot honour", async () => {
+            expect.assertions(3);
+
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+            const body = { idempotencyKey: "digest-1", subject: "Digest", text: "Weekly", to: "ada@example.com" };
+
+            await mail.queue.send(body, { delaySeconds: 60 });
+            await mail.poll();
+
+            expect(transport.sent).toStrictEqual([]);
+
+            clock.advance(60_000);
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(1);
+            await expect(mail.queue.send(body, { contentType: "text" })).rejects.toThrow(/delaySeconds/u);
+        });
+    });
 });

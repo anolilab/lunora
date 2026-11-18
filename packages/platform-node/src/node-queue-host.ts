@@ -221,7 +221,7 @@ interface NodeQueueHost<Queues extends Record<string, { isLunoraQueue: true }>> 
      */
     deadLetters: {
         list: (queue: string) => { attempts: number; body: unknown; id: string }[];
-        /** Return a parked message to its queue with `attempts` reset. `false` when no such message is parked. */
+        /** Return a parked message to its queue with `attempts` reset. `false` when no message of a queue this host declared is parked under that id. */
         requeue: (id: string) => boolean;
     };
     /** The caller's `env` plus one `QUEUE_<EXPORT>` binding per queue. */
@@ -293,8 +293,10 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         "SELECT COUNT(*) AS n FROM _lunora_queue_messages WHERE queue = ? AND state = 'pending' AND visible_at <= ?",
     );
     const listDead = database.prepare<[string], MessageRow>("SELECT * FROM _lunora_queue_messages WHERE queue = ? AND state = 'dead' ORDER BY enqueued_at");
-    const revive = database.prepare<[number, string]>(
-        "UPDATE _lunora_queue_messages SET state = 'pending', attempts = 0, visible_at = ? WHERE id = ? AND state = 'dead'",
+    // Scoped to the queues this host declared: the table is shared, and a row of another host's
+    // queue (the mail host's, which keeps attempts on requeue for its dedupe check) is not ours to reset.
+    const revive = database.prepare<[number, string, string]>(
+        "UPDATE _lunora_queue_messages SET state = 'pending', attempts = 0, visible_at = ? WHERE id = ? AND state = 'dead' AND queue IN (SELECT value FROM json_each(?))",
     );
 
     const compiled: CompiledQueue[] = Object.entries(options.queues).map(([exportName, value]) => {
@@ -306,6 +308,7 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
     });
 
     const declared = new Set(compiled.map((queue) => queue.name));
+    const declaredJson = JSON.stringify([...declared]);
 
     // Checked once, at construction, because both failures are silent at runtime:
     // a queue that dead-letters to itself re-enqueues with `attempts` reset and
@@ -539,7 +542,7 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
                 listDead.all(queueName).map((row) => {
                     return { attempts: row.attempts, body: safeDecode(row), id: row.id };
                 }),
-            requeue: (id: string) => revive.run(clock(), id).changes > 0,
+            requeue: (id: string) => revive.run(clock(), id, declaredJson).changes > 0,
         },
         env,
         poll: async (now = clock()): Promise<number> => {

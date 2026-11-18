@@ -22,6 +22,8 @@
  * Batches are claimed oldest first; a retried send goes behind newer ones.
  */
 
+import { createHash } from "node:crypto";
+
 import { LunoraError } from "@lunora/errors";
 import type { MailEnv, Mailer, MailTransport, QueueLike, SentMailStore } from "@lunora/mail";
 import { consumeQueuedSend, createMailer, createMailerFromEnv, isOutcomeUnknownMailError, isRetryableMailError, shouldCaptureMail } from "@lunora/mail";
@@ -59,6 +61,16 @@ const MAIL_VISIBILITY_TIMEOUT_MS = MAIL_BATCH_SIZE * (MAIL_SEND_TIMEOUT_MS + 4 *
  */
 const OUTCOME_UNKNOWN_RETRY_SECONDS = 180;
 
+/**
+ * How long `consumeQueuedSend`'s attempt marks live: 15 days, its
+ * `ATTEMPT_MARK_TTL_SECONDS` at the default `sentTtlSeconds`. A redelivery older
+ * than this would find no evidence of an earlier send that may have landed.
+ */
+const MAIL_EVIDENCE_TTL_MS = 15 * 86_400_000;
+
+/** How long a key remembers the content it was first queued with: the ledger's default sent TTL. */
+const MAIL_KEY_CONTENT_TTL_MS = 86_400_000;
+
 /** How deep a logged error's `cause` chain is followed. */
 const MAX_CAUSE_DEPTH = 3;
 
@@ -92,7 +104,8 @@ interface NodeMailHost {
          * Return a parked send to the queue for one more delivery. Its attempt
          * count is kept, so a send an earlier attempt may have delivered is
          * refused once the provider no longer dedupes it. `false` when no mail
-         * send with that id is parked.
+         * send with that id is parked. Throws for one queued 15 or more days ago,
+         * whose attempt record in the sent ledger has expired.
          */
         requeue: (id: string) => boolean;
     };
@@ -146,19 +159,26 @@ const logFailure = (level: "error" | "warn", event: string, attempts: number, er
     console[level](`[@lunora/platform-node] ${line}`);
 };
 
+/** How often the sent ledger drops expired rows. A read ignores them anyway, so this only bounds the table. */
+const LEDGER_PRUNE_INTERVAL_MS = 60_000;
+
 /**
  * The sent-mail ledger `consumeQueuedSend` dedupes on, in the same database as
- * the queue, so every process on the file shares it. Expired rows are pruned on
- * write; a read ignores them, as Workers KV's TTL would.
+ * the queue, so every process on the file shares it. A read ignores expired
+ * rows, as Workers KV's TTL would; a write prunes them, at most once a minute
+ * and through an index, since each send writes two or three rows that live for
+ * 15 days and the prune holds the write lock the shard and app queues share.
  */
 const createSentLedger = (database: Database.Database, clock: () => number): SentMailStore => {
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_sent (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER NOT NULL)");
+    database.exec("CREATE INDEX IF NOT EXISTS _lunora_mail_sent_expires ON _lunora_mail_sent (expires_at)");
 
     const read = database.prepare<[string, number], { value: string }>("SELECT value FROM _lunora_mail_sent WHERE key = ? AND expires_at > ?");
     const write = database.prepare<[string, string, number]>(
         "INSERT INTO _lunora_mail_sent (key, value, expires_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
     );
     const prune = database.prepare<[number]>("DELETE FROM _lunora_mail_sent WHERE expires_at <= ?");
+    let prunedAt = Number.NEGATIVE_INFINITY;
 
     return {
         // eslint-disable-next-line @typescript-eslint/require-await -- the contract is async for KV; SQLite is synchronous
@@ -167,10 +187,104 @@ const createSentLedger = (database: Database.Database, clock: () => number): Sen
         put: async (key, value, { expirationTtl }) => {
             const now = clock();
 
-            prune.run(now);
+            if (now - prunedAt >= LEDGER_PRUNE_INTERVAL_MS) {
+                prune.run(now);
+                prunedAt = now;
+            }
+
             write.run(key, value, now + expirationTtl * 1000);
         },
     };
+};
+
+/** One delivery at a time per idempotency key, and one content per key, across polls and processes on the file. */
+interface KeyClaims {
+    release: (key: string) => void;
+
+    /**
+     * Take the key for this delivery: `"busy"` while another delivery holds it,
+     * `"conflict"` when the key was first queued with different content.
+     */
+    take: (key: string, fingerprint: string) => "busy" | "conflict" | "taken";
+}
+
+/**
+ * Claims taken before a send, in one immediate transaction with the content
+ * check: two queued rows with one key, claimed by overlapping polls or two
+ * processes, would otherwise both pass the ledger's "not yet sent" read before
+ * either recorded the send. A claim a crash left behind lapses after the same
+ * lease as the row, which is when the row redelivers; `DO NOTHING` would hold
+ * the key forever instead.
+ *
+ * The content check exists because the ledger answers by key alone: a key
+ * reused for a different message would otherwise be acked as already sent.
+ */
+const createKeyClaims = (database: Database.Database, clock: () => number): KeyClaims => {
+    database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_claims (key TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)");
+    database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_keys (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, expires_at INTEGER NOT NULL)");
+
+    const claim = database.prepare<[string, number, number]>(
+        "INSERT INTO _lunora_mail_claims (key, expires_at) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET expires_at = excluded.expires_at WHERE _lunora_mail_claims.expires_at <= ?",
+    );
+    const drop = database.prepare<[string]>("DELETE FROM _lunora_mail_claims WHERE key = ?");
+    const readContent = database.prepare<[string, number], { fingerprint: string }>(
+        "SELECT fingerprint FROM _lunora_mail_keys WHERE key = ? AND expires_at > ?",
+    );
+    const writeContent = database.prepare<[string, string, number]>(
+        "INSERT INTO _lunora_mail_keys (key, fingerprint, expires_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET fingerprint = excluded.fingerprint, expires_at = excluded.expires_at",
+    );
+
+    const takeInTransaction = database.transaction((key: string, fingerprint: string): "busy" | "conflict" | "taken" => {
+        const now = clock();
+        const known = readContent.get(key, now)?.fingerprint;
+
+        if (known !== undefined && known !== fingerprint) {
+            return "conflict";
+        }
+
+        if (claim.run(key, now + MAIL_VISIBILITY_TIMEOUT_MS, now).changes === 0) {
+            return "busy";
+        }
+
+        if (known === undefined) {
+            writeContent.run(key, fingerprint, now + MAIL_KEY_CONTENT_TTL_MS);
+        }
+
+        return "taken";
+    });
+
+    return {
+        release: (key) => {
+            drop.run(key);
+        },
+        take: (key, fingerprint) => takeInTransaction.immediate(key, fingerprint),
+    };
+};
+
+/** A body as JSON with its object keys sorted, so the same message always hashes the same. */
+const canonicalJson = (value: unknown): string => {
+    if (Array.isArray(value)) {
+        return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+    }
+
+    if (value !== null && typeof value === "object") {
+        const entries = Object.entries(value as Record<string, unknown>)
+            .filter(([, entry]) => entry !== undefined)
+            .toSorted(([a], [b]) => (a < b ? -1 : 1));
+
+        return `{${entries.map(([name, entry]) => `${JSON.stringify(name)}:${canonicalJson(entry)}`).join(",")}}`;
+    }
+
+    return JSON.stringify(value);
+};
+
+const fingerprintOf = (body: unknown): string => createHash("sha256").update(canonicalJson(body)).digest("hex");
+
+/** The queued body's idempotency key, when it carries a usable one; `consumeQueuedSend` refuses the rest. */
+const idempotencyKeyOf = (body: unknown): string | undefined => {
+    const key = body !== null && typeof body === "object" ? (body as { idempotencyKey?: unknown }).idempotencyKey : undefined;
+
+    return typeof key === "string" && key !== "" ? key : undefined;
 };
 
 /**
@@ -229,16 +343,98 @@ const settleFailure = (message: MessageBatchLike["messages"][number], error: unk
     message.retry(isOutcomeUnknownMailError(error) ? { delaySeconds: OUTCOME_UNKNOWN_RETRY_SECONDS } : undefined);
 };
 
-/** Send each message of a batch in turn, settling each on its own outcome. */
-const consumeBatch = async (mailer: Mailer, sent: SentMailStore, batch: MessageBatchLike): Promise<void> => {
-    for (const message of batch.messages) {
-        try {
-            // eslint-disable-next-line no-await-in-loop -- one send at a time, so a provider rate limit fails one message, not the batch
-            await consumeQueuedSend(mailer, message.body, { attempts: message.attempts, enqueuedAt: message.timestamp, sent });
-            message.ack();
-        } catch (error) {
-            settleFailure(message, error);
+/** What the consumer needs besides the batch. */
+interface MailConsumer {
+    claims: KeyClaims;
+    clock: () => number;
+    mailer: Mailer;
+    sent: SentMailStore;
+}
+
+/** Retry a send whose key another delivery holds: it is settled by then, and the ledger answers for it. */
+const retryBusyKey = (message: MessageBatchLike["messages"][number], key: string): void => {
+    const busy = new Error(`another delivery of idempotency key "${key}" is in flight`);
+
+    logFailure(
+        message.attempts > MAIL_MAX_RETRIES ? "error" : "warn",
+        message.attempts > MAIL_MAX_RETRIES ? "lunora.mail.send_dead_lettered" : "lunora.mail.send_key_busy",
+        message.attempts,
+        busy,
+    );
+    message.retry({ delaySeconds: OUTCOME_UNKNOWN_RETRY_SECONDS });
+};
+
+/** Ack a delivery nothing should send, with an error an operator can alert on. */
+const refuse = (message: MessageBatchLike["messages"][number], event: string, reason: string): void => {
+    logFailure("error", event, message.attempts, new Error(reason));
+    message.ack();
+};
+
+/** Deliver one message under its key's claim, and settle it on its own outcome. */
+const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messages"][number]): Promise<void> => {
+    // Every route back into delivery passes here: a retry, a lapsed lease, a requeue. Past the
+    // attempt marks' lifetime the ledger can no longer say whether an earlier attempt landed.
+    if (message.attempts > 1 && consumer.clock() - message.timestamp.getTime() >= MAIL_EVIDENCE_TTL_MS) {
+        refuse(message, "lunora.mail.send_evidence_expired", "an earlier delivery may have been sent, and its record in the sent ledger has expired");
+
+        return;
+    }
+
+    const key = idempotencyKeyOf(message.body);
+    const claimed = key === undefined ? "taken" : consumer.claims.take(key, fingerprintOf(message.body));
+
+    if (claimed === "conflict") {
+        refuse(message, "lunora.mail.idempotency_key_conflict", `idempotency key "${String(key)}" was already queued with different content`);
+
+        return;
+    }
+
+    if (claimed === "busy") {
+        retryBusyKey(message, String(key));
+
+        return;
+    }
+
+    // `consumeQueuedSend` ages the message against Date.now(), so its enqueue time is moved
+    // by the gap between the two clocks: the dedupe window is then measured on the host clock,
+    // the one every other timestamp here comes from.
+    const enqueuedAt = new Date(Date.now() - (consumer.clock() - message.timestamp.getTime()));
+
+    try {
+        await consumeQueuedSend(consumer.mailer, message.body, { attempts: message.attempts, enqueuedAt, sent: consumer.sent });
+        message.ack();
+    } catch (error) {
+        settleFailure(message, error);
+    } finally {
+        if (key !== undefined) {
+            consumer.claims.release(key);
         }
+    }
+};
+
+/**
+ * The message, with its retry delay counted from now rather than from the
+ * batch's start. The queue host settles a whole batch on the poll's clock
+ * reading, so without this a send that failed late in a slow batch would be due
+ * again before its delay, possibly while the first request is still in flight.
+ */
+const retryingFromNow = (message: MessageBatchLike["messages"][number], elapsedSeconds: () => number): MessageBatchLike["messages"][number] => {
+    return {
+        ...message,
+        retry: (options) => {
+            message.retry({ delaySeconds: (options?.delaySeconds ?? 0) + elapsedSeconds() });
+        },
+    };
+};
+
+/** Send each message of a batch in turn. */
+const consumeBatch = async (consumer: MailConsumer, batch: MessageBatchLike): Promise<void> => {
+    const startedAt = consumer.clock();
+    const elapsedSeconds = (): number => Math.ceil(Math.max(0, consumer.clock() - startedAt) / 1000);
+
+    for (const message of batch.messages) {
+        // eslint-disable-next-line no-await-in-loop -- one send at a time, so a provider rate limit fails one message, not the batch
+        await deliver(consumer, retryingFromNow(message, elapsedSeconds));
     }
 };
 
@@ -253,18 +449,29 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
     const env: MailEnv = options.env ?? { ...process.env };
     const clock = options.now ?? Date.now;
     const queue: QueueLike = {
-        send: async (payload) => {
+        send: async (payload, sendOptions) => {
+            const { delaySeconds, ...unsupported } = sendOptions ?? {};
+
+            // Refused rather than dropped: a caller treating this like a Queue binding would
+            // otherwise get an immediate send, and a non-JSON `contentType` a body the consumer refuses.
+            if (Object.keys(unsupported).length > 0 || (delaySeconds !== undefined && typeof delaySeconds !== "number")) {
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    `@lunora/platform-node: the mail queue takes only a numeric \`delaySeconds\` option, got ${JSON.stringify(sendOptions)}`,
+                );
+            }
+
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `host` is assigned
-            await host.bindings.mail.send(payload);
+            await host.bindings.mail.send(payload, delaySeconds === undefined ? undefined : { delaySeconds });
         },
     };
     // Built before the tables, so a refusal leaves nothing behind in the database.
     const mailer = buildMailer(env, queue, options.transport);
-    const sent = createSentLedger(database, clock);
+    const consumer: MailConsumer = { claims: createKeyClaims(database, clock), clock, mailer, sent: createSentLedger(database, clock) };
     const host = createNodeQueueHost(database, {
         now: clock,
         onBatch: async (batch) => {
-            await consumeBatch(mailer, sent, batch);
+            await consumeBatch(consumer, batch);
         },
         // No batch window: a verification code or reset link must not wait for nine more sends.
         queues: {
@@ -284,12 +491,34 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
     const revive = database.prepare<[number, string, string]>(
         "UPDATE _lunora_queue_messages SET state = 'pending', visible_at = ? WHERE id = ? AND queue = ? AND state = 'dead'",
     );
+    const parkedAt = database.prepare<[string, string], { enqueued_at: number }>(
+        "SELECT enqueued_at FROM _lunora_queue_messages WHERE id = ? AND queue = ? AND state = 'dead'",
+    );
     const inFlight = new Set<Promise<number>>();
+
+    const requeue = (id: string): boolean => {
+        const row = parkedAt.get(id, MAIL_QUEUE_NAME);
+
+        if (row === undefined) {
+            return false;
+        }
+
+        // Refused here, loudly, rather than revived and then refused by `deliver`: the operator
+        // asking is the one who needs to know the send cannot be replayed safely.
+        if (clock() - row.enqueued_at >= MAIL_EVIDENCE_TTL_MS) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: parked mail ${id} was queued 15 or more days ago, so the record of whether an earlier attempt was sent has expired — check the provider's logs and queue it again if it never arrived`,
+            );
+        }
+
+        return revive.run(clock(), id, MAIL_QUEUE_NAME).changes > 0;
+    };
 
     return {
         deadLetters: {
             list: () => host.deadLetters.list(MAIL_QUEUE_NAME),
-            requeue: (id) => revive.run(clock(), id, MAIL_QUEUE_NAME).changes > 0,
+            requeue,
         },
         drain: async () => {
             await Promise.allSettled(inFlight);
