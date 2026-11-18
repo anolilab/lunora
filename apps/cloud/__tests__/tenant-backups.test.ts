@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { exportEndLine } from "../../../shared/export-end";
 import { internal } from "../lunora/_generated/internal";
 import { authorizeDownload, beginBackup, beginRestore, finish, list } from "../lunora/tenant-backups";
 import { PART_BYTES, uploadStream } from "../src/backup/multipart";
@@ -22,6 +23,8 @@ const NOW = Date.UTC(2026, 8, 30, 12, 0, 0);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TOKEN = "tok_super_secret_admin_bearer";
 const SECRET_ROW = `{"table":"users","doc":{"_id":"u1","email":"private@example.com"}}\n`;
+/** {@link SECRET_ROW} as a whole export: the row, then the terminal frame counting it. */
+const SECRET_SNAPSHOT = `${SECRET_ROW}${exportEndLine(1)}`;
 
 type Row = Record<string, unknown>;
 
@@ -582,7 +585,7 @@ describe(restoreTenantSnapshot, () => {
         const snapshot = line.repeat(2000);
         const calls: { body: string; path: string }[] = [];
 
-        const summary = await restoreTenantSnapshot(stagedTenant(calls), new Blob([await gzip(snapshot)]).stream(), SESSION);
+        const summary = await restoreTenantSnapshot(stagedTenant(calls), new Blob([await gzip(`${snapshot}${exportEndLine(2000)}`)]).stream(), SESSION);
         const staged = calls.filter((call) => call.path === STAGE_PATH);
 
         expect(staged.length).toBeGreaterThan(1);
@@ -595,7 +598,7 @@ describe(restoreTenantSnapshot, () => {
     it("still stages an empty snapshot, whose commit empties the tenant", async () => {
         const calls: { body: string; path: string }[] = [];
 
-        await restoreTenantSnapshot(stagedTenant(calls), new Blob([await gzip("")]).stream(), SESSION);
+        await restoreTenantSnapshot(stagedTenant(calls), new Blob([await gzip(exportEndLine(0))]).stream(), SESSION);
 
         expect(calls.map((call) => call.path)).toStrictEqual([ABORT_PATH, STAGE_PATH, COMMIT_PATH]);
         expect(calls[1]?.body).toBe("");
@@ -615,14 +618,14 @@ describe(restoreTenantSnapshot, () => {
         await expect(
             restoreTenantSnapshot(
                 answering(rejected, Response.json({ errors: [{ code: "VALIDATION_ERROR" }], failed: [], received: 1 })),
-                new Blob([await gzip(SECRET_ROW)]).stream(),
+                new Blob([await gzip(SECRET_SNAPSHOT)]).stream(),
                 SESSION,
             ),
         ).rejects.toThrow(/1 row\(s\) rejected.*nothing was changed/u);
         await expect(
             restoreTenantSnapshot(
                 answering(partial, Response.json({ errors: [], failed: [{ shardKey: "c2" }], received: 1 }, { status: 207 })),
-                new Blob([await gzip(SECRET_ROW)]).stream(),
+                new Blob([await gzip(SECRET_SNAPSHOT)]).stream(),
                 SESSION,
             ),
         ).rejects.toThrow(/1 shard\(s\) unreachable/u);
@@ -636,7 +639,7 @@ describe(restoreTenantSnapshot, () => {
         await expect(
             restoreTenantSnapshot(
                 stagedTenant(retried, [() => Response.json({ errors: [], failed: [{ shardKey: "c2" }], status: "partial" }, { status: 502 })]),
-                new Blob([await gzip(SECRET_ROW)]).stream(),
+                new Blob([await gzip(SECRET_SNAPSHOT)]).stream(),
                 SESSION,
             ),
         ).resolves.toMatchObject({ inserted: 2000 });
@@ -647,7 +650,7 @@ describe(restoreTenantSnapshot, () => {
         await expect(
             restoreTenantSnapshot(
                 stagedTenant(refused, [() => Response.json({ errors: [{ code: "VALIDATION_ERROR" }], failed: [], status: "refused" }, { status: 409 })]),
-                new Blob([await gzip(SECRET_ROW)]).stream(),
+                new Blob([await gzip(SECRET_SNAPSHOT)]).stream(),
                 SESSION,
             ),
         ).rejects.toThrow(/refused before anything was written: 1 row\(s\) would not land/u);
@@ -660,7 +663,7 @@ describe(restoreTenantSnapshot, () => {
         await expect(
             restoreTenantSnapshot(
                 stagedTenant(calls, [() => Response.json({ error: { code: "IMPORT_SESSION_COMMITTING", message: "being committed" } }, { status: 409 })]),
-                new Blob([await gzip(SECRET_ROW)]).stream(),
+                new Blob([await gzip(SECRET_SNAPSHOT)]).stream(),
                 SESSION,
             ),
         ).resolves.toMatchObject({ inserted: 2000 });
@@ -672,7 +675,7 @@ describe(restoreTenantSnapshot, () => {
         const failing = (): Response => Response.json({ errors: [], failed: [{ shardKey: "c2" }], status: "partial" }, { status: 502 });
 
         await expect(
-            restoreTenantSnapshot(stagedTenant([], [failing, failing, failing]), new Blob([await gzip(SECRET_ROW)]).stream(), SESSION),
+            restoreTenantSnapshot(stagedTenant([], [failing, failing, failing]), new Blob([await gzip(SECRET_SNAPSHOT)]).stream(), SESSION),
         ).rejects.toThrow(/did not finish after 3 attempts.*part of the tenant may already hold the snapshot/u);
     });
 
@@ -700,7 +703,7 @@ describe(restoreTenantSnapshot, () => {
 
             return path === COMMIT_PATH ? hostile() : Response.json({ errors: "x".repeat(10_000), received: -1 });
         };
-        const summary = await restoreTenantSnapshot(staging, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION);
+        const summary = await restoreTenantSnapshot(staging, new Blob([await gzip(SECRET_SNAPSHOT)]).stream(), SESSION);
         const tables = Object.keys(summary.deletedByTable);
 
         expect(tables.length).toBeLessThanOrEqual(65);
@@ -717,13 +720,25 @@ describe(restoreTenantSnapshot, () => {
         const send: TenantSend = async (path) =>
             path === ABORT_PATH ? Response.json({ aborted: false }) : Response.json({ error: { message: "m".repeat(100_000) } }, { status: 500 });
 
-        const failure: unknown = await restoreTenantSnapshot(send, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION).then(
+        const failure: unknown = await restoreTenantSnapshot(send, new Blob([await gzip(SECRET_SNAPSHOT)]).stream(), SESSION).then(
             () => undefined,
             (error: unknown) => error,
         );
 
         expect(failure).toBeInstanceOf(Error);
         expect((failure as Error).message.length).toBeLessThan(500);
+    });
+
+    it.each([
+        ["has no end marker", SECRET_ROW, /no end marker/u],
+        ["declares more rows than it holds", `${SECRET_ROW}${exportEndLine(2)}`, /declares 2 row\(s\) but 1 were read/u],
+        ["continues after its end marker", `${SECRET_SNAPSHOT}${SECRET_ROW}`, /continues after its end marker/u],
+    ])("aborts the session, and never commits, a snapshot that %s", async (_label, snapshot, message) => {
+        const calls: { body: string; path: string }[] = [];
+
+        await expect(restoreTenantSnapshot(stagedTenant(calls), new Blob([await gzip(snapshot)]).stream(), SESSION)).rejects.toThrow(message);
+        expect(calls.map((call) => call.path)).not.toContain(COMMIT_PATH);
+        expect(calls.at(-1)?.path).toBe(ABORT_PATH);
     });
 
     it("refuses a runtime without staged import before sending it a row", async () => {
@@ -734,7 +749,7 @@ describe(restoreTenantSnapshot, () => {
             return new Response("not found", { status: 404 });
         };
 
-        await expect(restoreTenantSnapshot(old, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION)).rejects.toThrow(/predates staged import/u);
+        await expect(restoreTenantSnapshot(old, new Blob([await gzip(SECRET_SNAPSHOT)]).stream(), SESSION)).rejects.toThrow(/predates staged import/u);
         expect(calls).toStrictEqual([ABORT_PATH]);
     });
 
@@ -746,7 +761,7 @@ describe(restoreTenantSnapshot, () => {
             return path === ABORT_PATH ? Response.json({ aborted: false }) : Response.json({ error: { message: "Body too large" } }, { status: 413 });
         };
 
-        await expect(restoreTenantSnapshot(send, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION)).rejects.toThrow(/HTTP 413/u);
+        await expect(restoreTenantSnapshot(send, new Blob([await gzip(SECRET_SNAPSHOT)]).stream(), SESSION)).rejects.toThrow(/HTTP 413/u);
         expect(calls.at(-1)).toBe(ABORT_PATH);
     });
 });
@@ -877,7 +892,7 @@ describe("tenant backup routes", () => {
     const target = { adminToken: TOKEN, alias: "acme", deploymentId: "dep_a", resourceRef: "acme", scriptName: "acme", url: "https://acme.lunora.app" };
 
     it("takes the pre-restore backup before importing, and settles both rows", async () => {
-        const { bucket, objects } = memoryBucket({ "src.ndjson.gz": await gzip(SECRET_ROW) });
+        const { bucket, objects } = memoryBucket({ "src.ndjson.gz": await gzip(SECRET_SNAPSHOT) });
         const { dispatcher, requests } = fakeDispatcher({
             acme: (request) => {
                 const { pathname } = new URL(request.url);
@@ -930,7 +945,7 @@ describe("tenant backup routes", () => {
     });
 
     it("restores nothing when the pre-restore backup fails", async () => {
-        const { bucket } = memoryBucket({ "src.ndjson.gz": await gzip(SECRET_ROW) });
+        const { bucket } = memoryBucket({ "src.ndjson.gz": await gzip(SECRET_SNAPSHOT) });
         const { dispatcher, requests } = fakeDispatcher({ acme: () => Promise.resolve(Response.json({ error: { message: "boom" } }, { status: 500 })) });
         const finished: Row[] = [];
         const runMutation = vi.fn<(reference: unknown, args?: Row) => Promise<unknown>>(async (reference, args) => {

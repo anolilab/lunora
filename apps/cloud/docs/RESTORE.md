@@ -195,6 +195,14 @@ sections — records under reserved `$`-prefixed table names. A file with no hea
 is format 1 (tables only, every snapshot taken before this change), and the
 import reads both.
 
+Every export ends with `{"end":true,"rows":N}`, N counting the rows before it.
+A studio restore refuses, and changes nothing for, a snapshot without that
+line, one whose count differs from the rows read, or one that continues past
+it: a file cut on a row boundary is still valid NDJSON, and a rewind would
+delete every row after the cut. A snapshot taken by a runtime older than the
+marker has none; after checking it is complete, download it and restore it by
+hand (below).
+
 | Covered                                                                                                                                                                                                                                   | **Not** covered                                                                         |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | Every table in the app's schema on every shard (the default DO and, with a shard registry, every `.shardBy()` shard)                                                                                                                      | Vectorize — the binding cannot list an index's vectors; re-embed with `backfillVectors` |

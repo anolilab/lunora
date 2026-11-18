@@ -351,8 +351,9 @@ export const restoreTenantSnapshot = async (
     const encoder = new TextEncoder();
     let received = 0;
     // The export's terminal frame (`{"end":true,"rows":N}`), checked here and never staged: a batch holds a slice of the
-    // rows, so the tenant would read the file's total as a count mismatch and refuse the batch. A snapshot taken before
-    // exports carried the frame has none and is staged as it is.
+    // rows, so the tenant would read the file's total as a count mismatch and refuse the batch. A snapshot without one is
+    // refused like the CLI's import refuses it: a cut on a row boundary is indistinguishable from a smaller export, and a
+    // replace would delete every row past the cut.
     let snapshotRows = 0;
     let declaredRows: number | undefined;
     let batch = "";
@@ -421,7 +422,14 @@ export const restoreTenantSnapshot = async (
             batchBytes += size;
         });
 
-        if (declaredRows !== undefined && declaredRows !== snapshotRows) {
+        if (declaredRows === undefined) {
+            throw new TenantAdminError(
+                "the snapshot has no end marker, so it may have been cut short or taken by a runtime older than the marker — nothing was changed",
+                0,
+            );
+        }
+
+        if (declaredRows !== snapshotRows) {
             throw new TenantAdminError(
                 `the snapshot's end marker declares ${String(declaredRows)} row(s) but ${String(snapshotRows)} were read, so it is incomplete — nothing was changed`,
                 0,
