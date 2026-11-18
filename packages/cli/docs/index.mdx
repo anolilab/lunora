@@ -835,6 +835,8 @@ Refused before codegen writes anything:
   `--migrate-allow-destructive`, `--health-check`, `--preview`, `--temporary`,
   `--emit-bindings`, and `--prebuilt`, since `lunora build` and `lunora prepare`
   never generate for this target.
+- **A malformed `secrets.required`**: anything but an array of non-empty
+  names, which would otherwise deploy a server missing those secrets.
 - **A `secrets_store_secrets[]` binding named `LUNORA_*`**, which the runtime
   reads as a plain string and which could therefore never start.
 
@@ -860,14 +862,16 @@ responses in flight at that moment to be written (a request still arriving on an
 open connection gets a 503 and `Connection: close`), closes the listener (ending
 event streams and WebSockets), then drains `waitUntil` work, alarms and cron runs
 before closing the databases. The whole drain shares one deadline,
-`LUNORA_SHUTDOWN_TIMEOUT_MS` (default 8000, under `docker stop`'s 10 s grace);
+`LUNORA_SHUTDOWN_TIMEOUT_MS` (default 8000, under `docker stop`'s 10 s grace; a
+value that is not a whole number of milliseconds is refused at startup);
 work still running when it passes is logged by name and the exit code is 1. A
 failed step is logged and the rest still run, and any fatal error during the
 shutdown also makes the exit code 1. A second signal exits at once. `waitUntil`
 failures, alarm and scheduled-job failures, a throwing fetch handler (logged by
 method and path, never its query string), unhandled rejections and uncaught
 exceptions are logged with their stack and cause; the last two also shut the
-server down with exit code 1.
+server down with exit code 1. If the process ends before the shutdown finished,
+for any reason, it exits 1 and logs the step it was in.
 
 The deploy warns, by name, about every declared binding the server does not
 compose: static `assets`, queues, workflows, `.global()` tables, object

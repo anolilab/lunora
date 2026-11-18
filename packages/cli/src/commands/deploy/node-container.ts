@@ -103,7 +103,7 @@ interface NodeWranglerConfig {
     durable_objects?: { bindings?: ReadonlyArray<{ class_name?: unknown; name?: unknown; script_name?: unknown } | null> };
     hyperdrive?: ReadonlyArray<{ binding?: unknown } | null>;
     main?: unknown;
-    secrets?: { required?: unknown } | null;
+    secrets?: unknown;
     secrets_store_secrets?: ReadonlyArray<{ binding?: unknown } | null>;
     vars?: Record<string, unknown> | null;
 }
@@ -186,6 +186,30 @@ const stringNames = (entries: ReadonlyArray<{ binding?: unknown } | null> | unde
     (entries ?? []).flatMap((entry) => (typeof entry?.binding === "string" ? [entry.binding] : []));
 
 /**
+ * The `secrets.required` names, or a throw naming the field when it is not a list of names. Dropping a malformed value would
+ * deploy a server that starts without the secrets the app needs, the failure this check exists to prevent.
+ */
+const requiredSecretNames = (secrets: unknown, configName: string): string[] => {
+    if (secrets === undefined || secrets === null) {
+        return [];
+    }
+
+    const required = typeof secrets === "object" && !Array.isArray(secrets) ? (secrets as { required?: unknown }).required : secrets;
+
+    if (required === undefined && typeof secrets === "object" && !Array.isArray(secrets)) {
+        return [];
+    }
+
+    if (!Array.isArray(required) || !required.every((name) => typeof name === "string" && name.trim() !== "")) {
+        throw new Error(
+            `--target node checks every secrets.required name at startup, and secrets.required in ${configName} is ${JSON.stringify(required)}: it must be an array of non-empty secret names, such as ["API_KEY"]`,
+        );
+    }
+
+    return required as string[];
+};
+
+/**
  * Read what the server entry has to compose, or throw naming what is missing or unservable. Reads the wrangler config only, so the
  * deploy runs it before codegen writes anything.
  * @param projectRoot Directory containing the wrangler config.
@@ -249,7 +273,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         );
     }
 
-    const required = parsed.secrets?.required;
+    const workerSecrets = requiredSecretNames(parsed.secrets, configName);
     const declared = parsed as Record<string, unknown>;
 
     return {
@@ -259,7 +283,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         storeSecrets,
         unbound: [...Object.keys(declared).filter((key) => !COMPOSED_OR_CONFIG_KEYS.has(key) && isDeclared(declared[key])), ...external],
         vars: { ...parsed.vars },
-        workerSecrets: Array.isArray(required) ? required.filter((name): name is string => typeof name === "string") : [],
+        workerSecrets,
     };
 };
 
@@ -353,17 +377,34 @@ import { LUNORA_CRONS } from ${JSON.stringify(projectSpecifier(projectRoot, cron
 const CONFIG = ${JSON.stringify(config, undefined, 4)};
 const PRIMARY_BINDING = ${JSON.stringify(primary?.name)};
 
-// The error object, not its message: console.error prints its stack and its cause chain.
+// The error object, not its message: console.error prints its stack and its cause chain. Every log here passes a literal
+// format string and its values as arguments, so a value that contains %s or %o prints as itself.
 const logError = (message, error) => {
-    console.error(\`lunora: \${message}\`, error);
+    console.error("lunora: %s", message, error);
 };
 
 const missing = CONFIG.requiredEnv.filter((name) => process.env[name] === undefined || process.env[name] === "");
 
 if (missing.length > 0) {
-    console.error(\`lunora: refusing to start, these required environment variables are not set: \${missing.join(", ")}\`);
+    console.error("lunora: refusing to start, these required environment variables are not set: %s", missing.join(", "));
     process.exit(1);
 }
+
+// The whole drain shares one deadline, kept under \`docker stop\`'s default 10 s grace so the databases are closed before a kill.
+// Checked here, before anything listens: Number() reads "8s" as NaN and "" as 0, either of which would skip the drain entirely.
+const timeoutName = ${JSON.stringify(SHUTDOWN_TIMEOUT_VARIABLE)};
+const rawShutdownTimeout = process.env[timeoutName];
+
+if (rawShutdownTimeout !== undefined && !(/^\\d+$/u.test(rawShutdownTimeout) && Number.isSafeInteger(Number(rawShutdownTimeout)))) {
+    console.error(
+        "lunora: refusing to start, %s must be a whole number of milliseconds such as ${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)}, and it is %j",
+        timeoutName,
+        rawShutdownTimeout,
+    );
+    process.exit(1);
+}
+
+const shutdownTimeoutMs = rawShutdownTimeout === undefined ? ${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)} : Number(rawShutdownTimeout);
 
 const DURABLE_OBJECT_CLASSES = { ${classTable} };
 
@@ -477,7 +518,7 @@ const drainSet = async (set, { timeoutMs }) => {
     try {
         while (set.size > 0) {
             if (!(await Promise.race([Promise.all(set).then(() => true), expired]))) {
-                console.error(\`lunora: shutdown deadline passed with \${String(set.size)} waitUntil task(s) still running\`);
+                console.error("lunora: shutdown deadline passed with %d waitUntil task(s) still running", set.size);
 
                 return { pending: [...set].map(() => "waitUntil work"), timedOut: true };
             }
@@ -517,19 +558,12 @@ const server = await createNodeHttpServer({
     port: Number(process.env.PORT ?? ${String(DEFAULT_PORT)}),
 });
 
-const publicUrl = process.env.LUNORA_ORIGIN_URL;
-
-console.log(\`lunora: listening on \${server.origin}\${publicUrl === undefined || publicUrl === "" ? "" : \` (public URL \${publicUrl})\`}\`);
-
 // One exit code for the whole process: a fatal error raised while a shutdown is already running must still end it non-zero.
 let exitCode = 0;
 
 const markFailed = () => {
     exitCode = 1;
 };
-
-// The whole drain shares one deadline, kept under \`docker stop\`'s default 10 s grace so the databases are closed before a kill.
-const shutdownTimeoutMs = Number(process.env[${JSON.stringify(SHUTDOWN_TIMEOUT_VARIABLE)}] ?? ${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)});
 
 const shutdown = async (code) => {
     if (code !== 0) {
@@ -543,12 +577,26 @@ const shutdown = async (code) => {
     stopping = true;
     console.log("lunora: shutting down, draining in-flight work");
 
+    // Until the last step has run, any exit is an incomplete shutdown: if the event loop runs empty while a step still waits
+    // (a promise nothing will ever settle), Node ends the process itself, and it must neither look successful nor go unexplained.
+    let currentStep = "starting the shutdown";
+    let finished = false;
+
+    process.exitCode = 1;
+    process.once("exit", () => {
+        if (!finished) {
+            console.error("lunora: the process exited before the shutdown finished, while %s; the databases may not have been closed", currentStep);
+        }
+    });
+
     const deadlineAt = Date.now() + shutdownTimeoutMs;
     const remaining = () => ({ timeoutMs: Math.max(0, deadlineAt - Date.now()) });
 
     // A failed step is logged and the rest still run, so the databases are closed whatever went wrong before them. A drain that
     // ran out of time counts as a failure: the work it names was cut off.
     const step = async (label, run) => {
+        currentStep = label;
+
         try {
             const results = [await run()].flat();
 
@@ -580,6 +628,7 @@ const shutdown = async (code) => {
         setImmediate(resolve);
     });
 
+    finished = true;
     console.log("lunora: stopped");
     process.exit(exitCode);
 };
@@ -588,7 +637,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
         if (stopping) {
             // A second signal is the operator insisting: stop waiting for work that may never settle.
-            console.error(\`lunora: \${signal} again, exiting without waiting\`);
+            console.error("lunora: %s again, exiting without waiting", signal);
             process.exit(1);
         }
 
@@ -605,6 +654,16 @@ process.on("uncaughtException", (error) => {
     logError("uncaught exception", error);
     void shutdown(1);
 });
+
+// Printed last, once the signal and error handlers exist: a SIGTERM sent as soon as this line appears must reach the graceful
+// shutdown, not the default action that kills the process outright.
+const publicUrl = process.env.LUNORA_ORIGIN_URL;
+
+if (publicUrl === undefined || publicUrl === "") {
+    console.log("lunora: listening on %s", server.origin);
+} else {
+    console.log("lunora: listening on %s (public URL %s)", server.origin, publicUrl);
+}
 `;
 };
 

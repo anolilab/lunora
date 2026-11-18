@@ -459,6 +459,21 @@ describe("lunora deploy --target node", () => {
             }
         });
 
+        it.each(["8s", "10_000", "", "-1"])("refuses to start when LUNORA_SHUTDOWN_TIMEOUT_MS is %j, instead of skipping the drain", async (value) => {
+            expect.assertions(2);
+
+            const run = startServer(artifact, dataDirectory(), { ...RUN_ENV, LUNORA_SHUTDOWN_TIMEOUT_MS: value });
+            const outcome = await Promise.race([run.listening.then(() => "listening"), run.exited.then((code) => `exit ${String(code)}`)]);
+
+            run.child.kill("SIGKILL");
+            await run.exited;
+
+            expect(outcome).toBe("exit 1");
+            expect(run.stderr()).toContain(
+                `LUNORA_SHUTDOWN_TIMEOUT_MS must be a whole number of milliseconds such as 8000, and it is ${JSON.stringify(value)}`,
+            );
+        });
+
         it("refuses to start without a secrets.required variable, naming it", async () => {
             expect.assertions(2);
 
@@ -646,6 +661,32 @@ describe("lunora deploy --target node", () => {
         );
 
         it(
+            "exits non-zero and says where it stopped when the shutdown stalls on work nothing will settle",
+            async () => {
+                expect.assertions(2);
+
+                // Fault injection from outside the product: the HTTP server's close never calls back, so the shutdown waits on
+                // a promise with no I/O behind it and Node ends the process once the event loop runs empty.
+                const preload = join(workdir, "stalled-close.mjs");
+
+                writeFileSync(
+                    preload,
+                    `import { Server } from "node:http";\nconst close = Server.prototype.close;\nServer.prototype.close = function () {\n    close.call(this);\n    return this;\n};\n`,
+                    "utf8",
+                );
+
+                const run = startServer(artifact, dataDirectory(), RUN_ENV, ["--import", preload]);
+
+                await run.listening;
+                run.child.kill("SIGTERM");
+
+                await expect(run.exited).resolves.toBe(1);
+                expect(run.stderr()).toContain("lunora: the process exited before the shutdown finished, while closing the HTTP server");
+            },
+            SERVER_TEST_TIMEOUT,
+        );
+
+        it(
             "waits at SIGTERM for background work that a running waitUntil registered",
             async () => {
                 expect.assertions(2);
@@ -752,6 +793,24 @@ describe("lunora deploy --target node", () => {
                 error: expect.stringContaining("adapter/_worker.js), and it does not export ShardDO"),
             });
             expect(existsSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"))).toBe(false);
+        });
+
+        it.each<[string, unknown]>([
+            ["a string", { required: "API_KEY" }],
+            ["a number", { required: 42 }],
+            ["a list with a non-string entry", { required: ["API_KEY", 3] }],
+            ["a list with an empty entry", { required: ["API_KEY", ""] }],
+            ["a bare string in place of the object", "API_KEY"],
+        ])("refuses secrets.required when it is %s, instead of dropping the names", async (_shape, secrets) => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { secrets } });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 2,
+                error: expect.stringContaining("secrets.required in wrangler.jsonc is"),
+            });
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
         });
 
         it("refuses a secrets_store binding with the reserved LUNORA_ prefix, which could never start", async () => {
