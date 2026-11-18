@@ -705,7 +705,8 @@ const shutdownTimeoutMs = rawShutdownTimeout === undefined ? ${String(DEFAULT_SH
 const rawPort = process.env.PORT === "" ? undefined : process.env.PORT;
 
 if (rawPort !== undefined && !(/^\\d+$/u.test(rawPort) && Number(rawPort) <= 65_535)) {
-    console.error("lunora: refusing to start, PORT must be a whole number from 0 to 65535, such as ${String(DEFAULT_PORT)}, and it is %j", rawPort);
+    // The value is not printed: a platform can pass a secret-bearing variable through, and a log line would expose it.
+    console.error("lunora: refusing to start, PORT is not a whole number from 0 to 65535 (such as ${String(DEFAULT_PORT)})");
     process.exit(1);
 }
 

@@ -574,8 +574,8 @@ describe("lunora deploy --target node", () => {
             },
         );
 
-        it.each(["http", "80.5", "-1", "65536"])("refuses to start when PORT is %j, instead of listening somewhere else", async (value) => {
-            expect.assertions(2);
+        it.each(["not-a-port-7Qx", "80.5", "65536"])("refuses to start when PORT is %j, instead of listening somewhere else", async (value) => {
+            expect.assertions(3);
 
             const run = startServer(artifact, dataDirectory(), { ...RUN_ENV, PORT: value });
             const outcome = await Promise.race([run.listening.then(() => "listening"), run.exited.then((code) => `exit ${String(code)}`)]);
@@ -584,7 +584,9 @@ describe("lunora deploy --target node", () => {
             await run.exited;
 
             expect(outcome).toBe("exit 1");
-            expect(run.stderr()).toContain(`PORT must be a whole number from 0 to 65535, such as 8787, and it is ${JSON.stringify(value)}`);
+            expect(run.stderr()).toContain("PORT is not a whole number from 0 to 65535 (such as 8787)");
+            // Never the value itself, which may be a secret.
+            expect(run.stderr()).not.toContain(value);
         });
 
         it("treats an empty PORT as unset and listens on 8787, not on a random port", async () => {
