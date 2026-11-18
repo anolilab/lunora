@@ -324,7 +324,7 @@ describe(createNodeMailHost, () => {
             expect(database.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get()).toStrictEqual({ n: 0 });
         });
 
-        it("refuses a requeued dead letter that may have landed once the provider's dedupe window has passed", async () => {
+        it("parks, never sends, a requeued dead letter that may have landed once the provider's dedupe window has passed", async () => {
             expect.assertions(4);
 
             // Only Date is faked: `consumeQueuedSend` ages a message against Date.now(), and the
@@ -355,9 +355,10 @@ describe(createNodeMailHost, () => {
 
             await mail.poll();
 
-            // Any of the four may have been delivered, and Resend no longer drops a repeat of the key.
+            // Any of the four may have been delivered, and Resend no longer drops a repeat of the key:
+            // not sent, and parked again for an operator to check, never dropped.
             expect(transport.sent).toHaveLength(4);
-            expect(mail.deadLetters.list()).toStrictEqual([]);
+            expect(mail.deadLetters.list()).toMatchObject([{ id: parked?.id, reason: "outcome_unknown" }]);
             expect(error.mock.calls.map(([line]) => logged(line).event)).toContain("lunora.mail.send_outcome_unknown");
         });
 
@@ -1979,6 +1980,64 @@ describe(createNodeMailHost, () => {
             await expect(pollAround(120_000)).resolves.toStrictEqual([3, 4]);
 
             expect(mail.deadLetters.list()).toMatchObject([{ attempts: 4, body: { subject: "Verify" } }]);
+        });
+    });
+
+    describe("nineteenth review", () => {
+        const DAY_MS = 24 * 60 * 60 * 1000;
+
+        it("parks as outcome_unknown, never acks, a send whose attempt marks could not be written or cleared", async () => {
+            expect.assertions(4);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const database = freshDatabase();
+            const down = new MailSendError({ message: "provider is down", retryable: true });
+            const transport = scriptedTransport([down, down, down, down, "ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
+
+            // Neither the failed mark nor the fallback delete of the sending mark can be written.
+            database.exec(
+                "CREATE TRIGGER refuse_failed_mark BEFORE INSERT ON _lunora_mail_sent WHEN NEW.value = 'failed' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END",
+            );
+            database.exec(
+                "CREATE TRIGGER keep_sending_mark BEFORE DELETE ON _lunora_mail_sent WHEN OLD.value = 'sending' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END",
+            );
+
+            await mail.mailer.queue({ idempotencyKey: "reset-8", subject: "Reset", text: "Code 4321", to: "ada@example.com" });
+
+            for (let delivery = 0; delivery < 4; delivery += 1) {
+                clock.advance(MAIL_MAX_BACKOFF_MS);
+                // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
+                await mail.poll();
+            }
+
+            // Requeued past Resend's 24-hour window: each orphaned sending mark reads as a send that may have landed.
+            clock.advance(DAY_MS + 60_000);
+
+            const [parked] = mail.deadLetters.list();
+
+            mail.deadLetters.requeue(parked?.id ?? "");
+            await mail.poll();
+
+            const events = error.mock.calls.map(([line]) => logged(line).event);
+
+            expect(transport.sent).toHaveLength(4);
+            expect(mail.deadLetters.list()).toMatchObject([{ id: parked?.id, reason: "outcome_unknown" }]);
+            expect(events).toContain("lunora.mail.attempt_mark_orphaned");
+            expect(events).toContain("lunora.mail.send_outcome_unknown");
+        });
+
+        it("refuses a send with neither text nor html at enqueue, instead of retrying it into deadLetters", async () => {
+            expect.assertions(2);
+
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: scriptedTransport(["ok"]) });
+
+            await expect(mail.mailer.queue({ subject: "Empty", to: "ada@example.com" })).rejects.toThrow(/needs `text` or `html`/u);
+            expect(database.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get()).toStrictEqual({ n: 0 });
         });
     });
 });

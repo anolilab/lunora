@@ -63,7 +63,7 @@ export { createNodeHttpServer } from "./node-http-server";
 export type { NodeHyperdriveBinding } from "./node-hyperdrive";
 export { createNodeHyperdrive } from "./node-hyperdrive";
 export { createNodeShardKvStore } from "./node-kv-store";
-export type { NodeMailHost, NodeMailHostOptions } from "./node-mail-host";
+export type { MailParkReason, NodeMailHost, NodeMailHostOptions } from "./node-mail-host";
 export { createNodeMailHost } from "./node-mail-host";
 export type { NodeCronJob, NodePlatform, NodePlatformDispatchOptions, NodePlatformMailOptions, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";

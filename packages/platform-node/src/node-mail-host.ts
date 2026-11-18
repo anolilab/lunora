@@ -125,10 +125,20 @@ interface NodeMailHostOptions {
 }
 
 /** Queued mail delivery for one Node process. */
+
+/**
+ * Why a send sits in `deadLetters`: its retries ran out (`retries_exhausted`); its idempotency key
+ * belongs to other content (`idempotency_key_conflict`); an earlier delivery may have been sent
+ * and the provider no longer drops a repeat (`outcome_unknown`), so the provider's logs decide;
+ * or that may be so and the record of it has expired (`evidence_expired`).
+ */
+type MailParkReason = "evidence_expired" | "idempotency_key_conflict" | "outcome_unknown" | "retries_exhausted";
+
 interface NodeMailHost {
     /** Sends that failed past the queue's retries, parked by the queue host rather than dropped. */
     deadLetters: {
-        list: () => { attempts: number; body: unknown; id: string }[];
+        /** Each parked send, with why it was parked, so an operator can decide whether to requeue it. */
+        list: () => { attempts: number; body: unknown; id: string; reason: MailParkReason }[];
 
         /**
          * Return a parked send to the queue for one more delivery. Its attempt
@@ -229,20 +239,28 @@ const createSentLedger = (database: Database.Database, clock: () => number): Sen
             // `@lunora/mail` writes `failed <n> <key>` only once delivery n is known not to have gone
             // out, so that delivery's `sending <n> <key>` mark means nothing any more. Dropped in the
             // same write, and dropped alone when that write fails: a surviving sending mark without
-            // its failed mark makes a retry past the provider's dedupe window refuse, as if the send
-            // may have landed. A delete adds no row, so it can succeed where the insert could not.
-            // Should both fail, the error stays retryable: every automatic retry falls inside the
-            // window, where the marks are not read, and past it the refusal never sends a copy.
+            // its failed mark makes a delivery past the provider's dedupe window an unknown outcome.
+            // A delete adds no row, so it can succeed where the insert could not.
+            //
+            // Never thrown: the send's result is the provider's own retryable error, and every
+            // automatic retry falls inside the window, where the marks are not read. Should both
+            // writes fail, a delivery past the window finds the orphaned mark and parks the send as
+            // `outcome_unknown` for an operator, rather than sending a possible copy or dropping it.
             if (value === "failed" && key.startsWith(FAILED_MARK_PREFIX)) {
                 const mark = key.slice(FAILED_MARK_PREFIX.length);
                 const sendingKey = `${SENDING_MARK_PREFIX}${mark}`;
+                const delivery = Number.parseInt(mark, 10);
 
                 try {
                     markFailed(key, sendingKey, now + expirationTtl * 1000);
-                } catch (error) {
-                    // Throws on its own failure, which `@lunora/mail` then logs as the unwritten mark it is.
-                    forget.run(sendingKey);
-                    logFailure("warn", "lunora.mail.attempt_mark_failed", Number.parseInt(mark, 10), error);
+                } catch (markError) {
+                    logFailure("warn", "lunora.mail.attempt_mark_failed", delivery, markError);
+
+                    try {
+                        forget.run(sendingKey);
+                    } catch (forgetError) {
+                        logFailure("error", "lunora.mail.attempt_mark_orphaned", delivery, forgetError);
+                    }
                 }
 
                 return;
@@ -650,15 +668,31 @@ const buildMailer = (env: MailEnv, queue: QueueLike, transport: MailTransport | 
 };
 
 /**
- * Settle a failed send the way the `consumeQueuedSend` consumer in `@lunora/mail`'s
- * docs does: a retryable failure is retried, anything else is acked and logged,
- * because a retry of a send that may have landed with no provider dedupe could
- * mail a second copy. A retry the queue host will park instead is logged as an
- * error, since nothing tries that send again.
+ * Park the message once its poll has settled it, under `reason`. Never acked: it is real mail,
+ * and an ack would drop it without a trace. A long retry keeps it out of reach until then.
  */
-const settleFailure = (message: MessageBatchLike["messages"][number], error: unknown): void => {
+const parkAfterPoll = (consumer: MailConsumer, message: MessageBatchLike["messages"][number], reason: MailParkReason): void => {
+    consumer.parking.getStore()?.set(message.id, reason);
+    message.retry({ delaySeconds: MAX_DELAY_SECONDS });
+};
+
+/**
+ * Settle a failed send. A retryable failure is retried. A send that may have landed,
+ * where a retry could mail a second copy, is parked as `outcome_unknown`, never acked,
+ * so an operator can check the provider and decide. Anything else is a refusal or a
+ * malformed body, which no retry changes: acked and logged. A retry the queue host
+ * will park instead is logged as an error, since nothing tries that send again.
+ */
+const settleFailure = (consumer: MailConsumer, message: MessageBatchLike["messages"][number], error: unknown): void => {
     if (!isRetryableMailError(error)) {
-        logFailure("error", isOutcomeUnknownMailError(error) ? "lunora.mail.send_outcome_unknown" : "lunora.mail.send_refused", message.attempts, error);
+        if (isOutcomeUnknownMailError(error)) {
+            logFailure("error", "lunora.mail.send_outcome_unknown", message.attempts, error);
+            parkAfterPoll(consumer, message, "outcome_unknown");
+
+            return;
+        }
+
+        logFailure("error", "lunora.mail.send_refused", message.attempts, error);
         message.ack();
 
         return;
@@ -678,14 +712,15 @@ interface MailConsumer {
     claims: KeyClaims;
     clock: () => number;
     mailer: Mailer;
-    sent: SentMailStore;
 
     /**
-     * The rows found superseded by the batches of the poll this runs in, parked once that poll has
-     * settled them. One set per poll: a shared one was parked and cleared by whichever overlapping
-     * poll finished first, before the batch that found a row had settled it, so it was never parked.
+     * The rows the batches of the poll this runs in chose to park, with why, parked once that poll
+     * has settled them. One map per poll: a shared one was parked and cleared by whichever
+     * overlapping poll finished first, before the batch that chose a row had settled it.
      */
-    superseded: AsyncLocalStorage<Set<string>>;
+    parking: AsyncLocalStorage<Map<string, MailParkReason>>;
+
+    sent: SentMailStore;
 }
 
 /** Retry a send whose key another delivery holds: it is settled by then, and the ledger answers for it. */
@@ -699,12 +734,6 @@ const retryBusyKey = (message: MessageBatchLike["messages"][number], key: string
         busy,
     );
     message.retry({ delaySeconds: OUTCOME_UNKNOWN_RETRY_SECONDS });
-};
-
-/** Ack a delivery nothing should send, with an error an operator can alert on. */
-const refuse = (message: MessageBatchLike["messages"][number], event: string, reason: string): void => {
-    logFailure("error", event, message.attempts, new Error(reason));
-    message.ack();
 };
 
 /**
@@ -723,7 +752,11 @@ const claimFor = (consumer: MailConsumer, message: MessageBatchLike["messages"][
     try {
         return consumer.claims.take(key, fingerprintOf(message.body), message.id, message.timestamp.getTime());
     } catch (error) {
-        settleFailure(message, new MailSendError({ cause: error, message: `@lunora/mail: could not claim idempotency key "${key}"`, retryable: true }));
+        settleFailure(
+            consumer,
+            message,
+            new MailSendError({ cause: error, message: `@lunora/mail: could not claim idempotency key "${key}"`, retryable: true }),
+        );
 
         return undefined;
     }
@@ -748,16 +781,14 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
     }
 
     if (claimed.outcome === "conflict") {
-        // Parked, never acked: this is real mail whose key another message owns, and an ack would
-        // drop it without a trace. A long retry keeps it out of reach until the poll parks it.
+        // Real mail whose key another message owns: parked, for an operator to give it a new key.
         logFailure(
             "error",
             "lunora.mail.idempotency_key_conflict",
             message.attempts,
             new Error(`idempotency key "${String(key)}" belongs to different content; this send is parked in deadLetters, not sent`),
         );
-        consumer.superseded.getStore()?.add(message.id);
-        message.retry({ delaySeconds: MAX_DELAY_SECONDS });
+        parkAfterPoll(consumer, message, "idempotency_key_conflict");
 
         return;
     }
@@ -781,11 +812,14 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
             consumer.claims.release(key, message.id);
         }
 
-        refuse(
-            message,
+        // As unknown as an `outcome_unknown` send, so parked the same way: the provider's logs decide.
+        logFailure(
+            "error",
             "lunora.mail.send_evidence_expired",
-            "an earlier delivery of this key may have been sent, and its record in the sent ledger has expired",
+            message.attempts,
+            new Error("an earlier delivery of this key may have been sent, and its record in the sent ledger has expired"),
         );
+        parkAfterPoll(consumer, message, "evidence_expired");
 
         return;
     }
@@ -799,7 +833,7 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
         try {
             await consumeQueuedSend(consumer.mailer, message.body, { attempts: claimed.delivery, enqueuedAt, sent: consumer.sent });
         } catch (error) {
-            settleFailure(message, error);
+            settleFailure(consumer, message, error);
 
             return;
         }
@@ -913,7 +947,7 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         clock,
         mailer,
         sent: createSentLedger(database, clock),
-        superseded: new AsyncLocalStorage(),
+        parking: new AsyncLocalStorage(),
     };
     // The one host allowed the reserved `lunora-mail` name.
     const host = createNodeQueueHost(
@@ -945,6 +979,14 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
     const park = database.prepare<[string]>(
         `UPDATE _lunora_queue_messages SET state = 'dead' WHERE id = ? AND queue = '${MAIL_QUEUE_NAME}' AND state = 'pending'`,
     );
+    // Why each parked send was parked; a row the queue host parked on its own retries has none.
+    database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_parked (id TEXT PRIMARY KEY, reason TEXT NOT NULL)");
+
+    const recordReason = database.prepare<[string, MailParkReason, string, string]>(
+        "INSERT OR REPLACE INTO _lunora_mail_parked (id, reason) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM _lunora_queue_messages WHERE id = ? AND queue = ? AND state = 'dead')",
+    );
+    const reasonOf = database.prepare<[string], { reason: MailParkReason }>("SELECT reason FROM _lunora_mail_parked WHERE id = ?");
+    const forgetReason = database.prepare<[string]>("DELETE FROM _lunora_mail_parked WHERE id = ?");
 
     // Scoped to this queue, unlike the queue host's own requeue: the table is shared with the
     // app's queues. Attempts are kept, not reset, because `consumeQueuedSend` reads them to tell
@@ -977,12 +1019,21 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
             );
         }
 
-        return revive.run(clock(), id, MAIL_QUEUE_NAME).changes > 0;
+        if (revive.run(clock(), id, MAIL_QUEUE_NAME).changes === 0) {
+            return false;
+        }
+
+        forgetReason.run(id);
+
+        return true;
     };
 
     return {
         deadLetters: {
-            list: () => host.deadLetters.list(MAIL_QUEUE_NAME),
+            list: () =>
+                host.deadLetters.list(MAIL_QUEUE_NAME).map((parked) => {
+                    return { ...parked, reason: reasonOf.get(parked.id)?.reason ?? "retries_exhausted" };
+                }),
             requeue,
         },
         drain: async () => {
@@ -990,12 +1041,14 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         },
         mailer,
         poll: async (now) => {
-            const superseded = new Set<string>();
-            const run = consumer.superseded
-                .run(superseded, async () => await host.poll(now))
+            const parking = new Map<string, MailParkReason>();
+            const run = consumer.parking
+                .run(parking, async () => await host.poll(now))
                 .finally(() => {
-                    for (const id of superseded) {
+                    for (const [id, reason] of parking) {
                         park.run(id);
+                        // Recorded whoever parked it: on its last retry the queue host already has.
+                        recordReason.run(id, reason, id, MAIL_QUEUE_NAME);
                     }
                 });
 
@@ -1012,4 +1065,4 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
 };
 
 export { createNodeMailHost };
-export type { NodeMailHost, NodeMailHostOptions };
+export type { MailParkReason, NodeMailHost, NodeMailHostOptions };
