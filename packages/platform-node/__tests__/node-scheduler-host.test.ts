@@ -219,6 +219,38 @@ describe("createNodeSchedulerHost", () => {
             }
         });
 
+        it("logs a failed tick with the job, the error and the next run, and keeps the schedule", async () => {
+            expect.assertions(5);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const database = new Database(":memory:");
+            const failure = new Error("shard answered 503");
+            const onDispatch = vi.fn<(functionPath: string) => Promise<void>>(async () => {
+                throw failure;
+            });
+            const host = createNodeSchedulerHost(database, { onDispatch });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:tick", name: "tick" }]);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(error).toHaveBeenCalledTimes(1);
+                expect(error.mock.calls[0]?.[0]).toContain('job "tick" (reports:tick)');
+                expect(error.mock.calls[0]?.[0]).toContain("next run: 2026-11-01T12:02:00.000Z");
+                expect(error.mock.calls[0]?.[1]).toBe(failure);
+
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(2);
+            } finally {
+                host.dispose();
+                database.close();
+                error.mockRestore();
+            }
+        });
+
         it("refuses a cron() schedule that parses but never occurs", async () => {
             expect.assertions(1);
 
@@ -227,6 +259,45 @@ describe("createNodeSchedulerHost", () => {
 
             try {
                 await expect(host.scheduler.cron?.("0 0 31 4,6,9,11 *", "reports:never", {})).rejects.toThrow(/never occurs/u);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it.each([
+            ["an empty", ""],
+            ["a blank", "   "],
+            ["a one-field", "5"],
+            ["a four-field", "0 9 * *"],
+            ["a seven-field", "0 0 9 * * * *"],
+        ])("refuses %s expression rather than letting the parser pad it into a schedule", async (_label, expression) => {
+            expect.assertions(2);
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+
+            try {
+                expect(() => {
+                    host.declareCrons([{ args: {}, expression, functionPath: "reports:x", name: "x" }]);
+                }).toThrow(/invalid or never occurs/u);
+                await expect(host.scheduler.cron?.(expression, "reports:x", {})).rejects.toThrow(/invalid or never occurs/u);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("still accepts a seconds-leading six-field expression", () => {
+            expect.assertions(1);
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+
+            try {
+                expect(() => {
+                    host.declareCrons([{ args: {}, expression: "*/30 * * * * *", functionPath: "reports:x", name: "x" }]);
+                }).not.toThrow();
             } finally {
                 host.dispose();
                 database.close();

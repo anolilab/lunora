@@ -269,9 +269,10 @@ export type NodePlatformOptions<
      * (or your own `onDispatch`) to reach a shard; a non-empty map with neither
      * throws. Job names must be unique, every schedule must have a next
      * occurrence, and schedules are read as UTC. The map is the whole declared
-     * set: a job declared by an earlier run and absent here is deleted, and
-     * omitting the option deletes them all. Crons registered through
-     * `scheduler.cron()` are not declared and are left alone.
+     * set: a job declared by an earlier run and absent here is deleted. Omit
+     * the option and this process neither fires nor deletes declared jobs, so
+     * a script opening the same file leaves a running server's crons alone.
+     * Crons registered through `scheduler.cron()` are re-armed either way.
      */
     crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
 
@@ -363,9 +364,12 @@ export const createNodePlatform = <
 
         teardown.push(disposeScheduler);
 
-        // The `crons` option owns every declared row: omitting it declares none, so a
-        // job an earlier run declared stops firing instead of re-arming from its row.
-        declareCrons(options.crons === undefined ? [] : deliverableCrons(options.crons, options.onDispatch !== undefined || options.onFetch !== undefined));
+        // Only a process that passes `crons` manages the declared set. One that omits
+        // it neither arms nor deletes declared rows, so an admin script opening the
+        // same file cannot switch off a running server's crons.
+        if (options.crons !== undefined) {
+            declareCrons(deliverableCrons(options.crons, options.onDispatch !== undefined || options.onFetch !== undefined));
+        }
 
         // Queues, workflows, object storage and global tables are all composed here
         // rather than left for a caller to assemble: `NODE_CAPABILITIES` rates all

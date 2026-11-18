@@ -19,7 +19,10 @@ const LEADING_SLASH = /^\//u;
 /** An IPv6 literal keeps its brackets in `hostname`; a driver's `host` option wants the bare address. */
 const BRACKETED_HOST = /^\[(.*)\]$/u;
 
+const POSTGRES_PROTOCOLS: ReadonlySet<string> = new Set(["postgres:", "postgresql:"]);
+
 const DEFAULT_PORTS: Readonly<Record<string, number>> = {
+    "mariadb:": 3306,
     "mysql:": 3306,
     "postgres:": 5432,
     "postgresql:": 5432,
@@ -35,7 +38,10 @@ const DEFAULT_PORTS: Readonly<Record<string, number>> = {
  * There is no pool or query cache in front of the database here: the driver
  * the app constructs from `connectionString` connects to it directly, so its own
  * pool settings are the only ones that apply.
- * @param url A `postgres://`, `postgresql://` or `mysql://` URL; `DATABASE_URL` unless given.
+ * A Postgres URL may name a Unix socket the libpq way: an empty host with the
+ * socket directory in a `host` query parameter (`postgres:///db?host=/var/run/postgresql`),
+ * which becomes the binding's `host`.
+ * @param url A `postgres://`, `postgresql://`, `mysql://` or `mariadb://` URL; `DATABASE_URL` unless given.
  */
 const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL): NodeHyperdriveBinding => {
     if (url === undefined || url === "") {
@@ -47,6 +53,7 @@ const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL
 
     let parsed: URL;
     let database: string;
+    let hostname: string;
     let password: string;
     let user: string;
 
@@ -54,6 +61,8 @@ const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL
         parsed = new URL(url);
         // Decoded here so bad percent-encoding is reported like any other malformed URL, not as a raw URIError.
         database = decodeURIComponent(parsed.pathname.replace(LEADING_SLASH, ""));
+        // `postgres:` and `mysql:` are not WHATWG special schemes, so their host is opaque and stays percent-encoded.
+        hostname = decodeURIComponent(parsed.hostname);
         password = decodeURIComponent(parsed.password);
         user = decodeURIComponent(parsed.username);
     } catch {
@@ -61,24 +70,28 @@ const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the Hyperdrive database URL is not a valid URL");
     }
 
-    // Refused here rather than left to the driver, whose error may echo the URL and its password.
-    if (parsed.hostname === "" || database === "") {
-        throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the Hyperdrive database URL needs both a host and a database name");
-    }
-
     const defaultPort = DEFAULT_PORTS[parsed.protocol];
 
     if (defaultPort === undefined) {
         throw new LunoraError(
             "VALIDATION_ERROR",
-            `@lunora/platform-node: the Hyperdrive database URL uses "${parsed.protocol}", but Hyperdrive serves only postgres:, postgresql: and mysql:`,
+            `@lunora/platform-node: the Hyperdrive database URL uses "${parsed.protocol}", but Hyperdrive serves only postgres:, postgresql:, mysql: and mariadb:`,
         );
+    }
+
+    // libpq and `pg` read a Unix socket directory from `?host=` when the authority is empty.
+    const socketHost = POSTGRES_PROTOCOLS.has(parsed.protocol) ? (parsed.searchParams.get("host") ?? "") : "";
+    const host = hostname === "" ? socketHost : hostname.replace(BRACKETED_HOST, "$1");
+
+    // Refused here rather than left to the driver, whose error may echo the URL and its password.
+    if (host === "" || database === "") {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the Hyperdrive database URL needs both a host and a database name");
     }
 
     return {
         connectionString: url,
         database,
-        host: parsed.hostname.replace(BRACKETED_HOST, "$1"),
+        host,
         password,
         port: parsed.port === "" ? defaultPort : Number(parsed.port),
         user,

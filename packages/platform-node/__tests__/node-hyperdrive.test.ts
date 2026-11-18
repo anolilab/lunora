@@ -23,6 +23,7 @@ describe(createNodeHyperdrive, () => {
         ["postgres://u@h/db", 5432],
         ["postgresql://u@h/db", 5432],
         ["mysql://u@h/db", 3306],
+        ["mariadb://u@h/db", 3306],
     ])("falls back to the protocol's default port for %s", (url, port) => {
         expect.assertions(1);
 
@@ -82,6 +83,39 @@ describe(createNodeHyperdrive, () => {
         expect.assertions(1);
 
         expect(() => createNodeHyperdrive(url)).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.not.stringContaining(url) }));
+    });
+
+    it.each([
+        ["postgres://u@local%68ost/db", "localhost"],
+        ["mysql://u@local%68ost/db", "localhost"],
+        ["postgres://u@[::1]/db", "::1"],
+    ])("percent-decodes the host of %s", (url, host) => {
+        expect.assertions(1);
+
+        expect(createNodeHyperdrive(url).host).toBe(host);
+    });
+
+    it("reports a malformed escape in the host as a VALIDATION_ERROR without echoing it", () => {
+        expect.assertions(1);
+
+        expect(() => createNodeHyperdrive("postgres://u@db%ZZ/orders")).toThrow(
+            expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.not.stringContaining("db%ZZ") }),
+        );
+    });
+
+    it("takes a Postgres Unix socket directory from the host query parameter", () => {
+        expect.assertions(2);
+
+        const binding = createNodeHyperdrive("postgres:///orders?host=/var/run/postgresql");
+
+        expect(binding).toMatchObject({ database: "orders", host: "/var/run/postgresql", port: 5432 });
+        expect(createNodeHyperdrive("postgres:///orders?host=%2Fvar%2Frun%2Fpostgresql").host).toBe("/var/run/postgresql");
+    });
+
+    it("refuses an empty host with a host parameter on a protocol that does not read it", () => {
+        expect.assertions(1);
+
+        expect(() => createNodeHyperdrive("mysql:///orders?host=/var/run/mysqld")).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
     });
 
     it("keeps the password out of the error for an unparseable URL", () => {

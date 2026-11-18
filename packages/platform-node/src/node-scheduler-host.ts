@@ -58,6 +58,7 @@ import { deserialize, serialize } from "node:v8";
 
 import { LunoraError } from "@lunora/errors";
 import type { ScheduledJob, ScheduledJobRecord, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
+import isValidCronExpression from "@lunora/scheduler/validate";
 import { parse } from "@visulima/cron-parser/cloudflare";
 import type Database from "better-sqlite3";
 
@@ -152,20 +153,26 @@ interface NodeDeclaredCron {
 }
 
 /**
- * Parse `expression` and prove it has a next occurrence. A parse alone does not:
- * `0 0 31 4,6,9,11 *` parses, then `next()` finds no date, and `armCron` would
- * swallow that and never fire it.
+ * Refuse an expression that is not a 5- or 6-field cron with a next occurrence,
+ * through `@lunora/scheduler`'s shared validator, so this host accepts exactly
+ * what codegen and `cronJobs()` accept. A bare parse is not enough: the parser
+ * fills `""` with every-minute and pads a short expression, and
+ * `0 0 31 4,6,9,11 *` parses but never occurs, which `armCron` would swallow.
  */
 const assertNextRun = (expression: string, label: string): void => {
-    try {
-        parse(expression, CRON_PARSE_OPTIONS).next();
-    } catch {
+    if (!isValidCronExpression(expression)) {
         throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: ${label} has cron expression "${expression}", which is invalid or never occurs`);
     }
 };
 
 /** Key prefix of a declared cron's row, keeping them apart from rows `cron()` registered. */
 const DECLARED_CRON_PREFIX = "declared:";
+
+/** A cron row as a log line names it: the declared job's name, or the expression `cron()` registered. */
+const describeCron = (row: CronRow): string =>
+    row.key.startsWith(DECLARED_CRON_PREFIX)
+        ? `job "${row.key.slice(DECLARED_CRON_PREFIX.length)}" (${row.function_path})`
+        : `"${row.expression}" (${row.function_path})`;
 
 /** Options for {@link createNodeSchedulerHost}. */
 interface NodeSchedulerHostOptions {
@@ -420,6 +427,13 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      */
     const runningCrons = new Set<string>();
 
+    /**
+     * The declared keys this process last armed through `declareCrons`. A tick
+     * whose row then vanishes was removed by another process managing the same
+     * file, which is worth a log line; a key this process dropped itself is not.
+     */
+    let declaredKeys = new Set<string>();
+
     const toStatus = (row: JobRow): ScheduledJobStatus => {
         return {
             attempts: row.attempts,
@@ -652,11 +666,15 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * onto the same far-future target — an unbounded ~1 ms dispatch loop for a
      * schedule that should fire once a month.
      */
-    const armCron = (row: CronRow): void => {
+    // Assigned below: `settleCronTick` and `armCron` call each other.
+    let settleCronTick: (row: CronRow, scheduledFor: number, failure: { error: unknown } | undefined) => void;
+
+    /** Arm `row`'s next tick and return when it is due, or `undefined` when nothing was armed. */
+    const armCron = (row: CronRow): number | undefined => {
         // A running tick re-reads its row and re-arms when it settles, so it picks up
         // this definition (or its removal) then; arming now would overlap the run.
         if (runningCrons.has(row.key)) {
-            return;
+            return undefined;
         }
 
         const existing = cronTimers.get(row.key);
@@ -674,7 +692,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             // one — re-arming would spin. `cron()` validates before it ever
             // writes a row, so reaching here means the row predates this process
             // (a database written by an older build).
-            return;
+            return undefined;
         }
 
         const delay = Math.max(0, nextAt - Date.now());
@@ -687,39 +705,46 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 }, MAX_TIMEOUT_MS),
             );
 
-            return;
+            return nextAt;
         }
 
         const timer = setTimeout(() => {
             cronTimers.delete(row.key);
+
+            if (closed || !isOpen()) {
+                return;
+            }
+
+            // Re-read before dispatching: another process passing `crons` may have
+            // removed or changed this job since it was armed.
+            const current = selectCron.get(row.key);
+
+            if (current === undefined) {
+                settleCronTick(row, nextAt, undefined);
+
+                return;
+            }
+
             runningCrons.add(row.key);
 
             (async (): Promise<void> => {
+                let failure: { error: unknown } | undefined;
+
                 try {
-                    await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, {
+                    await options.onDispatch?.(current.function_path, deserialize(current.args) as Record<string, unknown>, {
                         attempts: 0,
                         // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
                         id: `${row.key}:${String(nextAt)}`,
                         scheduledFor: nextAt,
                     });
-                } catch {
-                    // See the docstring: a dropped tick must not stop the schedule.
+                } catch (error) {
+                    // See the docstring: a dropped tick must not stop the schedule, but it is logged.
+                    failure = { error };
                 } finally {
                     runningCrons.delete(row.key);
                 }
 
-                // `closed` checked alongside `isOpen()`: a tick that lands
-                // during `dispose()` must not arm the next one, since that
-                // timer would be minted after `cronTimers` was cleared.
-                if (!closed && isOpen()) {
-                    // Re-read rather than re-arm `row`: `declareCrons` may have
-                    // removed or changed this cron while the tick was in flight.
-                    const current = selectCron.get(row.key);
-
-                    if (current !== undefined) {
-                        armCron(current);
-                    }
-                }
+                settleCronTick(current, nextAt, failure);
             })().catch(() => {
                 // Unreachable — the body catches its own dispatch failure —
                 // but an unhandled rejection here would take the process down.
@@ -727,6 +752,41 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         }, delay);
 
         cronTimers.set(row.key, timer);
+
+        return nextAt;
+    };
+
+    settleCronTick = (row, scheduledFor, failure) => {
+        let nextRun: number | undefined;
+
+        // `closed` checked alongside `isOpen()`: a tick that lands during
+        // `dispose()` must not arm the next one, since that timer would be
+        // minted after `cronTimers` was cleared.
+        if (!closed && isOpen()) {
+            // Re-read rather than re-arm `row`: `declareCrons` may have removed
+            // or changed this cron while the tick was in flight.
+            const current = selectCron.get(row.key);
+
+            if (current !== undefined) {
+                nextRun = armCron(current);
+            } else if (declaredKeys.has(row.key)) {
+                declaredKeys.delete(row.key);
+                // eslint-disable-next-line no-console -- the package logs host-side failures to the console; nothing else would show that this cron stopped
+                console.warn(
+                    `[@lunora/platform-node] declared cron ${describeCron(row)} was removed from the database by another process passing \`crons\`; it stops firing here`,
+                );
+            }
+        }
+
+        if (failure !== undefined) {
+            const next = nextRun === undefined ? "none scheduled" : new Date(nextRun).toISOString();
+
+            // eslint-disable-next-line no-console -- the tick is dropped by design, so this line is its only trace
+            console.error(
+                `[@lunora/platform-node] cron ${describeCron(row)} tick due ${new Date(scheduledFor).toISOString()} failed; next run: ${next}`,
+                failure.error,
+            );
+        }
     };
 
     const scheduler: SchedulerHost = {
@@ -879,8 +939,13 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         armJob(row.id, row.scheduled_for);
     }
 
+    // Declared rows are armed only by `declareCrons`: a process that does not
+    // manage the declared set (an admin script on the same file) must neither
+    // fire nor delete them. Rows registered through `cron()` re-arm as before.
     for (const row of selectCrons.all()) {
-        armCron(row);
+        if (!row.key.startsWith(DECLARED_CRON_PREFIX)) {
+            armCron(row);
+        }
     }
 
     return {
@@ -933,6 +998,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                     cronTimers.delete(row.key);
                 }
             }
+
+            declaredKeys = keep;
 
             for (const row of rows) {
                 armCron(row);

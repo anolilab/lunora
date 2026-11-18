@@ -64,6 +64,7 @@
         "@lunora/platform": "1.0.0-alpha.80",
         "@lunora/queue": "1.0.0-alpha.143",
         "@lunora/runtime": "^1.0.0-alpha.287",
+        "@lunora/scheduler": "^1.0.0-alpha.170",
         "@lunora/sql-store": "^1.0.0-alpha.234",
         "@lunora/workflow": "^1.0.0-alpha.111",
         "@visulima/cron-parser": "catalog:tooling",
