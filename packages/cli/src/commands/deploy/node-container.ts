@@ -112,12 +112,12 @@ const BINDING_NAME = /^[A-Za-z_$][\w$]*$/u;
 const RUNTIME_ENV_PREFIX = "LUNORA_";
 
 interface NodeWranglerConfig {
-    durable_objects?: { bindings?: ReadonlyArray<{ class_name?: unknown; name?: unknown; script_name?: unknown } | null> };
-    hyperdrive?: ReadonlyArray<{ binding?: unknown } | null>;
+    durable_objects?: unknown;
+    hyperdrive?: unknown;
     main?: unknown;
     secrets?: unknown;
-    secrets_store_secrets?: ReadonlyArray<{ binding?: unknown } | null>;
-    vars?: Record<string, unknown> | null;
+    secrets_store_secrets?: unknown;
+    vars?: unknown;
 }
 
 /** What the generated server entry composes, read from the project's wrangler config. */
@@ -194,8 +194,95 @@ const frameworkRefusal = (projectRoot: string, main: string, configName: string)
     return undefined;
 };
 
-const stringNames = (entries: ReadonlyArray<{ binding?: unknown } | null> | undefined): string[] =>
-    (entries ?? []).flatMap((entry) => (typeof entry?.binding === "string" ? [entry.binding] : []));
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * A binding list the deploy reads (`hyperdrive`, `secrets_store_secrets`): every entry must name its binding. One that
+ * does not used to be dropped, so the deploy succeeded and the worker read `undefined` where the app expected a binding.
+ */
+const bindingNames = (value: unknown, section: string, configName: string): string[] => {
+    if (value === undefined || value === null) {
+        return [];
+    }
+
+    if (!Array.isArray(value)) {
+        throw new TypeError(`--target node reads ${section} in ${configName} as a list of bindings, and it is ${JSON.stringify(value)}`);
+    }
+
+    return value.map((entry: unknown, index) => {
+        const name = isRecord(entry) ? entry.binding : undefined;
+
+        if (typeof name !== "string" || !BINDING_NAME.test(name)) {
+            throw new Error(
+                `--target node binds each ${section} entry by its "binding" name, and ${section}[${String(index)}] in ${configName} has ${name === undefined ? "none" : `${JSON.stringify(name)}, which is not a valid binding name`}`,
+            );
+        }
+
+        return name;
+    });
+};
+
+/** `durable_objects.bindings`: each entry needs a string `name` and `class_name`, both identifiers. */
+const durableObjectEntries = (value: unknown, configName: string): { className: string; name: string; scriptName: unknown }[] => {
+    if (value === undefined || value === null) {
+        return [];
+    }
+
+    const bindings = isRecord(value) ? value.bindings : undefined;
+
+    if (bindings !== undefined && !Array.isArray(bindings)) {
+        throw new Error(`--target node reads durable_objects.bindings in ${configName} as a list of bindings, and it is ${JSON.stringify(bindings)}`);
+    }
+
+    if (!isRecord(value)) {
+        throw new Error(`--target node reads durable_objects in ${configName} as { "bindings": [...] }, and it is ${JSON.stringify(value)}`);
+    }
+
+    return (bindings ?? []).map((entry: unknown, index) => {
+        const where = `durable_objects.bindings[${String(index)}] in ${configName}`;
+
+        if (!isRecord(entry) || typeof entry.name !== "string" || typeof entry.class_name !== "string") {
+            throw new Error(`--target node constructs each Durable Object binding from its "name" and "class_name", and ${where} lacks one`);
+        }
+
+        // The name becomes a directory under LUNORA_DATA_DIR: anything but an identifier ("..", "a/b") could put shard files
+        // outside the data volume, where a replaced container loses them.
+        if (!BINDING_NAME.test(entry.name)) {
+            throw new Error(
+                `--target node stores each Durable Object binding's shards in a directory named after it, and the binding ${JSON.stringify(entry.name)} in ${configName} is not a valid binding name (a JavaScript identifier such as SHARD)`,
+            );
+        }
+
+        if (!BINDING_NAME.test(entry.class_name)) {
+            throw new Error(
+                `--target node imports each Durable Object class by name, and ${where} names ${JSON.stringify(entry.class_name)}, which is not a class name`,
+            );
+        }
+
+        return { className: entry.class_name, name: entry.name, scriptName: entry.script_name };
+    });
+};
+
+/** `vars`: an object of environment variable names, since an override comes from the variable of the same name. */
+const declaredVariables = (value: unknown, configName: string): Record<string, unknown> => {
+    if (value === undefined || value === null) {
+        return {};
+    }
+
+    if (!isRecord(value)) {
+        throw new Error(`--target node reads vars in ${configName} as an object of names and values, and it is ${JSON.stringify(value)}`);
+    }
+
+    const invalid = Object.keys(value).filter((name) => !ENV_NAME.test(name));
+
+    if (invalid.length > 0) {
+        throw new Error(
+            `--target node lets the environment variable of the same name override each var, and vars in ${configName} has ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
+        );
+    }
+
+    return { ...value };
+};
 
 /**
  * The `secrets.required` names, or a throw naming the field when it is not a list of names. Dropping a malformed value would
@@ -269,22 +356,10 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     const durableObjects: NodeDeployProject["durableObjects"] = [];
     const external: string[] = [];
 
-    for (const binding of parsed.durable_objects?.bindings ?? []) {
-        if (typeof binding?.name !== "string" || typeof binding.class_name !== "string") {
-            continue;
-        }
-
-        // The name becomes a directory under LUNORA_DATA_DIR: anything but an identifier ("..", "a/b") could put shard files
-        // outside the data volume, where a replaced container loses them.
-        if (!BINDING_NAME.test(binding.name)) {
-            throw new Error(
-                `--target node stores each Durable Object binding's shards in a directory named after it, and the binding ${JSON.stringify(binding.name)} in ${configName} is not a valid binding name (a JavaScript identifier such as SHARD)`,
-            );
-        }
-
+    for (const binding of durableObjectEntries(parsed.durable_objects, configName)) {
         // A binding to another worker's class has no class in this entry to construct, and no other worker runs here.
-        if (binding.script_name === undefined) {
-            durableObjects.push({ className: binding.class_name, name: binding.name });
+        if (binding.scriptName === undefined) {
+            durableObjects.push({ className: binding.className, name: binding.name });
         } else {
             external.push(`durable_objects.${binding.name}`);
         }
@@ -294,7 +369,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         throw new Error(`--target node serves the app's shard Durable Object, and ${configName} declares no durable_objects binding of its own`);
     }
 
-    const hyperdrive = stringNames(parsed.hyperdrive);
+    const hyperdrive = bindingNames(parsed.hyperdrive, "hyperdrive", configName);
 
     // One process has one DATABASE_URL; a second binding would need a naming scheme nothing reads yet.
     if (hyperdrive.length > 1) {
@@ -303,7 +378,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         );
     }
 
-    const storeSecrets = stringNames(parsed.secrets_store_secrets);
+    const storeSecrets = bindingNames(parsed.secrets_store_secrets, "secrets_store_secrets", configName);
     const reserved = storeSecrets.filter((name) => name.startsWith(RUNTIME_ENV_PREFIX));
 
     // `createNodeSecretBindings` throws on these at startup; refusing here keeps the deploy from writing an image that cannot start.
@@ -322,7 +397,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         hyperdrive: hyperdrive[0],
         storeSecrets,
         unbound: [...Object.keys(declared).filter((key) => !COMPOSED_OR_CONFIG_KEYS.has(key) && isDeclared(declared[key])), ...external],
-        vars: { ...parsed.vars },
+        vars: declaredVariables(parsed.vars, configName),
         workerSecrets,
     };
 };
@@ -643,15 +718,15 @@ const shutdown = async (code) => {
     const deadlineAt = Date.now() + shutdownTimeoutMs;
     const remaining = () => ({ timeoutMs: Math.max(0, deadlineAt - Date.now()) });
 
-    // A failed step is logged and the rest still run, so the databases are closed whatever went wrong before them. A drain that
-    // ran out of time counts as a failure: the work it names was cut off.
+    // A failed step is logged and the rest still run, so the databases are closed whatever went wrong before them.
     const step = async (label, run) => {
         currentStep = label;
 
         try {
             const results = [await run()].flat();
 
-            if (results.some((result) => result?.timedOut === true)) {
+            // Work a drain cut off, or that failed while it waited (each logged where it happened), means an unclean shutdown.
+            if (results.some((result) => result?.timedOut === true || (result?.failed?.length ?? 0) > 0)) {
                 markFailed();
             }
         } catch (error) {

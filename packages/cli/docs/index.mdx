@@ -839,6 +839,10 @@ Refused before codegen writes anything:
 - **A malformed `secrets`**: anything but `{ "required": [...] }` listing
   environment variable names (a misspelled key such as `require` included),
   which would otherwise deploy a server missing those secrets.
+- **A malformed binding entry**: a `durable_objects.bindings`, `hyperdrive` or
+  `secrets_store_secrets` entry without a valid name, or `vars` that is not an
+  object of environment variable names. The error names the section and index;
+  such an entry used to be dropped, leaving the worker an `undefined` binding.
 - **A Durable Object binding whose name is not an identifier** (`..`, `a/b`):
   each binding's shards live in a directory of that name under
   `LUNORA_DATA_DIR`.

@@ -972,6 +972,49 @@ describe("lunora deploy --target node", () => {
             });
         });
 
+        it.each<[string, Record<string, unknown>, string]>([
+            ["a Hyperdrive entry with no binding", { hyperdrive: [{ id: "abc" }] }, "hyperdrive[0] in wrangler.jsonc has none"],
+            ["a Hyperdrive binding that is not a string", { hyperdrive: [{ binding: 3, id: "abc" }] }, "hyperdrive[0] in wrangler.jsonc has 3"],
+            [
+                "a Hyperdrive section that is not a list",
+                { hyperdrive: "HYPERDRIVE" },
+                'reads hyperdrive in wrangler.jsonc as a list of bindings, and it is "HYPERDRIVE"',
+            ],
+            [
+                "a Secrets Store entry with no binding",
+                {
+                    secrets_store_secrets: [
+                        { binding: "STRIPE_KEY", secret_name: "stripe", store_id: "s" },
+                        { secret_name: "other", store_id: "s" },
+                    ],
+                },
+                "secrets_store_secrets[1] in wrangler.jsonc has none",
+            ],
+            [
+                "a Durable Object entry with no class",
+                { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }, { name: "OTHER" }] } },
+                "durable_objects.bindings[1] in wrangler.jsonc lacks one",
+            ],
+            [
+                "a Durable Object entry that is not an object",
+                { durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }, "OTHER"] } },
+                "durable_objects.bindings[1] in wrangler.jsonc lacks one",
+            ],
+            ["vars that are not an object", { vars: "LIMIT=3" }, 'reads vars in wrangler.jsonc as an object of names and values, and it is "LIMIT=3"'],
+            [
+                "a var whose name is not an environment variable",
+                { vars: { "API-URL": "x" } },
+                'vars in wrangler.jsonc has "API-URL", which is not an environment variable name',
+            ],
+        ])("refuses %s, naming where, instead of dropping it", async (_shape, wrangler, where) => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 2, error: expect.stringContaining(where) });
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+        });
+
         it("refuses a secrets_store binding with the reserved LUNORA_ prefix, which could never start", async () => {
             expect.assertions(1);
 
