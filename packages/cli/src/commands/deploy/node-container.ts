@@ -642,8 +642,8 @@ const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cron
     const classImports = classNames.map((className, index) => `${className} as __lunoraDurableObject${String(index)}`).join(", ");
     const classTable = classNames.map((className, index) => `${JSON.stringify(className)}: __lunoraDurableObject${String(index)}`).join(", ");
 
-    return `import { mkdirSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+    return `import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
     bindShardSockets,
@@ -723,6 +723,16 @@ const dataDirectory = resolve(process.env.LUNORA_DATA_DIR ?? "data");
 
 mkdirSync(dataDirectory, { recursive: true });
 
+// The volume as it really is on disk, so a shard directory is checked after symlinks, which resolve() does not follow.
+const realDataDirectory = realpathSync(dataDirectory);
+
+// By path segment, not by prefix: /data-other is not inside /data.
+const insideDataDirectory = (path) => {
+    const fromData = relative(realDataDirectory, path);
+
+    return fromData !== "" && fromData !== ".." && !fromData.startsWith(".." + sep) && !isAbsolute(fromData);
+};
+
 // Only declared names reach env, as on Cloudflare: the wrangler vars, the secrets.required names, and what the runtime reads
 // itself (LUNORA_*, PORT, DATABASE_URL). A container host's other variables (cloud credentials, another service's token) stay
 // out of reach of app code. A var set in the environment overrides the bundled value as a string.
@@ -785,7 +795,9 @@ for (const binding of CONFIG.durableObjects) {
     // Checked again here: the binding name was validated at deploy time, and the data directory must contain every shard file.
     const shardDirectory = resolve(dataDirectory, binding.name);
 
-    if (!shardDirectory.startsWith(dataDirectory + sep)) {
+    // A directory that already exists is checked through its symlinks too: a link out of the volume would put the shard files
+    // somewhere the volume does not keep.
+    if (!shardDirectory.startsWith(dataDirectory + sep) || (existsSync(shardDirectory) && !insideDataDirectory(realpathSync(shardDirectory)))) {
         throw new Error(\`lunora: Durable Object binding \${JSON.stringify(binding.name)} would store shards outside \${dataDirectory}\`);
     }
 
@@ -945,8 +957,16 @@ const shutdown = async (code) => {
     await step("waiting for in-flight requests", () => server.drain(remaining()));
     await step("closing the HTTP server", () => server.close());
     await step("draining waitUntil work", () => drainSet(background, remaining()));
-    // Together, until every registry is idle in one pass: work on one can hand work to another after that one drained.
-    await step("draining shards", () => drainTogether([...(platform === undefined ? [] : [platform]), ...registries], remaining()));
+    // Together, until every registry is idle in one pass: work on one can hand work to another after that one drained. Alarm
+    // timers stop first (the platform stops its own and the scheduler's as its drain starts), so none fires between the drain
+    // and the forced closes; their rows are kept and re-armed after a restart.
+    await step("draining shards", () => {
+        for (const registry of registries) {
+            registry.suspendAlarms();
+        }
+
+        return drainTogether([...(platform === undefined ? [] : [platform]), ...registries], remaining());
+    });
     // Forced: the drains above have finished or reached their deadline, so a close handler still running now never settles, and
     // its shard's database must not stay open at exit. platform-node logs any shard it closes that way.
     // Each close is its own step: one that throws (a database refusing to close) is logged and makes the exit 1, and the

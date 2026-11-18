@@ -636,6 +636,30 @@ describe("lunora deploy --target node", () => {
             }
         });
 
+        it("refuses to start when a shard directory is a symlink out of the data volume", async () => {
+            expect.assertions(2);
+
+            const data = dataDirectory();
+            const outside = mkdtempSync(join(tmpdir(), "lunora-outside-volume-"));
+
+            try {
+                mkdirSync(data, { recursive: true });
+                // Lexically inside the volume, really outside it: the shard files would land where the volume does not keep them.
+                symlinkSync(outside, join(data, "SHARD"), "dir");
+
+                const run = startServer(artifact, data);
+                const outcome = await Promise.race([run.listening.then(() => "listening"), run.exited.then((code) => `exit ${String(code)}`)]);
+
+                run.child.kill("SIGKILL");
+                await run.exited;
+
+                expect(outcome).not.toBe("listening");
+                expect(run.stderr()).toContain('Durable Object binding "SHARD" would store shards outside');
+            } finally {
+                rmSync(outside, { force: true, recursive: true });
+            }
+        });
+
         it("refuses to start without a secrets.required variable, naming it", async () => {
             expect.assertions(2);
 
@@ -1554,6 +1578,31 @@ describe("lunora deploy --target node", () => {
 
             await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
             expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).not.toContain("aliased-platform-marker");
+        });
+
+        it("stops every extra registry's alarm timers before the shutdown drain, so none fires before the forced close", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, {
+                wrangler: {
+                    durable_objects: {
+                        bindings: [
+                            { class_name: "ShardDO", name: "SHARD" },
+                            { class_name: "ShardDO", name: "SECOND" },
+                        ],
+                    },
+                },
+            });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+            const server = readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8");
+            // Searched from the step: the bundled platform-node has a suspendAlarms() call of its own, earlier in the file.
+            const drainStep = server.indexOf('"draining shards"');
+            const suspended = server.indexOf("registry.suspendAlarms()", drainStep);
+
+            // Suspended inside the drain step, before drainTogether runs its first pass.
+            expect(drainStep !== -1 && suspended !== -1 && suspended < server.indexOf("drainTogether([", drainStep)).toBe(true);
         });
 
         it("allows secrets.required to list a name twice, which puts one key on env", async () => {
