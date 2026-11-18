@@ -530,6 +530,61 @@ describe("boxSessionDO", () => {
         ]);
     });
 
+    it("never lets a superseded session's hello land over the session that replaced it", async () => {
+        const { key, session, state, store } = await setup();
+        const { get } = store;
+        let release = (): void => undefined;
+        let reach = (): void => undefined;
+        const reached = new Promise<void>((resolve) => {
+            reach = resolve;
+        });
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        // The older socket's auth reads the box twice: the handshake's key check, then `recordHello`'s read. Hold the second.
+        let boxReads = -1;
+
+        Object.assign(store, {
+            get: async (table: string, id: string): Promise<unknown> => {
+                const row = await get(table, id);
+
+                if (table === "boxes" && boxReads >= 0) {
+                    boxReads += 1;
+
+                    if (boxReads === 2) {
+                        reach();
+                        await gate;
+                    }
+                }
+
+                return row;
+            },
+        });
+
+        const older = fakeSocket(openSession("box_1", Date.now()));
+
+        state.acceptWebSocket(older);
+        await session.webSocketMessage(older, helloFrame("box_1"));
+
+        const challenge = older.received().find((frame) => frame.type === "challenge") as Extract<CloudMessage, { type: "challenge" }>;
+
+        boxReads = 0;
+
+        const olderAuth = session.webSocketMessage(older, await authFrame(key, "box_1", challenge.nonce));
+
+        await reached;
+        boxReads = -1;
+
+        const newer = await handshake(session, state, key, "box_1", { hello: { resources: { diskFreeMb: 1, memMb: 2 } } });
+
+        release();
+        await olderAuth;
+
+        expect(older.closedWith).toMatchObject({ reason: "SUPERSEDED" });
+        expect(newer.closedWith).toBeUndefined();
+        expect(store.tables["boxes"]?.[0]).toMatchObject({ resources: { diskFreeMb: 1, memMb: 2 }, status: "online" });
+    });
+
     it("keeps a full fleet list out of the socket attachment, which workerd caps at 16 KiB, and still records it", async () => {
         const { key, session, state, store } = await setup();
         // The protocol's maximum: 500 fleets, each with a 63-character alias and a 128-character deployment id.

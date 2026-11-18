@@ -510,8 +510,15 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
                 }
 
                 const fleets = this.takeFleets(effect.nonce);
+                const current = (): boolean => this.readySockets().includes(socket);
 
-                await recordHello(database, attachment.boxId, { ...effect.hello, ...(fleets === undefined ? {} : { fleets }) }, now);
+                await recordHello(database, attachment.boxId, { ...effect.hello, ...(fleets === undefined ? {} : { fleets }) }, now, current);
+
+                // Superseded while D1 answered: the newer session pushes its own routes and config.
+                if (!current()) {
+                    break;
+                }
+
                 await this.ctx.storage.put("seenWrittenAt", now);
                 // A failed push leaves `routesWithheld` unwritten, so the suspension sweep retries it within a minute.
                 await this.pushRoutes().catch(() => false);

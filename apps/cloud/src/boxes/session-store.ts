@@ -41,7 +41,7 @@ export const loadBox = async (database: ControlPlaneStore, boxId: string): Promi
  * it read before, and the store has no conditional patch to stop it. The write never touches
  * `revokedAt`, so it still says the box is revoked.
  */
-const isRevoked = (box: StoredBox): boolean => box.status === "revoked" || box.revokedAt != null;
+export const isRevoked = (box: StoredBox): boolean => box.status === "revoked" || box.revokedAt != null;
 
 /** Put back a revocation that landed between a session's read and its status write. */
 const keepRevoked = async (database: ControlPlaneStore, boxId: string): Promise<void> => {
@@ -60,16 +60,21 @@ export const sessionBoxOf = (box: null | StoredBox): null | SessionBox => (box =
  * this much room — and these fleets, when the session still held them (it holds
  * them in memory between `hello` and `auth`, so an eviction in between loses
  * them; the stored list then stays until the next job or `hello` moves it).
+ *
+ * `current` is asked after the read: a Durable Object takes other events while
+ * D1 answers, so a newer session may have superseded this one and recorded its
+ * own `hello`, which this one's would otherwise overwrite.
  */
 export const recordHello = async (
     database: ControlPlaneStore,
     boxId: string,
     hello: { fleets?: FleetSummary[]; resources: BoxResources; versions: BoxVersions },
     now: number,
+    current: () => boolean = () => true,
 ): Promise<void> => {
     const box = await loadBox(database, boxId);
 
-    if (box === null || isRevoked(box)) {
+    if (box === null || isRevoked(box) || !current()) {
         return;
     }
 
