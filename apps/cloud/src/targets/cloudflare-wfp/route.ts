@@ -46,8 +46,12 @@ export const scriptForPlatformHostname = (hostname: string, appDomain: string): 
     return label === "" || label.includes(".") ? null : label;
 };
 
+const TRAILING_DOT = /\.$/u;
+
 export const resolveTenant = async (hostname: string, options: ResolveTenantOptions): Promise<null | TenantRoute> => {
-    const host = hostname.toLowerCase();
+    // `tenant.lunora.app.` is the same name in its fully-qualified form, which some
+    // clients send as-is; neither the apex suffix nor a stored custom domain carries the dot.
+    const host = hostname.toLowerCase().replace(TRAILING_DOT, "");
     const platform = scriptForPlatformHostname(host, options.appDomain);
     const scriptName = platform === undefined ? ((await options.resolveCustomDomain?.(host)) ?? null) : platform;
 

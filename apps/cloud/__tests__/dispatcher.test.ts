@@ -13,6 +13,16 @@ describe(resolveTenant, () => {
         await expect(resolveTenant("Acme-App.Lunora.App", { appDomain: "lunora.app" })).resolves.toStrictEqual({ plan: undefined, scriptName: "acme-app" });
     });
 
+    it("resolves a fully-qualified host, trailing dot and all", async () => {
+        const resolveCustomDomain = (host: string) => Promise.resolve(host === "app.acme.com" ? "acme-app" : null);
+
+        await expect(resolveTenant("acme-app.lunora.app.", { appDomain: "lunora.app" })).resolves.toStrictEqual({ plan: undefined, scriptName: "acme-app" });
+        await expect(resolveTenant("app.acme.com.", { appDomain: "lunora.app", resolveCustomDomain })).resolves.toStrictEqual({
+            plan: undefined,
+            scriptName: "acme-app",
+        });
+    });
+
     it("rejects the apex and multi-label subdomains", async () => {
         await expect(resolveTenant("lunora.app", { appDomain: "lunora.app" })).resolves.toBeNull();
         await expect(resolveTenant("a.b.lunora.app", { appDomain: "lunora.app" })).resolves.toBeNull();
