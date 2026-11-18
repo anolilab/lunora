@@ -1549,4 +1549,78 @@ describe(createNodeMailHost, () => {
             }).toThrow(/shard registry/u);
         });
     });
+
+    describe("eleventh review", () => {
+        it.each([
+            ["the empty string", ""],
+            [":memory:", ":memory:"],
+            ["a file::memory: URI", "file::memory:"],
+            ["a mode=memory URI", "file:mail.sqlite3?mode=memory&cache=shared"],
+        ])("refuses %s as mail.path, since the mail queue must be durable", (_label, mailPath) => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-durable-"));
+
+            expect(() =>
+                createNodePlatform({
+                    mail: { env: PRODUCTION, path: mailPath, transport: scriptedTransport(["ok"]) },
+                    path: join(directory ?? "", "shard.sqlite3"),
+                }),
+            ).toThrow(/not durable/u);
+        });
+
+        it("logs a failed key claim like any delivery failure, and retries the send", async () => {
+            expect.assertions(4);
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            const database = freshDatabase();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "claim-1", subject: "Hi", text: "Hi", to: "ada@example.com" });
+            // The claim's insert fails, as a locked or corrupt database would make it.
+            database.exec("CREATE TEMP TRIGGER no_claims BEFORE INSERT ON main._lunora_mail_claims BEGIN SELECT RAISE(ABORT, 'claims unavailable'); END");
+            await mail.poll();
+
+            const line = logged(warn.mock.calls[0]?.[0]) as { attempts: number; error: { cause?: { message: string }; message: string }; event: string };
+
+            expect(line).toMatchObject({ attempts: 1, event: "lunora.mail.send_retry" });
+            expect(line.error.message).toContain('"claim-1"');
+            expect(line.error.cause?.message).toContain("claims unavailable");
+
+            // Retried, not dropped: once the claim works the send goes out.
+            database.exec("DROP TRIGGER no_claims");
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(1);
+        });
+
+        it("decodes a stored body only for mail, never on a plain queue send", async () => {
+            expect.assertions(3);
+
+            const database = freshDatabase();
+            const app = createNodeQueueHost(database, {
+                onBatch: () => undefined,
+                queues: { jobs: defineQueue({ handler: () => undefined, maxBatchTimeout: 0 }) },
+            });
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport });
+            // JSON.parse is the decoder for a JSON body: a plain send has no use for the decoded value.
+            const decode = vi.spyOn(JSON, "parse");
+
+            await app.bindings.jobs.send({ n: 1 });
+
+            expect(decode).not.toHaveBeenCalled();
+
+            await mail.queue.send({ idempotencyKey: "decoded-1", subject: "Hi", text: "Hi", to: "ada@example.com" });
+
+            // The mail host reads the stored value to take its key and fingerprint.
+            expect(decode).toHaveBeenCalledWith(expect.stringContaining('"idempotencyKey":"decoded-1"'));
+
+            decode.mockRestore();
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(1);
+        });
+    });
 });

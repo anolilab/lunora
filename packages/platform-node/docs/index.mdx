@@ -226,7 +226,10 @@ file the mail host keeps its queue, sent ledger and key records in (the
 there is no default. `shard.transaction()` holds the shard's file across awaits,
 so mail written on it during a mutation would be rolled back with it, and the
 ack and sent record lost would mail the message again. Construction throws when
-`mail.path` names the shard's file, the `globalTablesPath` file, or a `.sqlite3`
+`mail.path` is not durable (`:memory:`, or the empty string, which better-sqlite3
+opens as a temporary file), or is a `file:` URI asking for memory (better-sqlite3
+does not read URIs, and would create a file by that literal name instead), or
+names the shard's file, the `globalTablesPath` file, or a `.sqlite3`
 file inside the registry `directory` (which would be opened as a shard). Paths
 are compared after `path.resolve` and `realpath`, and existing files by device and
 inode, so a hard link to one of those files is refused too. SQLite names its WAL

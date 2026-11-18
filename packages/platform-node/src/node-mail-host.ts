@@ -26,7 +26,15 @@ import { createHash } from "node:crypto";
 
 import { LunoraError } from "@lunora/errors";
 import type { MailEnv, Mailer, MailTransport, QueueLike, SentMailStore } from "@lunora/mail";
-import { consumeQueuedSend, createMailer, createMailerFromEnv, isOutcomeUnknownMailError, isRetryableMailError, shouldCaptureMail } from "@lunora/mail";
+import {
+    consumeQueuedSend,
+    createMailer,
+    createMailerFromEnv,
+    isOutcomeUnknownMailError,
+    isRetryableMailError,
+    MailSendError,
+    shouldCaptureMail,
+} from "@lunora/mail";
 import type { MessageBatchLike } from "@lunora/platform";
 import { defineQueue } from "@lunora/queue";
 import type Database from "better-sqlite3";
@@ -614,6 +622,28 @@ const refuse = (message: MessageBatchLike["messages"][number], event: string, re
     message.ack();
 };
 
+/**
+ * Take the message's key, or settle the message and answer `undefined` when the
+ * claim itself fails. A SQLite error here is a failed delivery like any other: it
+ * is logged with the key, the attempt and the cause chain, and retried or parked
+ * on the same rule. Outside this, it escaped the batch, which the queue host
+ * retried with no log at all until the row parked in silence.
+ */
+const claimFor = (consumer: MailConsumer, message: MessageBatchLike["messages"][number], key: string | undefined): TakeOutcome | undefined => {
+    // A body without a key is refused by `consumeQueuedSend` before any mark is written, so the row's count serves.
+    if (key === undefined) {
+        return { delivery: message.attempts, firstDeliveredAt: message.timestamp.getTime(), outcome: "taken" };
+    }
+
+    try {
+        return consumer.claims.take(key, fingerprintOf(message.body), message.id);
+    } catch (error) {
+        settleFailure(message, new MailSendError({ cause: error, message: `@lunora/mail: could not claim idempotency key "${key}"`, retryable: true }));
+
+        return undefined;
+    }
+};
+
 /** Deliver one message under its key's claim, and settle it on its own outcome. */
 const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messages"][number]): Promise<void> => {
     // Every route back into delivery passes here: a retry, a lapsed lease, a requeue. Past the
@@ -625,11 +655,11 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
     }
 
     const key = idempotencyKeyOf(message.body);
-    // A body without a key is refused by `consumeQueuedSend` before any mark is written, so the row's count serves.
-    const claimed: TakeOutcome =
-        key === undefined
-            ? { delivery: message.attempts, firstDeliveredAt: message.timestamp.getTime(), outcome: "taken" }
-            : consumer.claims.take(key, fingerprintOf(message.body), message.id);
+    const claimed = claimFor(consumer, message, key);
+
+    if (claimed === undefined) {
+        return;
+    }
 
     if (claimed.outcome === "conflict") {
         // Parked, never acked: this is real mail whose key another message owns, and an ack would

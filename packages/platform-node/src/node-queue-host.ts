@@ -437,11 +437,19 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
             const encoded = encodeMessage(message, contentType, queue.name);
             const delay = delayMs(sendOptions?.delaySeconds);
 
+            // Decoded only when read, and once: the mail host asks for it, but the app queues'
+            // own sends (through the binding below) never do, and must not pay a decode per send.
+            let decoded: { value: unknown } | undefined;
+
             return {
                 insert: () => {
                     enqueue(queue.name, encoded, contentType, delay, clock());
                 },
-                stored: decodeBody(encoded, contentType),
+                get stored(): unknown {
+                    decoded ??= { value: decodeBody(encoded, contentType) };
+
+                    return decoded.value;
+                },
             };
         };
 
