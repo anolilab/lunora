@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { complete, DELIVERY_TTL_MS, recordPush, releaseTarget } from "../lunora/builds";
+import { complete, DELIVERY_TTL_MS, recordPush, releaseTarget, reportTarget } from "../lunora/builds";
 import { byGithubRepo, create, updateBuildSettings } from "../lunora/projects";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -562,5 +562,40 @@ describe("projects.updateBuildSettings", () => {
         ).rejects.toMatchObject({
             code: "BAD_REQUEST",
         });
+    });
+});
+
+/**
+ * An organization may claim installations on several GitHub accounts; the build's
+ * source fetch and commit status must use the one the push came through, which is
+ * the one known to reach the repository.
+ */
+describe("builds.reportTarget", () => {
+    const installations = [
+        { _id: "inst_other", claimedAt: 1, installationId: 7, organizationId: ORG },
+        { _id: "inst_1", claimedAt: 1, installationId: 42, organizationId: ORG },
+    ];
+
+    it("authenticates as the installation that delivered the push, not the organization's first claim", async () => {
+        const { ctx, ops } = makeCtx({ ...world(project()), githubInstallations: installations });
+
+        await recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } });
+
+        const inserted = ops.find((op) => op.kind === "insert" && op.table === "builds");
+        const build = { ...(inserted?.kind === "insert" ? inserted.document : {}), _id: "bld_1" };
+        const { ctx: readCtx } = makeCtx({ ...world(project(), [build]), githubInstallations: installations });
+
+        await expect(reportTarget.handler(readCtx, { buildId: "bld_1" as never })).resolves.toStrictEqual({
+            commitSha: "abc123",
+            installationId: 42,
+            repository: "acme/mono",
+        });
+    });
+
+    it("refuses an installation the organization no longer holds", async () => {
+        const build = { _id: "bld_1", commitSha: "abc123", installationId: 42, organizationId: ORG, projectId: "prj_1" };
+        const { ctx } = makeCtx({ ...world(project(), [build]), githubInstallations: [{ _id: "inst_1", installationId: 42, organizationId: "org_2" }] });
+
+        await expect(reportTarget.handler(ctx, { buildId: "bld_1" as never })).resolves.toBeNull();
     });
 });

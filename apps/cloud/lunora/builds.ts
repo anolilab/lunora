@@ -222,12 +222,13 @@ const recordProjectPush = async (
         changes: PushChanges;
         commitSha: string;
         fromFork: boolean | undefined;
+        installationId: number;
         pullRequest: number | undefined;
         trigger: BuildTrigger;
     },
 ): Promise<ProjectPushResult> => {
     const { now } = context;
-    const { branch, changes, commitSha, fromFork, pullRequest, trigger } = push;
+    const { branch, changes, commitSha, fromFork, installationId, pullRequest, trigger } = push;
     const { rootDirectory, watchPaths, workspacePackages } = absentForNull(project);
     const runtime = storedRuntime(project.runtime);
     const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, runtime, trigger });
@@ -255,6 +256,7 @@ const recordProjectPush = async (
         commitSha,
         createdAt: now,
         ...(fromFork === true ? { fromFork: true } : {}),
+        installationId,
         organizationId: project.organizationId,
         projectId: project._id, // secret-scanner:allow -- domain field name
         ...(pullRequest === undefined ? {} : { pullRequest }),
@@ -383,7 +385,7 @@ export const recordPush = internalMutation
                 // eslint-disable-next-line no-await-in-loop -- each project's decision reads the builds the previous one queued
                 const result = await (redelivery
                     ? redelivered(context, project._id, commitSha, trigger)
-                    : recordProjectPush(context, project, { before, branch, changes, commitSha, fromFork, pullRequest, trigger }));
+                    : recordProjectPush(context, project, { before, branch, changes, commitSha, fromFork, installationId, pullRequest, trigger }));
 
                 results.push(result);
             }
@@ -603,18 +605,18 @@ export const fail = internalMutation
     });
 
 /**
- * Everything needed to write a commit status for one build: the repository, the
- * commit, and the installation that grants write access to it.
+ * Everything needed to fetch a build's source and write its commit status: the
+ * repository, the commit, and the installation that grants access to it.
  *
- * Resolved here rather than stored on the build row, because both halves already
- * have an owner and neither belongs to a build: the repository is the project's
- * connection (`githubRepo`), and the installation is the org's claim. Copying
- * them onto every build would give a rename or a re-install two places to be
- * right, and the second one is the one nobody updates.
+ * The installation is the one the push arrived through, stored on the build: an
+ * organization may claim installations on several GitHub accounts, and only the
+ * one that delivered the push is known to reach the repository. It must still be
+ * claimed by the build's organization — an unclaimed or re-claimed installation
+ * no longer speaks for it. The repository is read from the project's connection
+ * (`githubRepo`), whose owner it is.
  *
- * Returns `null` when either is missing — a project with no connected repo, or an
- * org that has not claimed an installation — which is the ordinary state for a
- * build that arrived any way other than a push. SYSTEM only.
+ * Returns `null` when the project has no connected repo or the push's
+ * installation is no longer the organization's. SYSTEM only.
  */
 export const reportTarget = internalQuery
     .input({ buildId: v.id("builds") })
@@ -631,8 +633,12 @@ export const reportTarget = internalQuery
             return null;
         }
 
-        const { page } = await context.db.githubInstallations.findMany({ where: { organizationId: build.organizationId } });
-        const installation = page.find((row) => row.claimedAt !== undefined);
+        if (build.installationId == null) {
+            return null;
+        }
+
+        const { page } = await context.db.githubInstallations.findMany({ where: { installationId: build.installationId } });
+        const installation = page.find((row) => row.organizationId === build.organizationId);
 
         if (!installation) {
             return null;

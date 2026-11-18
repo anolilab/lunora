@@ -295,6 +295,9 @@ export const deployTables = {
         // preview release resolves the project's secrets and mints its ingest
         // key, which opening a pull request must never reach.
         fromFork: v.optional(v.boolean()),
+        // The GitHub App installation the push arrived through: the one known to
+        // reach the repository, which the source fetch and commit status use.
+        installationId: v.optional(v.number()),
         organizationId: v.id("organizations"),
         // Work lease: which runner is on it and since when (stale after 30 min).
         processingBy: v.optional(v.string()),

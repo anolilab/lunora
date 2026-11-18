@@ -246,6 +246,7 @@ export interface Doc_builds {
     deploymentId?: string | null;
     error?: string | null;
     fromFork?: boolean | null;
+    installationId?: number | null;
     organizationId: Id<"organizations">;
     processingBy?: string | null;
     processingStartedAt?: number | null;
@@ -1328,6 +1329,7 @@ export interface Insert_builds {
     deploymentId?: string;
     error?: string;
     fromFork?: boolean;
+    installationId?: number;
     organizationId: Id<"organizations">;
     processingBy?: string;
     processingStartedAt?: number;

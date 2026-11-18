@@ -259,6 +259,7 @@ export const builds = sqliteTable("builds", {
     deploymentId: text("deploymentId"),
     error: text("error"),
     fromFork: integer("fromFork", { mode: "boolean" }),
+    installationId: real("installationId"),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     processingBy: text("processingBy"),
     processingStartedAt: real("processingStartedAt"),
