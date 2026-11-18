@@ -251,6 +251,26 @@ describe(teardownPorts, () => {
         expect(deleteRow).toHaveBeenCalledWith("aliasOwnership", "ao_1");
     });
 
+    it("holdAlias marks the project's own claim, and never another project's", async () => {
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const database = fakeControlPlaneDb({ aliasOwnership: [{ _id: "ao_1", alias: "app", projectId: "prj_1" }] }, { patch });
+        const ports = teardownPorts(database, noop, 7000, everyTarget);
+
+        await expect(ports.holdAlias("app", "prj_2")).resolves.toBe(false);
+        expect(patch).not.toHaveBeenCalled();
+        await expect(ports.holdAlias("app", "prj_1")).resolves.toBe(true);
+        expect(patch).toHaveBeenCalledWith("aliasOwnership", "ao_1", { teardownAt: 7000 });
+    });
+
+    it("unholdAlias clears the mark on the project's own claim", async () => {
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const database = fakeControlPlaneDb({ aliasOwnership: [{ _id: "ao_1", alias: "app", projectId: "prj_1", teardownAt: 7000 }] }, { patch });
+
+        await teardownPorts(database, noop, 8000, everyTarget).unholdAlias("app", "prj_1");
+
+        expect(patch).toHaveBeenCalledWith("aliasOwnership", "ao_1", { teardownAt: null });
+    });
+
     it("releaseAlias is a no-op when no ownership row exists (already released)", async () => {
         const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeControlPlaneDb({ aliasOwnership: [] }, { delete: deleteRow }), noop, 1000, everyTarget);

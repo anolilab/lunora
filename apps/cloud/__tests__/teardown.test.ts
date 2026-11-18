@@ -12,9 +12,11 @@ const ports = (overrides: Partial<TeardownPorts>): TeardownPorts => {
         aliasInUse: () => Promise.resolve(false),
         deleteRelease: () => Promise.resolve(),
         destroy: () => Promise.resolve(),
+        holdAlias: () => Promise.resolve(true),
         listPending: () => Promise.resolve([]),
         markTornDown: () => Promise.resolve(),
         releaseAlias: () => Promise.resolve(),
+        unholdAlias: () => Promise.resolve(),
         ...overrides,
     };
 };
@@ -184,5 +186,70 @@ describe(runTeardownSweep, () => {
         );
 
         expect(released).toStrictEqual([]);
+    });
+
+    it("holds the alias before asking whether it is in use, and keeps holding it through the destroy", async () => {
+        const steps: string[] = [];
+        const step =
+            <T>(name: string, value: T) =>
+            (): Promise<T> => {
+                steps.push(name);
+
+                return Promise.resolve(value);
+            };
+
+        await runTeardownSweep(
+            ports({
+                aliasInUse: step("aliasInUse", false),
+                destroy: step("destroy", undefined),
+                holdAlias: step("holdAlias", true),
+                listPending: () => Promise.resolve([target("gone", { destroyWorker: true })]),
+                releaseAlias: step("releaseAlias", undefined),
+                unholdAlias: step("unholdAlias", undefined),
+            }),
+        );
+
+        // Released with the claim, never cleared before the destroy finished.
+        expect(steps).toStrictEqual(["holdAlias", "aliasInUse", "destroy", "aliasInUse", "releaseAlias"]);
+    });
+
+    it.each([
+        ["the alias has a release", { aliasInUse: () => Promise.resolve(true) }],
+        ["the destroy fails", { destroy: () => Promise.reject(new Error("driver down")) }],
+    ])("clears the hold when %s, so the next release is not refused", async (_label, overrides: Partial<TeardownPorts>) => {
+        const unheld: string[] = [];
+
+        await runTeardownSweep(
+            ports({
+                listPending: () => Promise.resolve([target("gone", { destroyWorker: true })]),
+                unholdAlias: (alias) => {
+                    unheld.push(alias);
+
+                    return Promise.resolve();
+                },
+                ...overrides,
+            }),
+        );
+
+        expect(unheld).toStrictEqual(["gone"]);
+    });
+
+    it("destroys nothing when another project owns the alias, whose tenant it now is", async () => {
+        const destroyed: string[] = [];
+
+        const result = await runTeardownSweep(
+            ports({
+                destroy: (pending) => {
+                    destroyed.push(pending.alias);
+
+                    return Promise.resolve();
+                },
+                holdAlias: () => Promise.resolve(false),
+                listPending: () => Promise.resolve([target("gone", { destroyWorker: true })]),
+            }),
+        );
+
+        expect(destroyed).toStrictEqual([]);
+        expect(result).toStrictEqual({ failed: 0, tornDown: 1 });
     });
 });

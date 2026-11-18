@@ -273,7 +273,18 @@ describe("celld-vps teardown after the project is gone", () => {
         const store = memoryStore({
             aliasOwnership: [{ _id: "own_1", alias: "web", projectId: "proj_1" }],
             boxes: [],
-            deployments: [{ _id: "dep_1", alias: "web", createdAt: 1, kind: "production", scriptName: "web", status: "destroyed", target: "celld-vps" }],
+            deployments: [
+                {
+                    _id: "dep_1",
+                    alias: "web",
+                    createdAt: 1,
+                    kind: "production",
+                    projectId: "proj_1",
+                    scriptName: "web",
+                    status: "destroyed",
+                    target: "celld-vps",
+                },
+            ],
             projects: [],
         });
         const { jobs, session } = recordingSession();

@@ -212,6 +212,7 @@ export const aliasOwnership = sqliteTable("aliasOwnership", {
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     pendingClasses: text("pendingClasses", { mode: "json" }).$type<Array<{ classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; endedAt?: number; startedAt: number; token: string }>>(),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    teardownAt: real("teardownAt"),
     workerClasses: text("workerClasses", { mode: "json" }).$type<Array<{ binding: string; className: string; sqlite?: boolean; type: string }>>(),
 }, (t) => ({
     by_alias: uniqueIndex("by_alias").on(t.alias),

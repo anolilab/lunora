@@ -50,6 +50,31 @@ export const claimAlias = async (context: MutationContext, alias: string, organi
     }
 };
 
+/**
+ * How long the teardown sweep's hold on an alias refuses releases. Past it the
+ * sweep is taken to have died mid-run; its next run holds the alias again.
+ */
+const ALIAS_TEARDOWN_HOLD_MS = 30 * 60 * 1000;
+
+/**
+ * Refuse a release whose alias the teardown sweep is destroying, removing the
+ * row the release already inserted. Called after that insert: the sweep writes
+ * its hold before it asks whether the alias has a release, so either it sees
+ * this row and keeps the tenant, or this sees the hold (`src/deploy/teardown.ts`).
+ * @throws {LunoraError} `CONFLICT` while the hold is fresh.
+ */
+export const refuseWhileTearingDown = async (context: MutationContext, alias: string, deploymentId: Id<"deployments">): Promise<void> => {
+    const { page } = await context.db.aliasOwnership.findMany({ where: { alias } });
+    const heldAt = page[0]?.teardownAt;
+
+    // `!= null`: `.global()` rows answer SQL NULL for an unset column.
+    if (heldAt != null && context.now - heldAt < ALIAS_TEARDOWN_HOLD_MS) {
+        await context.db.delete("deployments", deploymentId);
+
+        throw new LunoraError("CONFLICT", `deployment alias "${alias}" is being torn down; deploy again once its teardown finishes, within a few minutes`);
+    }
+};
+
 /** Whether `error` is {@link claimAlias}'s refusal of an alias another project owns. */
 const isAliasTaken = (error: unknown): boolean => error instanceof LunoraError && error.code === "FORBIDDEN";
 

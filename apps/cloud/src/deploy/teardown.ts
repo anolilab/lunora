@@ -52,6 +52,17 @@ export interface TeardownPorts {
     deleteRelease: (id: string) => Promise<void>;
     /** Destroy the alias's tenant and its resources — through the driver of the placement its rows name. */
     destroy: (target: TeardownTarget) => Promise<void>;
+
+    /**
+     * Mark `projectId`'s claim on the alias as being torn down (true, nothing
+     * written, when no claim is left). `deployments.create` refuses a release for an
+     * alias so marked, after inserting its row: with the sweep writing the mark
+     * before it asks {@link aliasInUse}, one of the two always sees the other.
+     * False, and nothing written, when another project owns the alias: its
+     * tenant is that project's now.
+     */
+    holdAlias: (alias: string, projectId: string) => Promise<boolean>;
+
     /** The destroyed/failed deployments whose release has not been reclaimed yet. */
     listPending: () => Promise<TeardownTarget[]>;
     /** Record that a deployment's stored release (and, for {@link TeardownTarget.destroyWorker}, its tenant) is gone. */
@@ -63,6 +74,8 @@ export interface TeardownPorts {
      * Idempotent.
      */
     releaseAlias: (alias: string, projectId: string) => Promise<void>;
+    /** Clear {@link holdAlias}'s mark when the tenant was kept, so a release can be created again. Idempotent. */
+    unholdAlias: (alias: string, projectId: string) => Promise<void>;
 }
 
 export interface TeardownResult {
@@ -71,6 +84,44 @@ export interface TeardownResult {
     /** Targets reclaimed and marked torn down. */
     tornDown: number;
 }
+
+/**
+ * Destroy the alias's tenant and release the claim, unless a release holds it.
+ *
+ * The hold is written before the alias is checked, and held through the
+ * destroy: a release created after the check is refused by
+ * `deployments.create`, which inserts its row before reading the hold. The
+ * hold is cleared whenever the tenant is kept, a failed destroy included, so
+ * it never blocks a release beyond the run that set it.
+ */
+const destroyTenant = async (ports: TeardownPorts, target: TeardownTarget): Promise<void> => {
+    if (!(await ports.holdAlias(target.alias, target.projectId))) {
+        return;
+    }
+
+    let released = false;
+
+    try {
+        if (await ports.aliasInUse(target.alias)) {
+            return;
+        }
+
+        await ports.destroy(target);
+
+        // The alias is only free once its tenant and resources are gone.
+        // Released BEFORE `markTornDown` so a failure here leaves the row
+        // pending and the (idempotent) release retries next tick. Asked again:
+        // a release that read the hold as stale still owns the claim.
+        if (!(await ports.aliasInUse(target.alias))) {
+            await ports.releaseAlias(target.alias, target.projectId);
+            released = true;
+        }
+    } finally {
+        if (!released) {
+            await ports.unholdAlias(target.alias, target.projectId);
+        }
+    }
+};
 
 /**
  * Reclaim every pending target, then mark the row. Idempotent (driven off
@@ -84,20 +135,9 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
 
     for (const target of targets) {
         try {
-            // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small
-            if (target.destroyWorker && !(await ports.aliasInUse(target.alias))) {
+            if (target.destroyWorker) {
                 // eslint-disable-next-line no-await-in-loop -- sequential teardown paces the target's API work; volumes are small
-                await ports.destroy(target);
-
-                // The alias is only free once its tenant and resources are gone.
-                // Released BEFORE `markTornDown` so a failure here leaves the row
-                // pending and the (idempotent) release retries next tick. Asked
-                // again: a release created during the destroy still owns the claim.
-                // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small
-                if (!(await ports.aliasInUse(target.alias))) {
-                    // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small
-                    await ports.releaseAlias(target.alias, target.projectId);
-                }
+                await destroyTenant(ports, target);
             }
 
             // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small

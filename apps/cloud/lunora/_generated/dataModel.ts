@@ -208,6 +208,7 @@ export interface Doc_aliasOwnership {
     organizationId: Id<"organizations">;
     pendingClasses?: Array<{ classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; endedAt?: number; startedAt: number; token: string }> | null;
     projectId: Id<"projects">;
+    teardownAt?: number | null;
     workerClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }> | null;
 }
 
@@ -1288,6 +1289,7 @@ export interface Insert_aliasOwnership {
     organizationId: Id<"organizations">;
     pendingClasses?: Array<{ classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; endedAt?: number; startedAt: number; token: string }>;
     projectId: Id<"projects">;
+    teardownAt?: number;
     workerClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>;
 }
 

@@ -204,6 +204,10 @@ export const deployTables = {
             v.array(v.object({ classes: v.array(boundClass), endedAt: v.optional(v.number()), startedAt: v.number(), token: v.string() })),
         ),
         projectId: v.id("projects"),
+        // When the teardown sweep started destroying the alias's tenant; unset
+        // when it is not. `deployments.create` refuses a release while it is
+        // fresh (`src/deploy/teardown.ts`).
+        teardownAt: v.optional(v.number()),
         // The Durable Object and Workflow classes of the script the last
         // successful converge put on the alias's Worker. On a target that drops
         // unbound classes these are the classes that can hold data — what an

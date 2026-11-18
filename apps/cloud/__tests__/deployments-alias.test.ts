@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server";
 import { claimAlias } from "../lunora/deployment-aliases";
+import { create as createDeployment } from "../lunora/deployments";
+import { makeCtx as makeFullCtx, owner } from "./_helpers/fake-ctx";
 
 type AliasRow = { _id: string; alias: string; organizationId: string; projectId: string }; // gitleaks:allow -- a type alias; the scanner matches `projectId` as a Cypress id
 
@@ -99,5 +101,45 @@ describe(claimAlias, () => {
         const { ctx } = makeCtx([], { throw: boom });
 
         await expect(claimAlias(ctx, "acme", org, "proj_A" as never)).rejects.toBe(boom);
+    });
+});
+
+describe("deployments.create while the alias is torn down", () => {
+    const NOW = 1_700_000_000_000;
+    const release = (teardownAt?: number) => {
+        const full = makeFullCtx(
+            {
+                aliasOwnership: [
+                    { _id: "ao_1", alias: "web", organizationId: "org_1", projectId: "prj_1", ...(teardownAt === undefined ? {} : { teardownAt }) },
+                ],
+                deployments: [],
+                halts: [],
+                members: [owner("org_1")],
+                organizations: [{ _id: "org_1" }],
+                projects: [{ _id: "prj_1", organizationId: "org_1", slug: "web" }],
+            },
+            { now: NOW },
+        );
+
+        return {
+            ...full,
+            created: createDeployment.handler(full.ctx, { kind: "preview", organizationId: "org_1" as never, projectId: "prj_1" as never, scriptName: "web" }),
+        };
+    };
+
+    it("refuses the release and removes the row it inserted while the teardown sweep holds the alias", async () => {
+        expect.assertions(2);
+
+        const { created, ops } = release(NOW - 60_000);
+
+        await expect(created).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(ops.filter((op) => op.kind === "delete")).toStrictEqual([{ id: "deployments_new", kind: "delete" }]);
+    });
+
+    it("creates the release when the hold is cleared, or stale from a sweep that died", async () => {
+        expect.assertions(2);
+
+        await expect(release().created).resolves.toMatchObject({ deploymentId: "deployments_new" });
+        await expect(release(NOW - 31 * 60_000).created).resolves.toMatchObject({ deploymentId: "deployments_new" });
     });
 });

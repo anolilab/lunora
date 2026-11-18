@@ -16,7 +16,7 @@ import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
 import { assertMember, authorizeDeployKey } from "./authz";
-import { claimDeploymentAlias } from "./deployment-aliases";
+import { claimDeploymentAlias, refuseWhileTearingDown } from "./deployment-aliases";
 import { installBadgeOf, isWebUrl, onEnter, PHASE_TIMESTAMP, projectNameOf, releaseDetail } from "./deployment-lifecycle";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -505,6 +505,8 @@ export const create = mutation
             updatedAt: now,
             version,
         });
+
+        await refuseWhileTearingDown(context, arguments_.scriptName, deploymentId);
 
         // A deliberate deletion of Durable Object data is on the record, with who asked.
         if (deletedClasses.length > 0) {

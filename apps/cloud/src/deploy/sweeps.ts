@@ -160,6 +160,25 @@ export const teardownPorts = (
                     .filter((target): target is TeardownTarget => target.target !== undefined && canConverge(target.target))
             );
         },
+        holdAlias: async (alias, projectId) => {
+            const { page } = await database.findMany("aliasOwnership", { limit: 1, where: { alias } });
+            const claim = page[0] as undefined | { _id: string; projectId: string };
+
+            // No claim left: an earlier run destroyed the tenant and released the alias
+            // but failed to stamp the row. There is nothing to hold, and the destroy
+            // it repeats is idempotent.
+            if (claim === undefined) {
+                return true;
+            }
+
+            if (claim.projectId !== projectId) {
+                return false;
+            }
+
+            await database.patch("aliasOwnership", claim._id, { teardownAt: now });
+
+            return true;
+        },
         markTornDown: async (id) => {
             await database.patch("deployments", id, { teardownAt: now, updatedAt: now });
         },
@@ -182,6 +201,14 @@ export const teardownPorts = (
             for (const row of halts as { _id: string }[]) {
                 // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)
                 await database.delete("halts", row._id);
+            }
+        },
+        unholdAlias: async (alias, projectId) => {
+            const { page } = await database.findMany("aliasOwnership", { where: { alias, projectId } });
+
+            for (const row of page as { _id: string }[]) {
+                // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)
+                await database.patch("aliasOwnership", row._id, { teardownAt: null });
             }
         },
     };
