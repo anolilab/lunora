@@ -621,6 +621,49 @@ export const renderMetricAlert = (
 };
 
 /**
+ * How far before `now` a rule's evaluation reads: the current window plus the
+ * prior one, or plus the trailing baseline in `deviation` mode. A read that does
+ * not reach this far — or stops short of it at a page cap — evaluates the rule on
+ * part of its windows, which can fire or clear it on numbers that are not there.
+ */
+export const metricLookbackMs = (rule: Pick<MetricRule, "baselineWindows" | "mode" | "windowMinutes">): number => {
+    const windowsBack = rule.mode === "deviation" ? 1 + Math.max(1, rule.baselineWindows ?? DEFAULT_BASELINE_WINDOWS) : 2;
+
+    return windowsBack * rule.windowMinutes * 60_000;
+};
+
+/**
+ * Split `rules` by whether a newest-first, possibly page-capped read of the
+ * org's observations covers each one's whole lookback. With `truncated` false the
+ * read held every row, so all rules are covered. Otherwise the read is complete
+ * only down to its oldest row: a rule whose lookback starts at or after that row
+ * saw every observation it needs, any other would be judged on a partial window.
+ */
+export const partitionByCoverage = <TRule extends Pick<MetricRule, "baselineWindows" | "mode" | "windowMinutes">>(
+    rules: ReadonlyArray<TRule>,
+    observations: ReadonlyArray<Pick<MetricObservation, "startedAt">>,
+    truncated: boolean,
+    now: number,
+): { covered: TRule[]; uncovered: TRule[] } => {
+    if (!truncated) {
+        return { covered: [...rules], uncovered: [] };
+    }
+
+    const oldest = observations.at(-1)?.startedAt ?? now;
+    const covered: TRule[] = [];
+    const uncovered: TRule[] = [];
+
+    for (const rule of rules) {
+        // Windows are open at their start (`startedAt > start`), so a row AT the
+        // start is outside them and rows sharing the oldest row's timestamp that
+        // the page cut off cannot matter.
+        (oldest <= now - metricLookbackMs(rule) ? covered : uncovered).push(rule);
+    }
+
+    return { covered, uncovered };
+};
+
+/**
  * Slice a metric rule's current + prior window out of a recent-observation set.
  * `functionPath` scoping is applied first; both windows are `windowMinutes`
  * long, back-to-back, ending at `now`.

@@ -2,7 +2,7 @@ import { fingerprintError } from "@lunora/fingerprint";
 import { LunoraError } from "@lunora/server";
 
 import type { AlertDelivery as AlertDeliveryBase, FiringRule, MetricRule, MetricTarget } from "../src/telemetry/alerts";
-import { fireCrossedRules, fireMetricRules } from "../src/telemetry/alerts";
+import { fireCrossedRules, fireMetricRules, partitionByCoverage } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server";
@@ -394,17 +394,20 @@ export const ingest = mutation
             // (shared with the periodic sweep in `src/telemetry/sweep.ts`) makes a
             // sustained breach alert once and lets a quiet window still clear + re-arm.
             if (metricRules.length > 0) {
-                const { page: storedWindow } = await context.db.observations.findMany({
+                const { isDone, page: storedWindow } = await context.db.observations.findMany({
                     limit: METRIC_SCAN_LIMIT,
                     orderBy: [{ startedAt: "desc" }],
                     where: { organizationId: args.organizationId },
                 });
                 const windowObservations = storedWindow.map((row) => absentForNull(row));
+                // A rule whose windows reach past a full page is left to the periodic
+                // sweep, which reports it, rather than fired or cleared on a partial count.
+                const { covered } = partitionByCoverage(metricRules, windowObservations, !isDone, now);
                 const { page: statePage } = await context.db.alertRuleState.findMany({ where: { organizationId: args.organizationId } });
                 const stateByRule = new Map(statePage.map((row) => [row.ruleId as string, row]));
 
                 const outcome = await fireMetricRules(
-                    metricRules,
+                    covered,
                     windowObservations,
                     args.organizationId,
                     {

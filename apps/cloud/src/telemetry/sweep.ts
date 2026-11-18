@@ -20,7 +20,7 @@
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { AlertChannel, AlertDelivery, MetricObservation, MetricRule, MetricTarget } from "./alerts";
-import { fireMetricRules, METRIC_TARGETS } from "./alerts";
+import { fireMetricRules, METRIC_TARGETS, partitionByCoverage } from "./alerts";
 
 /** An `alertRules` row as the control-plane store returns it. */
 interface AlertRuleRow {
@@ -58,6 +58,8 @@ export interface AlertSweepResult {
     deliveries: AlertDelivery[];
     /** Orgs whose recent observations were scanned (had ≥1 enabled metric rule). */
     evaluatedOrgs: number;
+    /** Rules left undecided because the bounded read ended inside their windows. */
+    incomplete: { organizationId: string; ruleId: string }[];
 }
 
 /** Options for {@link runAlertSweep}. */
@@ -114,7 +116,7 @@ export const runAlertSweep = async (database: ControlPlaneDatabase, options: Ale
     }
 
     if (rulesByOrg.size === 0) {
-        return { cleared: 0, deliveries: [], evaluatedOrgs: 0 };
+        return { cleared: 0, deliveries: [], evaluatedOrgs: 0, incomplete: [] };
     }
 
     // Prior firing latches, read once and keyed by ruleId (across all orgs). Drained:
@@ -124,22 +126,30 @@ export const runAlertSweep = async (database: ControlPlaneDatabase, options: Ale
     const stateByRule = new Map(states.map((row) => [row.ruleId, row]));
 
     const deliveries: AlertDelivery[] = [];
+    const incomplete: AlertSweepResult["incomplete"] = [];
     let cleared = 0;
 
     for (const [organizationId, rules] of rulesByOrg) {
         // The org's recent spans, newest-first and bounded — the windows are sliced
         // from these in `fireMetricRules`.
         // eslint-disable-next-line no-await-in-loop -- one bounded read per org with a metric rule; serialized like the uptime sweep
-        const { page: observationPage } = await database.findMany("observations", {
+        const { isDone, page: observationPage } = await database.findMany("observations", {
             limit: scanLimit,
             orderBy: [{ startedAt: "desc" }],
             where: { organizationId },
         });
         const observations = observationPage as ObservationRow[];
+        // A busy org fills the page before reaching back across a long or deviation
+        // rule's windows; evaluating it then would fire or clear on a partial count.
+        const { covered, uncovered } = partitionByCoverage(rules, observations, isDone === false, options.now);
+
+        for (const rule of uncovered) {
+            incomplete.push({ organizationId, ruleId: rule.ruleId });
+        }
 
         // eslint-disable-next-line no-await-in-loop -- serialized D1 writes, one org at a time
         const outcome = await fireMetricRules<string>(
-            rules,
+            covered,
             observations,
             organizationId,
             {
@@ -161,5 +171,5 @@ export const runAlertSweep = async (database: ControlPlaneDatabase, options: Ale
         cleared += outcome.cleared;
     }
 
-    return { cleared, deliveries, evaluatedOrgs: rulesByOrg.size };
+    return { cleared, deliveries, evaluatedOrgs: rulesByOrg.size, incomplete };
 };

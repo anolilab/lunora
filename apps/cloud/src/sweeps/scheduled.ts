@@ -209,7 +209,12 @@ const sweepUptime = async (database: ControlPlaneStore, env: ControlPlaneEnv): P
  */
 const sweepAlerts = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     const now = Date.now();
-    const { deliveries } = await runAlertSweep(database, { now });
+    const { deliveries, incomplete } = await runAlertSweep(database, { now });
+
+    if (incomplete.length > 0) {
+        // eslint-disable-next-line no-console -- a rule left undecided by a truncated read would otherwise be silent
+        console.error("[metric-alerts] observation read ended inside the rule windows; rules left undecided", JSON.stringify(incomplete));
+    }
 
     await deliverFiredAlerts(env, database, deliveries, now);
 };
