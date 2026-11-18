@@ -107,6 +107,29 @@ describe("oTLP ingest routes", () => {
         expect(body.partialSuccess.rejectedSpans).toBe(1);
     });
 
+    it("archives the decoded error events alongside the spans, like the native telemetry route", async () => {
+        expect.assertions(1);
+
+        const archived: string[] = [];
+        const TELEMETRY_PIPELINE = {
+            send: async (records: { recordType?: string }[]) => {
+                archived.push(...records.map((record) => record.recordType ?? "event"));
+            },
+        };
+        const spans = [{ ...okSpan(1), status: { code: 2, message: "boom" } }];
+
+        await createDeployRouter().fetch(
+            new Request("https://cloud.test/v1/traces", {
+                body: JSON.stringify({ resourceSpans: [{ scopeSpans: [{ scope: { name: "@lunora/runtime" }, spans }] }] }),
+                headers: { authorization: "Bearer valid", "content-type": "application/json" },
+                method: "POST",
+            }),
+            { __lunoraCtx: context, TELEMETRY_PIPELINE },
+        );
+
+        expect(archived).toStrictEqual(["event", "span"]);
+    });
+
     it("accepts an OTLP/protobuf body (no longer 415s it)", async () => {
         const response = await post("/v1/traces", new Uint8Array(), { authorization: "Bearer valid", "content-type": "application/x-protobuf" });
 

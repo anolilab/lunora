@@ -222,10 +222,12 @@ export const handleOtlpTracesRoute = (request: Request, environment: RouterEnv):
             organizationId: auth.organizationId,
         });
 
-        // Tier the spans to the columnar archive (fire-and-forget; scales past D1).
-        await createCloudflareTelemetryStore(environment)
-            .archiveSpans(observations, auth.organizationId)
-            .catch(() => undefined);
+        // Archive like the native `/v1/telemetry` route: the raw error events, then
+        // the spans tiered to the columnar archive (best-effort; scales past D1).
+        const store = createCloudflareTelemetryStore(environment);
+
+        await store.archiveEvents(keptEvents).catch(() => undefined);
+        await store.archiveSpans(observations, auth.organizationId).catch(() => undefined);
 
         // An error span past the event cap still lands as an observation, so it is
         // rejected only in part; the larger of the two shortfalls is what the caller lost.
