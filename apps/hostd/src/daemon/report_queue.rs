@@ -35,7 +35,20 @@ impl ReportQueue {
 
     pub fn push(&mut self, reports: impl IntoIterator<Item = ReportMessage>) {
         self.pending.extend(reports);
+        self.trim();
+    }
 
+    /// Put back reports drained but never written to the socket. They go ahead
+    /// of everything queued since, which is newer.
+    pub fn requeue(&mut self, reports: Vec<ReportMessage>) {
+        for report in reports.into_iter().rev() {
+            self.pending.push_front(report);
+        }
+
+        self.trim();
+    }
+
+    fn trim(&mut self) {
         if self.pending.len() > MAX_PENDING {
             self.pending.drain(..self.pending.len() - MAX_PENDING);
         }
@@ -102,6 +115,16 @@ mod tests {
         assert_eq!(queue.drain(|_| false, T0 + 10 * MINUTE), 0);
         assert_eq!(queue.len(), 8 - REPORTS_PER_DRAIN);
         assert_eq!(sent, (0..REPORTS_PER_DRAIN as u64).map(|index| T0 + index * MINUTE).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn requeues_unsent_reports_ahead_of_newer_ones() {
+        let mut queue = ReportQueue::new();
+
+        queue.push([report(T0 + 2 * MINUTE)]);
+        queue.requeue(vec![report(T0), report(T0 + MINUTE)]);
+
+        assert_eq!(queue.pending.iter().map(|report| report.window_start).collect::<Vec<_>>(), [T0, T0 + MINUTE, T0 + 2 * MINUTE]);
     }
 
     #[test]

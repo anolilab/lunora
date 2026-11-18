@@ -427,6 +427,11 @@ pub async fn run_daemon(options: DaemonOptions, stop: Arc<tokio::sync::Notify>) 
                 tokio::spawn(async move { shared.on_routes(table, |alias| runner.busy(alias)).await });
             })
         },
+        on_unsent_reports: {
+            let queue = Arc::clone(&report_queue);
+
+            Box::new(move |reports| lock(&queue).requeue(reports))
+        },
     };
     let (session, handle) = Session::new(config.box_id.clone(), config.control_plane.clone(), identity, logger.clone(), callbacks);
 

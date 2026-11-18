@@ -27,7 +27,7 @@ use super::identity::Identity;
 use super::log::Logger;
 use crate::wire::codec::{Frame, decode_cloud_message, encode_box_message};
 use crate::wire::signing::challenge_payload;
-use crate::wire::types::{BoxMessage, CloudMessage, HelloMessage, HostdJob, RouteEntry, TelemetryConfig};
+use crate::wire::types::{BoxMessage, CloudMessage, HelloMessage, HostdJob, ReportMessage, RouteEntry, TelemetryConfig};
 
 /// Backoff between connection attempts: 1 s doubling to 60 s, jittered.
 pub const RECONNECT_MIN: Duration = Duration::from_secs(1);
@@ -60,6 +60,8 @@ pub struct SessionCallbacks {
     /// Once a connection authenticates (to drain queued reports, say).
     pub on_ready: Box<dyn Fn() + Send + Sync>,
     pub on_routes: Box<dyn Fn(Vec<RouteEntry>) + Send + Sync>,
+    /// Reports still in the outbox when a connection ended, oldest first, for the caller to send again.
+    pub on_unsent_reports: Box<dyn Fn(Vec<ReportMessage>) + Send + Sync>,
 }
 
 /// The delay before attempt `attempt` (0-based): `min(60 s, 1 s · 2^attempt)`, jittered to between half and all of it,
@@ -202,8 +204,25 @@ impl Session {
             let closed = self.connection(&mut attempt).await;
 
             self.shared.authenticated.store(false, Ordering::SeqCst);
+
             // Frames for a socket that is gone: the control plane failed their jobs already.
-            self.shared.outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+            // A report has no job to fail and is otherwise gone for good; the control plane
+            // ignores a window it already recorded, so handing it back is safe.
+            let unsent: Vec<ReportMessage> = self
+                .shared
+                .outbox
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .drain(..)
+                .filter_map(|message| match message {
+                    BoxMessage::Report(report) => Some(report),
+                    _ => None,
+                })
+                .collect();
+
+            if !unsent.is_empty() {
+                (self.callbacks.on_unsent_reports)(unsent);
+            }
 
             let Closed::Lost { code, reason, refusal } = closed else {
                 return SessionEnd::Stopped;
@@ -405,6 +424,7 @@ mod tests {
     use super::*;
     use crate::daemon::log::recording;
     use crate::daemon::testing::{FakePlane, Script};
+    use crate::wire::codec::encode_cloud_message;
     use crate::wire::types::{BoxResources, BoxVersions};
 
     const BOX_ID: &str = "box_1";
@@ -421,22 +441,27 @@ mod tests {
         crate::daemon::identity::generate_identity(&directory.path().join("box.key")).unwrap()
     }
 
+    fn hello() -> HelloMessage {
+        HelloMessage {
+            box_id: BOX_ID.into(),
+            fleets: Vec::new(),
+            isolation: None,
+            protocol: crate::wire::PROTOCOL_VERSION,
+            resources: BoxResources { disk_free_mb: 1, mem_mb: 1 },
+            versions: BoxVersions { caddy: "unknown".into(), celld: "unknown".into(), hostd: "0.0.0".into() },
+        }
+    }
+
     fn session(origin: &str, identity: Identity, logger: Logger) -> (Session, SessionHandle, Arc<Seen>) {
         let seen = Arc::new(Seen { jobs: Mutex::new(Vec::new()), ready: Mutex::new(0), routes: Mutex::new(Vec::new()) });
         let (jobs, ready, routes) = (Arc::clone(&seen), Arc::clone(&seen), Arc::clone(&seen));
         let callbacks = SessionCallbacks {
-            hello: Box::new(|| HelloMessage {
-                box_id: BOX_ID.into(),
-                fleets: Vec::new(),
-                isolation: None,
-                protocol: crate::wire::PROTOCOL_VERSION,
-                resources: BoxResources { disk_free_mb: 1, mem_mb: 1 },
-                versions: BoxVersions { caddy: "unknown".into(), celld: "unknown".into(), hostd: "0.0.0".into() },
-            }),
+            hello: Box::new(hello),
             on_config: Box::new(|_| {}),
             on_job: Box::new(move |job_id, _| jobs.jobs.lock().unwrap().push(job_id)),
             on_ready: Box::new(move || *ready.ready.lock().unwrap() += 1),
             on_routes: Box::new(move |table| routes.routes.lock().unwrap().push(table)),
+            on_unsent_reports: Box::new(|_| {}),
         };
         let (session, handle) = Session::new(BOX_ID.into(), origin.into(), identity, logger, callbacks);
 
@@ -552,6 +577,71 @@ mod tests {
         assert!(seen.routes.lock().unwrap().is_empty());
         assert_eq!(plane.record.lock().unwrap().closes.first(), Some(&4002));
         assert!(lines.lock().unwrap().iter().any(|line| line.contains("does not accept (INVALID_MESSAGE: $.table[0].alias must be an alias")), "{lines:?}");
+    }
+
+    #[tokio::test]
+    async fn hands_back_the_reports_a_lost_connection_never_sent() {
+        const REPORTS: u64 = 150;
+
+        let identity = identity();
+        let routes = encode_cloud_message(&CloudMessage::Routes { table: vec![route()] }).unwrap();
+        // `routes` authenticates, and `on_ready` queues more reports than the send budget's burst;
+        // the next frame does not decode and ends the connection.
+        let plane =
+            FakePlane::start(BOX_ID, identity.verifying_key(), vec![Script::Raw(vec![routes, r#"{"type":"bogus"}"#.into()]), Script::Send(Vec::new())]).await;
+        let cell: Arc<std::sync::OnceLock<SessionHandle>> = Arc::new(std::sync::OnceLock::new());
+        let unsent: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+        let (flood, returned) = (Arc::clone(&cell), Arc::clone(&unsent));
+        let flooded = AtomicBool::new(false);
+        let callbacks = SessionCallbacks {
+            hello: Box::new(hello),
+            on_config: Box::new(|_| {}),
+            on_job: Box::new(|_, _| {}),
+            on_ready: Box::new(move || {
+                if !flooded.swap(true, Ordering::SeqCst) {
+                    let handle = flood.get().unwrap();
+
+                    for index in 0..REPORTS {
+                        assert!(handle.send(BoxMessage::Report(ReportMessage { per_alias: vec![], window_end: index + 1, window_start: index })));
+                    }
+                }
+            }),
+            on_routes: Box::new(|_| {}),
+            on_unsent_reports: Box::new(move |reports| returned.lock().unwrap().extend(reports.iter().map(|report| report.window_start))),
+        };
+        let (session, handle) = Session::new(BOX_ID.into(), plane.origin.clone(), identity, Logger::silent(), callbacks);
+
+        let _ = cell.set(handle.clone());
+        let running = tokio::spawn(session.run());
+
+        // The close is recorded after every frame before it, so the plane has seen all it was sent.
+        eventually(|| {
+            let record = plane.record.lock().unwrap();
+
+            record.authenticated == 2 && record.closes.first() == Some(&4002)
+        })
+        .await;
+        handle.stop();
+        running.await.unwrap();
+
+        let mut windows: Vec<u64> = plane
+            .record
+            .lock()
+            .unwrap()
+            .received
+            .iter()
+            .filter_map(|message| match message {
+                BoxMessage::Report(report) => Some(report.window_start),
+                _ => None,
+            })
+            .collect();
+        let unsent = unsent.lock().unwrap().clone();
+
+        assert!(!unsent.is_empty());
+        assert!(unsent.windows(2).all(|pair| pair[0] < pair[1]), "{unsent:?}");
+        windows.extend(unsent);
+        windows.sort_unstable();
+        assert_eq!(windows, (0..REPORTS).collect::<Vec<_>>());
     }
 
     #[test]
