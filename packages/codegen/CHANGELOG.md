@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.426](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.425...@lunora/codegen@1.0.0-alpha.426) (2026-11-18)
+
+- feat(cli): deploy a Node app as a container (#1551) (#1625)
+
 ## @lunora/codegen [1.0.0-alpha.425](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.424...@lunora/codegen@1.0.0-alpha.425) (2026-11-18)
 
 - fix(codegen): see reassigned callback parameters in isReassignedBinding (#1627)

@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.502](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.501...@lunora/cli@1.0.0-alpha.502) (2026-11-18)
+
+- feat(cli): deploy a Node app as a container (#1551) (#1625)
+
 ## @lunora/cli [1.0.0-alpha.501](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.500...@lunora/cli@1.0.0-alpha.501) (2026-11-18)
 
 - feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)

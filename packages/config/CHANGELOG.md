@@ -1,3 +1,7 @@
+## @lunora/config [1.0.0-alpha.466](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.465...@lunora/config@1.0.0-alpha.466) (2026-11-18)
+
+- feat(cli): deploy a Node app as a container (#1551) (#1625)
+
 ## @lunora/config [1.0.0-alpha.465](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.464...@lunora/config@1.0.0-alpha.465) (2026-11-18)
 
 - feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)
