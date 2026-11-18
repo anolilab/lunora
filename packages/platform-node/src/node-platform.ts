@@ -104,7 +104,8 @@ const deliverableCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCronJ
  * symlink to it name the same database.
  */
 const canonicalPath = (path: string): string => {
-    const resolved = resolve(path);
+    // better-sqlite3 opens `filename.trim()`, so a path with a stray space names the trimmed file.
+    const resolved = resolve(path.trim());
 
     try {
         return realpathSync(resolved);
@@ -125,8 +126,11 @@ const canonicalPath = (path: string): string => {
  */
 const sameFile = (a: string, b: string): boolean => {
     try {
-        const first = statSync(a);
-        const second = statSync(b);
+        // Trimmed as better-sqlite3 trims what it opens. `bigint`, because a device or inode
+        // number past 2^53 (large or network filesystems) loses its low bits as a Number, and two
+        // distinct files would then compare equal.
+        const first = statSync(a.trim(), { bigint: true });
+        const second = statSync(b.trim(), { bigint: true });
 
         return first.dev === second.dev && first.ino === second.ino;
     } catch {

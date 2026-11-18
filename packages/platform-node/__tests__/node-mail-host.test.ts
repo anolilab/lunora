@@ -1623,4 +1623,19 @@ describe(createNodeMailHost, () => {
             expect(transport.sent).toHaveLength(1);
         });
     });
+
+    describe("twelfth review", () => {
+        it("refuses a mail.path that names the shard's file with a stray space, as better-sqlite3 trims it", () => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-trim-"));
+
+            const shardPath = join(directory, "shard.sqlite3");
+
+            // better-sqlite3 opens `filename.trim()`: this would be the shard's own database.
+            expect(() =>
+                createNodePlatform({ mail: { env: PRODUCTION, path: `${shardPath} `, transport: scriptedTransport(["ok"]) }, path: shardPath }),
+            ).toThrow(/shard database/u);
+        });
+    });
 });
