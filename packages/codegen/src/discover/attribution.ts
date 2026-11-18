@@ -10,7 +10,17 @@
  * re-parsed in watch mode (a new compiler node) is re-indexed.
  */
 import { byCodepoint, callSiteCallers } from "@lunora/advisor";
-import type { BindingElement, FunctionDeclaration, Identifier, Node as TsNode, SourceFile, Symbol as TsSymbol, VariableDeclaration } from "ts-morph";
+import type {
+    BindingElement,
+    FunctionDeclaration,
+    Identifier,
+    Node as TsNode,
+    ParameterDeclaration,
+    SourceFile,
+    Symbol as TsSymbol,
+    VariableDeclaration,
+    VariableDeclarationList,
+} from "ts-morph";
 import { Node, SyntaxKind, ts, VariableDeclarationKind } from "ts-morph";
 
 import type { CallSiteScope, FunctionIR } from "../ir";
@@ -288,21 +298,44 @@ const isLibraryDeclarationFile = (sourceFile: SourceFile): boolean => {
 };
 
 /**
- * Whether the binding a declaration creates is assigned after it: a `let` /
- * `var` (or an element of one) or a `function` declaration whose name is
- * written anywhere in its scope (`x = other`, `({ x } = other)`, `x++`). A
- * `const` never is.
+ * The `const` / `let` / `var` list `binding` belongs to through its own
+ * destructuring pattern, or `undefined` for a parameter, a `catch` binding or a
+ * `function`. Read from the binding's own declaration: the nearest enclosing
+ * list is wrong for a parameter of a callback that a `const` initializer holds
+ * (`const rows = q.filter(({ m }) => …)`).
+ */
+const declarationListOf = (binding: BindingElement | FunctionDeclaration | ParameterDeclaration | VariableDeclaration): VariableDeclarationList | undefined => {
+    let declaration: TsNode = binding;
+
+    while (Node.isBindingElement(declaration)) {
+        // A binding element's parent is its pattern; the pattern's parent is what declares it.
+        declaration = declaration.getParentOrThrow().getParentOrThrow();
+    }
+
+    const list = Node.isVariableDeclaration(declaration) ? declaration.getParent() : undefined;
+
+    return Node.isVariableDeclarationList(list) ? list : undefined;
+};
+
+/**
+ * Whether the binding a declaration creates is assigned after it: a parameter,
+ * a `let` / `var` (or an element of either) or a `function` declaration whose
+ * name is written anywhere in its scope (`x = other`, `({ x } = other)`,
+ * `x++`). A `const` never is.
  *
  * Neither is a platform global (`declare var URL`, `console`): a
  * {@link isLibraryDeclarationFile} holds no assignment, and its scope is the
  * whole file, so scanning it walked every identifier of the ~40k-line
  * `lib.dom.d.ts` on each codegen run — ~1s per run, ~15s under v8 coverage.
  */
-const isReassignedBinding = (binding: BindingElement | FunctionDeclaration | VariableDeclaration): boolean => {
+const isReassignedBinding = (binding: BindingElement | FunctionDeclaration | ParameterDeclaration | VariableDeclaration): boolean => {
     const nameNode = binding.getNameNode();
-    const list = Node.isFunctionDeclaration(binding) ? undefined : binding.getFirstAncestorByKind(SyntaxKind.VariableDeclarationList);
 
-    if (!Node.isIdentifier(nameNode) || list?.getDeclarationKind() === VariableDeclarationKind.Const || isLibraryDeclarationFile(binding.getSourceFile())) {
+    if (
+        !Node.isIdentifier(nameNode) ||
+        declarationListOf(binding)?.getDeclarationKind() === VariableDeclarationKind.Const ||
+        isLibraryDeclarationFile(binding.getSourceFile())
+    ) {
         return false;
     }
 
