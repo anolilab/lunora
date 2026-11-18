@@ -20,6 +20,9 @@ use super::log::Logger;
 /// Lines of output kept per child, for `diagnose`.
 const OUTPUT_LINES_KEPT: usize = 50;
 
+/// How often `stop` checks whether the processes a stopped child left behind have exited.
+const GROUP_POLL: Duration = Duration::from_millis(20);
+
 /// Restart backoff: `min` doubling to `max`; a child up for `stable` counts as healthy again.
 #[derive(Clone, Copy, Debug)]
 pub struct Backoff {
@@ -115,8 +118,9 @@ impl SupervisedProcess {
         }
     }
 
-    /// Stop the child and everything it started: SIGTERM to its process group, then SIGKILL once `budget` has
-    /// passed. Resolves when the child has exited (at once when none runs). It is not restarted.
+    /// Stop the child and everything it started: SIGTERM to its process group, then SIGKILL to the group once
+    /// `budget` has passed with any member left. Resolves when the child has exited (at once when none runs). It is
+    /// not restarted.
     pub async fn stop(&self, budget: Duration) {
         let running = {
             let mut inner = lock(&self.inner);
@@ -133,12 +137,30 @@ impl SupervisedProcess {
             return;
         };
 
+        let deadline = tokio::time::Instant::now() + budget;
+
         signal_group(pid, libc::SIGTERM);
 
-        if tokio::time::timeout(budget, exited.wait_for(|done| *done)).await.is_err() {
+        if tokio::time::timeout_at(deadline, exited.wait_for(|done| *done)).await.is_err() {
             self.options.logger.warn(&format!("{} did not stop within {} ms; killing it", self.options.name, budget.as_millis()));
             signal_group(pid, libc::SIGKILL);
             let _ = exited.wait_for(|done| *done).await;
+
+            return;
+        }
+
+        // The child going does not take its group with it: a descendant that ignores SIGTERM outlives it, so the
+        // rest of the budget is theirs and the group is killed after it. Nothing signals an empty group's exit, so
+        // it is polled.
+        while group_alive(pid) {
+            if tokio::time::Instant::now() >= deadline {
+                self.options.logger.warn(&format!("{}'s processes did not stop within {} ms; killing them", self.options.name, budget.as_millis()));
+                signal_group(pid, libc::SIGKILL);
+
+                return;
+            }
+
+            tokio::time::sleep(GROUP_POLL).await;
         }
     }
 
@@ -292,16 +314,18 @@ async fn read_lines(process: Arc<SupervisedProcess>, stream: impl AsyncRead + Un
     }
 }
 
-/// Signal the process group `pid` leads (`spawn_child` makes every child a group leader).
-fn signal_group(pid: u32, signal: i32) {
-    if let Ok(pid) = libc::pid_t::try_from(pid)
-        && pid > 0
-    {
-        // SAFETY: kill(2) on the group of a pid this process spawned and has not yet reaped.
-        unsafe {
-            libc::kill(-pid, signal);
-        }
-    }
+/// Signal the process group `pid` leads (`spawn_child` makes every child a group leader). Safe after the leader is
+/// reaped: the kernel hands out no pid that still names a live group, so `-pid` reaches this group or nothing.
+fn signal_group(pid: u32, signal: i32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else { return false };
+
+    // SAFETY: kill(2) on the group of a pid this process spawned.
+    pid > 0 && unsafe { libc::kill(-pid, signal) } == 0
+}
+
+/// Whether any process is left in the group `pid` leads.
+fn group_alive(pid: u32) -> bool {
+    signal_group(pid, 0)
 }
 
 #[cfg(test)]
@@ -447,6 +471,51 @@ mod tests {
         }
 
         assert!(gone, "the child's background process survived stop");
+    }
+
+    #[tokio::test]
+    async fn stop_kills_a_process_the_child_started_that_ignores_sigterm_when_the_child_exits() {
+        let (logger, _lines) = recording();
+        // The child exits on SIGTERM at once; its background process ignores it.
+        let parent = process("(trap '' TERM; exec sleep 30) & echo $!; wait", logger);
+
+        parent.start();
+
+        let mut grandchild = None;
+
+        for _ in 0..200 {
+            grandchild = parent.recent_output().first().and_then(|line| line.parse::<libc::pid_t>().ok());
+
+            if grandchild.is_some() {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let grandchild = grandchild.expect("the child printed its background pid");
+
+        parent.stop(Duration::from_millis(500)).await;
+
+        let mut gone = false;
+
+        for _ in 0..200 {
+            if is_gone(grandchild) {
+                gone = true;
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        if !gone {
+            // SAFETY: clean up the stray sleep this test started.
+            unsafe {
+                libc::kill(grandchild, libc::SIGKILL);
+            }
+        }
+
+        assert!(gone, "the background process that ignores SIGTERM survived stop");
     }
 
     #[tokio::test]
