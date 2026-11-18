@@ -804,13 +804,14 @@ codegen for the target (into the configured `schemaDir`), bundles a generated
 server entry together with the worker entry wrangler's `main` names into one
 `server.mjs` with the project's own `esbuild`, and writes `.lunora/deploy/node/`:
 
-| File            | What it is                                                                                                                        |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `server.mjs`    | The app on `@lunora/platform-node`: the app's own Durable Object bindings, the declared crons, `ctx.secrets` and Hyperdrive wired |
-| `package.json`  | Only `better-sqlite3`, the one native module the bundle leaves out, at the version the project's platform-node runs               |
-| `Dockerfile`    | Two stages on a Node LTS image pinned by digest: compiles `better-sqlite3` from source, then runs as the image's `node` user      |
-| `.dockerignore` | An allowlist: only `package.json` and `server.mjs` reach the builder, whatever else the reused directory holds                    |
-| `README.md`     | The run command, the data volume and its permissions, the shutdown behaviour, and every environment variable the server reads     |
+| File                | What it is                                                                                                                                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server.mjs`        | The app on `@lunora/platform-node`: the app's own Durable Object bindings, the declared crons, `ctx.secrets` and Hyperdrive wired                                                                         |
+| `package.json`      | Only `better-sqlite3`, the one native module the bundle leaves out, at the version the project's platform-node runs (plus `ws`'s optional `bufferutil` / `utf-8-validate` when the project installs them) |
+| `package-lock.json` | Resolved at deploy time with `npm install --package-lock-only`, so the image's `npm ci` installs the same tree on every rebuild; the deploy needs npm and registry access for it                          |
+| `Dockerfile`        | Two stages on a Node LTS image pinned by digest: compiles `better-sqlite3` from source, then runs as the image's `node` user                                                                              |
+| `.dockerignore`     | An allowlist: only `package.json` and `server.mjs` reach the builder, whatever else the reused directory holds                                                                                            |
+| `README.md`         | The run command, the data volume and its permissions, the shutdown behaviour, and every environment variable the server reads                                                                             |
 
 Install `esbuild` and `@lunora/platform-node` in the project; the CLI resolves
 both from there. `--image <name>` also runs `docker build -t <name>` on the
@@ -835,8 +836,14 @@ Refused before codegen writes anything:
   `--migrate-allow-destructive`, `--health-check`, `--preview`, `--temporary`,
   `--emit-bindings`, and `--prebuilt`, since `lunora build` and `lunora prepare`
   never generate for this target.
-- **A malformed `secrets.required`**: anything but an array of non-empty
-  names, which would otherwise deploy a server missing those secrets.
+- **A malformed `secrets`**: anything but `{ "required": [...] }` listing
+  environment variable names (a misspelled key such as `require` included),
+  which would otherwise deploy a server missing those secrets.
+- **A Durable Object binding whose name is not an identifier** (`..`, `a/b`):
+  each binding's shards live in a directory of that name under
+  `LUNORA_DATA_DIR`.
+- **An app import of `bufferutil` or `utf-8-validate` the project does not
+  install.** `ws` loads them optionally and falls back without them.
 - **A `secrets_store_secrets[]` binding named `LUNORA_*`**, which the runtime
   reads as a plain string and which could therefore never start.
 

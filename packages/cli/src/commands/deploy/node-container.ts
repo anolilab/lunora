@@ -12,12 +12,14 @@
  * dev --target node` resolves the latter: both are heavy (a per-platform binary
  * and a native addon), and every other `lunora` install would pay for them.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, relative, resolve, sep } from "node:path";
 
 import { COMPOSED_WORKER_ENTRY, resolveSchemaDirectory } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
+
+import type { Spawner } from "../../util/spawn";
 
 /** Where the build context is written, relative to the project root. `.lunora/` is already the CLI's gitignored state directory. */
 const NODE_DEPLOY_DIRECTORY = join(".lunora", "deploy", "node");
@@ -39,8 +41,12 @@ const SHUTDOWN_TIMEOUT_VARIABLE = ["LUNORA", "SHUTDOWN", "TIMEOUT", "MS"].join("
 /** The port the server listens on when `PORT` is unset, matching `wrangler dev`'s default. */
 const DEFAULT_PORT = 8787;
 
-/** Native or optional modules the bundle leaves to `node_modules`: `better-sqlite3` is a native addon; `ws` probes the other two. */
-const EXTERNAL_MODULES = ["better-sqlite3", "bufferutil", "utf-8-validate"] as const;
+/**
+ * `ws`'s optional native add-ons. It loads each inside a `try`, so when the project does not install one, esbuild leaves that
+ * guarded `require` in place and `ws` falls back at runtime, while a direct import in app code fails the bundle by name. When the
+ * project does install one, it stays external and the image installs the same version, since a native addon cannot be bundled.
+ */
+const OPTIONAL_NATIVE_MODULES = ["bufferutil", "utf-8-validate"] as const;
 
 /**
  * Top-level wrangler keys the generated entry composes, or that configure the Worker rather than bind something into `env`.
@@ -95,6 +101,12 @@ const COMPOSED_OR_CONFIG_KEYS: ReadonlySet<string> = new Set([
     "vars",
     "workers_dev",
 ]);
+
+/** An environment variable name as a container runtime sets one. */
+const ENV_NAME = /^[A-Z_a-z]\w*$/u;
+
+/** Wrangler's rule for a binding name: a JavaScript identifier. A Durable Object binding's name is also a directory on the data volume. */
+const BINDING_NAME = /^[A-Za-z_$][\w$]*$/u;
 
 /** The prefix of the env vars the runtime reads as plain strings; `createNodeSecretBindings` refuses it as a secret name. */
 const RUNTIME_ENV_PREFIX = "LUNORA_";
@@ -194,15 +206,35 @@ const requiredSecretNames = (secrets: unknown, configName: string): string[] => 
         return [];
     }
 
-    const required = typeof secrets === "object" && !Array.isArray(secrets) ? (secrets as { required?: unknown }).required : secrets;
+    const refuse = (problem: string): never => {
+        throw new Error(
+            `--target node checks every secrets.required name at startup, and ${problem} in ${configName}: secrets must be { "required": [...] }, an array of environment variable names such as ["API_KEY"]`,
+        );
+    };
 
-    if (required === undefined && typeof secrets === "object" && !Array.isArray(secrets)) {
-        return [];
+    if (typeof secrets !== "object" || Array.isArray(secrets)) {
+        return refuse(`secrets is ${JSON.stringify(secrets)}`);
     }
 
-    if (!Array.isArray(required) || !required.every((name) => typeof name === "string" && name.trim() !== "")) {
-        throw new Error(
-            `--target node checks every secrets.required name at startup, and secrets.required in ${configName} is ${JSON.stringify(required)}: it must be an array of non-empty secret names, such as ["API_KEY"]`,
+    // `required` is the object's only field: a misspelling ("require") would otherwise read as "no secrets" and skip the check.
+    const unknown = Object.keys(secrets).filter((key) => key !== "required");
+
+    if (unknown.length > 0) {
+        return refuse(`secrets has ${unknown.map((key) => JSON.stringify(key)).join(", ")} instead of "required"`);
+    }
+
+    const { required } = secrets as { required?: unknown };
+
+    if (!Array.isArray(required)) {
+        return refuse(`secrets.required is ${JSON.stringify(required)}`);
+    }
+
+    // An environment variable name: anything else could never be set on a container, so the server could never start.
+    const invalid = required.filter((name) => typeof name !== "string" || !ENV_NAME.test(name));
+
+    if (invalid.length > 0) {
+        return refuse(
+            `secrets.required lists ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
         );
     }
 
@@ -240,6 +272,14 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     for (const binding of parsed.durable_objects?.bindings ?? []) {
         if (typeof binding?.name !== "string" || typeof binding.class_name !== "string") {
             continue;
+        }
+
+        // The name becomes a directory under LUNORA_DATA_DIR: anything but an identifier ("..", "a/b") could put shard files
+        // outside the data volume, where a replaced container loses them.
+        if (!BINDING_NAME.test(binding.name)) {
+            throw new Error(
+                `--target node stores each Durable Object binding's shards in a directory named after it, and the binding ${JSON.stringify(binding.name)} in ${configName} is not a valid binding name (a JavaScript identifier such as SHARD)`,
+            );
         }
 
         // A binding to another worker's class has no class in this entry to construct, and no other worker runs here.
@@ -358,7 +398,7 @@ const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cron
     const classTable = classNames.map((className, index) => `${JSON.stringify(className)}: __lunoraDurableObject${String(index)}`).join(", ");
 
     return `import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 import {
     bindShardSockets,
@@ -475,8 +515,15 @@ const registries = [];
 
 for (const binding of CONFIG.durableObjects) {
     const instanceFor = instanceFactory(binding.className);
+    // Checked again here: the binding name was validated at deploy time, and the data directory must contain every shard file.
+    const shardDirectory = resolve(dataDirectory, binding.name);
+
+    if (!shardDirectory.startsWith(dataDirectory + sep)) {
+        throw new Error(\`lunora: Durable Object binding \${JSON.stringify(binding.name)} would store shards outside \${dataDirectory}\`);
+    }
+
     const handlers = {
-        directory: join(dataDirectory, binding.name),
+        directory: shardDirectory,
         // The platform's own host fires this with no shard; only registry shards carry a Durable Object.
         onAlarm: async (shard) => {
             if (shard !== undefined) {
@@ -670,14 +717,15 @@ if (publicUrl === undefined || publicUrl === "") {
 const renderDockerfile = (): string => `# Generated by \`lunora deploy --target node\`. Build: docker build -t <image> .
 #
 # The build stage compiles better-sqlite3 from source against this image's Node and libc, the one
-# native module the bundled server.mjs leaves to node_modules.
+# native module the bundled server.mjs leaves to node_modules. npm ci installs exactly the tree
+# package-lock.json pins, so a rebuild of this context installs the same dependencies.
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 RUN apt-get update \\
     && apt-get install -y --no-install-recommends g++ make python3 \\
     && rm -rf /var/lib/apt/lists/*
-COPY package.json ./
-RUN npm install --omit=dev --build-from-source --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --build-from-source --no-audit --no-fund
 
 FROM ${NODE_IMAGE}
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=${String(DEFAULT_PORT)} LUNORA_DATA_DIR=/data
@@ -696,6 +744,7 @@ CMD ["node", "server.mjs"]
 const DOCKERIGNORE = `# Generated by \`lunora deploy --target node\`. Only what the Dockerfile copies reaches the build context.
 *
 !package.json
+!package-lock.json
 !server.mjs
 `;
 
@@ -753,11 +802,40 @@ const resolveFromProject = (projectRoot: string, specifier: string): string | un
     }
 };
 
-/** The `better-sqlite3` version the project's `@lunora/platform-node` runs on, so the image installs the same one. */
-const betterSqliteVersion = (platformNodeManifest: string): string => {
-    const manifest = createRequire(platformNodeManifest).resolve("better-sqlite3/package.json");
+/** The installed version of `specifier`, resolved from `from` (a file inside the package that depends on it). */
+const installedVersion = (from: string, specifier: string): string | undefined => {
+    try {
+        const manifest = createRequire(from).resolve(`${specifier}/package.json`);
 
-    return (JSON.parse(readFileSync(manifest, "utf8")) as { version: string }).version;
+        return (JSON.parse(readFileSync(manifest, "utf8")) as { version: string }).version;
+    } catch {
+        return undefined;
+    }
+};
+
+/** The esbuild error for a module nothing installs, named so the deploy can say which dependency to add. */
+const UNRESOLVED_MODULE = /^Could not resolve "([^"]+)"$/u;
+
+/**
+ * Generate `package-lock.json` for the build context, so the image's `npm ci` installs exactly this tree: `better-sqlite3`'s
+ * own dependencies (`prebuild-install` and its install script among them) would otherwise float on every rebuild. Resolved
+ * from the registry, so it needs npm and network access at deploy time; without them the deploy stops rather than shipping an
+ * unpinned build.
+ */
+const writeLockfile = async (directory: string, spawner: Spawner): Promise<void> => {
+    const result = await spawner({
+        args: ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
+        captureStderrSilently: true,
+        captureStdoutSilently: true,
+        command: "npm",
+        cwd: directory,
+    });
+
+    if (result.code !== 0 || !existsSync(join(directory, "package-lock.json"))) {
+        throw new Error(
+            `--target node pins the image's build dependencies in a package-lock.json, and \`npm install --package-lock-only\` could not write one (exit ${String(result.code)}${result.stderr === undefined || result.stderr.trim() === "" ? "" : `: ${result.stderr.trim().split("\n").at(-1) ?? ""}`}). It needs npm and access to the registry.`,
+        );
+    }
 };
 
 interface EsbuildApi {
@@ -795,13 +873,31 @@ const missingExportRefusal = (error: unknown, project: NodeDeployProject, projec
     );
 };
 
+/** The deploy's message for an app import of an optional native module the project does not install. */
+const unresolvedOptionalRefusal = (error: unknown): Error | undefined => {
+    const missing = ((error as EsbuildFailure).errors ?? [])
+        .map((entry) => UNRESOLVED_MODULE.exec(entry.text ?? "")?.[1])
+        .filter((name): name is string => name !== undefined && (OPTIONAL_NATIVE_MODULES as ReadonlyArray<string>).includes(name));
+
+    if (missing.length === 0) {
+        return undefined;
+    }
+
+    return new Error(
+        `--target node bundles the app, and it imports ${missing.join(", ")}, which this project does not install. Add it as a dependency so the image builds it.`,
+        {
+            cause: error,
+        },
+    );
+};
+
 /** Bundle the generated entry and the app into `server.mjs`. */
-const bundleServer = async (esbuild: EsbuildApi, directory: string, contents: string, projectRoot: string): Promise<void> => {
+const bundleServer = async (esbuild: EsbuildApi, directory: string, contents: string, projectRoot: string, external: ReadonlyArray<string>): Promise<void> => {
     await esbuild.build({
         // CommonJS dependencies bundled into ESM still call `require` for Node built-ins.
         banner: { js: `import { createRequire as __lunoraCreateRequire } from "node:module";\nconst require = __lunoraCreateRequire(import.meta.url);` },
         bundle: true,
-        external: [...EXTERNAL_MODULES],
+        external: [...external],
         format: "esm",
         legalComments: "none",
         logLevel: "silent",
@@ -817,7 +913,7 @@ const bundleServer = async (esbuild: EsbuildApi, directory: string, contents: st
  * `_generated/*`.
  * @throws when the wrangler config names no entry or no Durable Object, or esbuild or `@lunora/platform-node` is not installed.
  */
-const buildNodeContainer = async (projectRoot: string): Promise<NodeContainerArtifact> => {
+const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promise<NodeContainerArtifact> => {
     const project = readNodeDeployProject(projectRoot);
     const platformNodeManifest = resolveFromProject(projectRoot, "@lunora/platform-node/package.json");
 
@@ -844,15 +940,30 @@ const buildNodeContainer = async (projectRoot: string): Promise<NodeContainerArt
 
     mkdirSync(directory, { recursive: true });
 
+    // Optional native modules the project installs stay external and ship in the image at the same version.
+    const optional = Object.fromEntries(
+        OPTIONAL_NATIVE_MODULES.flatMap((name) => {
+            const version = installedVersion(join(projectRoot, "package.json"), name);
+
+            return version === undefined ? [] : [[name, version]];
+        }),
+    );
+
     try {
-        await bundleServer(esbuild, directory, renderServerEntry(projectRoot, project, cronsModule), projectRoot);
+        await bundleServer(esbuild, directory, renderServerEntry(projectRoot, project, cronsModule), projectRoot, ["better-sqlite3", ...Object.keys(optional)]);
     } catch (error: unknown) {
-        throw missingExportRefusal(error, project, projectRoot) ?? error;
+        throw missingExportRefusal(error, project, projectRoot) ?? unresolvedOptionalRefusal(error) ?? error;
+    }
+
+    const sqliteVersion = installedVersion(platformNodeManifest, "better-sqlite3");
+
+    if (sqliteVersion === undefined) {
+        throw new Error("--target node installs the better-sqlite3 the project's @lunora/platform-node runs on, and it cannot be resolved from there.");
     }
 
     const env = nodeDeployEnv(project);
     const manifest = {
-        dependencies: { "better-sqlite3": betterSqliteVersion(platformNodeManifest) },
+        dependencies: { "better-sqlite3": sqliteVersion, ...optional },
         engines: { node: ">=22.15.0" },
         name: "lunora-node-server",
         private: true,
@@ -860,11 +971,14 @@ const buildNodeContainer = async (projectRoot: string): Promise<NodeContainerArt
     };
 
     writeFileSync(join(directory, "package.json"), `${JSON.stringify(manifest, undefined, 4)}\n`, "utf8");
+    // A previous deploy's lockfile would pin the previous manifest; npm would reuse what still fits rather than resolve afresh.
+    rmSync(join(directory, "package-lock.json"), { force: true });
+    await writeLockfile(directory, spawner);
     writeFileSync(join(directory, "Dockerfile"), renderDockerfile(), "utf8");
     writeFileSync(join(directory, ".dockerignore"), DOCKERIGNORE, "utf8");
     writeFileSync(join(directory, "README.md"), renderReadme(env), "utf8");
 
-    return { directory, env, files: [".dockerignore", "Dockerfile", "package.json", "README.md", "server.mjs"], unbound: project.unbound };
+    return { directory, env, files: [".dockerignore", "Dockerfile", "package-lock.json", "package.json", "README.md", "server.mjs"], unbound: project.unbound };
 };
 
 export type { NodeContainerArtifact, NodeDeployEnvVariable };

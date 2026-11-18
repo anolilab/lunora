@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { createServer } from "node:http";
@@ -14,6 +15,8 @@ import { runDeployCommand } from "../../src/commands/deploy/handler";
 import { NODE_DEPLOY_DIRECTORY, NODE_IMAGE } from "../../src/commands/deploy/node-container";
 import type { DeployCommandOptions } from "../../src/commands/deploy/types";
 import type { Logger } from "../../src/util/logger";
+import type { SpawnDescriptor, Spawner } from "../../src/util/spawn";
+import { defaultSpawner } from "../../src/util/spawn";
 
 /** This package's node_modules: the fixture links it so `@lunora/*` and esbuild resolve to the workspace copies. */
 const PACKAGE_NODE_MODULES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "node_modules");
@@ -46,7 +49,35 @@ const recordingLogger = (): { logger: Logger; warnings: string[] } => {
     };
 };
 
+/**
+ * Stands in for `npm install --package-lock-only`, which resolves from the registry: a lockfile derived from the manifest
+ * alone, so the suite needs no network. The local-only Docker test runs the real npm.
+ */
+const fakeNpm =
+    (calls: SpawnDescriptor[] = []): Spawner =>
+    async (descriptor) => {
+        calls.push(descriptor);
+
+        if (descriptor.command === "npm" && descriptor.args.includes("--package-lock-only") && descriptor.cwd !== undefined) {
+            const manifest = JSON.parse(readFileSync(join(descriptor.cwd, "package.json"), "utf8")) as { dependencies: Record<string, string>; name: string };
+            const packages = Object.fromEntries(Object.entries(manifest.dependencies).map(([name, version]) => [`node_modules/${name}`, { version }]));
+
+            writeFileSync(
+                join(descriptor.cwd, "package-lock.json"),
+                `${JSON.stringify({ lockfileVersion: 3, name: manifest.name, packages: { "": { dependencies: manifest.dependencies, name: manifest.name }, ...packages }, requires: true }, undefined, 2)}\n`,
+                "utf8",
+            );
+        }
+
+        return { code: 0 };
+    };
+
+/** The `ws` the workspace's platform-node runs on, linked into a fixture whose worker imports it directly. */
+const WS_PACKAGE = dirname(createRequire(join(PACKAGE_NODE_MODULES, "@lunora", "platform-node", "package.json")).resolve("ws/package.json"));
+
 interface FixtureOptions {
+    /** Extra packages the fixture's node_modules carries, by name, beside everything this package installs. */
+    extraModules?: Record<string, string>;
     /** `lunora({ schemaDir })` in a parsed-only vite.config.ts, and the directory the functions live in. */
     schemaDir?: string;
     /** Merged over the fixture's wrangler config. */
@@ -126,7 +157,20 @@ const writeFixture = (root: string, options: FixtureOptions = {}): void => {
 
     mkdirSync(join(root, schemaDir));
     mkdirSync(join(root, "src"));
-    symlinkSync(PACKAGE_NODE_MODULES, join(root, "node_modules"), "dir");
+    if (options.extraModules === undefined) {
+        symlinkSync(PACKAGE_NODE_MODULES, join(root, "node_modules"), "dir");
+    } else {
+        // A directory of links rather than one link, so the extras sit beside this package's own modules without touching them.
+        mkdirSync(join(root, "node_modules"));
+
+        for (const entry of readdirSync(PACKAGE_NODE_MODULES)) {
+            symlinkSync(join(PACKAGE_NODE_MODULES, entry), join(root, "node_modules", entry));
+        }
+
+        for (const [name, path] of Object.entries(options.extraModules)) {
+            symlinkSync(path, join(root, "node_modules", name), "dir");
+        }
+    }
     writeFileSync(join(root, "package.json"), JSON.stringify({ name: "node-container-app", private: true, type: "module" }), "utf8");
     writeFileSync(join(root, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
     writeFileSync(
@@ -183,7 +227,7 @@ const newWorkdir = (): string => realpathSync(mkdtempSync(join(tmpdir(), "lunora
 const deploy = async (cwd: string, options: Partial<DeployCommandOptions> = {}): ReturnType<typeof runDeployCommand> => {
     const { logger } = recordingLogger();
 
-    return runDeployCommand({ cwd, interactive: false, logger, target: "node", ...options });
+    return runDeployCommand({ cwd, interactive: false, logger, spawner: fakeNpm(), target: "node", ...options });
 };
 
 const callFunction = async (origin: string, functionPath: string, args: Record<string, unknown> = {}): Promise<unknown> => {
@@ -358,11 +402,11 @@ describe("lunora deploy --target node", () => {
             rmSync(workdir, { force: true, recursive: true });
         });
 
-        it("writes the five files, and the server serves a query and a write when run with node", async () => {
-            expect.assertions(8);
+        it("writes the six files, and the server serves a query and a write when run with node", async () => {
+            expect.assertions(9);
             expect(result).toMatchObject({ code: 0, container: { directory: artifact } });
 
-            for (const file of [".dockerignore", "Dockerfile", "package.json", "README.md", "server.mjs"]) {
+            for (const file of [".dockerignore", "Dockerfile", "package-lock.json", "package.json", "README.md", "server.mjs"]) {
                 expect(existsSync(join(artifact, file)), file).toBe(true);
             }
 
@@ -400,7 +444,7 @@ describe("lunora deploy --target node", () => {
                 .split("\n")
                 .filter((line) => line !== "" && !line.startsWith("#"));
 
-            expect(rules).toStrictEqual(["*", "!package.json", "!server.mjs"]);
+            expect(rules).toStrictEqual(["*", "!package.json", "!package-lock.json", "!server.mjs"]);
         });
 
         it("names the secrets in the README but bakes no secret value into any generated file", () => {
@@ -801,6 +845,10 @@ describe("lunora deploy --target node", () => {
             ["a list with a non-string entry", { required: ["API_KEY", 3] }],
             ["a list with an empty entry", { required: ["API_KEY", ""] }],
             ["a bare string in place of the object", "API_KEY"],
+            ["misspelled as require", { require: ["API_KEY"] }],
+            ["missing from the secrets object", {}],
+            ["a name with a dash", { required: ["API-KEY"] }],
+            ["a name starting with a digit", { required: ["1KEY"] }],
         ])("refuses secrets.required when it is %s, instead of dropping the names", async (_shape, secrets) => {
             expect.assertions(2);
 
@@ -808,9 +856,117 @@ describe("lunora deploy --target node", () => {
 
             await expect(deploy(workdir)).resolves.toMatchObject({
                 code: 2,
-                error: expect.stringContaining("secrets.required in wrangler.jsonc is"),
+                error: expect.stringContaining('in wrangler.jsonc: secrets must be { "required": [...] }'),
             });
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+        });
+
+        it.each(["..", "a/b"])("refuses the Durable Object binding name %j, which would put shard files outside the data volume", async (name) => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { durable_objects: { bindings: [{ class_name: "ShardDO", name }] } } });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 2,
+                error: expect.stringContaining(`the binding ${JSON.stringify(name)} in wrangler.jsonc is not a valid binding name`),
+            });
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+        });
+
+        it("refuses an app that imports an optional ws add-on the project does not install, naming it", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            writeFileSync(join(workdir, "src", "worker.ts"), `import "bufferutil";\n${readFileSync(join(workdir, "src", "worker.ts"), "utf8")}`, "utf8");
+
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 1,
+                error: expect.stringContaining("it imports bufferutil, which this project does not install"),
+            });
+            expect(existsSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"))).toBe(false);
+        });
+
+        it("serves an app that imports ws, whose optional add-ons it does not install", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { extraModules: { ws: WS_PACKAGE } });
+            writeFileSync(
+                join(workdir, "src", "worker.ts"),
+                `import { WebSocket } from "ws";\n\nexport const webSocketClass = WebSocket.name;\n\n${readFileSync(join(workdir, "src", "worker.ts"), "utf8")}`,
+                "utf8",
+            );
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+            const artifact = join(workdir, NODE_DEPLOY_DIRECTORY);
+
+            mkdirSync(join(artifact, "node_modules"));
+            symlinkSync(BETTER_SQLITE3, join(artifact, "node_modules", "better-sqlite3"), "dir");
+
+            const run = startServer(artifact, join(workdir, "data"));
+
+            try {
+                const origin = await run.listening;
+
+                await expect(callFunction(origin, "notes:greeting")).resolves.toStrictEqual({ result: "from the container" });
+            } finally {
+                run.child.kill("SIGTERM");
+                await run.exited;
+            }
+        });
+
+        it("writes a reproducible build context: a lockfile npm ci installs from, and the same bytes on every deploy", async () => {
+            expect.assertions(5);
+
+            writeFixture(workdir);
+
+            const artifact = join(workdir, NODE_DEPLOY_DIRECTORY);
+            const digests = (): Record<string, string> =>
+                Object.fromEntries(
+                    readdirSync(artifact)
+                        .toSorted((left, right) => left.localeCompare(right))
+                        .map((file) => [
+                            file,
+                            createHash("sha256")
+                                .update(readFileSync(join(artifact, file)))
+                                .digest("hex"),
+                        ]),
+                );
+            const calls: SpawnDescriptor[] = [];
+
+            await expect(deploy(workdir, { spawner: fakeNpm(calls) })).resolves.toMatchObject({ code: 0 });
+
+            const first = digests();
+
+            await deploy(workdir);
+
+            expect(digests()).toStrictEqual(first);
+            // The lockfile is resolved in the build context itself, from the manifest written there.
+            expect(calls).toContainEqual(
+                expect.objectContaining({ args: expect.arrayContaining(["install", "--package-lock-only"]), command: "npm", cwd: artifact }),
+            );
+
+            const buildFile = readFileSync(join(artifact, "Dockerfile"), "utf8");
+
+            expect(buildFile).toContain("COPY package.json package-lock.json ./");
+            expect(buildFile).toContain("RUN npm ci --omit=dev");
+        });
+
+        it("refuses to write a build context it cannot pin, when npm cannot write the lockfile", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            await expect(
+                deploy(workdir, {
+                    spawner: async () => {
+                        return { code: 1, stderr: "npm error network request failed" };
+                    },
+                }),
+            ).resolves.toMatchObject({
+                code: 1,
+                error: expect.stringContaining("could not write one (exit 1: npm error network request failed)"),
+            });
         });
 
         it("refuses a secrets_store binding with the reserved LUNORA_ prefix, which could never start", async () => {
@@ -838,7 +994,7 @@ describe("lunora deploy --target node", () => {
             });
 
             const { logger, warnings } = recordingLogger();
-            const deployed = await runDeployCommand({ cwd: workdir, interactive: false, logger, target: "node" });
+            const deployed = await runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" });
 
             expect(deployed.code).toBe(0);
             expect(warnings.join("\n")).toMatch(/not bound.*flagship.*version_metadata.*durable_objects\.BILLING/u);
@@ -864,7 +1020,8 @@ describe("lunora deploy --target node", () => {
                 const image = `lunora-node-container-test:${String(process.pid)}`;
 
                 try {
-                    await expect(deploy(workdir, { image })).resolves.toMatchObject({ code: 0, container: { image } });
+                    // The real npm and the real Docker, so the lockfile the image is built from is one npm resolved.
+                    await expect(deploy(workdir, { image, spawner: defaultSpawner })).resolves.toMatchObject({ code: 0, container: { image } });
                 } finally {
                     // eslint-disable-next-line sonarjs/no-os-command-from-path -- the engine resolves from PATH; fixed args, no shell
                     spawnSync("docker", ["image", "rm", "-f", image], { stdio: "ignore" });

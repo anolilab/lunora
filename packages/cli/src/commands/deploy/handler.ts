@@ -1769,7 +1769,7 @@ const runNodeContainerDeploy = async (options: DeployCommandOptions, target: str
     let artifact: Awaited<ReturnType<typeof buildNodeContainer>>;
 
     try {
-        artifact = await buildNodeContainer(cwd);
+        artifact = await buildNodeContainer(cwd, options.spawner ?? defaultSpawner);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
