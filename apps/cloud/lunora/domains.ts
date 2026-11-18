@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import type { AdmissionRow } from "../src/billing/spend";
 import { organizationServing } from "../src/billing/spend";
-import { randomSecret } from "../src/deploy/keys";
+import { sha256Hex } from "../src/deploy/keys";
 import { domainNotificationDetail } from "../src/domains/check";
 import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
 import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
@@ -96,8 +96,29 @@ export const add = mutation
             throw new LunoraError("BAD_REQUEST", "redirectTo must be an absolute http(s) URL");
         }
 
-        const txtToken = randomSecret();
         const { now } = context;
+
+        // A claim proves nothing until its TXT record verifies, and `by_hostname` is
+        // unique, so an unverified claim of another organization would hold a hostname
+        // it may not own until the unverified-domain sweep. It is displaced instead.
+        // One that ever got a certificate is a lapsed verification, not a claim, and stays.
+        const { page: held } = await context.db.domains.findMany({ where: { hostname } });
+        const claim = held.at(0);
+
+        if (claim !== undefined && claim.organizationId !== member.organizationId && claim.verifiedAt == null && claim.customHostnameId == null) {
+            await context.db.delete("domains", claim._id);
+            await context.db.insert("auditLog", {
+                action: "domain.displaced",
+                actorUserId: member.userId,
+                createdAt: now,
+                organizationId: claim.organizationId,
+                target: hostname,
+            });
+        }
+
+        // The same for every claim of this organization on this hostname, so a claim
+        // displaced and added again keeps the TXT record its owner already published.
+        const txtToken = await sha256Hex(`lunora-domain\0${member.organizationId}\0${hostname}`);
         const id = await context.db.insert("domains", {
             createdAt: now,
             hostname,

@@ -71,6 +71,39 @@ describe("domains.add", () => {
         await expect(add.handler(ctx, args({ redirectTo }) as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
+    it("displaces another organization's unverified claim, so a squatter cannot hold a hostname", async () => {
+        const squat = { _id: "dom_squat", createdAt: 1, hostname: "app.example.com", organizationId: "org_squatter", projectId: "prj_2", txtToken: "t" };
+        const { ctx, ops } = makeCtx(world({ domains: [squat] }));
+
+        await add.handler(ctx, args() as never);
+
+        expect(ops).toContainEqual({ id: "dom_squat", kind: "delete" });
+        expect(ops).toContainEqual(
+            expect.objectContaining({ document: expect.objectContaining({ action: "domain.displaced", organizationId: "org_squatter" }) }),
+        );
+    });
+
+    it.each([
+        ["verified", { verifiedAt: 5 }],
+        ["holding a certificate", { customHostnameId: "ch_1" }],
+    ])("keeps another organization's claim that is %s", async (_label, over) => {
+        const claim = { _id: "dom_owner", createdAt: 1, hostname: "app.example.com", organizationId: "org_owner", projectId: "prj_2", txtToken: "t", ...over };
+        const { ctx, ops } = makeCtx(world({ domains: [claim] }));
+
+        await add.handler(ctx, args() as never);
+
+        expect(ops).not.toContainEqual({ id: "dom_owner", kind: "delete" });
+    });
+
+    it("hands an organization the same TXT token each time it claims a hostname", async () => {
+        const first = await add.handler(makeCtx(world()).ctx, args() as never);
+        const again = await add.handler(makeCtx(world()).ctx, args() as never);
+        const other = await add.handler(makeCtx(world()).ctx, args({ hostname: "www.example.com" }) as never);
+
+        expect(again.txtToken).toBe(first.txtToken);
+        expect(other.txtToken).not.toBe(first.txtToken);
+    });
+
     it("accepts an absolute https redirect target", async () => {
         const { ctx } = makeCtx(world());
 
