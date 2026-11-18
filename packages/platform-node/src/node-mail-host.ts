@@ -31,7 +31,7 @@ import type { MessageBatchLike } from "@lunora/platform";
 import { defineQueue } from "@lunora/queue";
 import type Database from "better-sqlite3";
 
-import { createNodeQueueHost } from "./node-queue-host";
+import { createNodeQueueHost, preparedSendOf } from "./node-queue-host";
 
 /** The queue name the registry's `wrangler.jsonc` example gives the mail queue. */
 const MAIL_QUEUE_NAME = "lunora-mail";
@@ -257,25 +257,24 @@ const fingerprintOf = (body: unknown): string => {
 
 /** One delivery at a time per idempotency key, and one content per key, across polls and processes on the file. */
 interface KeyClaims {
-    /**
-     * Forget the content record `recordContent` made, for an enqueue that then
-     * failed: only while it still names this content and no live row carries the
-     * key. Another enqueue of the same mail may have used the record in between,
-     * and deleting it would free the key for different content.
-     */
-    forgetContent: (key: string, fingerprint: string) => void;
-
     /** Keep the key's content record at least as long as the sent record a successful send just wrote. */
     keepContent: (key: string) => void;
 
-    /**
-     * Record the content a key is first queued with: `"conflict"` when the key
-     * already names different content, `"recorded"` when this call created the
-     * record, `"matches"` when it already held this content.
-     */
-    recordContent: (key: string, fingerprint: string) => "conflict" | "matches" | "recorded";
-
     release: (key: string, messageId: string) => void;
+
+    /**
+     * Reserve the key for this content and run `insert`, the row's insert, in ONE
+     * `BEGIN IMMEDIATE` transaction: `"conflict"` when the key already belongs to
+     * different content, and then nothing is written.
+     *
+     * One transaction because two would leave a reservation without its row, visible
+     * to every other process on the file. A second process's failed enqueue could
+     * then see no live row and drop the reservation, a third reserve the key for
+     * other content, and the first's row land afterwards to be parked as a conflict.
+     * Here a reservation commits only with its row, and an insert that throws rolls
+     * the reservation back with it, so a failed enqueue needs no cleanup.
+     */
+    reserve: (key: string, fingerprint: string, insert: () => void) => "conflict" | "queued";
 
     /**
      * Take the key for this delivery of `messageId`: `"busy"` while another
@@ -338,7 +337,6 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
     const writeContent = database.prepare<[string, string, number]>(
         "INSERT INTO _lunora_mail_keys (key, fingerprint, expires_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET fingerprint = excluded.fingerprint, expires_at = excluded.expires_at",
     );
-    const dropContent = database.prepare<[string]>("DELETE FROM _lunora_mail_keys WHERE key = ?");
     const pruneClaims = database.prepare<[number]>("DELETE FROM _lunora_mail_claims WHERE expires_at <= ?");
     const pruneContent = database.prepare<[number]>("DELETE FROM _lunora_mail_keys WHERE expires_at <= ?");
     const pruneDeliveries = database.prepare<[number]>("DELETE FROM _lunora_mail_deliveries WHERE expires_at <= ?");
@@ -393,29 +391,25 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
         }
     };
 
-    const recordInTransaction = database.transaction((key: string, fingerprint: string): "conflict" | "matches" | "recorded" => {
+    const reserveInTransaction = database.transaction((key: string, fingerprint: string, insert: () => void): "conflict" | "queued" => {
         const now = clock();
 
         pruneDue(now);
 
         const owner = ownerFingerprint(key, now);
 
-        if (owner === undefined) {
-            writeContent.run(key, fingerprint, now + MAIL_KEY_CONTENT_TTL_MS);
-
-            return "recorded";
-        }
-
-        if (owner.fingerprint !== fingerprint) {
+        if (owner !== undefined && owner.fingerprint !== fingerprint) {
             return "conflict";
         }
 
-        // Owned by a live row whose record had lapsed: re-record it, so the next lookup is a read.
-        if (!owner.recorded) {
+        // A first record, or a re-record for a live row whose record had lapsed, so the next lookup is a read.
+        if (owner?.recorded !== true) {
             writeContent.run(key, fingerprint, now + MAIL_KEY_CONTENT_TTL_MS);
         }
 
-        return "matches";
+        insert();
+
+        return "queued";
     });
 
     const takeInTransaction = database.transaction((key: string, fingerprint: string, messageId: string): TakeOutcome => {
@@ -442,30 +436,14 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
         return { delivery: numbered?.delivery ?? 1, firstDeliveredAt: numbered?.first_at ?? now, outcome: "taken" };
     });
 
-    const forgetInTransaction = database.transaction((key: string, fingerprint: string): void => {
-        const now = clock();
-
-        if (readContent.get(key, now)?.fingerprint !== fingerprint) {
-            return;
-        }
-
-        // A row still carrying the key is a live use of the record: it stays.
-        if (liveRowFor(key) === undefined) {
-            dropContent.run(key);
-        }
-    });
-
     return {
-        forgetContent: (key, fingerprint) => {
-            forgetInTransaction.immediate(key, fingerprint);
-        },
         keepContent: (key) => {
             extendContent.run(clock() + MAIL_KEY_CONTENT_TTL_MS, key);
         },
-        recordContent: (key, fingerprint) => recordInTransaction.immediate(key, fingerprint),
         release: (key, messageId) => {
             drop.run(key, messageId);
         },
+        reserve: (key, fingerprint, insert) => reserveInTransaction.immediate(key, fingerprint, insert),
         take: (key, fingerprint, messageId) => takeInTransaction.immediate(key, fingerprint, messageId),
     };
 };
@@ -502,20 +480,32 @@ const assertValidDelay: (delaySeconds: unknown) => asserts delaySeconds is numbe
     }
 };
 
+/** The `LUNORA_MAIL_CAPTURE` values `shouldCaptureMail` obeys; any other value is ignored. */
+const CAPTURE_FLAG_VALUES: ReadonlySet<string> = new Set(["0", "1", "false", "true"]);
+
 /**
- * Why the env selects capture, in its own words: `LUNORA_MAIL_CAPTURE` when it is
- * set, otherwise the environment variables `shouldCaptureMail` read as dev.
+ * The variable that decided capture, as `shouldCaptureMail` decides it: an
+ * obeyed `LUNORA_MAIL_CAPTURE`, otherwise the environment variables it read as dev.
  */
 const captureTrigger = (env: MailEnv): string => {
     const flag = env["LUNORA_MAIL_CAPTURE"];
 
-    if (typeof flag === "string" && flag !== "") {
+    if (typeof flag === "string" && CAPTURE_FLAG_VALUES.has(flag.toLowerCase())) {
         return `LUNORA_MAIL_CAPTURE=${flag}`;
     }
 
     return ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"]
         .flatMap((name) => (typeof env[name] === "string" && env[name] !== "" ? [`${name}=${env[name]}`] : []))
         .join(", ");
+};
+
+/** A `LUNORA_MAIL_CAPTURE` value `shouldCaptureMail` ignored, so the reader sees why it did not count. */
+const ignoredCaptureFlag = (env: MailEnv): string => {
+    const flag = env["LUNORA_MAIL_CAPTURE"];
+
+    return typeof flag === "string" && flag !== "" && !CAPTURE_FLAG_VALUES.has(flag.toLowerCase())
+        ? `; LUNORA_MAIL_CAPTURE=${flag} was ignored, as only 1, true, 0 or false are read`
+        : "";
 };
 
 /**
@@ -532,7 +522,7 @@ const announceCapture = (env: MailEnv): void => {
 
     // eslint-disable-next-line no-console -- the package has no logger; the process's stderr is the log
     console.warn(
-        `[@lunora/platform-node] mail is captured, not sent (${captureTrigger(env)} selects dev capture): every send is ${fate}. Set LUNORA_MAIL_CAPTURE=0 to deliver.`,
+        `[@lunora/platform-node] mail is captured, not sent (${captureTrigger(env)} selects dev capture${ignoredCaptureFlag(env)}): every send is ${fate}. Set LUNORA_MAIL_CAPTURE=0 to deliver.`,
     );
 };
 
@@ -748,6 +738,7 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
     const env: MailEnv = options.env ?? { ...process.env };
     const clock = options.now ?? Date.now;
     const queue: QueueLike = {
+        // eslint-disable-next-line @typescript-eslint/require-await -- QueueLike's contract is async; the reservation and insert are one synchronous transaction
         send: async (payload, sendOptions) => {
             const { delaySeconds, ...unsupported } = sendOptions ?? {};
 
@@ -762,28 +753,25 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
 
             assertValidDelay(delaySeconds);
 
+            // Validated and encoded here, outside the transaction: a body the queue refuses (the
+            // 128 KiB ceiling) throws before anything is reserved, so there is nothing to undo.
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `host` is assigned
+            const insert = preparedSendOf(host, "mail")(payload, delaySeconds === undefined ? undefined : { delaySeconds });
             const key = idempotencyKeyOf(payload);
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `consumer` is assigned
-            const recorded = key === undefined ? "matches" : consumer.claims.recordContent(key, fingerprintOf(payload));
 
-            if (recorded === "conflict") {
-                throw new LunoraError(
-                    "VALIDATION_ERROR",
-                    `@lunora/platform-node: idempotency key "${String(key)}" was already queued with different content — a key names one message, so use a new key for new content`,
-                );
+            if (key === undefined) {
+                // `consumeQueuedSend` refuses a body without a key; queued as-is so the refusal is logged there.
+                insert();
+
+                return;
             }
 
-            try {
-                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `host` is assigned
-                await host.bindings.mail.send(payload, delaySeconds === undefined ? undefined : { delaySeconds });
-            } catch (error) {
-                // Nothing was queued under the key, so the record this call made must not outlive it.
-                if (recorded === "recorded") {
-                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see above
-                    consumer.claims.forgetContent(String(key), fingerprintOf(payload));
-                }
-
-                throw error;
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see above, for `consumer`
+            if (consumer.claims.reserve(key, fingerprintOf(payload), insert) === "conflict") {
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    `@lunora/platform-node: idempotency key "${key}" was already queued with different content — a key names one message, so use a new key for new content`,
+                );
             }
         },
     };

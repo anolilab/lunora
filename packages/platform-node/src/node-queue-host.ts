@@ -164,6 +164,39 @@ const delayMs = (delaySeconds: number | undefined): number => {
     return Math.min(Math.max(0, Math.ceil(delaySeconds)), MAX_DELAY_SECONDS) * 1000;
 };
 
+/**
+ * Validate and encode a message now, and return the insert that queues it.
+ * Everything that can refuse the message (content type, the 128 KiB ceiling)
+ * runs before the closure exists, so a caller can run the insert inside its own
+ * transaction knowing it can only fail on the database itself.
+ */
+type PreparedSend = (message: unknown, sendOptions?: QueueSendOptions) => () => void;
+
+/**
+ * The synchronous producers behind each host's async `QueueBindingLike`, keyed
+ * by host. Package-internal: `createNodeMailHost` needs to put its content
+ * reservation and the row insert in one transaction, which the async binding
+ * cannot join. Not exported from the package root, so not public API.
+ */
+const preparedSends = new WeakMap<object, ReadonlyMap<string, PreparedSend>>();
+
+/**
+ * The synchronous producer for one declared queue of `host`, by its
+ * `lunora/queues.ts` export name. Package-internal: exported from this module
+ * for `createNodeMailHost`, never from the package root. Deliberately carries no
+ * internal JSDoc tag: `stripInternal` would drop the declaration from the build
+ * and leave this module's export statement dangling.
+ */
+const preparedSendOf = (host: object, exportName: string): PreparedSend => {
+    const prepared = preparedSends.get(host)?.get(exportName);
+
+    if (prepared === undefined) {
+        throw new LunoraError("INTERNAL", `@lunora/platform-node: no queue "${exportName}" on this host`);
+    }
+
+    return prepared;
+};
+
 /** One declared queue, resolved from its `defineQueue` result. */
 interface CompiledQueue {
     definition: QueueDefinition;
@@ -393,14 +426,25 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
 
     const bindings: Record<string, QueueBindingLike> = {};
     const env: Record<string, unknown> = { ...options.env };
+    const preparedByQueue = new Map<string, PreparedSend>();
 
     for (const queue of compiled) {
+        const prepareSend: PreparedSend = (message, sendOptions) => {
+            const contentType = sendOptions?.contentType ?? "json";
+            const encoded = encodeMessage(message, contentType, queue.name);
+            const delay = delayMs(sendOptions?.delaySeconds);
+
+            return () => {
+                enqueue(queue.name, encoded, contentType, delay, clock());
+            };
+        };
+
+        preparedByQueue.set(queue.exportName, prepareSend);
+
         const binding: QueueBindingLike = {
             // eslint-disable-next-line @typescript-eslint/require-await -- the contract is async so a real binding can await the network; SQLite is synchronous
             send: async (message: unknown, sendOptions?: QueueSendOptions): Promise<unknown> => {
-                const contentType = sendOptions?.contentType ?? "json";
-
-                enqueue(queue.name, encodeMessage(message, contentType, queue.name), contentType, delayMs(sendOptions?.delaySeconds), clock());
+                prepareSend(message, sendOptions)();
 
                 return undefined;
             },
@@ -535,7 +579,7 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         return true;
     };
 
-    return {
+    const host: NodeQueueHost<Queues> = {
         bindings: bindings as NodeQueueHost<Queues>["bindings"],
         deadLetters: {
             list: (queueName: string) =>
@@ -564,6 +608,11 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
             return delivered;
         },
     };
+
+    preparedSends.set(host, preparedByQueue);
+
+    return host;
 };
 
-export type { NodeQueueHost, NodeQueueHostOptions };
+export { preparedSendOf };
+export type { NodeQueueHost, NodeQueueHostOptions, PreparedSend };

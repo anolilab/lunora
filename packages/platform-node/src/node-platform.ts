@@ -13,6 +13,9 @@
  * need to guess at that shape.
  */
 
+import { realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+
 import { LunoraError } from "@lunora/errors";
 import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
@@ -94,12 +97,70 @@ const deliverableCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCronJ
  * holds the file's write lock, so every mail write would wait out the busy
  * timeout on a blocked event loop. The `.global()` store is split off the same way.
  */
-const composeMail = (options: NodePlatformMailOptions | undefined): { close: () => void; mail: NodeMailHost } | undefined => {
+
+/**
+ * One spelling per file: resolved, then through `realpath` where the file (or,
+ * for one not created yet, its directory) exists, so `./a/../shard.sqlite3` and a
+ * symlink to it name the same database.
+ */
+const canonicalPath = (path: string): string => {
+    const resolved = resolve(path);
+
+    try {
+        return realpathSync(resolved);
+    } catch {
+        try {
+            return join(realpathSync(dirname(resolved)), basename(resolved));
+        } catch {
+            return resolved;
+        }
+    }
+};
+
+/** The suffix the shard registry reads as a shard database in its `directory`. */
+const REGISTRY_SHARD_SUFFIX = ".sqlite3";
+
+/**
+ * Refuse a mail file that is one the platform already opens: the shard's, the
+ * `.global()` store's, or one the shard registry would list as a shard. Each
+ * shares a write lock with mail, and the shard's is held across awaits by
+ * `shard.transaction()`, so mail would stall every shard request it overlapped.
+ */
+const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptions, "directory" | "globalTablesPath" | "path">): void => {
+    const mail = canonicalPath(mailPath);
+    const owners: [string, string | undefined][] = [
+        ["the shard database (`path`)", platform.path],
+        ["the .global() store (`globalTablesPath`)", platform.globalTablesPath],
+    ];
+
+    for (const [owner, ownerPath] of owners) {
+        if (ownerPath !== undefined && ownerPath !== ":memory:" && ownerPath !== "" && canonicalPath(ownerPath) === mail) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: mail.path "${mailPath}" is ${owner} "${ownerPath}" — give mail a database file of its own`,
+            );
+        }
+    }
+
+    if (platform.directory !== undefined && mail.endsWith(REGISTRY_SHARD_SUFFIX) && dirname(mail) === canonicalPath(platform.directory)) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: mail.path "${mailPath}" is a ${REGISTRY_SHARD_SUFFIX} file inside the shard registry's directory "${platform.directory}", which would open it as a shard — move it out of that directory`,
+        );
+    }
+};
+
+const composeMail = (
+    options: NodePlatformMailOptions | undefined,
+    platform: Pick<NodePlatformOptions, "directory" | "globalTablesPath" | "path">,
+): { close: () => void; mail: NodeMailHost } | undefined => {
     if (options === undefined) {
         return undefined;
     }
 
     const { path, ...hostOptions } = options;
+
+    refuseSharedMailPath(path, platform);
     const database = new Database(path);
 
     try {
@@ -499,7 +560,7 @@ export const createNodePlatform = <
                       queues: options.queues,
                   });
 
-        const composedMail = composeMail(options.mail);
+        const composedMail = composeMail(options.mail, options);
 
         if (composedMail !== undefined) {
             teardown.push(composedMail.close);

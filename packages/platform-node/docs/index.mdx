@@ -224,7 +224,10 @@ file the mail host keeps its queue, sent ledger and key records in (the
 `NodePlatformMailOptions` type). The file is its own, never the shard's, and
 there is no default. `shard.transaction()` holds the shard's file across awaits,
 so mail written on it during a mutation would be rolled back with it, and the
-ack and sent record lost would mail the message again.
+ack and sent record lost would mail the message again. Construction throws when
+`mail.path` names the shard's file, the `globalTablesPath` file, or a `.sqlite3`
+file inside the registry `directory` (which would be opened as a shard). Paths
+are compared after `path.resolve` and `realpath`.
 
 Run exactly one process with `crons`: it owns the declared set. Processes do
 not notify each other when a row changes, so a server only sees another
@@ -363,7 +366,9 @@ one. Capture follows `createMailerFromEnv`'s rule, the same one Cloudflare appli
 when every set value of `CF_ENV`, `ENVIRONMENT`, `NODE_ENV` and `WORKER_ENV` names
 a dev environment (`dev`, `development`, `local`, `localhost` or `test`). Node
 tooling often sets `NODE_ENV=test` by itself, so construction logs one warning
-whenever it captures, naming the variable that chose capture. To see captured mail
+whenever it captures, naming the variable that chose capture. A
+`LUNORA_MAIL_CAPTURE` value other than `1`, `true`, `0` or `false` is ignored by the
+rule, and the warning says so instead of blaming it. To see captured mail
 in the studio, put a `SHARD` namespace and `LUNORA_ADMIN_TOKEN` on `env`. Without
 them, captured mail is discarded, and the warning says so.
 
@@ -385,6 +390,9 @@ Delivery is at-least-once, narrowed:
   lease.
 - A key records the content it was first queued with, at enqueue, so the first
   message queued under a key owns it whatever order rows are delivered in. The
+  reservation and the row insert run in one `BEGIN IMMEDIATE` transaction, after
+  the body has been validated and encoded. So no process on the file ever sees a
+  reservation without its row, and a failed enqueue leaves nothing behind. The
   record is refreshed when a delivery takes the key and kept as long as the sent
   record. Once it lapses, the key still belongs to the oldest queued, retrying or
   parked row that carries it, judged by that row's own stored content. So

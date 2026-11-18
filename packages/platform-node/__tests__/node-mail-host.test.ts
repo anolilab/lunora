@@ -1324,4 +1324,123 @@ describe(createNodeMailHost, () => {
             expect(rowsWhenDrained).toStrictEqual({ n: 0 });
         });
     });
+
+    describe("eighth review", () => {
+        const mailFields = { idempotencyKey: "news-2", subject: "News", text: "Issue 2", to: "ada@example.com" };
+
+        it("never lets another process on the file see a reservation without its row", async () => {
+            expect.assertions(2);
+
+            const enqueuing = freshDatabase();
+            const watching = new Database(enqueuing.name);
+            const clock = startClock();
+            const writer = createNodeMailHost(enqueuing, { env: PRODUCTION, now: clock.now, transport: scriptedTransport(["ok"]) });
+            const other = createNodeMailHost(watching, { env: PRODUCTION, now: clock.now, transport: scriptedTransport(["ok"]) });
+            const windows: string[] = [];
+
+            // The interleaving hook: inside the writer's row insert, before the row lands, look through the
+            // other host's own connection. Under WAL it sees only what is committed, which is exactly what a
+            // second process would act on: a reservation with no row is the state its failed-enqueue cleanup
+            // deleted, freeing the key for different content while the writer's row was still to land.
+            enqueuing.function("observe_reservation", (key: unknown) => {
+                const reserved = watching.prepare("SELECT 1 FROM _lunora_mail_keys WHERE key = ?").get(key);
+                const row = watching
+                    .prepare("SELECT 1 FROM _lunora_queue_messages WHERE queue = 'lunora-mail' AND json_extract(CAST(body AS TEXT), '$.idempotencyKey') = ?")
+                    .get(key);
+
+                if (reserved !== undefined && row === undefined) {
+                    windows.push(String(key));
+                }
+
+                return 0;
+            });
+            enqueuing.exec(
+                // eslint-disable-next-line no-secrets/no-secrets -- trigger SQL, not a credential
+                "CREATE TEMP TRIGGER observe BEFORE INSERT ON main._lunora_queue_messages BEGIN SELECT observe_reservation(json_extract(CAST(NEW.body AS TEXT), '$.idempotencyKey')); END",
+            );
+
+            // The other process's oversized enqueue of the same mail fails; then the writer queues it.
+            await expect(other.queue.send({ ...mailFields, padding: "x".repeat(200_000) })).rejects.toThrow(/128 KiB/u);
+
+            await writer.mailer.queue(mailFields);
+
+            expect(windows).toStrictEqual([]);
+
+            watching.close();
+        });
+
+        it("leaves no reservation behind when the row insert fails", async () => {
+            expect.assertions(2);
+
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: scriptedTransport(["ok"]) });
+
+            database.exec("CREATE TEMP TRIGGER refuse BEFORE INSERT ON main._lunora_queue_messages BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+
+            await expect(mail.mailer.queue(mailFields)).rejects.toThrow("disk full");
+
+            expect(database.prepare("SELECT key FROM _lunora_mail_keys").all()).toStrictEqual([]);
+        });
+
+        it.each([
+            ["the shard's own file", "path", "shard database"],
+            ["the shard's file under another spelling", "path via ..", "shard database"],
+            ["the .global() store's file", "globalTablesPath", "globalTablesPath"],
+            ["a shard file in the registry's directory", "directory", "shard registry's directory"],
+        ])("refuses a mail.path that is %s, naming both", (_label, owner, named) => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-shared-"));
+
+            const root = directory;
+            const mailPath = join(root, "shard.sqlite3");
+            const owners: Record<string, { directory?: string; globalTablesPath?: string; path?: string }> = {
+                directory: { directory: root },
+                globalTablesPath: { globalTablesPath: mailPath },
+                path: { path: mailPath },
+                "path via ..": { path: join(root, "sub", "..", "shard.sqlite3") },
+            };
+
+            expect(() =>
+                createNodePlatform({
+                    path: join(root, "other-shard.sqlite3"),
+                    ...owners[owner],
+                    mail: { env: PRODUCTION, path: mailPath, transport: scriptedTransport(["ok"]) },
+                }),
+            ).toThrow(new RegExp(String.raw`mail\.path ".*shard\.sqlite3".*${named.replaceAll(".", String.raw`\.`)}`, "u"));
+        });
+
+        it("accepts a mail.path distinct from every database the platform opens", () => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-distinct-"));
+
+            const root = directory;
+
+            using platform = createNodePlatform({
+                directory: join(root, "shards"),
+                globalTablesPath: join(root, "global.sqlite3"),
+                mail: { env: PRODUCTION, path: join(root, "mail.sqlite3"), transport: scriptedTransport(["ok"]) },
+                path: join(root, "shard.sqlite3"),
+            });
+
+            expect(platform.mail).toBeDefined();
+        });
+
+        it("names the variable that decided capture when LUNORA_MAIL_CAPTURE holds a value it ignores", () => {
+            expect.assertions(2);
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            createNodeMailHost(freshDatabase(), {
+                env: { LUNORA_MAIL_CAPTURE: "yes", MAIL_FROM: PRODUCTION.MAIL_FROM, NODE_ENV: "test" },
+                transport: scriptedTransport(["ok"]),
+            });
+
+            const announced = warn.mock.calls.map(([line]) => String(line)).find((line) => line.includes("mail is captured, not sent"));
+
+            expect(announced).toContain("(NODE_ENV=test selects dev capture; LUNORA_MAIL_CAPTURE=yes was ignored, as only 1, true, 0 or false are read)");
+            expect(announced).not.toMatch(/\(LUNORA_MAIL_CAPTURE=yes selects/u);
+        });
+    });
 });
