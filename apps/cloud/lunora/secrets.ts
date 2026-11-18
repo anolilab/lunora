@@ -143,20 +143,26 @@ export const snapshotRows = internalQuery
         }): Promise<
             { ciphertext: string; cipherVersion?: null | number; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string }[]
         > => {
-            const wanted = new Set(names);
-            const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
+            // One read per name, not one page of the project: a row past that page would
+            // snapshot as absent, and rollback would delete the secret it should restore.
+            // A name has at most one row per environment, so each read fits a page.
+            const pages = await Promise.all(
+                [...new Set(names)].map(async (name) => {
+                    const { page } = await context.db.secrets.findMany({ where: { name, organizationId, projectId } }); // secret-scanner:allow -- domain field name
 
-            return (page as SecretRow[])
-                .filter((secret) => wanted.has(secret.name))
-                .map((secret) => {
-                    return {
-                        ciphertext: secret.ciphertext,
-                        cipherVersion: secret.cipherVersion,
-                        environment: secret.environment,
-                        iv: secret.iv,
-                        name: secret.name,
-                    };
-                });
+                    return page;
+                }),
+            );
+
+            return pages.flat().map((secret) => {
+                return {
+                    ciphertext: secret.ciphertext,
+                    cipherVersion: secret.cipherVersion,
+                    environment: secret.environment,
+                    iv: secret.iv,
+                    name: secret.name,
+                };
+            });
         },
     );
 
