@@ -590,3 +590,17 @@ fn pins_exactly_the_release_keys_the_daemon_and_the_control_plane_trust() {
     assert!(!pinned.is_empty(), "no key parsed from install.sh");
     assert_eq!(pinned, trusted, "install.sh's trusted_key() and protocol/hostd/trusted-release-keys.json disagree");
 }
+
+#[test]
+fn writes_the_unit_read_only_to_everyone_but_root_whatever_the_umask() {
+    if !has_tools("writes_the_unit_read_only_to_everyone_but_root_whatever_the_umask", &[BASH_4, GNU_STAT]) {
+        return;
+    }
+
+    let test_box = TestBox::new();
+    let unit = test_box.path.join("lunora-hostd.service");
+    let output =
+        test_box.output(&format!("umask 0000\nsystemctl() {{ :; }}\nUNIT_PATH=\"{}\"\ninstall_unit\nstat -c 'mode=%a' \"$UNIT_PATH\"", unit.display()));
+
+    assert!(output.contains("mode=644"), "{output}");
+}

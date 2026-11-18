@@ -631,6 +631,8 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 UNIT
     # END UNIT
+    # Set, not inherited: under a permissive umask anyone who could write the unit would choose what systemd runs as root.
+    chmod 0644 "${UNIT_PATH}.new"
     mv -f "${UNIT_PATH}.new" "${UNIT_PATH}"
     systemctl daemon-reload
 }
