@@ -20,12 +20,9 @@
  * result is the operator's own `@lunora/platform-node` process.
  *
  * That process is also where the target's gaps get reported. This file used to
- * carry an `infer`/`provision` pair naming them — containers have no Node
- * equivalent, and nothing walks the generated `LUNORA_CRONS` map into
- * `SchedulerHost.cron`, so a declared cron never fires here. Nothing ever
- * called either method, so no operator could read either warning; the honest
- * home for both is `NODE_CAPABILITIES`, which codegen does consult and which
- * rates them for exactly this reason.
+ * carry an `infer`/`provision` pair naming them. Nothing ever called either
+ * method, so no operator could read either warning; the honest home for the
+ * gaps is `NODE_CAPABILITIES`, which codegen does consult.
  */
 
 import type { DeployDriver } from "../deploy-driver";

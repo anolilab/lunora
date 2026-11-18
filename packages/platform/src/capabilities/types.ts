@@ -31,7 +31,7 @@
  *
  * `agents`, `ai`, `aiSearch`, `analytics`, `analyticsSql`, `artifacts`, `browser`, `commitOrderedTables`,
  * `containerEgressPolicy`, `containerRuntimeScheduling`, `containerSandboxTools`, `containers`,
- * `cronTriggers`, `crossShardFanout`,
+ * `cronTriggers`, `cronWorkflowTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
  * `scheduler`, `secretValues`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
@@ -94,7 +94,7 @@
  * pass that diagnoses app-declared features with no `ctx.*` capability row
  * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
  * `containerRuntimeScheduling`, `containerSandboxTools`, `cronTriggers`,
- * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
+ * `cronWorkflowTriggers`, `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
  * `relationGraph`, `secretValues`, `secrets`, `services`, `topics`, `vectorStore`, `workflowRollback`,
  * `workflowSchedules`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
@@ -338,6 +338,21 @@ export interface PlatformCapabilities {
          * fires. One rating covering both is how that shipped as green.
          */
         cronTriggers?: Capability;
+
+        /**
+         * A DECLARED cron job that targets a workflow (`cronJobs()` with a
+         * workflow export) rather than a function: each tick starts a fresh
+         * workflow instance instead of dispatching to a shard.
+         *
+         * Rated apart from {@link PlatformCapabilities.features.cronTriggers}
+         * because a host can fire function crons and still have nothing that
+         * starts a workflow from a tick, and apart from `workflowSchedules`,
+         * which is the platform's own `workflows[].schedules` list rather than a
+         * `cronJobs()` entry. Gate-bearing: codegen sets the
+         * `cronWorkflowTriggers` `PlatformSignals` flag when a declared cron job
+         * has a workflow target.
+         */
+        cronWorkflowTriggers?: Capability;
 
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;

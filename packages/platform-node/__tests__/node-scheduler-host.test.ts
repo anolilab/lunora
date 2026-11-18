@@ -8,6 +8,59 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNodeSchedulerHost } from "../src/node-scheduler-host";
 import { createNodeShardHost } from "../src/node-shard-host";
 
+const CRON_ROW_READ = "SELECT * FROM _lunora_scheduler_crons WHERE key = ?";
+const CRON_SET_READ = "SELECT * FROM _lunora_scheduler_crons";
+
+/** Forward every member of `target` except `override`'s, binding methods to `target`. */
+const forwardExcept = <T extends object>(target: T, override: PropertyKey, replacement: unknown): T =>
+    new Proxy(target, {
+        get(inner, name) {
+            if (name === override) {
+                return replacement;
+            }
+
+            const value: unknown = Reflect.get(inner, name, inner);
+
+            return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(inner) : value;
+        },
+    });
+
+/**
+ * `database`, with the per-key cron row read throwing while `failNext` has
+ * failures left: a stand-in for a SQLite error (a locked or corrupt file) on the
+ * scheduler's timer path.
+ */
+const withFailingCronRead = (database: Database.Database): { database: Database.Database; failNext: (count: number) => void } => {
+    let failures = 0;
+
+    const prepare = (source: string): Database.Statement => {
+        const statement = database.prepare(source);
+
+        if (source !== CRON_ROW_READ) {
+            return statement;
+        }
+
+        const get = (...values: unknown[]): unknown => {
+            if (failures > 0) {
+                failures -= 1;
+
+                throw new Error("SQLITE_BUSY: database is locked");
+            }
+
+            return statement.get(...values);
+        };
+
+        return forwardExcept(statement, "get", get);
+    };
+
+    return {
+        database: forwardExcept(database, "prepare", prepare),
+        failNext: (count) => {
+            failures = count;
+        },
+    };
+};
+
 describe("createNodeSchedulerHost", () => {
     afterEach(() => {
         vi.useRealTimers();
@@ -68,6 +121,434 @@ describe("createNodeSchedulerHost", () => {
                 await vi.advanceTimersByTimeAsync(advanceMs);
 
                 expect(onDispatch).toHaveBeenCalledWith("tasks:tick");
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+    });
+
+    describe("declared crons", () => {
+        it("does not re-arm a cron removed while its tick was in flight", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            let release: (() => void) | undefined;
+            const onDispatch = vi.fn<(functionPath: string) => Promise<void>>(
+                async () =>
+                    new Promise<void>((resolve) => {
+                        release = resolve;
+                    }),
+            );
+            const host = createNodeSchedulerHost(database, { onDispatch });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:tick", name: "tick" }]);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+
+                host.declareCrons([]);
+                release?.();
+                await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("fires on UTC, not on the process's local zone", async () => {
+            expect.assertions(2);
+
+            const previousTz = process.env.TZ;
+
+            // New York is UTC-5 here: a local-zone parse fires `0 9 * * *` at 14:00 UTC.
+            process.env.TZ = "America/New_York";
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:00Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "0 9 * * *", functionPath: "reports:daily", name: "daily" }]);
+                await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+
+                expect(onDispatch).not.toHaveBeenCalled();
+
+                await vi.advanceTimersByTimeAsync(18 * 60 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledWith("reports:daily");
+            } finally {
+                host.dispose();
+                database.close();
+
+                if (previousTz === undefined) {
+                    delete process.env.TZ;
+                } else {
+                    process.env.TZ = previousTz;
+                }
+            }
+        });
+
+        it("skips the ticks a slow run covers rather than overlapping it", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            let release: (() => void) | undefined;
+            const onDispatch = vi.fn<(functionPath: string) => Promise<void>>(
+                async () =>
+                    new Promise<void>((resolve) => {
+                        release = resolve;
+                    }),
+            );
+            const host = createNodeSchedulerHost(database, { onDispatch });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:slow", name: "slow" }]);
+                // First tick at 12:01; the run is still going through 12:02 and 12:03.
+                await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+
+                release?.();
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(2);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("does not start a second run when a retained cron is re-declared mid-run", async () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            const releases: (() => void)[] = [];
+            const onDispatch = vi.fn<(functionPath: string) => Promise<void>>(
+                async () =>
+                    new Promise<void>((resolve) => {
+                        releases.push(resolve);
+                    }),
+            );
+            const host = createNodeSchedulerHost(database, { onDispatch });
+            const declared = [{ args: {}, expression: "* * * * *", functionPath: "reports:slow", name: "slow" }];
+
+            try {
+                host.declareCrons(declared);
+                // 12:01 tick starts and stays pending; the refresh lands mid-run.
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+                host.declareCrons(declared);
+                await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+
+                releases[0]?.();
+                await vi.advanceTimersByTimeAsync(0);
+
+                // The settled run re-armed exactly one timer for the next minute.
+                expect(vi.getTimerCount()).toBe(1);
+
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(2);
+                expect(vi.getTimerCount()).toBe(0);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("logs a failed tick with the job, the error and the next run, and keeps the schedule", async () => {
+            expect.assertions(5);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const database = new Database(":memory:");
+            const failure = new Error("shard answered 503");
+            const onDispatch = vi.fn<(functionPath: string) => Promise<void>>(async () => {
+                throw failure;
+            });
+            const host = createNodeSchedulerHost(database, { onDispatch });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:tick", name: "tick" }]);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(error).toHaveBeenCalledTimes(1);
+                expect(error.mock.calls[0]?.[0]).toContain('job "tick" (reports:tick)');
+                expect(error.mock.calls[0]?.[0]).toContain("next run: 2026-11-01T12:02:00.000Z");
+                expect(error.mock.calls[0]?.[1]).toBe(failure);
+
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(2);
+            } finally {
+                host.dispose();
+                database.close();
+                error.mockRestore();
+            }
+        });
+
+        it("re-arms from a changed expression instead of firing the new job on the old timer", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:x", name: "x" }]);
+                // Another process moves the job from every minute to daily at 09:00 UTC.
+                database.prepare("UPDATE _lunora_scheduler_crons SET expression = '0 9 * * *' WHERE key = 'declared:x'").run();
+                await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+                expect(onDispatch).not.toHaveBeenCalled();
+
+                await vi.advanceTimersByTimeAsync(20 * 60 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("logs and re-arms when the row read before a tick throws, instead of crashing the timer", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const real = new Database(":memory:");
+            const { database, failNext } = withFailingCronRead(real);
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:x", name: "x" }]);
+                failNext(1);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(error.mock.calls[0]?.[0]).toContain("could not read its row before the tick");
+
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+                expect(error).toHaveBeenCalledTimes(1);
+            } finally {
+                host.dispose();
+                real.close();
+                error.mockRestore();
+            }
+        });
+
+        it("logs and re-arms when settling a tick throws, so the job never goes quiet", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const real = new Database(":memory:");
+            const { database, failNext } = withFailingCronRead(real);
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                    // The pre-dispatch read already happened; fail the one after the dispatch.
+                    failNext(1);
+                },
+            });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:x", name: "x" }]);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(error.mock.calls[0]?.[0]).toContain("could not read its row after its tick");
+
+                failNext(0);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(2);
+                expect(error.mock.calls[0]?.[0]).toContain("next run: 2026-11-01T12:02:00.000Z");
+            } finally {
+                host.dispose();
+                real.close();
+                error.mockRestore();
+            }
+        });
+
+        it("refuses a cron() schedule that parses but never occurs", async () => {
+            expect.assertions(1);
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+
+            try {
+                await expect(host.scheduler.cron?.("0 0 31 4,6,9,11 *", "reports:never", {})).rejects.toThrow(/never occurs/u);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it.each([
+            ["an empty", ""],
+            ["a blank", "   "],
+            ["a one-field", "5"],
+            ["a four-field", "0 9 * *"],
+            ["a seven-field", "0 0 9 * * * *"],
+        ])("refuses %s expression rather than letting the parser pad it into a schedule", async (_label, expression) => {
+            expect.assertions(2);
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+
+            try {
+                expect(() => {
+                    host.declareCrons([{ args: {}, expression, functionPath: "reports:x", name: "x" }]);
+                }).toThrow(/invalid or never occurs/u);
+                await expect(host.scheduler.cron?.(expression, "reports:x", {})).rejects.toThrow(/invalid or never occurs/u);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("still accepts a seconds-leading six-field expression", () => {
+            expect.assertions(1);
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+
+            try {
+                expect(() => {
+                    host.declareCrons([{ args: {}, expression: "*/30 * * * * *", functionPath: "reports:x", name: "x" }]);
+                }).not.toThrow();
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("replaces the declared set atomically, so a declare racing another leaves only the last writer's set", () => {
+            expect.assertions(3);
+
+            const directory = mkdtempSync(join(tmpdir(), "lunora-declare-race-"));
+            const path = join(directory, "scheduler.sqlite3");
+            const realA = new Database(path);
+            const realB = new Database(path);
+            const hostB = createNodeSchedulerHost(realB);
+            let racing = false;
+            const setReadsOutsideTransaction: boolean[] = [];
+
+            // Another process's declare runs in the gap after A reads the declared set. The gap
+            // only exists when that read is outside A's write transaction: inside it, B could not
+            // write until A committed, so the race cannot start there.
+            const all = (statement: Database.Statement) => (): unknown[] => {
+                const result = statement.all();
+
+                if (racing) {
+                    setReadsOutsideTransaction.push(!realA.inTransaction);
+
+                    if (!realA.inTransaction) {
+                        racing = false;
+                        hostB.declareCrons([{ args: {}, expression: "0 4 * * *", functionPath: "reports:b", name: "b" }]);
+                    }
+                }
+
+                return result;
+            };
+            const databaseA = forwardExcept(realA, "prepare", (source: string): Database.Statement => {
+                const statement = realA.prepare(source);
+
+                return source === CRON_SET_READ ? forwardExcept(statement, "all", all(statement)) : statement;
+            });
+            const hostA = createNodeSchedulerHost(databaseA);
+
+            try {
+                racing = true;
+                hostA.declareCrons([{ args: {}, expression: "0 3 * * *", functionPath: "reports:a", name: "a" }]);
+
+                const keys = realA
+                    .prepare<[], { key: string }>("SELECT key FROM _lunora_scheduler_crons ORDER BY key")
+                    .all()
+                    .map((row) => row.key);
+
+                expect(keys).toStrictEqual(["declared:a"]);
+                expect(setReadsOutsideTransaction.length).toBeGreaterThan(0);
+                expect(setReadsOutsideTransaction).not.toContain(true);
+            } finally {
+                hostA.dispose();
+                hostB.dispose();
+                realA.close();
+                realB.close();
+                rmSync(directory, { force: true, recursive: true });
+            }
+        });
+
+        it("refuses two declared crons with the same name", () => {
+            expect.assertions(1);
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+
+            try {
+                expect(() => {
+                    host.declareCrons([
+                        { args: {}, expression: "0 3 * * *", functionPath: "reports:a", name: "nightly" },
+                        { args: {}, expression: "0 4 * * *", functionPath: "reports:b", name: "nightly" },
+                    ]);
+                }).toThrow(/"nightly"/u);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("leaves a cron registered through cron() alone", async () => {
+            expect.assertions(1);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                await host.scheduler.cron?.("* * * * *", "reports:dynamic", {});
+                host.declareCrons([]);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledWith("reports:dynamic");
             } finally {
                 host.dispose();
                 database.close();

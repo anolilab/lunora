@@ -337,6 +337,8 @@ interface PlatformSignals {
     containerSandboxTools?: boolean;
     /** A `cronJobs()` registration. */
     cronTriggers?: boolean;
+    /** A `cronJobs()` registration whose target is a workflow, not a function. */
+    cronWorkflowTriggers?: boolean;
     /** A `.shardBy(...)` schema — clients can address non-default shards, so the coordinator can fan out across them. */
     crossShardFanout?: boolean;
     /** A `.deliveryAuthorization(...)` call on the app builder. */
@@ -385,6 +387,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "containerRuntimeScheduling",
     "containerSandboxTools",
     "cronTriggers",
+    "cronWorkflowTriggers",
     "crossShardFanout",
     "deliveryAuthorization",
     "durableStreams",
@@ -412,6 +415,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     containerSandboxTools: "container sandbox helpers — files, directory backups, bucket mounts (`defineContainer({ sandbox: true })`)",
     deliveryAuthorization: "delivery authorization (`.deliveryAuthorization(...)` on the app builder)",
     cronTriggers: "declared cron triggers (`cronJobs()`)",
+    cronWorkflowTriggers: "declared cron jobs that start a workflow (`cronJobs()` with a workflow target)",
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
     globalTables: "global tables (`.global()`)",

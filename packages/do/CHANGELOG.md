@@ -1,3 +1,8 @@
+## @lunora/do [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.287...@lunora/do@1.0.0-alpha.288) (2026-11-18)
+
+- Updated dependency @lunora/platform@1.0.0-alpha.81
+- Updated dependency @lunora/platform-cloudflare@1.0.0-alpha.124
+
 ## @lunora/do [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.286...@lunora/do@1.0.0-alpha.287) (2026-11-16)
 
 - fix(do): keep broadcast deltas off subscriptions served by re-execution (#1597)

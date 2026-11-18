@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.423](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.422...@lunora/codegen@1.0.0-alpha.423) (2026-11-18)
+
+- feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)
+
 ## @lunora/codegen [1.0.0-alpha.422](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.421...@lunora/codegen@1.0.0-alpha.422) (2026-11-17)
 
 - fix(codegen): fail closed on ctx paths the ip-read analysis loses (#1605) (#1613)

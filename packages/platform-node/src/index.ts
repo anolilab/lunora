@@ -34,7 +34,9 @@
  * registry as the `shardDO` namespace that worker routes to. Also absent are
  * the Cloudflare product bindings with no local
  * equivalent — Vectorize, Workers AI, Browser Rendering, Containers, Analytics
- * Engine, Pipelines, Secrets Store, Hyperdrive.
+ * Engine, Pipelines. `ctx.secrets` reads environment variables through
+ * `createNodeSecretBindings` (`./node-secrets`), and the Hyperdrive binding is
+ * built from `DATABASE_URL` by `createNodeHyperdrive` (`./node-hyperdrive`).
  *
  * `@lunora/config` ships a `node` **deploy** driver, so `--target node` resolves
  * for `provision` — which reports, once, which declared features this target
@@ -50,8 +52,10 @@ export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStore
 export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
 export type { NodeHttpServer, NodeHttpServerOptions } from "./node-http-server";
 export { createNodeHttpServer } from "./node-http-server";
+export type { NodeHyperdriveBinding } from "./node-hyperdrive";
+export { createNodeHyperdrive } from "./node-hyperdrive";
 export { createNodeShardKvStore } from "./node-kv-store";
-export type { NodePlatform, NodePlatformDispatchOptions, NodePlatformOptions } from "./node-platform";
+export type { NodeCronJob, NodePlatform, NodePlatformDispatchOptions, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
 export type { NodeProfileHandler, NodeProfileHandlerOptions } from "./node-profile-handler";
 export { createNodeProfileHandler } from "./node-profile-handler";
@@ -59,8 +63,10 @@ export type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 export { createNodeQueueHost } from "./node-queue-host";
 export type { NodeR2BucketOptions } from "./node-r2-bucket";
 export { createNodeR2Bucket } from "./node-r2-bucket";
-export type { NodeSchedulerHost, NodeSchedulerHostOptions } from "./node-scheduler-host";
+export type { NodeDeclaredCron, NodeSchedulerHost, NodeSchedulerHostOptions } from "./node-scheduler-host";
 export { createNodeSchedulerHost } from "./node-scheduler-host";
+export type { NodeSecretBinding } from "./node-secrets";
+export { createNodeSecretBindings } from "./node-secrets";
 export type { NodeShardHostOptions } from "./node-shard-host";
 export { createNodeShardHost } from "./node-shard-host";
 export { createNodeShardNamespace } from "./node-shard-namespace";

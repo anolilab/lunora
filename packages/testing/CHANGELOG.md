@@ -1,3 +1,9 @@
+## @lunora/testing [1.0.0-alpha.338](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.337...@lunora/testing@1.0.0-alpha.338) (2026-11-18)
+
+- Updated dependency @lunora/platform@1.0.0-alpha.81
+- Updated dependency @lunora/bindings@1.0.0-alpha.152
+- Updated dependency @lunora/queue@1.0.0-alpha.144
+
 ## @lunora/testing [1.0.0-alpha.337](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.336...@lunora/testing@1.0.0-alpha.337) (2026-11-14)
 
 - fix(testing): wire-round-trip lunoraTest results like production (#1532)

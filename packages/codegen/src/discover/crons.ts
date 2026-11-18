@@ -352,11 +352,15 @@ const rawCronExpression = (call: CallExpression, name: string): string => {
     }
 
     if (!isValidCronExpression(expression)) {
-        throw diagnosticAt(call, `Cron job "${name}" has an invalid cron expression "${expression}" — expected 5 or 6 space-separated fields.`, {
-            code: "CRON_EXPR_INVALID",
-            name: "LunoraError",
-            status: 500,
-        });
+        throw diagnosticAt(
+            call,
+            `Cron job "${name}" has an invalid cron expression "${expression}" — expected 5 or 6 space-separated fields that occur on at least one date.`,
+            {
+                code: "CRON_EXPR_INVALID",
+                name: "LunoraError",
+                status: 500,
+            },
+        );
     }
 
     warnIfSecondsLeading(expression, `cron expression for job "${name}"`);

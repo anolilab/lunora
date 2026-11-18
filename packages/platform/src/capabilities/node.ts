@@ -24,7 +24,7 @@ import type { PlatformCapabilities } from "./types";
  * What remains genuinely absent is everything a single Node process cannot
  * distribute: placement across nodes, failover, and most Cloudflare-specific
  * product bindings (Vectorize, Workers AI, Containers, Browser Rendering,
- * Analytics Engine, Secrets Store, Hyperdrive). Workflows, object storage and
+ * Analytics Engine). Workflows, object storage and
  * queues are the three that CAN be emulated locally — `defineWorkflow` handlers
  * compile onto the `@visulima/workflow` engine, R2 becomes a filesystem bucket,
  * and Queues becomes a durable table with the same batch/ack/retry/dead-letter
@@ -155,15 +155,19 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         scheduler: {
             level: "emulated",
-            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with finite retry backoff and a dead-letter queue. This host's schedule() refuses `retry.forever` as INVALID_INPUT before a job is persisted or armed. ctx.scheduler does not call schedule(): it posts to the SchedulerDO namespace the app's .scheduler() declaration binds, so whether a ctx.scheduler call can retry forever is decided by what backs that binding, not by this host. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with finite retry backoff and a dead-letter queue. This host's schedule() refuses `retry.forever` as INVALID_INPUT before a job is persisted or armed. ctx.scheduler does not call schedule(): it posts to the SchedulerDO namespace the app's .scheduler() declaration binds, so whether a ctx.scheduler call can retry forever is decided by what backs that binding, not by this host. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer. An app's DECLARED crons are rated separately, under cronTriggers. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
         },
         relationGraph: {
             level: "emulated",
             note: "Identical to Cloudflare: the same engine-level traversal over the same ctx.db reads, served here by better-sqlite3 through this host's per-shard handle. One process and one disk, so a deep expansion is if anything cheaper than on workerd; what it is not is a platform feature",
         },
-        cronTriggers: {
+        cronWorkflowTriggers: {
             level: "unsupported",
-            note: "No runtime walks the generated LUNORA_CRONS map into SchedulerHost.cron, so the conformance suite is that method's only caller and a declared cron does not fire on this host. Gate-bearing: codegen refuses an app that declares one here rather than letting it deploy green and never run. Schedule the work explicitly with ctx.scheduler.runAfter/runAt instead",
+            note: "The scheduler host dispatches a declared cron to a function only: nothing on this host starts a workflow instance from a tick. Gate-bearing: codegen refuses a cronJobs() entry with a workflow target on this target, and createNodePlatform still refuses one at construction as a backstop. Schedule a function that calls ctx.workflows.get(name).create() instead",
+        },
+        cronTriggers: {
+            level: "emulated",
+            note: "createNodePlatform's crons option takes the generated LUNORA_CRONS map and arms each job on the scheduler host's durable cron table, keyed by job name, so two jobs on one schedule and function stay apart and a job the app stops declaring is deleted at the next start. Exactly one process should pass crons; it owns the declared set, and other processes' timers see a changed row only when they next fire. Only a process that passes crons manages that set: one that omits it (an admin script on the same file) neither fires nor deletes declared jobs, and a running server whose declared job another process removed logs that and stops firing it. A schedule with no next occurrence is refused at construction. A tick goes through the same onDispatch delivery a scheduled job does, under its own idempotency id. setTimeout over a durable row, not a platform trigger: a tick that falls while the process is down is skipped, not delivered late, and a failed tick is logged with its job, error and next run, and dropped rather than retried. Schedules are UTC, as on Cloudflare. A run that outlasts the interval skips the ticks it covers instead of overlapping itself, the outcome Cloudflare's per-job lease gives, but with no SchedulerDO the skip is not recorded: there is no run history and no deployment pause. Two processes on one database file both fire every tick. A job that targets a workflow is rated separately, under cronWorkflowTriggers",
         },
         authJurisdictionMove: {
             level: "unsupported",
@@ -244,8 +248,8 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "The queue tier this host lacked when the rating was written now exists (createNodeQueueHost), but nothing here composes a @lunora/mail transport or the queued-send consumer, so a send would be accepted and never delivered",
         },
         secrets: {
-            level: "unsupported",
-            note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars). Gate-bearing, and it has to be: ctx.secrets is a core built-in spliced into every context, so codegen refuses an app that reads it on this target instead of emitting a surface that throws on first use",
+            level: "emulated",
+            note: "createNodeSecretBindings(names) (@lunora/platform-node) builds one binding per named secret over process.env, spread into the env the worker and shard are built over, so ctx.secrets.get(name) reads that variable when called and rejects if it is unset or empty. Only listed names are bound, as only listed secrets_store_secrets[] are on Cloudflare, and any name with the reserved LUNORA prefix is refused: the runtime reads those env vars as plain strings, which a binding spread over one would replace. Emulated, not native: environment variables are not a secrets store, so a value is plaintext to anything that can read the process environment, there is no per-secret access control or audit, and a rotated value needs a restart",
         },
         secretValues: {
             level: "unsupported",
@@ -259,7 +263,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Each subscription is a createNodeQueueHost queue, so a publish is one durable insert per subscription into _lunora_queue_messages. A subscription handler's message.run goes through the same in-process dispatch route as the queues row, and needs the same wiring",
         },
-        hyperdrive: { level: "unsupported", note: "No connection-pooling binding implemented" },
+        hyperdrive: {
+            level: "emulated",
+            note: "createNodeHyperdrive (@lunora/platform-node) builds the HYPERDRIVE binding from DATABASE_URL (postgres:, postgresql:, mysql: or mariadb:, plus the libpq Unix-socket form postgres:///db?host=/socket/dir), so the app's own .hyperdrive((env) => …) wiring builds ctx.sql from it unchanged. A URL with any TLS option other than an explicit off (sslmode=prefer or require, ssl=true, sslrootcert=…) keeps it in connectionString only: Cloudflare's binding has no TLS field to mirror, so the binding's discrete host/port/user/password/database fields throw rather than let a driver built from them connect without TLS; sslmode=disable and ssl=false keep them. Emulated, not native: nothing sits between the driver and the database, so there is no edge connection pool and no query cache, and the driver's own pool settings are the only ones that apply",
+        },
         httpCache: {
             level: "unsupported",
             note: "Nothing sits in front of this host to cache its responses, and Node exposes no Web Cache API global — the runtime's REST edge cache finds no HttpCacheLike here and degrades to emitting Cache-Control alone, which browsers and any CDN in front still honour",

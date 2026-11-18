@@ -276,6 +276,25 @@ describe("discover/crons", () => {
         expect(() => discoverCrons(newProject(), workdir)).toThrow(/invalid cron expression/u);
     });
 
+    it("throws at build time on a raw cron expression that parses but never occurs", () => {
+        expect.assertions(1);
+
+        // April, June, September and November have no 31st: the parser accepts the
+        // expression and only `next()` finds there is no date to fire on.
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { internal } from "./_generated/internal.js";
+            const crons = cronJobs();
+            crons.cron("thirty-first", "0 0 31 4,6,9,11 *", internal.a.b, {});
+            export default crons;
+        `,
+        );
+
+        expect(() => discoverCrons(newProject(), workdir)).toThrow(/Cron job "thirty-first" has an invalid cron expression/u);
+    });
+
     it("names the job + file:line when an interval.seconds schedule is rejected (build path)", () => {
         expect.assertions(4);
 

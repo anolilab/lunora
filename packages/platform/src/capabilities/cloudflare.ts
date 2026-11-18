@@ -112,6 +112,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Lunora's own flag, not a platform primitive: held in the SchedulerDO, whose alarm holds jobs while it is set. The worker re-reads it per isolate every 5 s for the router (503 DEPLOYMENT_PAUSED), cron (skipped, recorded) and queue consumer (each message re-sent as a delayed copy with a fresh attempt budget). A pause reaches every named scheduler instance: instances register durably with the configured one in its SchedulerDO storage the first time they are addressed, the admin route fans a pause or resume out to all of them (a partial failure is reported, and repeating the command converges), and an instance first addressed during a pause starts paused. Realtime sockets opened before the pause keep serving subscriptions until they reconnect. An app without a SchedulerDO cannot pause",
         },
+        cronWorkflowTriggers: {
+            level: "native",
+            note: "The same scheduled() handler: for a job with a workflow target it starts a new instance through the workflow's ctx.exports entry, with the job's args as params, under the same SchedulerDO-held lease and run history as a function job",
+        },
         cronTriggers: {
             level: "native",
             note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself. Each job runs under a SchedulerDO-held lease, so a tick landing in any isolate while the previous run is still going is skipped, and every fire (run, skip, failure) is recorded in the SchedulerDO",

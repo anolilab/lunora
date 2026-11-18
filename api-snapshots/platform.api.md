@@ -299,6 +299,7 @@ interface PlatformCapabilities {
         containers?: Capability;
         containerSandboxTools?: Capability;
         cronTriggers?: Capability;
+        cronWorkflowTriggers?: Capability;
         crossShardFanout?: Capability;
         dataExportSections?: Capability;
         deliveryAuthorization?: Capability;

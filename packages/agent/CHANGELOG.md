@@ -1,3 +1,7 @@
+## @lunora/agent [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.283...@lunora/agent@1.0.0-alpha.284) (2026-11-18)
+
+- Updated dependency @lunora/platform@1.0.0-alpha.81
+
 ## @lunora/agent [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.282...@lunora/agent@1.0.0-alpha.283) (2026-11-14)
 
 - fix: land five small audit fixes (#1538)
