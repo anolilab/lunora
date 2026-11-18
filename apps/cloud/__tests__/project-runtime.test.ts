@@ -274,20 +274,21 @@ describe("deployments", () => {
         });
     });
 
-    it("checks the alias's Worker whatever the kind, so a preview key cannot switch production's runtime", async () => {
+    it("checks the alias's Worker whatever the kind, so a dev key cannot switch a preview's runtime", async () => {
         expect.assertions(1);
 
         const { ctx } = makeCtx({
             aliasOwnership: [],
             halts: [],
             organizations: [{ _id: ORG }],
-            deployments: [live()],
+            deployments: [{ ...live(), kind: "preview" }],
             members: [owner(ORG)],
             projects: [{ _id: "prj_1", organizationId: ORG, slug: "web" }],
         });
 
+        // A production alias refuses a dev or preview release outright (`deployments-alias.test.ts`).
         await expect(
-            createDeployment.handler(ctx, { kind: "preview", organizationId: ORG as never, projectId: "prj_1" as never, runtime: "worker", scriptName: "web" }),
+            createDeployment.handler(ctx, { kind: "dev", organizationId: ORG as never, projectId: "prj_1" as never, runtime: "worker", scriptName: "web" }),
         ).rejects.toMatchObject({ code: "CONFLICT" });
     });
 

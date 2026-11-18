@@ -143,3 +143,61 @@ describe("deployments.create while the alias is torn down", () => {
         await expect(release(NOW - 31 * 60_000).created).resolves.toMatchObject({ deploymentId: "deployments_new" });
     });
 });
+
+describe("deployments.create onto a production alias", () => {
+    const NOW = 1_700_000_000_000;
+    const deploy = (
+        kind: "dev" | "preview" | "production",
+        scriptName: string,
+        project: Record<string, unknown> = {},
+        deployments: Record<string, unknown>[] = [],
+    ) => {
+        const { ctx } = makeFullCtx(
+            {
+                aliasOwnership: [
+                    { _id: "ao_1", alias: "web", organizationId: "org_1", projectId: "prj_1" },
+                    { _id: "ao_2", alias: "web-pr-feat-x", organizationId: "org_1", projectId: "prj_1" },
+                ],
+                deployments,
+                halts: [],
+                members: [owner("org_1")],
+                organizations: [{ _id: "org_1" }],
+                projects: [{ _id: "prj_1", organizationId: "org_1", slug: "web", ...project }],
+            },
+            { now: NOW },
+        );
+
+        return createDeployment.handler(ctx, { kind, organizationId: "org_1" as never, projectId: "prj_1" as never, scriptName });
+    };
+
+    it("refuses a preview or dev release onto the project's reserved production alias", async () => {
+        expect.assertions(2);
+
+        await expect(deploy("preview", "web", { productionAlias: "web" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(deploy("dev", "web", { productionAlias: "web" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("refuses a preview release onto an alias a production release runs on", async () => {
+        expect.assertions(1);
+
+        const live = {
+            _id: "dep_1",
+            createdAt: NOW - 1,
+            kind: "production",
+            organizationId: "org_1",
+            projectId: "prj_1",
+            scriptName: "web",
+            status: "live",
+            version: 1,
+        };
+
+        await expect(deploy("preview", "web", {}, [live])).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("still records a production release on the production alias and a preview on its own", async () => {
+        expect.assertions(2);
+
+        await expect(deploy("production", "web", { productionAlias: "web" })).resolves.toMatchObject({ deploymentId: "deployments_new" });
+        await expect(deploy("preview", "web-pr-feat-x", { productionAlias: "web" })).resolves.toMatchObject({ deploymentId: "deployments_new" });
+    });
+});

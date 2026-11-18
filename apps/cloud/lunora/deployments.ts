@@ -118,6 +118,37 @@ const assertKeepsWorkerData = (
     return dropped;
 };
 
+/**
+ * Refuse a non-production release onto a production alias. One alias is one
+ * Worker, converged in place whatever the kind, while the key's scope ceiling and
+ * `liveRelease` both go by kind: a preview key naming the production alias would
+ * replace production code, and leave production no rollback target. The
+ * project's reserved and active aliases are production's before any row says so.
+ * @throws {LunoraError} `FORBIDDEN` when a dev or preview release names a production alias.
+ */
+const assertNotProductionAlias = (
+    project: Pick<Document_<"projects">, "activeScriptName" | "productionAlias">,
+    existing: ReadonlyArray<DeploymentRow>,
+    alias: string,
+    kind: DeploymentRow["kind"],
+): void => {
+    if (kind === "production") {
+        return;
+    }
+
+    const production =
+        alias === project.productionAlias ||
+        alias === project.activeScriptName ||
+        existing.some((row) => (row.alias ?? row.scriptName) === alias && row.kind === "production" && row.status !== "destroyed");
+
+    if (production) {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `${alias} is this project's production Worker and cannot take a ${kind} release; deploy ${kind} under its own script name`,
+        );
+    }
+};
+
 /** Every class the alias's converge record says may be on its Worker, by name: `workerClasses` and every pending converge's. */
 const convergedClasses = async (context: QueryContext, alias: string): Promise<string[]> => {
     const { page } = await context.db.aliasOwnership.findMany({ where: { alias } });
@@ -484,6 +515,9 @@ export const create = mutation
         // release itself is the payload the deploy handler stores under this id.
         // Every page: the data-loss guard and the version number need the alias's whole history, not its first 1000 rows.
         const existing = await collectAll<DeploymentRow>((cursor) => context.db.deployments.findMany({ cursor, where: { projectId: arguments_.projectId } })); // secret-scanner:allow -- domain field name
+
+        assertNotProductionAlias(project, existing, arguments_.scriptName, arguments_.kind);
+
         const version = 1 + Math.max(0, ...existing.filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
         const previous = await liveRelease(context, { kind: arguments_.kind, projectId: arguments_.projectId, scriptName: arguments_.scriptName }); // secret-scanner:allow -- domain field name
 
