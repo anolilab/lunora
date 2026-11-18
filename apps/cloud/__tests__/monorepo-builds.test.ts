@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { complete, DELIVERY_TTL_MS, recordPush, releaseTarget } from "../lunora/builds";
-import { updateBuildSettings } from "../lunora/projects";
+import { byGithubRepo, create, updateBuildSettings } from "../lunora/projects";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
@@ -29,6 +29,31 @@ const world = (projectRow: Row, builds: Row[] = []): Record<string, Row[]> => {
 };
 
 const push = { branch: "main", commitSha: "abc123", installationId: 42, repository: "acme/mono", trigger: "push" as const };
+
+/** GitHub sends `repository.full_name` in its own casing; a project connected in another must still build. */
+describe("repository casing", () => {
+    it("stores the connected repository lowercased", async () => {
+        const { ctx, ops } = makeCtx({ aliasOwnership: [], members: [owner(ORG)], payment_subscriptions: [], projects: [] });
+
+        await create.handler(ctx, { githubRepo: "Acme/Mono", name: "Web", organizationId: ORG as never, slug: "web" });
+
+        expect(ops).toContainEqual(expect.objectContaining({ document: expect.objectContaining({ githubRepo: "acme/mono" }) as unknown, table: "projects" }));
+    });
+
+    it("builds a push whose repository casing differs from the stored one", async () => {
+        const { ctx } = makeCtx(world(project()));
+
+        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" }, repository: "ACME/Mono" })).resolves.toMatchObject([
+            { projectId: "prj_1" },
+        ]);
+    });
+
+    it("resolves a pull request's project whatever the repository casing", async () => {
+        const { ctx } = makeCtx(world(project()));
+
+        await expect(byGithubRepo.handler(ctx, { repository: "Acme/MONO" })).resolves.toMatchObject({ projectId: "prj_1" });
+    });
+});
 
 describe("builds.recordPush path filter", () => {
     it("records a skipped build with the reason when no watched path changed", async () => {

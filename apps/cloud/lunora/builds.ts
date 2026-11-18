@@ -5,6 +5,7 @@ import { decideBuild, MAX_CHANGED_FILES } from "../src/builds/paths";
 import type { BuildReleaseTarget } from "../src/builds/release";
 import type { BuildAdvisory } from "../src/builds/runner";
 import { isUnconfiguredInfrastructure, MAX_BUILD_ADVISORIES } from "../src/builds/runner";
+import { githubRepoKey } from "../src/github/webhook";
 import type { ProjectRuntime } from "../src/project-runtime";
 import { runtimeColumn, storedRuntime } from "../src/project-runtime";
 import type { DataModel, Doc as Document_, Id } from "./_generated/dataModel";
@@ -353,7 +354,7 @@ export const recordPush = internalMutation
             args: { before, branch, changes, commitSha, deliveryId, fromFork, installationId, pullRequest, repository, trigger },
         }): Promise<RecordPushResult> => {
             const [{ page }, { page: installationPage }] = await Promise.all([
-                context.db.projects.findMany({ where: { githubRepo: repository } }),
+                context.db.projects.findMany({ where: { githubRepo: githubRepoKey(repository) } }),
                 context.db.githubInstallations.findMany({ where: { installationId } }),
             ]);
 

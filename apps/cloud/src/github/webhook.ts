@@ -13,6 +13,13 @@ import type { CommitStatus } from "./app";
 
 const encoder = new TextEncoder();
 
+/**
+ * The form a repository (`owner/name`) is stored and looked up in. GitHub resolves
+ * names case-insensitively and sends `repository.full_name` in its own casing, so a
+ * project connected as `Acme/App` must match a webhook for `acme/app`.
+ */
+export const githubRepoKey = (repository: string): string => repository.toLowerCase();
+
 const toHex = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /**

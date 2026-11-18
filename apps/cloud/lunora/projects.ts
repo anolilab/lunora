@@ -4,6 +4,7 @@ import { normalizeRootDirectory, normalizeWatchPaths } from "../src/builds/paths
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import { productionAliasCandidates } from "../src/deploy/production-alias";
 import { assertStatusMove } from "../src/deploy/status-transitions";
+import { githubRepoKey } from "../src/github/webhook";
 import type { ProjectRuntime } from "../src/project-runtime";
 import { runtimeColumn, storedRuntime } from "../src/project-runtime";
 import type { TargetId } from "../src/provision-contract";
@@ -140,7 +141,7 @@ export const listByOrg = query
 export const byGithubRepo = internalQuery
     .input({ repository: boundedString(LIMITS.token) })
     .query(async ({ ctx: context, args: { repository } }): Promise<null | { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string }> => {
-        const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
+        const { page } = await context.db.projects.findMany({ where: { githubRepo: githubRepoKey(repository) } });
         const project = page[0];
 
         return project ? { organizationId: project.organizationId, projectId: project._id, slug: project.slug } : null; // secret-scanner:allow -- domain field name
@@ -222,7 +223,7 @@ export const create = mutation
         const projectId = await context.db.insert("projects", {
             createdAt: context.now,
             framework: arguments_.framework,
-            githubRepo: arguments_.githubRepo,
+            githubRepo: arguments_.githubRepo === undefined ? undefined : githubRepoKey(arguments_.githubRepo),
             name: arguments_.name,
             organizationId: member.organizationId,
             ...runtimeColumn(arguments_.runtime),
