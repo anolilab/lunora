@@ -19,7 +19,7 @@ import { NODE_CAPABILITIES } from "@lunora/platform";
 
 import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
 import type { Drainable, DrainOptions, DrainResult } from "./drain-deadline";
-import { drainTogether, settlesBefore, startDrainDeadline } from "./drain-deadline";
+import { drainTimeoutMs, drainTogether, settlesBefore, startDrainDeadline } from "./drain-deadline";
 import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-route";
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
@@ -527,6 +527,8 @@ export const createNodePlatform = <
             // Timers are stopped first, before the first pass: a job, cron tick or alarm that fired after the drain found
             // everything idle would run into the forced close. Their rows stay, so each fires after a restart.
             drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
+                // Checked before anything is stopped: a refused timeout must leave jobs, crons and alarms running.
+                drainTimeoutMs(drainOptions);
                 suspendScheduler();
                 suspendHostAlarms();
                 registry.suspendAlarms();

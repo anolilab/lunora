@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { resolveShard } from "@lunora/platform";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -105,6 +106,45 @@ describe("createNodePlatform declared crons", () => {
             expect(after).toHaveBeenCalledWith("reports:tick", {});
         } finally {
             second.close();
+        }
+    });
+
+    it("keeps jobs, crons and alarms running when a drain is refused for a bad timeout", async () => {
+        expect.assertions(4);
+
+        const onDispatch = dispatchSpy();
+        const fired: string[] = [];
+        const platform = createNodePlatform({
+            crons: { "* * * * *": [{ args: {}, functionPath: "reports:tick", name: "tick" }] },
+            // Optional: the platform's own host calls it with no shard, a registry shard with one.
+            onAlarm: (shard?: { shardKey: string }) => {
+                fired.push(shard?.shardKey ?? "platform");
+            },
+            onDispatch: async (functionPath, args) => {
+                onDispatch(functionPath, args);
+            },
+            onFetch: async (_request, shard) => {
+                await shard.shard.alarms.set(Date.now() + 1000);
+
+                return new Response("armed");
+            },
+            path: join(directory, "shard.sqlite3"),
+        });
+
+        try {
+            await resolveShard(platform.directory, "a").fetch(new Request("https://shard.internal/rpc"));
+            await platform.scheduler.schedule("reports:once", {}, { delayMs: 10_000 });
+
+            await expect(platform.drain({ timeoutMs: -1 })).rejects.toThrow("a drain timeoutMs must be a whole number of milliseconds");
+
+            await vi.advanceTimersByTimeAsync(MINUTE);
+
+            // Refused before anything was stopped, so everything still fires.
+            expect(onDispatch).toHaveBeenCalledWith("reports:once", {});
+            expect(onDispatch).toHaveBeenCalledWith("reports:tick", {});
+            expect(fired).toStrictEqual(["a"]);
+        } finally {
+            platform.close();
         }
     });
 

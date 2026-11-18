@@ -54,7 +54,11 @@ interface DrainDeadline {
 /** The longest delay a Node timer honours: a larger one, or a non-integer, runs after 1 ms. */
 const MAX_DRAIN_TIMEOUT_MS = 2_147_483_647;
 
-const startDrainDeadline = (options: DrainOptions = {}): DrainDeadline => {
+/**
+ * The drain's timeout, or a throw when it is not one Node can honour. Separate from {@link startDrainDeadline} so a caller that
+ * changes state before draining (the platform stops its timers) can refuse a bad value before changing anything.
+ */
+const drainTimeoutMs = (options: DrainOptions = {}): number => {
     const timeoutMs = options.timeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
 
     // Refused rather than clamped: a timeout Node would run after 1 ms cuts the drain off at once, the opposite of the intent.
@@ -63,6 +67,12 @@ const startDrainDeadline = (options: DrainOptions = {}): DrainDeadline => {
             `@lunora/platform-node: a drain timeoutMs must be a whole number of milliseconds from 0 to ${String(MAX_DRAIN_TIMEOUT_MS)}, and it is ${String(timeoutMs)}`,
         );
     }
+
+    return timeoutMs;
+};
+
+const startDrainDeadline = (options: DrainOptions = {}): DrainDeadline => {
+    const timeoutMs = drainTimeoutMs(options);
 
     let expire: () => void = () => {};
     const expired = new Promise<void>((resolve) => {
@@ -160,4 +170,4 @@ const settlesBefore = async (work: Promise<unknown>, deadline: DrainDeadline): P
     ]);
 
 export type { Drainable, DrainDeadline, DrainOptions, DrainResult, DrainTimer };
-export { DEFAULT_DRAIN_TIMEOUT_MS, drainTogether, settlesBefore, startDrainDeadline, timerBoundTo };
+export { DEFAULT_DRAIN_TIMEOUT_MS, drainTimeoutMs, drainTogether, settlesBefore, startDrainDeadline, timerBoundTo };
