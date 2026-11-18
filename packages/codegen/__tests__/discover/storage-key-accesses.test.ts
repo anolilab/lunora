@@ -1015,6 +1015,64 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it.each([
+        ["writes the compared field", "m.userId = ctx.auth.userId;"],
+        ["increments the compared field", "m.userId++;"],
+        ["deletes the compared field", "delete m.userId;"],
+        ["destructures into the compared field", "({ id: m.userId } = { id: ctx.auth.userId });"],
+        ["hands the row to a call", "mutate(m);"],
+    ])("reports an inline guard whose filter %s before comparing it", (_label, write_) => {
+        expect.assertions(1);
+
+        const filter = `(m) => { ${write_} return m.userId === ctx.auth.userId && m.channelId === message.channelId; }`;
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts an inline guard whose filter writes only an unrelated row field", () => {
+        expect.assertions(1);
+
+        const filter = "(m) => { m.seen = true; return m.userId === ctx.auth.userId && m.channelId === message.channelId; }";
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        [
+            "a local filter with a trailing spread",
+            "const filter = { userId: ctx.auth.userId, ...args.where };",
+            "where: { AND: [filter, { channelId: message.channelId }] }",
+        ],
+        ["an inline where with a trailing spread", "", "where: { userId: ctx.auth.userId, channelId: message.channelId, ...args.where }"],
+        ["a query spread after its where", "", "where: { userId: ctx.auth.userId, channelId: message.channelId }, ...args.query"],
+        ["a duplicate key after the identity", "", "where: { userId: ctx.auth.userId, channelId: message.channelId, userId: args.victim }"],
+    ])("reports an inline guard whose identity %s can override", (_label, local, query) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`${local}\n    ${inlineGuard(`ctx.db.members.findFirst({ ${query} })`)}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        [
+            "a local filter with a leading spread",
+            "const filter = { ...args.where, userId: ctx.auth.userId };",
+            "where: { AND: [filter, { channelId: message.channelId }] }",
+        ],
+        ["an inline where with a leading spread", "", "where: { ...args.where, userId: ctx.auth.userId, channelId: message.channelId }"],
+    ])("accepts an inline guard whose identity follows %s", (_label, local, query) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`${local}\n    ${inlineGuard(`ctx.db.members.findFirst({ ${query} })`)}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("reports an inline guard whose filter repoints its row parameter", () => {
         expect.assertions(1);
 

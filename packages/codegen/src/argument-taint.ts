@@ -657,6 +657,204 @@ const sitsInUnpinningBranch = (node: TsNode): boolean => {
     return false;
 };
 
+const isAssignmentOperator = (kind: SyntaxKind): boolean => kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
+
+/**
+ * Whether `node` is written: the target of an assignment, including from inside a destructuring pattern
+ * (`({ a: row.ownerId } = x)`, `[row.ownerId] = x`), a `for…of` / `for…in` target, or the operand of
+ * `delete`, `++` or `--`.
+ */
+const isWriteTarget = (node: TsNode): boolean => {
+    let current = node;
+    let parent = current.getParent();
+
+    // Climb out of any pattern the node sits in as a target; a value position in an object literal climbs too, which is
+    // harmless: it only ends in a write when that literal is itself an assignment target.
+    while (
+        Node.isParenthesizedExpression(parent) ||
+        Node.isArrayLiteralExpression(parent) ||
+        Node.isObjectLiteralExpression(parent) ||
+        Node.isSpreadElement(parent) ||
+        Node.isSpreadAssignment(parent) ||
+        Node.isShorthandPropertyAssignment(parent) ||
+        (Node.isPropertyAssignment(parent) && parent.getNameNode() !== current)
+    ) {
+        current = parent;
+        parent = current.getParent();
+    }
+
+    if (Node.isBinaryExpression(parent)) {
+        return parent.getLeft() === current && isAssignmentOperator(parent.getOperatorToken().getKind());
+    }
+
+    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
+        return parent.getInitializer() === current;
+    }
+
+    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
+        const operator = parent.getOperatorToken();
+
+        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
+    }
+
+    return Node.isDeleteExpression(parent);
+};
+
+/** A path of names read off the row; an `undefined` segment is a computed key, which may be any name. */
+type RowPath = ReadonlyArray<string | undefined>;
+
+/** Whether `path` and `other` may name the same value, or one an object holding the other. */
+const overlaps = (path: RowPath, other: RowPath): boolean =>
+    path.every((segment, index) => index >= other.length || segment === undefined || other[index] === undefined || segment === other[index]);
+
+/** Whether `path` names an object that holds `other`, rather than `other` itself or a value below it. */
+const holds = (path: RowPath, other: RowPath): boolean => path.length < other.length && overlaps(path, other);
+
+/**
+ * The longest property/element access chain `use` heads, through value-preserving wrappers, and the names it reads
+ * (`undefined` for a computed key).
+ */
+const accessChainFrom = (use: Identifier): { node: TsNode; path: (string | undefined)[] } => {
+    const path: (string | undefined)[] = [];
+    let node: TsNode = valueWrapperOf(use);
+
+    for (let parent = node.getParent(); ; parent = node.getParent()) {
+        if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === node) {
+            path.push(parent.getName());
+        } else if (Node.isElementAccessExpression(parent) && parent.getExpression() === node) {
+            const argument = unwrapExpression(parent.getArgumentExpression());
+
+            path.push(Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument) ? argument.getLiteralValue() : undefined);
+        } else {
+            return { node, path };
+        }
+
+        node = valueWrapperOf(parent);
+    }
+};
+
+/** Whether `node` is the callee of the call that is its parent (`row.save()`), so the object it is read off runs as `this`. */
+const isInvoked = (node: TsNode): boolean => {
+    const parent = node.getParent();
+
+    return Node.isCallExpression(parent) && parent.getExpression() === node;
+};
+
+/** Whether `node` only tests an object (`!row`, `row === null`, `typeof row`), which cannot change it. */
+const isTestOf = (node: TsNode): boolean => {
+    const parent = node.getParent();
+
+    return (
+        (Node.isPrefixUnaryExpression(parent) && parent.getOperatorToken() === SyntaxKind.ExclamationToken) ||
+        (Node.isBinaryExpression(parent) && EQUALITY_OPERATORS.has(parent.getOperatorToken().getKind())) ||
+        Node.isTypeOfExpression(parent)
+    );
+};
+
+/**
+ * Whether `node`, standing for the row at `path`, only tests the row itself (`!row`, `row === null`): that reads no
+ * field. A field on either side of a comparison (`m.channelId === row.channelId`) is one the guard depends on.
+ */
+const isBareRowTest = (node: TsNode, path: RowPath): boolean => path.length === 0 && isTestOf(node);
+
+/**
+ * Whether an object at `path` holding the guarded values at `heldPaths`, used as `node`, only has them read: tested,
+ * returned from `owner` (the function that declares the binding), or copied by a spread or a destructuring. Any call
+ * is an escape, `JSON.stringify` included: it runs the row's `toJSON` and its replacer, either of which can write. A copy is shallow, so it is
+ * read-only only while every held value sits directly on the object: spreading `row` for a key at `row.meta.key`
+ * shares `row.meta`, and `copy.meta.key = …` then changes the key unseen.
+ */
+const isReadOnlyHolderUse = (node: TsNode, path: RowPath, heldPaths: ReadonlyArray<RowPath>, owner: FunctionNode | undefined): boolean => {
+    const parent = node.getParent();
+    // A declaration whose name is a pattern can only hold `node` as its initializer.
+    const isCopy = Node.isSpreadAssignment(parent) || (Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode()));
+
+    if (isCopy) {
+        return heldPaths.every((held) => held.length === path.length + 1);
+    }
+
+    // A `return` ends the function that owns the binding, so nothing after it there runs; one from a nested function
+    // hands its caller an alias this check never sees.
+    const returnsFromOwner = Node.isReturnStatement(parent) && owner !== undefined && enclosingFunctionOf(parent)?.compilerNode === owner.compilerNode;
+
+    return isTestOf(node) || returnsFromOwner;
+};
+
+/**
+ * Whether `use`, a reference to the guarded row, leaves every value at `guardedPaths` (the key, and each field the
+ * guard read) as the guard saw it. A write that may reach one (`row.key = …`, `row.channelId = args.channelId`,
+ * `({ key: row.key } = args)`, `delete row.key`) changes it, and so can any code handed an object holding one: a call
+ * argument (`Object.assign(row, args)`, `mutate(row)`), a method invoked on it, or an alias. A holder may still be
+ * read without being handed on (see {@link isReadOnlyHolderUse}). `prefix` is the row path `use` itself stands for: `[]`
+ * for the row, `["meta"]` for a helper parameter that received `row.meta`.
+ */
+const keepsGuardedValues = (use: Identifier, guardedPaths: ReadonlyArray<RowPath>, prefix: RowPath = []): boolean => {
+    const { node, path: chainPath } = accessChainFrom(use);
+    const path = [...prefix, ...chainPath];
+
+    // Assigning the binding itself (`channelId = "general"` in a helper) rebinds a local; it writes nothing into the
+    // row. Whether that may run before the check is judged where the guard is found.
+    if (isWriteTarget(node)) {
+        return chainPath.length === 0 || !guardedPaths.some((guardedPath) => overlaps(path, guardedPath));
+    }
+
+    // A method invoked on a holder (`row.save()`) runs with the holder as `this`; one on a guarded value itself cannot repoint it.
+    if (isInvoked(node)) {
+        const holder = path.slice(0, -1);
+
+        return chainPath.length === 0 || !guardedPaths.some((guardedPath) => holds(holder, guardedPath));
+    }
+
+    const heldPaths = guardedPaths.filter((guardedPath) => holds(path, guardedPath));
+
+    const declaration = declarationOf(use);
+
+    return heldPaths.length === 0 || isReadOnlyHolderUse(node, path, heldPaths, declaration === undefined ? undefined : enclosingFunctionOf(declaration));
+};
+
+/**
+ * Whether a later member of `object` can replace `property` at runtime: a spread, the same key written
+ * again, or a computed key whose name is only known at runtime (`[args.field]: …`).
+ */
+const isOverriddenLater = (object: ObjectLiteralExpression, property: ObjectLiteralElementLike): boolean => {
+    const members = object.getProperties();
+    const key = Node.isSpreadAssignment(property) ? undefined : propertyKeyName(property);
+
+    return members.slice(members.indexOf(property) + 1).some((later) => {
+        if (Node.isSpreadAssignment(later)) {
+            return true;
+        }
+
+        const laterKey = staticPropertyName(later.getNameNode());
+
+        return laterKey === undefined || laterKey === key;
+    });
+};
+
+/**
+ * Whether a member on the way from `node` up to its query call or declaration can be replaced at runtime: a later
+ * spread, duplicate key or computed key in the same object literal (`{ userId: uid, ...args.where }`).
+ */
+const isOverriddenOnTheWay = (node: TsNode): boolean => {
+    for (
+        let current: TsNode | undefined = node;
+        current !== undefined && !Node.isCallExpression(current) && !Node.isVariableDeclaration(current) && !isFunctionNode(current);
+        current = current.getParent()
+    ) {
+        const object = current.getParent();
+
+        if (
+            (Node.isPropertyAssignment(current) || Node.isShorthandPropertyAssignment(current)) &&
+            Node.isObjectLiteralExpression(object) &&
+            isOverriddenLater(object, current)
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 /**
  * Whether `node`, a member of a query object, sits in an argument of a `ctx.db` read: every enclosing object, array
  * and property up to the call belongs to the query. In any other call's argument (`mutate({ where: filter })`) the
@@ -740,53 +938,11 @@ const isCallerOnlyInList = (list: TsNode): boolean => {
                 Node.isPropertyAssignment(property) &&
                 staticPropertyName(property.getNameNode()) === "in" &&
                 !sitsInUnpinningBranch(property) &&
-                isInDatabaseReadArgument(property)
+                isInDatabaseReadArgument(property) &&
+                !isOverriddenOnTheWay(property)
             );
         })
     );
-};
-
-const isAssignmentOperator = (kind: SyntaxKind): boolean => kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
-
-/**
- * Whether `node` is written: the target of an assignment, including from inside a destructuring pattern
- * (`({ a: row.ownerId } = x)`, `[row.ownerId] = x`), a `for…of` / `for…in` target, or the operand of
- * `delete`, `++` or `--`.
- */
-const isWriteTarget = (node: TsNode): boolean => {
-    let current = node;
-    let parent = current.getParent();
-
-    // Climb out of any pattern the node sits in as a target; a value position in an object literal climbs too, which is
-    // harmless: it only ends in a write when that literal is itself an assignment target.
-    while (
-        Node.isParenthesizedExpression(parent) ||
-        Node.isArrayLiteralExpression(parent) ||
-        Node.isObjectLiteralExpression(parent) ||
-        Node.isSpreadElement(parent) ||
-        Node.isSpreadAssignment(parent) ||
-        Node.isShorthandPropertyAssignment(parent) ||
-        (Node.isPropertyAssignment(parent) && parent.getNameNode() !== current)
-    ) {
-        current = parent;
-        parent = current.getParent();
-    }
-
-    if (Node.isBinaryExpression(parent)) {
-        return parent.getLeft() === current && isAssignmentOperator(parent.getOperatorToken().getKind());
-    }
-
-    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
-        return parent.getInitializer() === current;
-    }
-
-    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
-        const operator = parent.getOperatorToken();
-
-        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
-    }
-
-    return Node.isDeleteExpression(parent);
 };
 
 /**
@@ -820,6 +976,20 @@ const isUndefaultedRowBinding = (element: BindingElement): boolean =>
     );
 
 /**
+ * Whether every use of the row binding `declaration` in `callback` leaves the field `root` reads (`m.userId`) as the
+ * row holds it: no write to it or an object holding it (`m.userId = uid`, `delete m.userId`, `({ userId: m.userId } =
+ * x)`), no method on a holder, and no holder handed to a call (`mutate(m)`). A write to another field is fine.
+ */
+const keepsRowField = (root: Identifier, declaration: TsNode | undefined, callback: TsNode): boolean => {
+    const fieldPath = accessChainFrom(root).path;
+
+    return callback
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .filter((identifier) => identifier.getParent() !== declaration && declarationOf(identifier)?.compilerNode === declaration?.compilerNode)
+        .every((use) => keepsGuardedValues(use, [fieldPath]));
+};
+
+/**
  * Whether `node` reads a field of the row a filter callback is handed (`m.userId` in `(m) => …`): only then does an
  * identity equality pin the match. Against an args value, a constant or another identity (`uid === args.victim`) it is
  * a check that does not depend on the row at all.
@@ -841,7 +1011,7 @@ const isFilteredRowField = (node: TsNode, comparison: TsNode): boolean => {
         owner = declaration.getFirstAncestorByKind(SyntaxKind.Parameter)?.getParent();
     }
 
-    return owner !== undefined && owner === callback;
+    return owner !== undefined && owner === callback && Node.isIdentifier(root) && keepsRowField(root, declaration, owner);
 };
 
 /**
@@ -868,7 +1038,8 @@ const matchesCallerAt = (value: TsNode): boolean => {
             !NON_MATCHING_OPERATORS.has(key) &&
             !UNPINNING_KEYS.has(key) &&
             !sitsInUnpinningBranch(parent) &&
-            (isInDatabaseReadArgument(parent) || isInLocalQueryObject(parent))
+            (isInDatabaseReadArgument(parent) || isInLocalQueryObject(parent)) &&
+            !isOverriddenOnTheWay(parent)
         );
     }
 
@@ -956,7 +1127,12 @@ const isWholeFilterUse = (use: TsNode): boolean => {
     const parent = wrapped.getParent();
 
     if (Node.isPropertyAssignment(parent) || Node.isShorthandPropertyAssignment(parent)) {
-        return staticPropertyName(parent.getNameNode()) === "where" && !sitsInUnpinningBranch(parent) && isInDatabaseReadArgument(parent);
+        return (
+            staticPropertyName(parent.getNameNode()) === "where" &&
+            !sitsInUnpinningBranch(parent) &&
+            isInDatabaseReadArgument(parent) &&
+            !isOverriddenOnTheWay(parent)
+        );
     }
 
     if (Node.isArrayLiteralExpression(parent)) {
@@ -966,7 +1142,8 @@ const isWholeFilterUse = (use: TsNode): boolean => {
             Node.isPropertyAssignment(branches) &&
             staticPropertyName(branches.getNameNode()) === "AND" &&
             !sitsInUnpinningBranch(branches) &&
-            isInDatabaseReadArgument(branches)
+            isInDatabaseReadArgument(branches) &&
+            !isOverriddenOnTheWay(branches)
         );
     }
 
@@ -1140,25 +1317,6 @@ const equatesToCaller = (value: TsNode): boolean => {
     const eq = rest.length === 0 && Node.isPropertyAssignment(only) && propertyKeyName(only) === "eq" ? only.getInitializer() : undefined;
 
     return eq !== undefined && isCallerId(eq);
-};
-
-/**
- * Whether a later member of `object` can replace `property` at runtime: a spread, the same key written
- * again, or a computed key whose name is only known at runtime (`[args.field]: …`).
- */
-const isOverriddenLater = (object: ObjectLiteralExpression, property: ObjectLiteralElementLike): boolean => {
-    const members = object.getProperties();
-    const key = Node.isSpreadAssignment(property) ? undefined : propertyKeyName(property);
-
-    return members.slice(members.indexOf(property) + 1).some((later) => {
-        if (Node.isSpreadAssignment(later)) {
-            return true;
-        }
-
-        const laterKey = staticPropertyName(later.getNameNode());
-
-        return laterKey === undefined || laterKey === key;
-    });
 };
 
 /** Whether `object` has a member that runs code when the query is evaluated (a getter, setter or method), which can rewrite it. */
@@ -1542,118 +1700,6 @@ const rowDeclarationOf = (key: TsNode): { keyPath: ReadonlyArray<string>; row: V
     const readChain = Node.isCallExpression(read) && contextTrustPathOf(read.getExpression())?.[0] === "db" ? databaseChainOf(read) : undefined;
 
     return readChain !== undefined && singleRowReadOf(readChain) !== undefined ? { keyPath: access.path, row: declaration } : undefined;
-};
-
-/** A path of names read off the row; an `undefined` segment is a computed key, which may be any name. */
-type RowPath = ReadonlyArray<string | undefined>;
-
-/** Whether `path` and `other` may name the same value, or one an object holding the other. */
-const overlaps = (path: RowPath, other: RowPath): boolean =>
-    path.every((segment, index) => index >= other.length || segment === undefined || other[index] === undefined || segment === other[index]);
-
-/** Whether `path` names an object that holds `other`, rather than `other` itself or a value below it. */
-const holds = (path: RowPath, other: RowPath): boolean => path.length < other.length && overlaps(path, other);
-
-/**
- * The longest property/element access chain `use` heads, through value-preserving wrappers, and the names it reads
- * (`undefined` for a computed key).
- */
-const accessChainFrom = (use: Identifier): { node: TsNode; path: (string | undefined)[] } => {
-    const path: (string | undefined)[] = [];
-    let node: TsNode = valueWrapperOf(use);
-
-    for (let parent = node.getParent(); ; parent = node.getParent()) {
-        if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === node) {
-            path.push(parent.getName());
-        } else if (Node.isElementAccessExpression(parent) && parent.getExpression() === node) {
-            const argument = unwrapExpression(parent.getArgumentExpression());
-
-            path.push(Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument) ? argument.getLiteralValue() : undefined);
-        } else {
-            return { node, path };
-        }
-
-        node = valueWrapperOf(parent);
-    }
-};
-
-/** Whether `node` is the callee of the call that is its parent (`row.save()`), so the object it is read off runs as `this`. */
-const isInvoked = (node: TsNode): boolean => {
-    const parent = node.getParent();
-
-    return Node.isCallExpression(parent) && parent.getExpression() === node;
-};
-
-/** Whether `node` only tests an object (`!row`, `row === null`, `typeof row`), which cannot change it. */
-const isTestOf = (node: TsNode): boolean => {
-    const parent = node.getParent();
-
-    return (
-        (Node.isPrefixUnaryExpression(parent) && parent.getOperatorToken() === SyntaxKind.ExclamationToken) ||
-        (Node.isBinaryExpression(parent) && EQUALITY_OPERATORS.has(parent.getOperatorToken().getKind())) ||
-        Node.isTypeOfExpression(parent)
-    );
-};
-
-/**
- * Whether `node`, standing for the row at `path`, only tests the row itself (`!row`, `row === null`): that reads no
- * field. A field on either side of a comparison (`m.channelId === row.channelId`) is one the guard depends on.
- */
-const isBareRowTest = (node: TsNode, path: RowPath): boolean => path.length === 0 && isTestOf(node);
-
-/**
- * Whether an object at `path` holding the guarded values at `heldPaths`, used as `node`, only has them read: tested,
- * returned from `owner` (the function that declares the binding), or copied by a spread or a destructuring. Any call
- * is an escape, `JSON.stringify` included: it runs the row's `toJSON` and its replacer, either of which can write. A copy is shallow, so it is
- * read-only only while every held value sits directly on the object: spreading `row` for a key at `row.meta.key`
- * shares `row.meta`, and `copy.meta.key = …` then changes the key unseen.
- */
-const isReadOnlyHolderUse = (node: TsNode, path: RowPath, heldPaths: ReadonlyArray<RowPath>, owner: FunctionNode | undefined): boolean => {
-    const parent = node.getParent();
-    // A declaration whose name is a pattern can only hold `node` as its initializer.
-    const isCopy = Node.isSpreadAssignment(parent) || (Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode()));
-
-    if (isCopy) {
-        return heldPaths.every((held) => held.length === path.length + 1);
-    }
-
-    // A `return` ends the function that owns the binding, so nothing after it there runs; one from a nested function
-    // hands its caller an alias this check never sees.
-    const returnsFromOwner = Node.isReturnStatement(parent) && owner !== undefined && enclosingFunctionOf(parent)?.compilerNode === owner.compilerNode;
-
-    return isTestOf(node) || returnsFromOwner;
-};
-
-/**
- * Whether `use`, a reference to the guarded row, leaves every value at `guardedPaths` (the key, and each field the
- * guard read) as the guard saw it. A write that may reach one (`row.key = …`, `row.channelId = args.channelId`,
- * `({ key: row.key } = args)`, `delete row.key`) changes it, and so can any code handed an object holding one: a call
- * argument (`Object.assign(row, args)`, `mutate(row)`), a method invoked on it, or an alias. A holder may still be
- * read without being handed on (see {@link isReadOnlyHolderUse}). `prefix` is the row path `use` itself stands for: `[]`
- * for the row, `["meta"]` for a helper parameter that received `row.meta`.
- */
-const keepsGuardedValues = (use: Identifier, guardedPaths: ReadonlyArray<RowPath>, prefix: RowPath = []): boolean => {
-    const { node, path: chainPath } = accessChainFrom(use);
-    const path = [...prefix, ...chainPath];
-
-    // Assigning the binding itself (`channelId = "general"` in a helper) rebinds a local; it writes nothing into the
-    // row. Whether that may run before the check is judged where the guard is found.
-    if (isWriteTarget(node)) {
-        return chainPath.length === 0 || !guardedPaths.some((guardedPath) => overlaps(path, guardedPath));
-    }
-
-    // A method invoked on a holder (`row.save()`) runs with the holder as `this`; one on a guarded value itself cannot repoint it.
-    if (isInvoked(node)) {
-        const holder = path.slice(0, -1);
-
-        return chainPath.length === 0 || !guardedPaths.some((guardedPath) => holds(holder, guardedPath));
-    }
-
-    const heldPaths = guardedPaths.filter((guardedPath) => holds(path, guardedPath));
-
-    const declaration = declarationOf(use);
-
-    return heldPaths.length === 0 || isReadOnlyHolderUse(node, path, heldPaths, declaration === undefined ? undefined : enclosingFunctionOf(declaration));
 };
 
 /** A use of a helper parameter that received the row's value at `prefix` (`[]` for the whole row). */
