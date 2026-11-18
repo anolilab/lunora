@@ -1409,7 +1409,8 @@ describe("shard drain passes", () => {
         const hold = deferred();
         const platform = createNodePlatform({
             directory,
-            onAlarm: (shard) => {
+            // Optional: the platform's own host calls it with no shard, a registry shard with one.
+            onAlarm: (shard?: { shardKey: string }) => {
                 fired.push(shard?.shardKey ?? "platform");
             },
             onFetch: async (_request, shard) => {
