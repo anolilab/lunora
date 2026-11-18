@@ -260,7 +260,10 @@ export const deployDeps = (context: LunoraActionContext, environment: RouterEnv,
         recordProvisionFailure(environment.PLATFORM_METRICS, { cell, reason, step });
     };
 
-    return { ...release, analytics, backend, healthCheck, provisionFailed };
+    const executionContext = environment.__executionCtx;
+    const waitUntil = executionContext?.waitUntil?.bind(executionContext);
+
+    return { ...release, analytics, backend, healthCheck, provisionFailed, ...(waitUntil === undefined ? {} : { waitUntil }) };
 };
 
 type RouteHandler = (request: Request, environment: RouterEnv) => Promise<Response>;

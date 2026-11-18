@@ -217,22 +217,39 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
     // each status write, so a cut-over Worker would stay recorded at an earlier status.
     // Frames to a gone client are dropped instead.
     let open = true;
+    let sink: { close: () => void; enqueue: (chunk: Uint8Array) => void; error: (reason: unknown) => void } | undefined;
     const stream = new ReadableStream<Uint8Array>({
         cancel() {
             open = false;
         },
-        async start(controller) {
+        start(controller) {
+            sink = controller;
+        },
+    });
+
+    // Run outside the stream and on `waitUntil`: work the request does not own is
+    // stopped when the response ends, which a disconnect brings forward — leaving a
+    // cut-over Worker recorded at `provisioning`, and a failed health check unreverted.
+    const forward = async (): Promise<void> => {
+        try {
             await started.run((frame) => {
                 if (open) {
-                    controller.enqueue(encoder.encode(`${JSON.stringify(frame)}\n`));
+                    sink?.enqueue(encoder.encode(`${JSON.stringify(frame)}\n`));
                 }
             });
 
             if (open) {
-                controller.close();
+                sink?.close();
             }
-        },
-    });
+        } catch (error) {
+            if (open) {
+                sink?.error(error);
+            }
+        }
+    };
+    const released = forward();
+
+    deps.waitUntil?.(released);
 
     return new Response(stream, { headers: { "content-type": "application/x-ndjson", "x-accel-buffering": "no" }, status: 200 });
 };

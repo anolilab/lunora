@@ -217,6 +217,41 @@ describe(handleDeployRequest, () => {
         expect(statuses).toStrictEqual(["provisioning", "live"]);
     });
 
+    it("hands the release to waitUntil, which settles with its statuses recorded after a disconnect", async () => {
+        const statuses: string[] = [];
+        const kept: Promise<unknown>[] = [];
+        const { promise: cancelled, resolve: cancel } = Promise.withResolvers<undefined>();
+        const backend = backendWith({
+            updateStatus: ({ status }) => {
+                statuses.push(status);
+
+                return Promise.resolve();
+            },
+        });
+        const gated: Provisioner = {
+            deploy: () =>
+                cancelled.then(() => {
+                    return { url: "https://proj.lunora.app" };
+                }),
+            destroy: () => Promise.resolve(),
+        };
+
+        const response = await handleDeployRequest(request("k", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }), {
+            ...deps(backend, gated),
+            waitUntil: (promise) => {
+                kept.push(promise);
+            },
+        });
+
+        expect(kept).toHaveLength(1);
+
+        await response.body?.cancel();
+        cancel(undefined);
+        await Promise.all(kept);
+
+        expect(statuses).toStrictEqual(["provisioning", "live"]);
+    });
+
     it("counts a failed converge by step and bounded reason, never the message", async () => {
         const provisionFailed = vi.fn<NonNullable<DeployHandlerDeps["provisionFailed"]>>();
         const failing: Provisioner = { deploy: () => Promise.reject(new TypeError("fetch failed: acme.example.com")), destroy: () => Promise.resolve() };

@@ -108,6 +108,12 @@ export interface DeployHandlerDeps extends ReleaseDeps {
      * like `analytics`: it must not throw and is never awaited.
      */
     provisionFailed?: (step: ProvisionStep, reason: string) => void;
+
+    /**
+     * The request's `waitUntil`, so `POST /v1/deploy` keeps the release running
+     * after its client disconnects. Omit where the caller awaits the run itself.
+     */
+    waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /**
