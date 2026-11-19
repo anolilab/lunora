@@ -3,6 +3,10 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-19T17:19:55.309Z",
+      "key": "@lunora/shard-engine@1.0.0-alpha.201"
+    },
+    {
       "at": "2026-11-18T09:17:12.479Z",
       "key": "@lunora/codegen@1.0.0-alpha.426"
     },
@@ -397,12 +401,8 @@
     {
       "at": "2026-11-13T22:02:19.274Z",
       "key": "@lunora/codegen@1.0.0-alpha.410"
-    },
-    {
-      "at": "2026-11-13T20:59:11.472Z",
-      "key": "@lunora/client@1.0.0-alpha.294"
     }
   ],
-  "updatedAt": "2026-11-18T09:17:12.480Z",
+  "updatedAt": "2026-11-19T17:19:55.309Z",
   "version": 1
 }
