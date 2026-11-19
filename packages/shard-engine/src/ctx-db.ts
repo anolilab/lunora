@@ -123,6 +123,7 @@ import type {
     GeoIndexDefinitionLike,
     GroupByEntry,
     IndexRangeBuilderLike,
+    NestedWith,
     PaginationOptions,
     QueryArgs,
     QueryPage,
@@ -137,6 +138,7 @@ import type {
     ServerDefaultContextLike,
     TableDefinitionLike,
     TableReaderLike,
+    WithInput,
 } from "./schema-types";
 import { mayHoldProjectedValue } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
@@ -3015,9 +3017,38 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * (the EXISTS fast path stamps local children in its strategy; nested
      * multi-hop fetches pass through here too, so each global hop is covered).
      */
+    /** The tables a relation reads: its target, and for a many-to-many its join table too. */
+    const relationTables = (relation: RelationDefinitionLike): string[] =>
+        relation.through === undefined ? [relation.table] : [relation.through.table, relation.table];
+
+    /**
+     * Stamp the scan of every `.global()` table a `with` under a global row loads. The D1 writer resolves those levels
+     * itself, with a reader that reports nothing to this shard, so their dependencies are recorded here.
+     */
+    const stampNestedGlobalWith = (tableName: string, withInput: WithInput | undefined): void => {
+        const relations = schema.tables[tableName]?.relationMap ?? {};
+
+        for (const [name, nested] of Object.entries(withInput ?? {})) {
+            const relation = name === "_count" ? undefined : relations[name];
+
+            if (relation === undefined || nested === undefined || nested === false) {
+                continue;
+            }
+
+            for (const table of relationTables(relation).filter((candidate) => isGlobalTable(candidate))) {
+                onRead(table, SCAN_DEP);
+            }
+
+            if (typeof nested === "object") {
+                stampNestedGlobalWith(relation.table, (nested as NestedWith).with);
+            }
+        }
+    };
+
     const relationPredicateFetcher = (relationTable: string, relationArgs: QueryArgs): Promise<QueryPage> => {
         if (isGlobalTable(relationTable)) {
             onRead(relationTable, SCAN_DEP);
+            stampNestedGlobalWith(relationTable, relationArgs.with);
         }
 
         return relationFetcher(relationTable, relationArgs);
@@ -3278,8 +3309,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     /**
      * The rows a `.global()` delete cascades to or nulls out. The D1 writer applies `onDelete` inside
      * its own backend, so those writes never reach this DO's `broadcast`. Read before the delete, they
-     * are announced by their real ids. Only `.global()` holders live in that backend; `visited` stops
-     * a cycle of cascades from reading the same rows twice.
+     * are announced by their real ids. Only `.global()` holders live in that backend.
      */
     /** The `.global()` holders whose `onDelete` cascades to, or nulls out, rows of `tableName`. */
     const globalCascadeRelations = (tableName: string): { action: "delete" | "update"; field: string; holderTable: string; references: string }[] =>
@@ -3335,36 +3365,65 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         return holderIds;
     };
 
+    /**
+     * One parent row through one relation: the holders to announce, and (for a cascade) the rows whose own holders
+     * still have to be read. `seen` keeps one announcement per row and action, and expands each cascaded row once,
+     * whatever relation reached it first, so a set-null edge never hides a cascade's descendants.
+     */
+    const holdersThroughRelation = async (
+        global: DatabaseWriterLike,
+        tableName: string,
+        relation: { action: "delete" | "update"; field: string; holderTable: string; references: string },
+        id: string,
+        seen: { announced: Set<string>; expanded: Set<string> },
+        hard: boolean,
+    ): Promise<{ effects: { id: string; op: "delete" | "update"; table: string }[]; toExpand: string[] }> => {
+        const { action, field, holderTable, references } = relation;
+        const value = await referencedValue(global, tableName, references, id);
+
+        if (value === undefined || value === null) {
+            return { effects: [], toExpand: [] };
+        }
+
+        const found = await holderIdsOf(global, holderTable, field, value, hard);
+        const fresh = found.filter((holderId) => !seen.announced.has(`${action}:${holderTable}:${holderId}`));
+        const toExpand = action === "delete" ? found.filter((holderId) => !seen.expanded.has(`${holderTable}:${holderId}`)) : [];
+
+        for (const holderId of fresh) {
+            seen.announced.add(`${action}:${holderTable}:${holderId}`);
+        }
+
+        for (const holderId of toExpand) {
+            seen.expanded.add(`${holderTable}:${holderId}`);
+        }
+
+        return {
+            effects: fresh.map((holderId) => {
+                return { id: holderId, op: action, table: holderTable };
+            }),
+            toExpand,
+        };
+    };
+
     const globalCascadeEffects = async (
         global: DatabaseWriterLike,
         tableName: string,
         ids: ReadonlyArray<string>,
-        visited: Set<string>,
+        seen: { announced: Set<string>; expanded: Set<string> },
         hard: boolean,
     ): Promise<{ id: string; op: "delete" | "update"; table: string }[]> => {
         const effects: { id: string; op: "delete" | "update"; table: string }[] = [];
 
-        for (const { action, field, holderTable, references } of globalCascadeRelations(tableName)) {
+        for (const relation of globalCascadeRelations(tableName)) {
             for (const id of ids) {
-                // eslint-disable-next-line no-await-in-loop -- one parent row at a time: a non-id reference needs that row's column value
-                const value = await referencedValue(global, tableName, references, id);
+                // eslint-disable-next-line no-await-in-loop -- one parent row at a time, each bounded by the cap the D1 writer enforces on the same walk
+                const step = await holdersThroughRelation(global, tableName, relation, id, seen, hard);
 
-                if (value === undefined || value === null) {
-                    continue;
-                }
+                effects.push(...step.effects);
 
-                // eslint-disable-next-line no-await-in-loop -- one relation at a time, each bounded by the cap the D1 writer enforces on the same walk
-                const found = await holderIdsOf(global, holderTable, field, value, hard);
-                const holderIds = found.filter((holderId) => !visited.has(`${holderTable}:${holderId}`));
-
-                for (const holderId of holderIds) {
-                    visited.add(`${holderTable}:${holderId}`);
-                    effects.push({ id: holderId, op: action, table: holderTable });
-                }
-
-                if (action === "delete" && holderIds.length > 0) {
+                if (step.toExpand.length > 0) {
                     // eslint-disable-next-line no-await-in-loop -- a cascaded row's own holders are read before anything is deleted
-                    effects.push(...(await globalCascadeEffects(global, holderTable, holderIds, visited, hard)));
+                    effects.push(...(await globalCascadeEffects(global, relation.holderTable, step.toExpand, seen, hard)));
                 }
             }
         }
@@ -3399,7 +3458,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         // Read before the delete: once the rows are gone, their holders no longer point at them.
         const cascaded =
-            deleteOptions?.skipOnDelete === true ? [] : await globalCascadeEffects(global, expectedTable, ids, new Set(), deleteOptions?.hard === true);
+            deleteOptions?.skipOnDelete === true
+                ? []
+                : await globalCascadeEffects(global, expectedTable, ids, { announced: new Set(), expanded: new Set() }, deleteOptions?.hard === true);
 
         try {
             if (batch !== undefined && global.deleteMany !== undefined) {

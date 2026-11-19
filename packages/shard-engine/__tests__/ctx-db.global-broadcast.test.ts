@@ -302,3 +302,88 @@ describe("the cascade pre-read matches what the D1 writer touches", () => {
         ]);
     });
 });
+
+describe("review follow-ups on .global() reads and cascades", () => {
+    it("walks a row's cascade children even when a set-null relation reached it first", async () => {
+        expect.hasAssertions();
+
+        const schema: SchemaLike = {
+            tables: {
+                children: {
+                    indexes: [],
+                    relationMap: {
+                        backup: { field: "backupId", kind: "one", onDelete: "set null", references: "_id", table: "parents" },
+                        owner: { field: "ownerId", kind: "one", onDelete: "cascade", references: "_id", table: "parents" },
+                    },
+                    shape: { backupId: col("string", { notNull: false }), ownerId: col("string") },
+                    shardMode: { kind: "global" },
+                },
+                grandchildren: {
+                    indexes: [],
+                    relationMap: { child: { field: "childId", kind: "one", onDelete: "cascade", references: "_id", table: "children" } },
+                    shape: { childId: col("string") },
+                    shardMode: { kind: "global" },
+                },
+                parents: { indexes: [], shape: { name: col("string") }, shardMode: { kind: "global" } },
+            },
+        };
+        const rows: Record<string, Record<string, unknown>[]> = {
+            "children:backupId=p1": [{ _id: "c1" }],
+            "children:ownerId=p1": [{ _id: "c1" }],
+            "grandchildren:childId=c1": [{ _id: "g1" }],
+        };
+        const findMany = vi.fn<
+            (table: string, query: { where: Record<string, unknown> }) => Promise<{ continueCursor: null; isDone: true; page: Record<string, unknown>[] }>
+        >(async (table, query) => {
+            const [field, value] = Object.entries(query.where)[0] ?? [];
+
+            return { continueCursor: null, isDone: true, page: rows[`${table}:${String(field)}=${String(value)}`] ?? [] };
+        });
+        const { deltas, writer } = setup({ findMany }, { schema });
+
+        await writer.delete("parents", "p1");
+
+        expect(deltas).toStrictEqual([
+            { key: "p1", op: "delete", table: "parents" },
+            { key: "c1", op: "update", table: "children" },
+            { key: "c1", op: "delete", table: "children" },
+            { key: "g1", op: "delete", table: "grandchildren" },
+        ]);
+    });
+
+    it("records the scan of a .global() grandchild that a nested with loads inside D1", async () => {
+        expect.hasAssertions();
+
+        const schema: SchemaLike = {
+            tables: {
+                deeper: { indexes: [], shape: { value: col("string") }, shardMode: { kind: "global" } },
+                globals: {
+                    indexes: [],
+                    relationMap: { deep: { field: "deepId", kind: "one", references: "_id", table: "deeper" } },
+                    shape: { deepId: col("string") },
+                    shardMode: { kind: "global" },
+                },
+                local: {
+                    indexes: [],
+                    relationMap: { remote: { field: "ref", kind: "one", references: "_id", table: "globals" } },
+                    shape: { ref: col("string") },
+                    shardMode: { kind: "root" },
+                },
+            },
+        };
+        const onRead = vi.fn<NonNullable<CtxDbOptions["onRead"]>>();
+        const { writer } = setup(
+            {
+                findMany: vi.fn<() => Promise<{ continueCursor: null; isDone: true; page: Record<string, unknown>[] }>>(async () => {
+                    return { continueCursor: null, isDone: true, page: [{ _id: "g1", deep: { _id: "d1", value: "x" }, deepId: "d1" }] };
+                }),
+            },
+            { onRead, schema },
+        );
+
+        await writer.insert("local", { _id: "l1", ref: "g1" }, { allowExplicitId: true });
+        await writer.findMany("local", { with: { remote: { with: { deep: true } } } });
+
+        expect(onRead).toHaveBeenCalledWith("deeper", "*scan", undefined);
+    });
+});
