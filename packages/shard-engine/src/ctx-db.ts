@@ -2903,6 +2903,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * Tell this DO's live subscriptions that a `.global()` row changed. The write lands in D1, so
+     * neither the row image nor its index positions are known here. Without them a subscriber is
+     * invalidated across its whole table, which is always sound.
+     */
+    const broadcastGlobalWrite = (op: "update" | "delete", table: string, id: string): void => {
+        broadcast({ key: id, op, table });
+    };
+
+    /**
      * The `.global()` half of `insert`: put the row on the meter, forward it to
      * the global (D1) writer, then refresh this DO's subscribers.
      *
@@ -3278,12 +3287,19 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         if (batch !== undefined && global.deleteMany !== undefined) {
-            return global.deleteMany(expectedTable, ids, batch.options);
+            const result = await global.deleteMany(expectedTable, ids, batch.options);
+
+            for (const id of ids) {
+                broadcastGlobalWrite("delete", expectedTable, id);
+            }
+
+            return result;
         }
 
         for (const id of ids) {
             // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
             await global.delete(expectedTable, id, deleteOptions);
+            broadcastGlobalWrite("delete", expectedTable, id);
         }
 
         return { deleted: ids.length };
@@ -4585,6 +4601,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     meterWrite(patch);
 
                     await global.patch(table, id, patch, patchOptions);
+                    broadcastGlobalWrite("update", table, id);
                     return;
                 }
 
@@ -4706,7 +4723,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // Same metering as the global `patch` branch: the delta is charged.
                 meterWrite(args.patch);
 
-                return global.patchIf(tableName, id, args);
+                const result = await global.patchIf(tableName, id, args);
+
+                if (result.applied) {
+                    broadcastGlobalWrite("update", tableName, id);
+                }
+
+                return result;
             }
 
             if (!schema.tables[tableName]) {
@@ -5108,6 +5131,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     meterWrite(document);
 
                     await global.replace(table, id, document, replaceOptions);
+                    broadcastGlobalWrite("update", table, id);
                     return;
                 }
 
