@@ -24,12 +24,12 @@ const globalSchema: SchemaLike = {
 const setup = (globalOverrides: Partial<Record<"patch" | "replace" | "delete" | "patchIf" | "restore", unknown>> = {}) => {
     const deltas: Parameters<BroadcastDelta>[0][] = [];
     const globalDb = {
-        delete: vi.fn(async () => undefined),
-        patch: vi.fn(async () => undefined),
-        patchIf: vi.fn(async () => {
+        delete: vi.fn<() => Promise<undefined>>(async () => undefined),
+        patch: vi.fn<() => Promise<undefined>>(async () => undefined),
+        patchIf: vi.fn<() => Promise<{ applied: boolean; doc: null }>>(async () => {
             return { applied: true, doc: null };
         }),
-        replace: vi.fn(async () => undefined),
+        replace: vi.fn<() => Promise<undefined>>(async () => undefined),
         ...globalOverrides,
     } as unknown as DatabaseWriterLike;
     const writer = createShardContextDatabase({
@@ -45,6 +45,8 @@ const setup = (globalOverrides: Partial<Record<"patch" | "replace" | "delete" | 
 
 describe("ctx.db writes on a .global() table reach live subscriptions", () => {
     it("a patch broadcasts an update for the row", async () => {
+        expect.hasAssertions();
+
         const { deltas, writer } = setup();
 
         await writer.patch("counters", "g1", { n: 2 });
@@ -53,6 +55,8 @@ describe("ctx.db writes on a .global() table reach live subscriptions", () => {
     });
 
     it("a replace broadcasts an update for the row", async () => {
+        expect.hasAssertions();
+
         const { deltas, writer } = setup();
 
         await writer.replace("counters", "g1", { n: 2 });
@@ -61,6 +65,8 @@ describe("ctx.db writes on a .global() table reach live subscriptions", () => {
     });
 
     it("a delete broadcasts a delete for the row", async () => {
+        expect.hasAssertions();
+
         const { deltas, writer } = setup();
 
         await writer.delete("counters", "g1");
@@ -69,7 +75,9 @@ describe("ctx.db writes on a .global() table reach live subscriptions", () => {
     });
 
     it("a restore broadcasts an update for the row", async () => {
-        const { deltas, writer } = setup({ restore: vi.fn(async () => undefined) });
+        expect.hasAssertions();
+
+        const { deltas, writer } = setup({ restore: vi.fn<() => Promise<undefined>>(async () => undefined) });
 
         await writer.restore?.("counters", "g1");
 
@@ -77,18 +85,16 @@ describe("ctx.db writes on a .global() table reach live subscriptions", () => {
     });
 
     it("a conditional patch broadcasts only when it applied", async () => {
-        const applied = setup({
-            patchIf: vi.fn(async () => {
-                return { applied: true, doc: null };
-            }),
-        });
+        expect.hasAssertions();
+
+        const applied = setup();
 
         await applied.writer.patchIf?.("counters", "g1", { patch: { n: 2 }, where: {} });
 
         expect(applied.deltas).toStrictEqual([{ key: "g1", op: "update", table: "counters" }]);
 
         const refused = setup({
-            patchIf: vi.fn(async () => {
+            patchIf: vi.fn<() => Promise<{ applied: boolean; doc: null }>>(async () => {
                 return { applied: false, doc: null };
             }),
         });

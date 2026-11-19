@@ -2908,6 +2908,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * invalidated across its whole table, which is always sound.
      */
     const broadcastGlobalWrite = (op: "update" | "delete", table: string, id: string): void => {
+        // The shard's cached reads of this table can hold the old row, and a global write has no row image to narrow by.
+        cache?.invalidateTable(table);
         broadcast({ key: id, op, table });
     };
 
@@ -3287,19 +3289,22 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         if (batch !== undefined && global.deleteMany !== undefined) {
-            const result = await global.deleteMany(expectedTable, ids, batch.options);
-
-            for (const id of ids) {
-                broadcastGlobalWrite("delete", expectedTable, id);
+            try {
+                return await global.deleteMany(expectedTable, ids, batch.options);
+            } finally {
+                for (const id of ids) {
+                    broadcastGlobalWrite("delete", expectedTable, id);
+                }
             }
-
-            return result;
         }
 
         for (const id of ids) {
-            // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
-            await global.delete(expectedTable, id, deleteOptions);
-            broadcastGlobalWrite("delete", expectedTable, id);
+            try {
+                // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
+                await global.delete(expectedTable, id, deleteOptions);
+            } finally {
+                broadcastGlobalWrite("delete", expectedTable, id);
+            }
         }
 
         return { deleted: ids.length };
@@ -4009,7 +4014,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             if (args.with) {
                 await resolveWith({
-                    fetcher: relationFetcher,
+                    fetcher: relationPredicateFetcher,
                     groupedCounter: relationGroupedCounter,
                     parents: result.page,
                     ...relationHooks(args),
@@ -4055,6 +4060,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = globalFallbackFor(table);
 
                 if (global) {
+                    // A subscription that read this row only through the D1 writer still needs the dependency to be refreshed by a global write.
+                    reportRead(table, id, true);
+
                     return global.get(table, id);
                 }
 
@@ -4600,8 +4608,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // actually sends.
                     meterWrite(patch);
 
-                    await global.patch(table, id, patch, patchOptions);
-                    broadcastGlobalWrite("update", table, id);
+                    try {
+                        await global.patch(table, id, patch, patchOptions);
+                    } finally {
+                        broadcastGlobalWrite("update", table, id);
+                    }
+
                     return;
                 }
 
@@ -4723,7 +4735,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // Same metering as the global `patch` branch: the delta is charged.
                 meterWrite(args.patch);
 
-                const result = await global.patchIf(tableName, id, args);
+                let result: Awaited<ReturnType<NonNullable<DatabaseWriterLike["patchIf"]>>>;
+
+                try {
+                    result = await global.patchIf(tableName, id, args);
+                } catch (error) {
+                    // A throw can follow a committed write in another backend, so subscribers are told either way.
+                    broadcastGlobalWrite("update", tableName, id);
+
+                    throw error;
+                }
 
                 if (result.applied) {
                     broadcastGlobalWrite("update", tableName, id);
@@ -5071,8 +5092,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = globalFallbackFor(table);
 
                 if (global?.restore) {
-                    await global.restore(table, id);
-                    broadcastGlobalWrite("update", table, id);
+                    try {
+                        await global.restore(table, id);
+                    } finally {
+                        broadcastGlobalWrite("update", table, id);
+                    }
 
                     return;
                 }
@@ -5131,8 +5155,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // exact rather than a delta.
                     meterWrite(document);
 
-                    await global.replace(table, id, document, replaceOptions);
-                    broadcastGlobalWrite("update", table, id);
+                    try {
+                        await global.replace(table, id, document, replaceOptions);
+                    } finally {
+                        broadcastGlobalWrite("update", table, id);
+                    }
+
                     return;
                 }
 
