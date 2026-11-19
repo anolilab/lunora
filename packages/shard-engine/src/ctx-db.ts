@@ -2424,6 +2424,9 @@ const commitSequences = new WeakMap<CtxDbOptions, { value: number | undefined }>
 /** ...and count one trigger-recursion depth, so an erase started inside a trigger does not reset the guard. */
 const triggerDepths = new WeakMap<CtxDbOptions, { value: number }>();
 
+/** Holder rows one page of a `.global()` cascade pre-read loads; only their ids are kept between pages. */
+const CASCADE_HOLDER_PAGE = 500;
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { baselineSeq, onStalePatchDropped } = options;
     const { headroom } = options;
@@ -3309,11 +3312,35 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         return row?.[references];
     };
 
+    /**
+     * Ids of the rows in `holderTable` whose `field` holds `value`. Read a page at a time, keeping only the ids, so a
+     * cascade near the D1 writer's cap never holds every holder row in memory at once. `includeDeleted` matches what the
+     * D1 writer touches: a hard delete cascades to soft-deleted holders too.
+     */
+    const holderIdsOf = async (global: DatabaseWriterLike, holderTable: string, field: string, value: unknown, includeDeleted: boolean): Promise<string[]> => {
+        const holderIds: string[] = [];
+        let cursor: string | undefined;
+
+        do {
+            // eslint-disable-next-line no-await-in-loop -- pages are read in order: each needs the previous page's cursor
+            const result = await global.findMany(holderTable, { cursor, includeDeleted, limit: CASCADE_HOLDER_PAGE, where: { [field]: value } });
+
+            for (const row of result.page) {
+                holderIds.push(String(row["_id"]));
+            }
+
+            cursor = result.isDone ? undefined : (result.continueCursor ?? undefined);
+        } while (cursor !== undefined && holderIds.length <= CASCADE_MAX_ROWS);
+
+        return holderIds;
+    };
+
     const globalCascadeEffects = async (
         global: DatabaseWriterLike,
         tableName: string,
         ids: ReadonlyArray<string>,
         visited: Set<string>,
+        hard: boolean,
     ): Promise<{ id: string; op: "delete" | "update"; table: string }[]> => {
         const effects: { id: string; op: "delete" | "update"; table: string }[] = [];
 
@@ -3326,9 +3353,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     continue;
                 }
 
-                // eslint-disable-next-line no-await-in-loop -- bounded per relation by the cap the D1 writer enforces on the same walk
-                const { page } = await global.findMany(holderTable, { limit: CASCADE_MAX_ROWS, where: { [field]: value } });
-                const holderIds = page.map((row) => String(row["_id"])).filter((holderId) => !visited.has(`${holderTable}:${holderId}`));
+                // eslint-disable-next-line no-await-in-loop -- one relation at a time, each bounded by the cap the D1 writer enforces on the same walk
+                const found = await holderIdsOf(global, holderTable, field, value, hard);
+                const holderIds = found.filter((holderId) => !visited.has(`${holderTable}:${holderId}`));
 
                 for (const holderId of holderIds) {
                     visited.add(`${holderTable}:${holderId}`);
@@ -3337,7 +3364,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                 if (action === "delete" && holderIds.length > 0) {
                     // eslint-disable-next-line no-await-in-loop -- a cascaded row's own holders are read before anything is deleted
-                    effects.push(...(await globalCascadeEffects(global, holderTable, holderIds, visited)));
+                    effects.push(...(await globalCascadeEffects(global, holderTable, holderIds, visited, hard)));
                 }
             }
         }
@@ -3371,7 +3398,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         // Read before the delete: once the rows are gone, their holders no longer point at them.
-        const cascaded = deleteOptions?.skipOnDelete === true ? [] : await globalCascadeEffects(global, expectedTable, ids, new Set());
+        const cascaded =
+            deleteOptions?.skipOnDelete === true ? [] : await globalCascadeEffects(global, expectedTable, ids, new Set(), deleteOptions?.hard === true);
 
         try {
             if (batch !== undefined && global.deleteMany !== undefined) {

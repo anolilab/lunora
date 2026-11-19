@@ -244,3 +244,61 @@ describe("a .global() delete announces the rows D1 cascades to", () => {
         ]);
     });
 });
+
+describe("the cascade pre-read matches what the D1 writer touches", () => {
+    const schema: SchemaLike = {
+        tables: {
+            authors: { indexes: [], shape: { name: col("string") }, shardMode: { kind: "global" } },
+            posts: {
+                indexes: [],
+                relationMap: { author: { field: "authorId", kind: "one", onDelete: "cascade", references: "_id", table: "authors" } },
+                shape: { authorId: col("string") },
+                shardMode: { kind: "global" },
+            },
+        },
+    };
+
+    it("includes soft-deleted holders on a hard delete, and only then", async () => {
+        expect.hasAssertions();
+
+        const findMany = vi.fn<
+            (table: string, query: { includeDeleted?: boolean }) => Promise<{ continueCursor: null; isDone: true; page: Record<string, unknown>[] }>
+        >(async () => {
+            return { continueCursor: null, isDone: true, page: [] };
+        });
+        const { writer } = setup({ findMany }, { schema });
+
+        await writer.delete("authors", "a1", { hard: true });
+        await writer.delete("authors", "a2");
+
+        expect(findMany.mock.calls.map(([, query]) => query.includeDeleted)).toStrictEqual([true, false]);
+    });
+
+    it("reads the holders a page at a time and announces every page's rows", async () => {
+        expect.hasAssertions();
+
+        const findMany = vi.fn<
+            (
+                table: string,
+                query: { cursor?: string | null; limit?: number },
+            ) => Promise<{ continueCursor: string | null; isDone: boolean; page: Record<string, unknown>[] }>
+        >(async (_table, query) =>
+            query.cursor === "page-2"
+                ? { continueCursor: null, isDone: true, page: [{ _id: "p2", authorId: "a1" }] }
+                : { continueCursor: "page-2", isDone: false, page: [{ _id: "p1", authorId: "a1" }] },
+        );
+        const { deltas, writer } = setup({ findMany }, { schema });
+
+        await writer.delete("authors", "a1");
+
+        expect(findMany.mock.calls.map(([, query]) => [query.cursor, query.limit])).toStrictEqual([
+            [undefined, 500],
+            ["page-2", 500],
+        ]);
+        expect(deltas).toStrictEqual([
+            { key: "a1", op: "delete", table: "authors" },
+            { key: "p1", op: "delete", table: "posts" },
+            { key: "p2", op: "delete", table: "posts" },
+        ]);
+    });
+});
