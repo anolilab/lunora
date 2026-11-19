@@ -104,7 +104,16 @@ import { deriveRelationEdges, findRelated } from "./relation-graph";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, composeReadPredicate, findManyPage, resolveRelationPredicates } from "./relation-predicates";
 import { describeRelationWrites } from "./relation-writes";
-import { applyInsertDefaults, applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators, transformOnlyDefinition } from "./relations";
+import {
+    applyInsertDefaults,
+    applyOnDelete,
+    CASCADE_MAX_ROWS,
+    fanOutScalarCounts,
+    relationHooks,
+    resolveWith,
+    runRowValidators,
+    transformOnlyDefinition,
+} from "./relations";
 import { guardWriter } from "./rls-guard";
 import { CHANGES_PROBE_SQL, deleteRowSql, insertRowSql, patchRowSql, replaceRowSql, rowProbeParams, rowProbeSql } from "./row-statements";
 import type {
@@ -114,6 +123,7 @@ import type {
     GeoIndexDefinitionLike,
     GroupByEntry,
     IndexRangeBuilderLike,
+    NestedWith,
     PaginationOptions,
     QueryArgs,
     QueryPage,
@@ -128,6 +138,7 @@ import type {
     ServerDefaultContextLike,
     TableDefinitionLike,
     TableReaderLike,
+    WithInput,
 } from "./schema-types";
 import { mayHoldProjectedValue } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
@@ -2415,6 +2426,9 @@ const commitSequences = new WeakMap<CtxDbOptions, { value: number | undefined }>
 /** ...and count one trigger-recursion depth, so an erase started inside a trigger does not reset the guard. */
 const triggerDepths = new WeakMap<CtxDbOptions, { value: number }>();
 
+/** Holder rows one page of a `.global()` cascade pre-read loads; only their ids are kept between pages. */
+const CASCADE_HOLDER_PAGE = 500;
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { baselineSeq, onStalePatchDropped } = options;
     const { headroom } = options;
@@ -2903,6 +2917,17 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * Tell this DO's live subscriptions that a `.global()` row changed. The write lands in D1, so
+     * neither the row image nor its index positions are known here. Without them a subscriber is
+     * invalidated across its whole table, which is always sound.
+     */
+    const broadcastGlobalWrite = (op: "update" | "delete", table: string, id: string): void => {
+        // The shard's cached reads of this table can hold the old row, and a global write has no row image to narrow by.
+        cache?.invalidateTable(table);
+        broadcast({ key: id, op, table });
+    };
+
+    /**
      * The `.global()` half of `insert`: put the row on the meter, forward it to
      * the global (D1) writer, then refresh this DO's subscribers.
      *
@@ -2992,9 +3017,53 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * (the EXISTS fast path stamps local children in its strategy; nested
      * multi-hop fetches pass through here too, so each global hop is covered).
      */
+    /** The tables a relation reads: its target, and for a many-to-many its join table too. */
+    const relationTables = (relation: RelationDefinitionLike): string[] =>
+        relation.through === undefined ? [relation.table] : [relation.through.table, relation.table];
+
+    /** Stamp the scan of each `.global()` table a relation reads. */
+    const stampGlobalTablesOf = (relation: RelationDefinitionLike | undefined): void => {
+        for (const table of relation === undefined ? [] : relationTables(relation)) {
+            if (isGlobalTable(table)) {
+                onRead(table, SCAN_DEP);
+            }
+        }
+    };
+
+    /**
+     * Stamp the scan of every `.global()` table a `with` under a global row loads or counts. The D1 writer resolves those
+     * levels itself, with a reader that reports nothing to this shard, so their dependencies are recorded here.
+     */
+    const stampNestedGlobalWith = (tableName: string, withInput: WithInput | undefined): void => {
+        const relations = schema.tables[tableName]?.relationMap ?? {};
+
+        for (const [name, nested] of Object.entries(withInput ?? {})) {
+            if (name === "_count") {
+                for (const counted of Object.keys(typeof nested === "object" ? nested : {})) {
+                    stampGlobalTablesOf(relations[counted]);
+                }
+
+                continue;
+            }
+
+            const relation = relations[name];
+
+            if (relation === undefined || nested === undefined || nested === false) {
+                continue;
+            }
+
+            stampGlobalTablesOf(relation);
+
+            if (typeof nested === "object") {
+                stampNestedGlobalWith(relation.table, (nested as NestedWith).with);
+            }
+        }
+    };
+
     const relationPredicateFetcher = (relationTable: string, relationArgs: QueryArgs): Promise<QueryPage> => {
         if (isGlobalTable(relationTable)) {
             onRead(relationTable, SCAN_DEP);
+            stampNestedGlobalWith(relationTable, relationArgs.with);
         }
 
         return relationFetcher(relationTable, relationArgs);
@@ -3253,6 +3322,131 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         expectedTable === undefined || isGlobalTable(expectedTable) ? globalDb : undefined;
 
     /**
+     * The rows a `.global()` delete cascades to or nulls out. The D1 writer applies `onDelete` inside
+     * its own backend, so those writes never reach this DO's `broadcast`. Read before the delete, they
+     * are announced by their real ids. Only `.global()` holders live in that backend.
+     */
+    /** The `.global()` holders whose `onDelete` cascades to, or nulls out, rows of `tableName`. */
+    const globalCascadeRelations = (tableName: string): { action: "delete" | "update"; field: string; holderTable: string; references: string }[] =>
+        Object.entries(schema.tables).flatMap(([holderTable, holderDefinition]) => {
+            if (!isGlobalTable(holderTable)) {
+                return [];
+            }
+
+            return Object.values(holderDefinition.relationMap ?? {}).flatMap((relation) => {
+                if (relation.through !== undefined || relation.kind !== "one" || relation.table !== tableName) {
+                    return [];
+                }
+
+                if (relation.onDelete !== "cascade" && relation.onDelete !== "set null") {
+                    return [];
+                }
+
+                return [{ action: relation.onDelete === "cascade" ? "delete" : "update", field: relation.field, holderTable, references: relation.references }];
+            });
+        });
+
+    /** The value a holder stores for row `id`: the id itself, or the column a non-id reference points at. */
+    const referencedValue = async (global: DatabaseWriterLike, tableName: string, references: string, id: string): Promise<unknown> => {
+        if (references === "_id") {
+            return id;
+        }
+
+        const row = await global.get(tableName, id);
+
+        return row?.[references];
+    };
+
+    /**
+     * Ids of the rows in `holderTable` whose `field` holds `value`. Read a page at a time, keeping only the ids, so a
+     * cascade near the D1 writer's cap never holds every holder row in memory at once. `includeDeleted` matches what the
+     * D1 writer touches: a hard delete cascades to soft-deleted holders too.
+     */
+    const holderIdsOf = async (global: DatabaseWriterLike, holderTable: string, field: string, value: unknown, includeDeleted: boolean): Promise<string[]> => {
+        const holderIds: string[] = [];
+        let cursor: string | undefined;
+
+        do {
+            // eslint-disable-next-line no-await-in-loop -- pages are read in order: each needs the previous page's cursor
+            const result = await global.findMany(holderTable, { cursor, includeDeleted, limit: CASCADE_HOLDER_PAGE, where: { [field]: value } });
+
+            for (const row of result.page) {
+                holderIds.push(String(row["_id"]));
+            }
+
+            cursor = result.isDone ? undefined : (result.continueCursor ?? undefined);
+        } while (cursor !== undefined && holderIds.length <= CASCADE_MAX_ROWS);
+
+        return holderIds;
+    };
+
+    /**
+     * One parent row through one relation: the holders to announce, and (for a cascade) the rows whose own holders
+     * still have to be read. `seen` keeps one announcement per row and action, and expands each cascaded row once,
+     * whatever relation reached it first, so a set-null edge never hides a cascade's descendants.
+     */
+    const holdersThroughRelation = async (
+        global: DatabaseWriterLike,
+        tableName: string,
+        relation: { action: "delete" | "update"; field: string; holderTable: string; references: string },
+        id: string,
+        seen: { announced: Set<string>; expanded: Set<string> },
+        hard: boolean,
+    ): Promise<{ effects: { id: string; op: "delete" | "update"; table: string }[]; toExpand: string[] }> => {
+        const { action, field, holderTable, references } = relation;
+        const value = await referencedValue(global, tableName, references, id);
+
+        if (value === undefined || value === null) {
+            return { effects: [], toExpand: [] };
+        }
+
+        const found = await holderIdsOf(global, holderTable, field, value, hard);
+        const fresh = found.filter((holderId) => !seen.announced.has(`${action}:${holderTable}:${holderId}`));
+        const toExpand = action === "delete" ? found.filter((holderId) => !seen.expanded.has(`${holderTable}:${holderId}`)) : [];
+
+        for (const holderId of fresh) {
+            seen.announced.add(`${action}:${holderTable}:${holderId}`);
+        }
+
+        for (const holderId of toExpand) {
+            seen.expanded.add(`${holderTable}:${holderId}`);
+        }
+
+        return {
+            effects: fresh.map((holderId) => {
+                return { id: holderId, op: action, table: holderTable };
+            }),
+            toExpand,
+        };
+    };
+
+    const globalCascadeEffects = async (
+        global: DatabaseWriterLike,
+        tableName: string,
+        ids: ReadonlyArray<string>,
+        seen: { announced: Set<string>; expanded: Set<string> },
+        hard: boolean,
+    ): Promise<{ id: string; op: "delete" | "update"; table: string }[]> => {
+        const effects: { id: string; op: "delete" | "update"; table: string }[] = [];
+
+        for (const relation of globalCascadeRelations(tableName)) {
+            for (const id of ids) {
+                // eslint-disable-next-line no-await-in-loop -- one parent row at a time, each bounded by the cap the D1 writer enforces on the same walk
+                const step = await holdersThroughRelation(global, tableName, relation, id, seen, hard);
+
+                effects.push(...step.effects);
+
+                if (step.toExpand.length > 0) {
+                    // eslint-disable-next-line no-await-in-loop -- a cascaded row's own holders are read before anything is deleted
+                    effects.push(...(await globalCascadeEffects(global, relation.holderTable, step.toExpand, seen, hard)));
+                }
+            }
+        }
+
+        return effects;
+    };
+
+    /**
      * Delete `.global()` rows by id straight on the D1 writer, skipping the
      * shard-local probe. These deletes return before `onWrite`, so they charge
      * the meter here: a row and no bytes each, as `onWrite` charges a local
@@ -3277,16 +3471,38 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             meterWrite(undefined);
         }
 
-        if (batch !== undefined && global.deleteMany !== undefined) {
-            return global.deleteMany(expectedTable, ids, batch.options);
-        }
+        // Read before the delete: once the rows are gone, their holders no longer point at them.
+        const cascaded =
+            deleteOptions?.skipOnDelete === true
+                ? []
+                : await globalCascadeEffects(global, expectedTable, ids, { announced: new Set(), expanded: new Set() }, deleteOptions?.hard === true);
 
-        for (const id of ids) {
-            // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
-            await global.delete(expectedTable, id, deleteOptions);
-        }
+        try {
+            if (batch !== undefined && global.deleteMany !== undefined) {
+                try {
+                    return await global.deleteMany(expectedTable, ids, batch.options);
+                } finally {
+                    for (const id of ids) {
+                        broadcastGlobalWrite("delete", expectedTable, id);
+                    }
+                }
+            }
 
-        return { deleted: ids.length };
+            for (const id of ids) {
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
+                    await global.delete(expectedTable, id, deleteOptions);
+                } finally {
+                    broadcastGlobalWrite("delete", expectedTable, id);
+                }
+            }
+
+            return { deleted: ids.length };
+        } finally {
+            for (const effect of cascaded) {
+                broadcastGlobalWrite(effect.op, effect.table, effect.id);
+            }
+        }
     };
 
     /**
@@ -3993,7 +4209,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             if (args.with) {
                 await resolveWith({
-                    fetcher: relationFetcher,
+                    fetcher: relationPredicateFetcher,
                     groupedCounter: relationGroupedCounter,
                     parents: result.page,
                     ...relationHooks(args),
@@ -4039,6 +4255,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = globalFallbackFor(table);
 
                 if (global) {
+                    // A subscription that read this row only through the D1 writer still needs the dependency to be refreshed by a global write.
+                    reportRead(table, id, true);
+
                     return global.get(table, id);
                 }
 
@@ -4584,7 +4803,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // actually sends.
                     meterWrite(patch);
 
-                    await global.patch(table, id, patch, patchOptions);
+                    try {
+                        await global.patch(table, id, patch, patchOptions);
+                    } finally {
+                        broadcastGlobalWrite("update", table, id);
+                    }
+
                     return;
                 }
 
@@ -4706,7 +4930,22 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // Same metering as the global `patch` branch: the delta is charged.
                 meterWrite(args.patch);
 
-                return global.patchIf(tableName, id, args);
+                let result: Awaited<ReturnType<NonNullable<DatabaseWriterLike["patchIf"]>>>;
+
+                try {
+                    result = await global.patchIf(tableName, id, args);
+                } catch (error) {
+                    // A throw can follow a committed write in another backend, so subscribers are told either way.
+                    broadcastGlobalWrite("update", tableName, id);
+
+                    throw error;
+                }
+
+                if (result.applied) {
+                    broadcastGlobalWrite("update", tableName, id);
+                }
+
+                return result;
             }
 
             if (!schema.tables[tableName]) {
@@ -5048,7 +5287,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = globalFallbackFor(table);
 
                 if (global?.restore) {
-                    await global.restore(table, id);
+                    try {
+                        await global.restore(table, id);
+                    } finally {
+                        broadcastGlobalWrite("update", table, id);
+                    }
 
                     return;
                 }
@@ -5107,7 +5350,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // exact rather than a delta.
                     meterWrite(document);
 
-                    await global.replace(table, id, document, replaceOptions);
+                    try {
+                        await global.replace(table, id, document, replaceOptions);
+                    } finally {
+                        broadcastGlobalWrite("update", table, id);
+                    }
+
                     return;
                 }
 

@@ -1249,6 +1249,7 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
 export {
     applyInsertDefaults,
     applyOnDelete,
+    CASCADE_MAX_ROWS,
     distinctValues,
     fanOutScalarCounts,
     MAX_LINK_ROWS,
