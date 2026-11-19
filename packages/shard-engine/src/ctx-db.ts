@@ -3021,23 +3021,38 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const relationTables = (relation: RelationDefinitionLike): string[] =>
         relation.through === undefined ? [relation.table] : [relation.through.table, relation.table];
 
+    /** Stamp the scan of each `.global()` table a relation reads. */
+    const stampGlobalTablesOf = (relation: RelationDefinitionLike | undefined): void => {
+        for (const table of relation === undefined ? [] : relationTables(relation)) {
+            if (isGlobalTable(table)) {
+                onRead(table, SCAN_DEP);
+            }
+        }
+    };
+
     /**
-     * Stamp the scan of every `.global()` table a `with` under a global row loads. The D1 writer resolves those levels
-     * itself, with a reader that reports nothing to this shard, so their dependencies are recorded here.
+     * Stamp the scan of every `.global()` table a `with` under a global row loads or counts. The D1 writer resolves those
+     * levels itself, with a reader that reports nothing to this shard, so their dependencies are recorded here.
      */
     const stampNestedGlobalWith = (tableName: string, withInput: WithInput | undefined): void => {
         const relations = schema.tables[tableName]?.relationMap ?? {};
 
         for (const [name, nested] of Object.entries(withInput ?? {})) {
-            const relation = name === "_count" ? undefined : relations[name];
+            if (name === "_count") {
+                for (const counted of Object.keys(typeof nested === "object" ? nested : {})) {
+                    stampGlobalTablesOf(relations[counted]);
+                }
+
+                continue;
+            }
+
+            const relation = relations[name];
 
             if (relation === undefined || nested === undefined || nested === false) {
                 continue;
             }
 
-            for (const table of relationTables(relation).filter((candidate) => isGlobalTable(candidate))) {
-                onRead(table, SCAN_DEP);
-            }
+            stampGlobalTablesOf(relation);
 
             if (typeof nested === "object") {
                 stampNestedGlobalWith(relation.table, (nested as NestedWith).with);

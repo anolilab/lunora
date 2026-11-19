@@ -387,3 +387,41 @@ describe("review follow-ups on .global() reads and cascades", () => {
         expect(onRead).toHaveBeenCalledWith("deeper", "*scan", undefined);
     });
 });
+
+describe("nested counts under a .global() relation", () => {
+    it("records the scan of the table a nested _count reads inside D1", async () => {
+        expect.hasAssertions();
+
+        const schema: SchemaLike = {
+            tables: {
+                deeper: { indexes: [], shape: { value: col("string") }, shardMode: { kind: "global" } },
+                globals: {
+                    indexes: [],
+                    relationMap: { deep: { field: "deepId", kind: "one", references: "_id", table: "deeper" } },
+                    shape: { deepId: col("string") },
+                    shardMode: { kind: "global" },
+                },
+                local: {
+                    indexes: [],
+                    relationMap: { remote: { field: "ref", kind: "one", references: "_id", table: "globals" } },
+                    shape: { ref: col("string") },
+                    shardMode: { kind: "root" },
+                },
+            },
+        };
+        const onRead = vi.fn<NonNullable<CtxDbOptions["onRead"]>>();
+        const { writer } = setup(
+            {
+                findMany: vi.fn<() => Promise<{ continueCursor: null; isDone: true; page: Record<string, unknown>[] }>>(async () => {
+                    return { continueCursor: null, isDone: true, page: [{ _count: { deep: 1 }, _id: "g1", deepId: "d1" }] };
+                }),
+            },
+            { onRead, schema },
+        );
+
+        await writer.insert("local", { _id: "l1", ref: "g1" }, { allowExplicitId: true });
+        await writer.findMany("local", { with: { remote: { with: { _count: { deep: true } } } } });
+
+        expect(onRead).toHaveBeenCalledWith("deeper", "*scan", undefined);
+    });
+});
