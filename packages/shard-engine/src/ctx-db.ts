@@ -104,7 +104,16 @@ import { deriveRelationEdges, findRelated } from "./relation-graph";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, composeReadPredicate, findManyPage, resolveRelationPredicates } from "./relation-predicates";
 import { describeRelationWrites } from "./relation-writes";
-import { applyInsertDefaults, applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators, transformOnlyDefinition } from "./relations";
+import {
+    applyInsertDefaults,
+    applyOnDelete,
+    CASCADE_MAX_ROWS,
+    fanOutScalarCounts,
+    relationHooks,
+    resolveWith,
+    runRowValidators,
+    transformOnlyDefinition,
+} from "./relations";
 import { guardWriter } from "./rls-guard";
 import { CHANGES_PROBE_SQL, deleteRowSql, insertRowSql, patchRowSql, replaceRowSql, rowProbeParams, rowProbeSql } from "./row-statements";
 import type {
@@ -3264,6 +3273,79 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         expectedTable === undefined || isGlobalTable(expectedTable) ? globalDb : undefined;
 
     /**
+     * The rows a `.global()` delete cascades to or nulls out. The D1 writer applies `onDelete` inside
+     * its own backend, so those writes never reach this DO's `broadcast`. Read before the delete, they
+     * are announced by their real ids. Only `.global()` holders live in that backend; `visited` stops
+     * a cycle of cascades from reading the same rows twice.
+     */
+    /** The `.global()` holders whose `onDelete` cascades to, or nulls out, rows of `tableName`. */
+    const globalCascadeRelations = (tableName: string): { action: "delete" | "update"; field: string; holderTable: string; references: string }[] =>
+        Object.entries(schema.tables).flatMap(([holderTable, holderDefinition]) => {
+            if (!isGlobalTable(holderTable)) {
+                return [];
+            }
+
+            return Object.values(holderDefinition.relationMap ?? {}).flatMap((relation) => {
+                if (relation.through !== undefined || relation.kind !== "one" || relation.table !== tableName) {
+                    return [];
+                }
+
+                if (relation.onDelete !== "cascade" && relation.onDelete !== "set null") {
+                    return [];
+                }
+
+                return [{ action: relation.onDelete === "cascade" ? "delete" : "update", field: relation.field, holderTable, references: relation.references }];
+            });
+        });
+
+    /** The value a holder stores for row `id`: the id itself, or the column a non-id reference points at. */
+    const referencedValue = async (global: DatabaseWriterLike, tableName: string, references: string, id: string): Promise<unknown> => {
+        if (references === "_id") {
+            return id;
+        }
+
+        const row = await global.get(tableName, id);
+
+        return row?.[references];
+    };
+
+    const globalCascadeEffects = async (
+        global: DatabaseWriterLike,
+        tableName: string,
+        ids: ReadonlyArray<string>,
+        visited: Set<string>,
+    ): Promise<{ id: string; op: "delete" | "update"; table: string }[]> => {
+        const effects: { id: string; op: "delete" | "update"; table: string }[] = [];
+
+        for (const { action, field, holderTable, references } of globalCascadeRelations(tableName)) {
+            for (const id of ids) {
+                // eslint-disable-next-line no-await-in-loop -- one parent row at a time: a non-id reference needs that row's column value
+                const value = await referencedValue(global, tableName, references, id);
+
+                if (value === undefined || value === null) {
+                    continue;
+                }
+
+                // eslint-disable-next-line no-await-in-loop -- bounded per relation by the cap the D1 writer enforces on the same walk
+                const { page } = await global.findMany(holderTable, { limit: CASCADE_MAX_ROWS, where: { [field]: value } });
+                const holderIds = page.map((row) => String(row["_id"])).filter((holderId) => !visited.has(`${holderTable}:${holderId}`));
+
+                for (const holderId of holderIds) {
+                    visited.add(`${holderTable}:${holderId}`);
+                    effects.push({ id: holderId, op: action, table: holderTable });
+                }
+
+                if (action === "delete" && holderIds.length > 0) {
+                    // eslint-disable-next-line no-await-in-loop -- a cascaded row's own holders are read before anything is deleted
+                    effects.push(...(await globalCascadeEffects(global, holderTable, holderIds, visited)));
+                }
+            }
+        }
+
+        return effects;
+    };
+
+    /**
      * Delete `.global()` rows by id straight on the D1 writer, skipping the
      * shard-local probe. These deletes return before `onWrite`, so they charge
      * the meter here: a row and no bytes each, as `onWrite` charges a local
@@ -3288,26 +3370,35 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             meterWrite(undefined);
         }
 
-        if (batch !== undefined && global.deleteMany !== undefined) {
-            try {
-                return await global.deleteMany(expectedTable, ids, batch.options);
-            } finally {
-                for (const id of ids) {
+        // Read before the delete: once the rows are gone, their holders no longer point at them.
+        const cascaded = deleteOptions?.skipOnDelete === true ? [] : await globalCascadeEffects(global, expectedTable, ids, new Set());
+
+        try {
+            if (batch !== undefined && global.deleteMany !== undefined) {
+                try {
+                    return await global.deleteMany(expectedTable, ids, batch.options);
+                } finally {
+                    for (const id of ids) {
+                        broadcastGlobalWrite("delete", expectedTable, id);
+                    }
+                }
+            }
+
+            for (const id of ids) {
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
+                    await global.delete(expectedTable, id, deleteOptions);
+                } finally {
                     broadcastGlobalWrite("delete", expectedTable, id);
                 }
             }
-        }
 
-        for (const id of ids) {
-            try {
-                // eslint-disable-next-line no-await-in-loop -- sequential: each delete's companion writes must land before the next row is removed
-                await global.delete(expectedTable, id, deleteOptions);
-            } finally {
-                broadcastGlobalWrite("delete", expectedTable, id);
+            return { deleted: ids.length };
+        } finally {
+            for (const effect of cascaded) {
+                broadcastGlobalWrite(effect.op, effect.table, effect.id);
             }
         }
-
-        return { deleted: ids.length };
     };
 
     /**
