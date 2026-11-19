@@ -5072,6 +5072,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                 if (global?.restore) {
                     await global.restore(table, id);
+                    broadcastGlobalWrite("update", table, id);
 
                     return;
                 }

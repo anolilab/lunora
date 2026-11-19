@@ -21,7 +21,7 @@ const globalSchema: SchemaLike = {
  * Live subscriptions on this shard read `.global()` rows, and the write lands in D1.
  * Every write must reach `broadcast`, or a subscriber keeps the old row until a refetch.
  */
-const setup = (globalOverrides: Partial<Record<"patch" | "replace" | "delete" | "patchIf", unknown>> = {}) => {
+const setup = (globalOverrides: Partial<Record<"patch" | "replace" | "delete" | "patchIf" | "restore", unknown>> = {}) => {
     const deltas: Parameters<BroadcastDelta>[0][] = [];
     const globalDb = {
         delete: vi.fn(async () => undefined),
@@ -66,6 +66,14 @@ describe("ctx.db writes on a .global() table reach live subscriptions", () => {
         await writer.delete("counters", "g1");
 
         expect(deltas).toStrictEqual([{ key: "g1", op: "delete", table: "counters" }]);
+    });
+
+    it("a restore broadcasts an update for the row", async () => {
+        const { deltas, writer } = setup({ restore: vi.fn(async () => undefined) });
+
+        await writer.restore?.("counters", "g1");
+
+        expect(deltas).toStrictEqual([{ key: "g1", op: "update", table: "counters" }]);
     });
 
     it("a conditional patch broadcasts only when it applied", async () => {
