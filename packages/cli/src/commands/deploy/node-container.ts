@@ -21,7 +21,16 @@ import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import type { Node as JsonNode } from "jsonc-parser";
 import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
-import { BINDING_NAME, isDeclared, refuseWorkerEnvOverride, unboundSections, WORKER_ENV } from "../../util/node-target-bindings";
+import {
+    BINDING_NAME,
+    isDeclared,
+    MAIL_QUEUE_NAME,
+    mailQueueBindings,
+    queueEntries,
+    refuseWorkerEnvOverride,
+    unboundSections,
+    WORKER_ENV,
+} from "../../util/node-target-bindings";
 import type { Spawner } from "../../util/spawn";
 
 /** Where the build context is written, relative to the project root. `.lunora/` is already the CLI's gitignored state directory. */
@@ -58,12 +67,6 @@ const SHARD_DURABLE_OBJECT_CLASSES: ReadonlySet<string> = new Set(
 
 /** An environment variable name as a container runtime sets one. */
 const ENV_NAME = /^[A-Z_a-z]\w*$/u;
-
-/**
- * The queue `@lunora/mail`'s producer writes to: the name the `mail` starter's wrangler config gives it, and the one
- * `@lunora/platform-node`'s mail host reserves. A producer bound to it is how the server knows the app queues mail.
- */
-const MAIL_QUEUE_NAME = "lunora-mail";
 
 /** What the mail host reads to deliver: the sender, and Resend's key, the only transport the container has. */
 const MAIL_ENV = ["MAIL_FROM", "RESEND_API_KEY"] as const;
@@ -402,28 +405,6 @@ const requiredSecretNames = (secrets: unknown, configName: string): string[] => 
  * @param projectRoot Directory containing the wrangler config.
  */
 /** `queues` entries of one kind (`producers`, `consumers`), as records; anything else in the list is dropped. */
-const queueEntries = (queues: unknown, kind: "consumers" | "producers"): Record<string, unknown>[] => {
-    const entries = isRecord(queues) ? queues[kind] : undefined;
-
-    return Array.isArray(entries) ? entries.filter((entry): entry is Record<string, unknown> => isRecord(entry)) : [];
-};
-
-/**
- * Every binding of an app {@link MAIL_QUEUE_NAME} producer: empty when the app queues no mail. Each is bound to the platform's
- * mail queue, so an app that names the queue under two bindings can use either.
- */
-const mailQueueBindings = (queues: unknown, configName: string): string[] =>
-    queueEntries(queues, "producers")
-        .filter((entry) => entry.queue === MAIL_QUEUE_NAME)
-        .map((producer) => {
-            if (typeof producer.binding !== "string" || !BINDING_NAME.test(producer.binding)) {
-                throw new Error(
-                    `--target node binds each ${MAIL_QUEUE_NAME} queue producer by its "binding" name, and one in ${configName} has ${producer.binding === undefined ? "none" : `${JSON.stringify(producer.binding)}, which is not a valid binding name`}`,
-                );
-            }
-
-            return producer.binding;
-        });
 
 /**
  * What of `queues` the server leaves unbound, given the mail producers it binds. A {@link MAIL_QUEUE_NAME} producer is

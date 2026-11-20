@@ -36,7 +36,7 @@ import { resolveLocalWorkerEnv, resolveSchemaDirectory, wranglerDotenvFiles } fr
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 
-import { BINDING_NAME, refuseWorkerEnvOverride, unboundSections, WORKER_ENV } from "../../util/node-target-bindings";
+import { BINDING_NAME, MAIL_QUEUE_NAME, mailQueueBindings, refuseWorkerEnvOverride, unboundSections, WORKER_ENV } from "../../util/node-target-bindings";
 import { codegenRequested } from "./lifecycle";
 import type {
     DevCommandOptions,
@@ -85,6 +85,8 @@ interface NodeDevProject {
     environment: string | undefined;
     /** `hyperdrive[].binding` names. */
     hyperdrive: string[];
+    /** The bindings of the app's mail-queue producers, which dev leaves undelivered. */
+    mailQueues: string[];
     /** The whole config as written; `resolveLocalWorkerEnv` picks the environment's `vars` and `secrets` from it itself. */
     parsed: NodeWranglerConfig;
     /** `secrets_store_secrets[].binding` names. */
@@ -175,6 +177,7 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
     );
 
     const unbound = [...unboundSections(view as Record<string, unknown>), ...external];
+    const mailQueues = mailQueueBindings((view as Record<string, unknown>)["queues"], configName);
 
     return {
         configPath,
@@ -182,6 +185,7 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
         entry: resolve(projectRoot, view.main),
         environment,
         hyperdrive,
+        mailQueues,
         parsed,
         secrets,
         unbound,
@@ -274,6 +278,14 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     ) {
         throw new TypeError(
             "--target node needs a @lunora/platform-node that exports createNodeAppHost and checkNodeAppHost (1.0.0-alpha.220 or later); upgrade it in this project",
+        );
+    }
+
+    // The container deploy composes a mail host for these; dev does not. While WORKER_ENV is development `@lunora/mail` captures
+    // each send to the Studio inbox instead, as under `wrangler dev`, so a queued send is only stranded with capture forced off.
+    if (project.mailQueues.length > 0) {
+        logger.warn(
+            `node: queued mail (the ${MAIL_QUEUE_NAME} queue, bound as ${project.mailQueues.join(", ")}) is not delivered in Node dev — @lunora/mail captures sends to the Studio inbox while WORKER_ENV is development; with LUNORA_MAIL_CAPTURE=0 they stay queued and unsent`,
         );
     }
 

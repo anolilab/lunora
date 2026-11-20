@@ -67,6 +67,38 @@ const COMPOSED_OR_CONFIG_KEYS: ReadonlySet<string> = new Set([
     "workers_dev",
 ]);
 
+/**
+ * The queue `@lunora/mail`'s producer writes to: the name the `mail` starter's wrangler config gives it, and the one
+ * `@lunora/platform-node`'s mail host reserves. A producer bound to it is how the host knows the app queues mail.
+ */
+const MAIL_QUEUE_NAME = "lunora-mail";
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The `queues.producers` or `queues.consumers` entries of a wrangler config, skipping anything that is not an object. */
+const queueEntries = (queues: unknown, kind: "consumers" | "producers"): Record<string, unknown>[] => {
+    const entries = isRecord(queues) ? queues[kind] : undefined;
+
+    return Array.isArray(entries) ? entries.filter((entry): entry is Record<string, unknown> => isRecord(entry)) : [];
+};
+
+/**
+ * Every binding of an app {@link MAIL_QUEUE_NAME} producer: empty when the app queues no mail. Each is bound to the platform's
+ * mail queue, so an app that names the queue under two bindings can use either.
+ */
+const mailQueueBindings = (queues: unknown, configName: string): string[] =>
+    queueEntries(queues, "producers")
+        .filter((entry) => entry.queue === MAIL_QUEUE_NAME)
+        .map((producer) => {
+            if (typeof producer.binding !== "string" || !BINDING_NAME.test(producer.binding)) {
+                throw new Error(
+                    `--target node binds each ${MAIL_QUEUE_NAME} queue producer by its "binding" name, and one in ${configName} has ${producer.binding === undefined ? "none" : `${JSON.stringify(producer.binding)}, which is not a valid binding name`}`,
+                );
+            }
+
+            return producer.binding;
+        });
+
 /** Whether a declared section binds anything: an empty list or object is no binding. */
 const isDeclared = (value: unknown): boolean => {
     if (Array.isArray(value)) {
@@ -108,4 +140,4 @@ const refuseWorkerEnvOverride = (
     throw new Error(`--target node sets ${WORKER_ENV} to ${mode} itself, and ${configName} also declares it in ${setBy.join(", ")}. Remove it: ${consequence}`);
 };
 
-export { BINDING_NAME, isDeclared, refuseWorkerEnvOverride, unboundSections, WORKER_ENV };
+export { BINDING_NAME, isDeclared, MAIL_QUEUE_NAME, mailQueueBindings, queueEntries, refuseWorkerEnvOverride, unboundSections, WORKER_ENV };

@@ -1106,6 +1106,20 @@ export default crons;
             }
         });
 
+        it("warns that queued mail is not delivered when the app produces to the mail queue", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { queues: { producers: [{ binding: "MAIL_QUEUE", queue: "lunora-mail" }] } });
+
+            const dev = await startWorker();
+
+            try {
+                expect(dev.warnings.join("\n")).toMatch(/queued mail \(the lunora-mail queue, bound as MAIL_QUEUE\) is not delivered in Node dev/u);
+            } finally {
+                await dev.stop();
+            }
+        });
+
         it("names every declared binding it does not compose in the startup warning", async () => {
             expect.assertions(2);
 

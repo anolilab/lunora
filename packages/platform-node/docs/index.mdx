@@ -182,6 +182,10 @@ resolves `@lunora/platform-node` from the project and serves the worker entry
   held the same port and databases.
 - `CLOUDFLARE_ENV` selects a wrangler environment, as for `wrangler dev`: its
   `main`, bindings and `vars`, and `.dev.vars.<env>` before `.dev.vars`.
+- Mail is captured to the Studio inbox while `WORKER_ENV` is `development`. No
+  `createNodeMailHost` runs in dev, so with `LUNORA_MAIL_CAPTURE=0` a send to
+  the `lunora-mail` queue is not delivered; a startup warning says so when the
+  app produces to that queue.
 - Each `durable_objects` binding is composed over this host with the class the
   entry exports (`createNodeAppHost`). Shard data persists in `.lunora/node/`.
 - `env` carries the wrangler `vars`, `.dev.vars` (or `.env`) and
