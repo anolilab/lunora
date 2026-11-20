@@ -10,9 +10,19 @@ const siteverify = (success: boolean) => vi.fn<typeof fetch>(async () => Respons
 const signUp = (fields: Record<string, unknown>, headers: Record<string, string> = {}): Request =>
     new Request("https://lunora.sh/api/waitlist", {
         body: JSON.stringify({ email: "a@b.co", privacy: true, source: "cloud", turnstileToken: "token", ...fields }),
-        headers: { "content-type": "application/json", ...headers },
+        headers: { "content-type": "application/json", origin: "https://lunora.sh", ...headers },
         method: "POST",
     });
+
+const limiterAnswering = (success: boolean) => {
+    return {
+        limit: vi.fn<(options: { key: string }) => Promise<{ success: boolean }>>(async () => {
+            return { success };
+        }),
+    };
+};
+
+const allowAll = () => limiterAnswering(true);
 
 const memoryStore = () => {
     const entries = new Map<string, string>();
@@ -115,6 +125,7 @@ describe(handleWaitlist, () => {
         const store = memoryStore();
         const response = await handleWaitlist(signUp({ email: "A@B.co" }, { "CF-Connecting-IP": "203.0.113.7" }), {
             fetcher: siteverify(true),
+            limiter: allowAll(),
             store,
             turnstileSecret: SECRET,
         });
@@ -128,7 +139,7 @@ describe(handleWaitlist, () => {
         expect.assertions(3);
 
         const store = memoryStore();
-        const response = await handleWaitlist(signUp({}), { fetcher: siteverify(false), store, turnstileSecret: SECRET });
+        const response = await handleWaitlist(signUp({}), { fetcher: siteverify(false), limiter: allowAll(), store, turnstileSecret: SECRET });
 
         expect(response.status).toBe(403);
         await expect(response.json()).resolves.toStrictEqual({ error: "verification_failed" });
@@ -139,7 +150,12 @@ describe(handleWaitlist, () => {
         expect.assertions(2);
 
         const store = memoryStore();
-        const response = await handleWaitlist(signUp({ turnstileToken: undefined }), { fetcher: siteverify(true), store, turnstileSecret: SECRET });
+        const response = await handleWaitlist(signUp({ turnstileToken: undefined }), {
+            fetcher: siteverify(true),
+            limiter: allowAll(),
+            store,
+            turnstileSecret: SECRET,
+        });
 
         expect(response.status).toBe(403);
         expect(store.entries.size).toBe(0);
@@ -149,9 +165,109 @@ describe(handleWaitlist, () => {
         expect.assertions(2);
 
         const fetcher = siteverify(true);
-        const response = await handleWaitlist(signUp({ email: "not-an-address" }), { fetcher, store: memoryStore(), turnstileSecret: SECRET });
+        const response = await handleWaitlist(signUp({ email: "not-an-address" }), {
+            fetcher,
+            limiter: allowAll(),
+            store: memoryStore(),
+            turnstileSecret: SECRET,
+        });
 
         expect(response.status).toBe(400);
         expect(fetcher).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["text/plain", { "content-type": "text/plain" }],
+        ["form-encoded", { "content-type": "application/x-www-form-urlencoded" }],
+    ])("refuses a %s body, which another site can send without a preflight", async (_case, headers) => {
+        expect.assertions(2);
+
+        const store = memoryStore();
+        const response = await handleWaitlist(signUp({}, headers), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET });
+
+        expect(response.status).toBe(415);
+        expect(store.entries.size).toBe(0);
+    });
+
+    it("accepts a JSON content type that carries a charset", async () => {
+        expect.assertions(1);
+
+        const response = await handleWaitlist(signUp({}, { "content-type": "application/json; charset=utf-8" }), {
+            fetcher: siteverify(true),
+            limiter: allowAll(),
+            store: memoryStore(),
+            turnstileSecret: SECRET,
+        });
+
+        expect(response.status).toBe(200);
+    });
+
+    it.each([
+        ["another site", { origin: "https://evil.example" }],
+        ["no", { origin: "" }],
+    ])("refuses a sign-up from %s origin", async (_case, headers) => {
+        expect.assertions(2);
+
+        const store = memoryStore();
+        const response = await handleWaitlist(signUp({}, headers), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET });
+
+        expect(response.status).toBe(403);
+        expect(store.entries.size).toBe(0);
+    });
+
+    it("refuses a client over its sign-up limit before spending a siteverify call", async () => {
+        expect.assertions(4);
+
+        const fetcher = siteverify(true);
+        const limiter = limiterAnswering(false);
+        const store = memoryStore();
+        const response = await handleWaitlist(signUp({}, { "CF-Connecting-IP": "203.0.113.7" }), {
+            fetcher,
+            limiter,
+            store,
+            turnstileSecret: SECRET,
+        });
+
+        expect(response.status).toBe(429);
+        expect(limiter.limit).toHaveBeenCalledWith({ key: "203.0.113.7" });
+        expect(fetcher).not.toHaveBeenCalled();
+        expect(store.entries.size).toBe(0);
+    });
+
+    it("skips the limit when the client address is unknown, rather than sharing one bucket", async () => {
+        expect.assertions(1);
+
+        const limiter = allowAll();
+
+        await handleWaitlist(signUp({}), { fetcher: siteverify(true), limiter, store: memoryStore(), turnstileSecret: SECRET });
+
+        expect(limiter.limit).not.toHaveBeenCalled();
+    });
+
+    it("answers a repeat sign-up KV throttles on the same key as stored", async () => {
+        expect.assertions(1);
+
+        const store = {
+            put: async () => {
+                throw new Error("KV PUT failed: 429 Too Many Requests");
+            },
+        };
+        const response = await handleWaitlist(signUp({}), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET });
+
+        expect(response.status).toBe(200);
+    });
+
+    it("answers 503 when KV refuses the write for any other reason", async () => {
+        expect.assertions(2);
+
+        const store = {
+            put: async () => {
+                throw new Error("KV put() limit exceeded for the day.");
+            },
+        };
+        const response = await handleWaitlist(signUp({}), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET });
+
+        expect(response.status).toBe(503);
+        await expect(response.json()).resolves.toStrictEqual({ error: "store_unavailable" });
     });
 });

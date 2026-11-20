@@ -1,5 +1,5 @@
 import alchemy from "alchemy";
-import { KVNamespace, TanStackStart } from "alchemy/cloudflare";
+import { KVNamespace, RateLimit, TanStackStart } from "alchemy/cloudflare";
 
 // Deployed with `pnpm run deploy`. Credentials come from CLOUDFLARE_ACCOUNT_ID and
 // CLOUDFLARE_API_TOKEN in the environment, never from this file; ALCHEMY_PASSWORD
@@ -17,10 +17,14 @@ if (!process.env.VITE_TURNSTILE_SITE_KEY) {
 // stored sign-ups. The binding name matches `WAITLIST` in src/routes/api/waitlist.ts.
 const waitlist = await KVNamespace("WAITLIST", { adopt: true, title: "lunora-docs-waitlist" });
 
+// Sign-ups per client address: five a minute covers a typo and a retry. The namespace
+// id is the account-wide key the limit's counters live under, so keep it stable.
+const waitlistLimiter = RateLimit({ namespace_id: 1001, simple: { limit: 5, period: 60 } });
+
 // The package's full build: it generates the package pages, error reference and stats before `vite build`.
 // dist/client is uploaded as static assets.
 await TanStackStart("lunora-docs", {
-    bindings: { TURNSTILE_SECRET_KEY: alchemy.secret.env.TURNSTILE_SECRET_KEY, WAITLIST: waitlist },
+    bindings: { TURNSTILE_SECRET_KEY: alchemy.secret.env.TURNSTILE_SECRET_KEY, WAITLIST: waitlist, WAITLIST_LIMITER: waitlistLimiter },
     build: "pnpm run build",
     compatibilityDate: "2026-10-01",
 });

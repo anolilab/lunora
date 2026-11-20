@@ -7,7 +7,7 @@ import { handleWaitlist } from "@/lib/waitlist";
 export const Route = createFileRoute("/api/waitlist")({
     server: {
         handlers: {
-            POST: ({ request }) => handleWaitlist(request, { store: env.WAITLIST, turnstileSecret: env.TURNSTILE_SECRET_KEY }),
+            POST: ({ request }) => handleWaitlist(request, { limiter: env.WAITLIST_LIMITER, store: env.WAITLIST, turnstileSecret: env.TURNSTILE_SECRET_KEY }),
         },
     },
 });

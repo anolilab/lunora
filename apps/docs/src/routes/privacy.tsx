@@ -377,6 +377,11 @@ const RouteComponent = () => (
             .
         </p>
         <p>
+            For the same reason, the server limits how many waitlist submissions it accepts from one IP address per minute. To do so, Cloudflare counts the
+            submissions received per IP address over a short period. This count is not stored with your submission, is not written to permanent storage by us
+            and is not merged with other data. The legal basis is our legitimate interest in protecting the form against abuse (Art. 6(1)(f) GDPR).
+        </p>
+        <p>
             We retain the data you provide via the waitlist until you withdraw your consent or the purpose for storing it ceases to apply (for example, after we
             have processed your request). Mandatory statutory retention periods remain unaffected.
         </p>
