@@ -9,6 +9,7 @@ import { handleHostdRolloutRoute } from "../src/deploy/routes/hostd";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import { MAX_JSON_BODY_BYTES, withContext } from "../src/deploy/routes/shared";
 import { handleTenantRecursionRoute } from "../src/deploy/routes/tenant-admin";
+import { handleCloudflareCostsRoute, handleUsageSummaryRoute } from "../src/deploy/routes/usage";
 
 /**
  * Every control-plane JSON route reads its body through `readJsonObject`: an array or a scalar is
@@ -57,6 +58,8 @@ const routes: { error: string; handler: Handler; name: string }[] = [
         name: "hostd rollout",
     },
     { error: "scriptName and depth are required", handler: handleTenantRecursionRoute, name: "tenant recursion" },
+    { error: "organizationId is required; periodStart, when given, is a number", handler: handleUsageSummaryRoute, name: "usage summary" },
+    { error: "organizationId and id are required", handler: handleCloudflareCostsRoute, name: "cloudflare costs" },
 ];
 
 const post = (body: string): Request =>

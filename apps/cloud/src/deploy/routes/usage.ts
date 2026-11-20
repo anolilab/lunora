@@ -20,12 +20,6 @@ import { isOptionalString, jsonError, nonEmptyString, readJsonObject, rejected, 
 const MAX_COST_PRODUCTS = 100;
 const MAX_LABEL = 128;
 
-const readBody = async (request: Request): Promise<null | Record<string, unknown>> => {
-    const body: unknown = await request.json().catch(() => null);
-
-    return typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
-};
-
 /**
  * `POST /v1/usage/summary` — one period's usage per meter, estimated spend,
  * cap and warn thresholds, level, and the current period's projection.
@@ -38,7 +32,7 @@ export const handleUsageSummaryRoute = async (request: Request, environment: Rou
         return jsonError(401, "missing bearer deploy key");
     }
 
-    const body = await readBody(request);
+    const body = await readJsonObject(request);
 
     if (typeof body?.["organizationId"] !== "string" || (body["periodStart"] !== undefined && typeof body["periodStart"] !== "number")) {
         return jsonError(400, "organizationId is required; periodStart, when given, is a number");
@@ -71,7 +65,7 @@ export const handleCloudflareCostsRoute = async (request: Request, environment: 
         return jsonError(401, "missing bearer deploy key");
     }
 
-    const body = await readBody(request);
+    const body = await readJsonObject(request);
 
     if (typeof body?.["organizationId"] !== "string" || typeof body["id"] !== "string") {
         return jsonError(400, "organizationId and id are required");
