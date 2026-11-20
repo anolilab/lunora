@@ -8,7 +8,8 @@ import type { RateLimitConfigMap } from "../src/types";
 const NOT_CONFIGURED_RE = /not configured/;
 const POSITIVE_PERIOD_RE = /period must be a positive number/;
 const POSITIVE_RATE_RE = /rate must be a positive number/;
-const NON_NEGATIVE_CAPACITY_RE = /capacity must be a non-negative number/;
+const CAPACITY_AT_LEAST_ONE_RE = /capacity must be at least 1/;
+const CEILING_RATE_AT_LEAST_ONE_RE = /rate must be at least 1/;
 
 const config = {
     login: { kind: "fixed window", period: 1000, rate: 3 },
@@ -417,12 +418,45 @@ describe("config validation", () => {
         expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", period: 1000, rate } }, now: () => 0 })).toThrow(POSITIVE_RATE_RE);
     });
 
-    it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a negative/non-finite capacity (%p) at construction", (capacity) => {
+    it.each([0, 0.5, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a capacity no request fits (%p) at construction", (capacity) => {
         expect.assertions(1);
 
         expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", capacity, period: 1000, rate: 4 } }, now: () => 0 })).toThrow(
-            NON_NEGATIVE_CAPACITY_RE,
+            CAPACITY_AT_LEAST_ONE_RE,
         );
+    });
+
+    it("admits one request under a capacity of 1", async () => {
+        expect.assertions(2);
+
+        const limiter = new RateLimiter({ config: { hits: { kind: "fixed window", capacity: 1, period: 1000, rate: 1 } }, now: () => 0 });
+
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: true });
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: false, reason: "rate" });
+    });
+
+    it.each([
+        ["a sliding window", { kind: "sliding window", period: 1000, rate: 0.5 }],
+        ["a token bucket with no capacity", { kind: "token bucket", period: 1000, rate: 0.5 }],
+        ["a fixed window with no capacity", { kind: "fixed window", period: 1000, rate: 0.5 }],
+    ] as const)("rejects a rate below 1 at construction when it is the ceiling: %s", (_label, hits) => {
+        expect.assertions(1);
+
+        expect(() => new RateLimiter({ config: { hits }, now: () => 0 })).toThrow(CEILING_RATE_AT_LEAST_ONE_RE);
+    });
+
+    it("keeps a fractional rate that refills a bucket with a capacity of at least 1", async () => {
+        expect.assertions(3);
+
+        const clock = { now: 0 };
+        const limiter = new RateLimiter({ config: { hits: { capacity: 1, kind: "token bucket", period: 1000, rate: 0.5 } }, now: () => clock.now });
+
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: true });
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: false, reason: "rate" });
+
+        clock.now = 2000;
+
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: true });
     });
 });
 
