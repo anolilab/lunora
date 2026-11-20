@@ -26,7 +26,7 @@ Returns a `resolveIdentity`-compatible function.
 | ---------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `issuer`         | —                         | Expected `iss` (string or list). Without `jwksUrl`, the JWKS is discovered from the first issuer's `/.well-known/openid-configuration`; that issuer must be https and the document must name it. |
 | `jwksUrl`        | —                         | The provider's JWKS (https). One of `issuer` / `jwksUrl` / `keySet` is required.                                                                                                                 |
-| `audience`       | none                      | Expected `aud`. Set it whenever the provider issues one.                                                                                                                                         |
+| `audience`       | required                  | Expected `aud` (string or list). `false` skips the check; see "No audience?" below.                                                                                                              |
 | `algorithms`     | every asymmetric JOSE alg | Allowed signing algorithms.                                                                                                                                                                      |
 | `requiredClaims` | `["exp"]`                 | Claims the token must carry.                                                                                                                                                                     |
 | `token`          | `bearerToken`             | `(request) => string \| null \| undefined`. See `headerToken(name)`, `cookieToken(name)` and `firstToken(...sources)`.                                                                           |
@@ -45,7 +45,16 @@ These cases resolve to `null` (anonymous):
 
 A correctly signed token whose only fault is a past `exp` keeps its identity.
 The runtime then answers `TOKEN_EXPIRED`. Missing configuration throws when the
-resolver is created.
+resolver is created, an unset or empty `audience` included.
+
+### No audience?
+
+Without an `aud` check, a token the same issuer minted for any other
+application verifies too, so `audience` has no default. Pass
+`audience: false` only when the provider puts no `aud` in its tokens and
+another claim binds a token to your app, and check that claim in `claims`
+(return `null` when it does not match). The `clerk` and `workos` presets do
+this for you.
 
 One remote key set is cached per JWKS URL per isolate. An unknown `kid` refetches
 it once, which handles key rotation. A token whose `iat` lies more than 60 s
