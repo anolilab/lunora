@@ -29,7 +29,6 @@ const memoryStore = () => {
 
     return {
         entries,
-        get: async (key: string) => entries.get(key) ?? null,
         put: async (key: string, value: string) => {
             entries.set(key, value);
         },
@@ -258,6 +257,9 @@ describe(handleWaitlist, () => {
         ["a compressed IPv6 address on its /64", "2001:DB8::1", "2001:db8:0:0::/64"],
         // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a documentation-range (RFC 5737) fixture, never contacted
         ["an IPv4-mapped address on its IPv4 part", "::ffff:203.0.113.7", "203.0.113.7"],
+        // eslint-disable-next-line sonarjs/no-hardcoded-ip -- 203.0.113.7 (RFC 5737) in hex, a fixture never contacted
+        ["a hexadecimal IPv4-mapped address on its IPv4 part", "::ffff:cb00:7107", "203.0.113.7"],
+        ["an IPv6 address with a dotted suffix on its /64, not the IPv4 part", "2001:db8::192.0.2.1", "2001:db8:0:0::/64"],
     ])("limits %s", async (_case, clientIp, key) => {
         expect.assertions(1);
 
@@ -301,52 +303,64 @@ describe(handleWaitlist, () => {
         expect(limiter.limit).not.toHaveBeenCalled();
     });
 
-    const throttledStore = (stored: Map<string, string>) => {
+    /** A store that throws KV's same-key 429 for the first `throttled` writes, then accepts. */
+    const throttledStore = (throttled: number) => {
+        let attempts = 0;
+
         return {
-            get: async (key: string) => stored.get(key) ?? null,
-            put: async () => {
-                throw new Error("KV PUT failed: 429 Too Many Requests");
-            },
+            put: vi.fn<(key: string, value: string) => Promise<void>>(async () => {
+                attempts += 1;
+
+                if (attempts <= throttled) {
+                    throw new Error("KV PUT failed: 429 Too Many Requests");
+                }
+            }),
         };
     };
 
-    it("answers a same-key throttle as stored when the address is already in KV", async () => {
-        expect.assertions(1);
+    it("retries a same-key throttled write once, after KV's cooldown", async () => {
+        expect.assertions(3);
 
-        const store = throttledStore(new Map([["waitlist:a@b.co", "{}"]]));
-        const response = await handleWaitlist(signUp({}), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET });
+        const store = throttledStore(1);
+        const wait = vi.fn<(ms: number) => Promise<void>>(async () => {});
+        const response = await handleWaitlist(signUp({}), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET, wait });
 
         expect(response.status).toBe(200);
+        expect(wait).toHaveBeenCalledWith(1000);
+        expect(store.put).toHaveBeenCalledTimes(2);
     });
 
-    it("answers 503 for a same-key throttle when the address is not in KV", async () => {
-        expect.assertions(1);
+    it("answers 503 when the retried write is throttled again", async () => {
+        expect.assertions(2);
 
         const error = vi.spyOn(console, "error").mockReturnValue(undefined);
+        const store = throttledStore(2);
         const response = await handleWaitlist(signUp({}), {
             fetcher: siteverify(true),
             limiter: allowAll(),
-            store: throttledStore(new Map()),
+            store,
             turnstileSecret: SECRET,
+            wait: async () => {},
         });
 
         error.mockRestore();
 
         expect(response.status).toBe(503);
+        expect(store.put).toHaveBeenCalledTimes(2);
     });
 
-    it("answers 503 and logs the error, without the address, when KV refuses the write for any other reason", async () => {
-        expect.assertions(4);
+    it("answers 503 without a retry, and logs the error without the address, when KV refuses the write for any other reason", async () => {
+        expect.assertions(5);
 
         const failure = new Error("KV put() limit exceeded for the day.");
         const error = vi.spyOn(console, "error").mockReturnValue(undefined);
+        const wait = vi.fn<(ms: number) => Promise<void>>(async () => {});
         const store = {
-            get: async () => null,
             put: async () => {
                 throw failure;
             },
         };
-        const response = await handleWaitlist(signUp({}), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET });
+        const response = await handleWaitlist(signUp({}), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET, wait });
         const logged = [...error.mock.calls];
 
         error.mockRestore();
@@ -355,5 +369,6 @@ describe(handleWaitlist, () => {
         await expect(response.json()).resolves.toStrictEqual({ error: "store_unavailable" });
         expect(logged).toStrictEqual([["waitlist: KV write failed", failure]]);
         expect(JSON.stringify(logged)).not.toContain("a@b.co");
+        expect(wait).not.toHaveBeenCalled();
     });
 });

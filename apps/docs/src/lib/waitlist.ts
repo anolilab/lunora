@@ -1,5 +1,6 @@
 import type { KVNamespace, RateLimit } from "@cloudflare/workers-types/index.ts";
 
+import { ipRateLimitKey } from "../../../../shared/ip-rate-limit-key";
 import { verifyTurnstile } from "./turnstile";
 import { readWaitlistBody } from "./waitlist-body";
 
@@ -7,8 +8,10 @@ interface WaitlistDependencies {
     fetcher?: typeof fetch;
     limiter: Pick<RateLimit, "limit">;
     /** Only the text read of `KVNamespace.get`, whose overloads a test double cannot otherwise satisfy. */
-    store: Pick<KVNamespace, "put"> & { get: (key: string) => Promise<string | null> };
+    store: Pick<KVNamespace, "put">;
     turnstileSecret: string;
+    /** Resolves after `ms`; injected so tests need not wait out the KV cooldown. */
+    wait?: (ms: number) => Promise<void>;
 }
 
 const WHITESPACE = /\s/u;
@@ -59,69 +62,57 @@ const refuseRequest = (request: Request): Response | undefined => {
 };
 
 /**
- * The bucket a client address counts against. An IPv6 client usually holds a whole /64,
- * so keying on the full address would hand it a fresh allowance per address; it counts
- * against its /64 instead. An IPv4-mapped address is keyed on its IPv4 part.
- */
-const limitKey = (clientIp: string): string => {
-    if (!clientIp.includes(":")) {
-        return clientIp;
-    }
-
-    if (clientIp.includes(".")) {
-        return clientIp.slice(clientIp.lastIndexOf(":") + 1);
-    }
-
-    const [head = "", tail = ""] = clientIp.toLowerCase().split("::");
-    const headGroups = head === "" ? [] : head.split(":");
-    const tailGroups = tail === "" ? [] : tail.split(":");
-    const groups = [...headGroups, ...Array.from<string>({ length: 8 - headGroups.length - tailGroups.length }).fill("0"), ...tailGroups];
-
-    return `${groups
-        .slice(0, 4)
-        .map((group) => Number.parseInt(group, 16).toString(16))
-        .join(":")}::/64`;
-};
-
-/**
  * Counts one verified sign-up against the client's address, so a client that solves
  * Turnstile cannot sign up address after address. It runs after verification, so
  * requests that fail validation or Turnstile never use up the allowance of other
  * people behind the same address. Without a client address every caller would share
- * one bucket, so the limit is skipped rather than applied to all.
+ * one bucket, so the limit is skipped rather than applied to all. An IPv6 client
+ * counts against its /64, which it usually holds whole.
  */
 const isOverLimit = async (clientIp: string | null, limiter: WaitlistDependencies["limiter"]): Promise<boolean> => {
     if (!clientIp) {
         return false;
     }
 
-    const { success } = await limiter.limit({ key: limitKey(clientIp) });
+    const { success } = await limiter.limit({ key: ipRateLimitKey(clientIp) });
 
     return !success;
 };
 
-/** A same-key throttle means an earlier write may have landed; only a stored entry proves it did. */
-const isAlreadyStored = async (store: WaitlistDependencies["store"], key: string): Promise<boolean> => {
-    try {
-        return (await store.get(key)) !== null;
-    } catch {
-        return false;
-    }
+/** KV's per-key write cooldown; a write after it is no longer throttled by the one before. */
+const SAME_KEY_COOLDOWN_MS = 1000;
+
+const delay = async (ms: number): Promise<void> => {
+    await new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
 };
 
-/** Whether the sign-up is in KV once this returns. */
-const storeSignUp = async (store: WaitlistDependencies["store"], email: string, source: string): Promise<boolean> => {
+const isSameKeyThrottle = (error: unknown): boolean => error instanceof Error && SAME_KEY_THROTTLED.test(error.message);
+
+/**
+ * Whether the sign-up is in KV once this returns. A same-key throttle means another
+ * write for this address landed within the last second, but KV reads are eventually
+ * consistent, so a read cannot confirm it; the write is retried once after the cooldown.
+ */
+const storeSignUp = async ({ store, wait = delay }: Pick<WaitlistDependencies, "store" | "wait">, email: string, source: string): Promise<boolean> => {
     const key = `waitlist:${email.toLowerCase()}`;
+    const value = JSON.stringify({ consent: true, source, submittedAt: new Date().toISOString() });
 
     try {
-        await store.put(key, JSON.stringify({ consent: true, source, submittedAt: new Date().toISOString() }));
+        try {
+            await store.put(key, value);
+        } catch (error) {
+            if (!isSameKeyThrottle(error)) {
+                throw error;
+            }
+
+            await wait(SAME_KEY_COOLDOWN_MS);
+            await store.put(key, value);
+        }
 
         return true;
     } catch (error) {
-        if (error instanceof Error && SAME_KEY_THROTTLED.test(error.message) && (await isAlreadyStored(store, key))) {
-            return true;
-        }
-
         // The error is logged without the key, which holds the submitted address.
         // eslint-disable-next-line no-console -- Workers Logs is the only record of a failed write
         console.error("waitlist: KV write failed", error);
@@ -136,7 +127,7 @@ const storeSignUp = async (store: WaitlistDependencies["store"], email: string, 
  * entry: GDPR requires an explicit opt-in before an address is stored. The
  * Turnstile check runs after validation, so malformed input never costs a `siteverify` call.
  */
-const handleWaitlist = async (request: Request, { fetcher, limiter, store, turnstileSecret }: WaitlistDependencies): Promise<Response> => {
+const handleWaitlist = async (request: Request, { fetcher, limiter, store, turnstileSecret, wait }: WaitlistDependencies): Promise<Response> => {
     const refused = refuseRequest(request);
 
     if (refused) {
@@ -178,7 +169,7 @@ const handleWaitlist = async (request: Request, { fetcher, limiter, store, turns
         return Response.json({ error: "rate_limited" }, { status: 429 });
     }
 
-    if (!(await storeSignUp(store, email, typeof body.source === "string" && SOURCES.has(body.source) ? body.source : "stable"))) {
+    if (!(await storeSignUp({ store, wait }, email, typeof body.source === "string" && SOURCES.has(body.source) ? body.source : "stable"))) {
         return Response.json({ error: "store_unavailable" }, { status: 503 });
     }
 
