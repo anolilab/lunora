@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { parse as parseJsonc } from "jsonc-parser";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -57,9 +58,7 @@ const deployedBindings = (): string[] => {
 
 /** Bindings `wrangler dev` provides: wrangler.jsonc's resources plus the secrets `.dev.vars.example` documents. */
 const localBindings = (): string[] => {
-    const { config } = ts.parseConfigFileTextToJson("wrangler.jsonc", read("wrangler.jsonc")) as {
-        config: { kv_namespaces?: { binding: string }[]; ratelimits?: { name: string }[] };
-    };
+    const config = parseJsonc(read("wrangler.jsonc")) as { kv_namespaces?: { binding: string }[]; ratelimits?: { name: string }[] };
     const secrets = read(".dev.vars.example")
         .split("\n")
         .flatMap((line) => /^([A-Z][A-Z0-9_]*)=/u.exec(line)?.[1] ?? []);

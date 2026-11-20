@@ -81,11 +81,6 @@ apps/hostd/target/
 # schema version's identity.)
 **/.lunora-schema.json
 
-# Netlify's build output for the docs site. Gitignored, so it only exists in a
-# checkout where `apps/docs` has been built — and then `lint:oxfmt` fails on
-# a bundle no one wrote and no one can usefully format.
-**/.netlify
-
 # vis release state — rewritten by the release job's serializer (2-space JSON) on
 # every run, so a reformat here is undone by the next release commit.
 .vis/release/

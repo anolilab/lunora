@@ -8,11 +8,7 @@ PostHog browser analytics is initialized globally for the TanStack Start docs si
 
 - **SDK:** The existing `posthog-js` dependency was reused; no manifest or lockfile changes were needed. `posthog-node` was not added because no server-side analytics routes were present.
 - **Initialization:** `src/lib/posthog.ts` is the single browser initialization module, loaded globally from `src/routes/__root.tsx`. It reads `VITE_PUBLIC_POSTHOG_PROJECT_TOKEN` and `VITE_PUBLIC_POSTHOG_HOST`, and sends events through the first-party `/pr/posthog` path rather than to a PostHog hostname directly.
-- **Ingestion path:** `api_host` is the literal string `/pr/posthog`. That path is not served by the app — it only resolves because two layers proxy it, and **both** must carry the rule:
-    - **Production:** `/pr/posthog/static/*` → `eu-assets.i.posthog.com` and `/pr/posthog/*` → `eu.i.posthog.com`, as 200 rewrites in `public/_redirects`, ordered before the TanStack Start SSR catch-all.
-    - **Dev:** the matching `server.proxy` entries in `vite.config.ts`.
-
-    Change the region or the path in one layer and you must change the other. There is no shared constant; the comments in each file point at the other.
+- **Ingestion path:** `api_host` is the literal string `/pr/posthog`. The Worker serves it from the server route `src/routes/pr/posthog/$.ts`, which forwards `/pr/posthog/static/*` to `eu-assets.i.posthog.com` and everything else under `/pr/posthog/*` to `eu.i.posthog.com`, passing responses through unchanged. Change the region there, in one place.
 
 - **Environment:** Real values are set in `.env` (gitignored); the variable names are documented in `.env.example`. `VITE_PUBLIC_POSTHOG_HOST` is **not** the ingestion host — ingestion is the proxy path above. It only feeds `ui_host`, which drives the "view in PostHog" links the toolbar renders.
 - **Consent:** the init opts out of capture and of device persistence by default, so nothing is stored on the device and nothing is sent before the visitor answers the banner. Cookieless counting was removed; the privacy policy describes this exact behaviour. The banner is forced to opt-in for every visitor through `offlinePolicy` in `src/routes/__root.tsx`, because c15t otherwise auto-grants measurement in regions with no opt-in rule. `AnalyticsProvider` carries the c15t decision across by calling `applyMeasurementConsent`; it must not call `init` itself, because posthog-js treats a second `init` as a no-op and the settings above would silently never apply.
@@ -36,11 +32,9 @@ Captures are intentionally personless and no PII is included in event properties
 
 ## Defects found and fixed
 
-**1. Production ingestion was never wired.** `api_host: "/pr/posthog"` was matched only by `server.proxy` in `vite.config.ts`, which exists exclusively in the Vite dev server. `netlify.toml` and `public/_redirects` had no such rule, so on the deployed site every `capture()` would have POSTed to `https://lunora.sh/pr/posthog`, fallen through to the SSR catch-all, and been dropped — silently, since `posthog-js` does not surface transport failures. Fixed by adding the two proxy rules to `public/_redirects`. Two rules rather than one because `posthog-js` fetches its remote config and toolbar bundles from the assets host while sending events to the ingestion host; the `/static/*` rule must sort first. They are 200 rewrites, not 30x redirects, which would break the CORS preflight on ingestion POSTs.
+**1. Production ingestion was never wired.** `api_host: "/pr/posthog"` was matched only by `server.proxy` in `vite.config.ts`, which exists exclusively in the Vite dev server. The deployed site had no such rule, so every `capture()` would have POSTed to `https://lunora.sh/pr/posthog`, fallen through to the SSR catch-all, and been dropped — silently, since `posthog-js` does not surface transport failures. It is now served by the Worker route above. It splits two ways because `posthog-js` fetches its remote config and toolbar bundles from the assets host while sending events to the ingestion host. It proxies rather than redirects, since a 30x would break the CORS preflight on ingestion POSTs.
 
 **2. A missing token crashed the dev server.** `src/lib/posthog.ts` did a module-scope `throw new Error(...)` when either variable was absent. Because `.env` is gitignored, that is the state of every fresh clone — so any contributor editing a docs page hit a hard crash on an analytics variable they had no reason to hold. Downgraded to a `console.warn` naming the missing variables; analytics simply stays off.
-
-The dev proxy in `vite.config.ts` also gained the `/static` split so dev and production resolve identically.
 
 ## Dashboard
 
@@ -64,20 +58,17 @@ Carried over from the original run, **not** re-verified after the fixes:
 
 Still unverified by anything:
 
-- **No runtime event delivery check has been performed, in dev or production.** The proxy rules are written to the documented Netlify recipe but have not been exercised against a deploy. This is the one item that would have caught defect 1, and it remains open.
+- **No runtime event delivery check has been performed, in dev or production.** The Worker route answers locally under `wrangler dev`, but has not been exercised against a deploy. This is the one item that would have caught defect 1, and it remains open.
 
 ## Known limitations
 
 - **No stable user identity.** The application has no auth model. If authentication is added without also wiring `identify()` and `reset()`, events and errors stay anonymous and can fragment across identities.
 - **`npm install` does not work in this app directory.** It cannot resolve the workspace's `catalog:` dependency protocol; use `pnpm`. This did not affect the integration because `posthog-js` was already installed, but the original report's build/lint claims were produced with `npm run …`, which works only because the scripts themselves shell out to already-installed binaries.
-- **Full-project Prettier reports two unrelated pre-existing failures:** the generated `src/data/packages.ts` and `src/routeTree.gen.ts`. The wizard-cache and `.netlify/` entries the original report listed here no longer apply — `.posthog-wizard-cache/` has since been deleted and `.netlify` is gitignored. All integration files pass.
-- **The integration is entirely uncommitted.** `src/lib/posthog.ts`, `.env.example`, and this report are untracked; the five instrumented components, `vite.config.ts`, `public/_redirects`, and `src/routes/__root.tsx` are modified but unstaged. Decide whether this report belongs in the repo at all, and if so where — `apps/docs/` root is not where the site's other documents live.
+- **Full-project Prettier reports two unrelated pre-existing failures:** the generated `src/data/packages.ts` and `src/routeTree.gen.ts`. The wizard-cache entry the original report listed here no longer applies — `.posthog-wizard-cache/` has since been deleted. All integration files pass.
 
 ## Before you merge
 
 - [ ] **Verify delivery in a deploy preview.** Trigger each of the four actions and confirm the events arrive and populate the dashboard. Specifically confirm `/pr/posthog/static/*` and `/pr/posthog/*` return 200 with PostHog content and not the SSR HTML shell — that check is what defect 1 slipped past.
 - [ ] Set `VITE_PUBLIC_POSTHOG_PROJECT_TOKEN` and `VITE_PUBLIC_POSTHOG_HOST` in every deploy environment, not only local `.env`. Names are in `.env.example`.
 - [ ] Confirm the PostHog project's data retention period matches the privacy policy, and that the data processing agreement is signed.
-- [ ] Confirm the Netlify plan permits proxy rewrites to an external host; if not, the `/pr/posthog` design cannot work and `api_host` should point at `VITE_PUBLIC_POSTHOG_HOST` directly, accepting that ad blockers will then drop a share of events.
 - [ ] Run the full production build and the test suite; update any mocks or fixtures affected by the new `capture()` calls in `src/pages/cloud/index.tsx`, `src/pages/home/sections/hero.tsx`, `src/pages/start/install-command.tsx`, `src/pages/packages/detail.tsx`, and `src/components/sections/agent-panel.tsx`.
-- [ ] Decide the fate of this report file (see Known limitations), and stage the integration deliberately — several of the touched files are shared with other in-flight work in this checkout, so `git add -A` is the wrong move here.

@@ -1084,7 +1084,6 @@ overrides:
   fast-xml-parser@<5.7.0: ^5.7.0
   hono@<4.12.34: ^4.13.7
   '@react-native-community/cli@<20': ^20.2.0
-  image-size@>=2.0.0 <2.0.3: ^2.0.3
   ip-address@<=10.3.0: ^10.7.1
   js-yaml@<=4.1.1: ^4.3.2
   katex@>=0.11.0 <0.18.2: ^0.18.2
@@ -1104,7 +1103,6 @@ overrides:
   svgo@>=4.0.0 <4.0.2: ^4.1.0
   tar@<=7.5.20: ^7.5.21
   tmp@<0.2.6: ^0.2.6
-  toml@<5.0.1: ^5.0.1
   undici@<6.27.0: ^6.28.1
   undici@>=7.0.0 <7.29.0: ^7.29.1
   undici@>=8.0.0 <8.10.2: ^8.10.2
@@ -1816,6 +1814,9 @@ importers:
       gray-matter:
         specifier: catalog:web
         version: 4.0.3(patch_hash=6867093d18e007f9f610b1c4c6871b64734503b546ffcd3bc7a3675dd11f2188)
+      jsonc-parser:
+        specifier: catalog:vite
+        version: 3.3.1
       lucide-react:
         specifier: catalog:web
         version: 1.52.0(@types/react@19.3.0)(react@19.3.1)

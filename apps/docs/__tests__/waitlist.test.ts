@@ -29,6 +29,7 @@ const memoryStore = () => {
 
     return {
         entries,
+        get: async (key: string) => entries.get(key) ?? null,
         put: async (key: string, value: string) => {
             entries.set(key, value);
         },
@@ -215,14 +216,31 @@ describe(handleWaitlist, () => {
         expect(store.entries.size).toBe(0);
     });
 
-    it("refuses a client over its sign-up limit before spending a siteverify call", async () => {
-        expect.assertions(4);
+    it.each([
+        ["fails validation", { email: "not-an-address" }, true],
+        ["fails Turnstile", {}, false],
+    ])("does not count a request that %s against the client's limit", async (_case, fields, verifies) => {
+        expect.assertions(1);
 
-        const fetcher = siteverify(true);
+        const limiter = allowAll();
+
+        await handleWaitlist(signUp(fields, { "CF-Connecting-IP": "203.0.113.7" }), {
+            fetcher: siteverify(verifies),
+            limiter,
+            store: memoryStore(),
+            turnstileSecret: SECRET,
+        });
+
+        expect(limiter.limit).not.toHaveBeenCalled();
+    });
+
+    it("refuses a verified sign-up over the client's limit and stores nothing", async () => {
+        expect.assertions(3);
+
         const limiter = limiterAnswering(false);
         const store = memoryStore();
         const response = await handleWaitlist(signUp({}, { "CF-Connecting-IP": "203.0.113.7" }), {
-            fetcher,
+            fetcher: siteverify(true),
             limiter,
             store,
             turnstileSecret: SECRET,
@@ -230,8 +248,47 @@ describe(handleWaitlist, () => {
 
         expect(response.status).toBe(429);
         expect(limiter.limit).toHaveBeenCalledWith({ key: "203.0.113.7" });
-        expect(fetcher).not.toHaveBeenCalled();
         expect(store.entries.size).toBe(0);
+    });
+
+    it.each([
+        ["an IPv4 address on its own", "203.0.113.7", "203.0.113.7"],
+        ["an IPv6 address on its /64", "2001:db8:aa:bb:1:2:3:4", "2001:db8:aa:bb::/64"],
+        // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a documentation-range (RFC 3849) fixture, never contacted
+        ["a compressed IPv6 address on its /64", "2001:DB8::1", "2001:db8:0:0::/64"],
+        // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a documentation-range (RFC 5737) fixture, never contacted
+        ["an IPv4-mapped address on its IPv4 part", "::ffff:203.0.113.7", "203.0.113.7"],
+    ])("limits %s", async (_case, clientIp, key) => {
+        expect.assertions(1);
+
+        const limiter = allowAll();
+
+        await handleWaitlist(signUp({}, { "CF-Connecting-IP": clientIp }), {
+            fetcher: siteverify(true),
+            limiter,
+            store: memoryStore(),
+            turnstileSecret: SECRET,
+        });
+
+        expect(limiter.limit).toHaveBeenCalledWith({ key });
+    });
+
+    it("counts two IPv6 addresses in one /64 against the same bucket", async () => {
+        expect.assertions(1);
+
+        const limiter = allowAll();
+
+        for (const clientIp of ["2001:db8:aa:bb::1", "2001:db8:aa:bb:ffff:ffff:ffff:ffff"]) {
+            // eslint-disable-next-line no-await-in-loop -- the two sign-ups are counted in order
+            await handleWaitlist(signUp({}, { "CF-Connecting-IP": clientIp }), {
+                fetcher: siteverify(true),
+                limiter,
+                store: memoryStore(),
+                turnstileSecret: SECRET,
+            });
+        }
+
+        expect(new Set(limiter.limit.mock.calls.map(([options]) => options.key)).size).toBe(1);
     });
 
     it("skips the limit when the client address is unknown, rather than sharing one bucket", async () => {
@@ -244,30 +301,59 @@ describe(handleWaitlist, () => {
         expect(limiter.limit).not.toHaveBeenCalled();
     });
 
-    it("answers a repeat sign-up KV throttles on the same key as stored", async () => {
-        expect.assertions(1);
-
-        const store = {
+    const throttledStore = (stored: Map<string, string>) => {
+        return {
+            get: async (key: string) => stored.get(key) ?? null,
             put: async () => {
                 throw new Error("KV PUT failed: 429 Too Many Requests");
             },
         };
+    };
+
+    it("answers a same-key throttle as stored when the address is already in KV", async () => {
+        expect.assertions(1);
+
+        const store = throttledStore(new Map([["waitlist:a@b.co", "{}"]]));
         const response = await handleWaitlist(signUp({}), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET });
 
         expect(response.status).toBe(200);
     });
 
-    it("answers 503 when KV refuses the write for any other reason", async () => {
-        expect.assertions(2);
+    it("answers 503 for a same-key throttle when the address is not in KV", async () => {
+        expect.assertions(1);
 
+        const error = vi.spyOn(console, "error").mockReturnValue(undefined);
+        const response = await handleWaitlist(signUp({}), {
+            fetcher: siteverify(true),
+            limiter: allowAll(),
+            store: throttledStore(new Map()),
+            turnstileSecret: SECRET,
+        });
+
+        error.mockRestore();
+
+        expect(response.status).toBe(503);
+    });
+
+    it("answers 503 and logs the error, without the address, when KV refuses the write for any other reason", async () => {
+        expect.assertions(4);
+
+        const failure = new Error("KV put() limit exceeded for the day.");
+        const error = vi.spyOn(console, "error").mockReturnValue(undefined);
         const store = {
+            get: async () => null,
             put: async () => {
-                throw new Error("KV put() limit exceeded for the day.");
+                throw failure;
             },
         };
         const response = await handleWaitlist(signUp({}), { fetcher: siteverify(true), limiter: allowAll(), store, turnstileSecret: SECRET });
+        const logged = [...error.mock.calls];
+
+        error.mockRestore();
 
         expect(response.status).toBe(503);
         await expect(response.json()).resolves.toStrictEqual({ error: "store_unavailable" });
+        expect(logged).toStrictEqual([["waitlist: KV write failed", failure]]);
+        expect(JSON.stringify(logged)).not.toContain("a@b.co");
     });
 });

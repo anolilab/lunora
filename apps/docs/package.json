@@ -69,6 +69,7 @@
         "fumadocs-twoslash": "catalog:web",
         "fumadocs-ui": "catalog:web",
         "gray-matter": "catalog:web",
+        "jsonc-parser": "catalog:vite",
         "lucide-react": "catalog:web",
         "lucide-static": "catalog:web",
         "media-icons": "catalog:web",

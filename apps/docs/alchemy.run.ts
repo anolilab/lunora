@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+
 import alchemy from "alchemy";
 import { KVNamespace, RateLimit, TanStackStart } from "alchemy/cloudflare";
+import { parse } from "jsonc-parser";
 
 // Deployed with `pnpm run deploy`. Credentials come from CLOUDFLARE_ACCOUNT_ID and
 // CLOUDFLARE_API_TOKEN in the environment, never from this file; ALCHEMY_PASSWORD
@@ -17,9 +20,22 @@ if (!process.env.VITE_TURNSTILE_SITE_KEY) {
 // stored sign-ups. The binding name matches `WAITLIST` in src/routes/api/waitlist.ts.
 const waitlist = await KVNamespace("WAITLIST", { adopt: true, title: "lunora-docs-waitlist" });
 
-// Sign-ups per client address: five a minute covers a typo and a retry. The namespace
-// id is the account-wide key the limit's counters live under, so keep it stable.
-const waitlistLimiter = RateLimit({ namespace_id: 1001, simple: { limit: 5, period: 60 } });
+// The sign-up limit is defined once, in wrangler.jsonc, so local runs and the deployed
+// Worker enforce the same numbers.
+interface WranglerRateLimit {
+    name: string;
+    namespace_id: string;
+    simple: { limit: number; period: 10 | 60 };
+}
+
+const { ratelimits = [] } = parse(readFileSync(new URL("wrangler.jsonc", import.meta.url), "utf8")) as { ratelimits?: WranglerRateLimit[] };
+const limiterConfig = ratelimits.find(({ name }) => name === "WAITLIST_LIMITER");
+
+if (!limiterConfig) {
+    throw new Error("wrangler.jsonc must define the WAITLIST_LIMITER rate limit");
+}
+
+const waitlistLimiter = RateLimit({ namespace_id: Number(limiterConfig.namespace_id), simple: limiterConfig.simple });
 
 // The package's full build: it generates the package pages, error reference and stats before `vite build`.
 // dist/client is uploaded as static assets.
