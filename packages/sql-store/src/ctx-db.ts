@@ -1,11 +1,11 @@
 /**
- * D1 column-dialect twin of the DO `createShardCtxDb` (`@lunora/do`).
+ * D1 column-dialect twin of the DO `createShardCtxDb` (`@lunora/shard-engine`).
  *
  * Global (`.global()`) tables live in D1 with a real column-per-field physical
  * schema — not the DO's JSON blob — so `where`/`orderBy`/keyset-cursor refer to
  * actual columns (`"field"`) rather than `json_extract(...)`. The query and
  * cursor logic is identical to the DO path: it reuses the shared keyset/order
- * helpers from `@lunora/do`, but compiles `WHERE` through the drizzle-emitting
+ * helpers from `@lunora/shard-engine`, but compiles `WHERE` through the drizzle-emitting
  * `compileWhereSql` with a `WhereSqlStrategy` (column refs + value
  * serialization) so the generated `ctx.db.<table>` facade (1.2.7) is
  * backend-agnostic.
