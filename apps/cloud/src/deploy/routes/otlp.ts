@@ -172,7 +172,8 @@ const otlpAccepted = (rejectedCount: number, rejectedField: "rejectedDataPoints"
  * The resources of an OTLP batch an ingest key may send: a project-scoped key
  * loses each whose `service.name` is a sibling project's script
  * (`telemetry.servicesOutsideKeyProject`), so its spans and metrics cannot stand
- * in for that project's. An organization-wide key keeps every resource.
+ * in for that project's, and each with no `service.name` at all. An
+ * organization-wide key keeps every resource.
  */
 const resourcesInKeyProject = async <R extends { resource?: { attributes?: { key: string; value?: { stringValue?: string } }[] } }>(
     resources: R[] | undefined,
@@ -180,24 +181,26 @@ const resourcesInKeyProject = async <R extends { resource?: { attributes?: { key
     context: LunoraActionContext,
 ): Promise<R[]> => {
     const serviceOf = (resource: R): string | undefined => resource.resource?.attributes?.find(({ key }) => key === "service.name")?.value?.stringValue;
-    const serviceNames = [...new Set((resources ?? []).map((resource) => serviceOf(resource)).filter((name) => name !== undefined))];
+    const all = resources ?? [];
 
-    if (serviceNames.length === 0) {
-        return resources ?? [];
+    if (all.length === 0) {
+        return all;
     }
 
-    const barred = new Set(
-        await context.runQuery<string[]>(internal.telemetry.servicesOutsideKeyProject, {
-            deployKey: auth.key,
-            organizationId: auth.organizationId,
-            serviceNames,
-        }),
-    );
+    const serviceNames = [...new Set(all.map((resource) => serviceOf(resource)).filter((name) => name !== undefined))];
+    const { barred, projectScoped } = await context.runQuery<{ barred: string[]; projectScoped: boolean }>(internal.telemetry.servicesOutsideKeyProject, {
+        deployKey: auth.key,
+        organizationId: auth.organizationId,
+        serviceNames,
+    });
+    const outside = new Set(barred);
 
-    return (resources ?? []).filter((resource) => {
+    // A project key's resource without a `service.name` is attributed to no project, so it would
+    // land among the organization's unscoped observations, which every member reads.
+    return all.filter((resource) => {
         const service = serviceOf(resource);
 
-        return service === undefined || !barred.has(service);
+        return service === undefined ? !projectScoped : !outside.has(service);
     });
 };
 

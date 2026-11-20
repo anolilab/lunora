@@ -514,11 +514,11 @@ export const pruneObservations = internalMutation.mutation(async ({ ctx: context
  */
 export const servicesOutsideKeyProject = internalQuery
     .input({ deployKey: boundedString(LIMITS.token), organizationId: v.id("organizations"), serviceNames: v.array(v.string()) })
-    .query(async ({ ctx: context, args }): Promise<string[]> => {
+    .query(async ({ ctx: context, args }): Promise<{ barred: string[]; projectScoped: boolean }> => {
         const key = await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
 
         if (key.projectId == null) {
-            return [];
+            return { barred: [], projectScoped: false };
         }
 
         const distinct = [...new Set(args.serviceNames)];
@@ -531,7 +531,7 @@ export const servicesOutsideKeyProject = internalQuery
             }
         }
 
-        return barred;
+        return { barred, projectScoped: true };
     });
 
 export const orgForDeployKey = internalQuery

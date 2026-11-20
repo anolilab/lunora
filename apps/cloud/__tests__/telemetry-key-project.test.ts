@@ -174,10 +174,10 @@ describe("spans and metrics of a project-scoped key", () => {
 
         await expect(
             servicesOutsideKeyProject.handler(ctx, { deployKey: KEY, organizationId: "org_1", serviceNames: ["web-b"] } as never),
-        ).resolves.toStrictEqual([]);
+        ).resolves.toStrictEqual({ barred: [], projectScoped: false });
     });
 
-    /** Through `POST /v1/traces` and `/v1/metrics`: the sibling's resource is dropped and reported, its own kept. */
+    /** Through `POST /v1/traces` and `/v1/metrics`: the sibling's and an unnamed resource are dropped and reported, its own kept. */
     it("drops a sibling project's resources from an OTLP batch as a partial success", async () => {
         const { ctx } = await store();
         const sent: { observations?: { serviceName?: string }[]; points?: { serviceName?: string }[] }[] = [];
@@ -209,10 +209,12 @@ describe("spans and metrics of a project-scoped key", () => {
             };
         };
 
-        const traces = await post("/v1/traces", { resourceSpans: [span("web-a", 1).resource, span("web-b", 2).resource] });
+        const unnamed = { ...span("web-a", 3).resource, resource: { attributes: [] } };
+        const traces = await post("/v1/traces", { resourceSpans: [span("web-a", 1).resource, span("web-b", 2).resource, unnamed] });
         const metrics = await post("/v1/metrics", { resourceMetrics: [metric("web-a"), metric("web-b")] });
 
-        await expect(readJson(traces)).resolves.toMatchObject({ partialSuccess: { rejectedSpans: 1 } });
+        // The unnamed resource is dropped too: no project would own its spans.
+        await expect(readJson(traces)).resolves.toMatchObject({ partialSuccess: { rejectedSpans: 2 } });
         await expect(readJson(metrics)).resolves.toMatchObject({ partialSuccess: { rejectedDataPoints: 1 } });
         expect(sent[0]?.observations?.map(({ serviceName }) => serviceName)).toStrictEqual(["web-a"]);
         expect(sent[1]?.points?.map(({ serviceName }) => serviceName)).toStrictEqual(["web-a"]);
