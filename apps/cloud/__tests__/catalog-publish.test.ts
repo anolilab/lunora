@@ -125,7 +125,7 @@ describe("catalog publishing", () => {
         ["a query", "https://catalog.example.com/apps?v=1", "must not carry a query or fragment"],
         ["an empty query", "https://catalog.example.com/apps?", "must not carry a query or fragment"],
         ["a fragment", "https://catalog.example.com/apps#top", "must not carry a query or fragment"],
-        ["credentials", `https://${"publisher"}:${"pw"}@catalog.example.com/apps`, "must not carry credentials"],
+        ["credentials", ["https://publisher", "pw@catalog.example.com/apps"].join(":"), "must not carry credentials"],
     ])("refuses a base URL with %s, which artifact paths would land inside", async (_label, baseUrl, message) => {
         const { privateKey } = await signer();
 

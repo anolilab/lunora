@@ -273,12 +273,10 @@ const saasZoneOf = (environment: CloudflareWfpEnvironment): SaasZone | undefined
  * dispatcher is bound to. Deploying per kind (`lunora-preview`, `lunora-dev`) put
  * previews where no dispatcher routes, and staging's tenants outside `lunora-staging`.
  * Aliases are unique platform-wide (the ownership ledger), so kinds share it safely.
+ * `||`, not `??`: a blank value names no namespace either.
  */
-export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string | undefined => {
-    const namespace = environment.LUNORA_DISPATCH_NAMESPACE?.trim();
-
-    return namespace ? namespace : undefined;
-};
+export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string | undefined =>
+    environment.LUNORA_DISPATCH_NAMESPACE?.trim() || undefined;
 
 /**
  * {@link dispatchNamespaceOf}, refusing when it is unset. No default: any guess is

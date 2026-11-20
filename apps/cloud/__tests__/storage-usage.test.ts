@@ -485,6 +485,23 @@ describe("the readback fleets' storage families", () => {
         }
     });
 
+    it("report the per-script families as unavailable while the dispatch namespace is unset, without querying", async () => {
+        const fetchSpy = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ data: null, errors: null })));
+
+        vi.stubGlobal("fetch", fetchSpy);
+
+        try {
+            const fleet = cloudflareWfpFleetFromEnv({ CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: TOKEN, LUNORA_CELL: "eu-1" });
+            const failure = await fleet.usage?.sources.durableObjects?.read("eu-1", WINDOW).catch((error: unknown) => error);
+
+            expect(failure).toBeInstanceOf(UsageUnavailableError);
+            expect(String(failure)).toContain("LUNORA_DISPATCH_NAMESPACE is unset");
+            expect(fetchSpy).not.toHaveBeenCalled();
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
     it("report a query Cloudflare rejects (here: introspection) as unavailable, and a 502 as a failure to retry", async () => {
         let status = 200;
 
@@ -496,7 +513,12 @@ describe("the readback fleets' storage families", () => {
         );
 
         try {
-            const fleet = cloudflareWfpFleetFromEnv({ CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: TOKEN, LUNORA_CELL: "eu-1" });
+            const fleet = cloudflareWfpFleetFromEnv({
+                CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
+                CLOUDFLARE_API_TOKEN: TOKEN,
+                LUNORA_CELL: "eu-1",
+                LUNORA_DISPATCH_NAMESPACE: "lunora-staging",
+            });
             const rejected = await fleet.usage?.sources.durableObjects?.read("eu-1", WINDOW).catch((error: unknown) => error);
 
             expect(rejected).toBeInstanceOf(UsageUnavailableError);
