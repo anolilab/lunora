@@ -996,6 +996,63 @@ describe("boxSessionDO", () => {
             }
         });
 
+        it("reads a later config push only after the earlier one sent, so the newer config lands last", async () => {
+            const { key, session, state, store } = await configured({ ingestToken: TOKEN });
+            const socket = await handshake(session, state, key, "box_1");
+            const read = store.findMany.bind(store);
+            let keyReads = 0;
+            let held: (() => void) | undefined;
+            let reached: () => void = () => undefined;
+            const holding = new Promise<void>((resolve) => {
+                reached = resolve;
+            });
+
+            // The first push's key read answers with the key as it was, then waits. Copies, as D1
+            // answers: the fake's rows are live objects a later patch would change under the read.
+            store.findMany = async (table: string, args: unknown) => {
+                const fresh = await read(table, args as never);
+                const answer = { ...fresh, page: fresh.page.map((row) => structuredClone(row as Record<string, unknown>)) };
+
+                if (table === "deployKeys") {
+                    keyReads += 1;
+
+                    if (held === undefined) {
+                        await new Promise<void>((resolve) => {
+                            held = resolve;
+                            reached();
+                        });
+                    }
+                }
+
+                return answer;
+            };
+
+            const push = (
+                session as unknown as { pushConfig: (database: unknown, boxId: string, now: number, force: boolean) => Promise<void> }
+            ).pushConfig.bind(session);
+            const earlier = push(store, "box_1", Date.now(), true);
+
+            await holding;
+            await store.patch("deployKeys", "key_ingest", { revokedAt: Date.now() });
+
+            const later = push(store, "box_1", Date.now(), true);
+
+            // Drain the microtask queue (the fake store answers on microtasks): an unordered later push
+            // would have read its keys by now, while the earlier one still holds its stale answer.
+            await new Promise((resolve) => {
+                setImmediate(resolve);
+            });
+
+            expect(keyReads).toBe(1);
+
+            held?.();
+            await Promise.all([earlier, later]);
+
+            const last = socket.received().findLast((frame) => frame.type === "config");
+
+            expect(last?.type === "config" ? last.telemetry?.token : undefined).not.toBe(TOKEN);
+        });
+
         it("leaves the session up, and logs nothing of the key, when the config cannot be resolved", async () => {
             const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 

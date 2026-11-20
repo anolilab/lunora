@@ -160,6 +160,14 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
     /** The last routes push requested; the next one chains onto it ({@link pushRoutes}). */
     private routesPush: Promise<boolean> = Promise.resolve(false);
 
+    /**
+     * The last config push requested; the next one chains onto it ({@link pushConfig}). Like the
+     * routes frame, `config` carries no version the box could compare, so ordering is the guarantee:
+     * a refresh overlapping an authentication's push reads and sends after it, never on top of it.
+     * Never rejects.
+     */
+    private configPush: Promise<void> = Promise.resolve();
+
     /** Reports are recorded one at a time, so a replay racing its original is still seen as a replay. Never rejects. */
     private reports: Promise<void> = Promise.resolve();
 
@@ -618,7 +626,16 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
      * Never throws: a config that cannot be resolved now is logged — without
      * the key — and retried on the next refresh.
      */
-    private async pushConfig(database: ControlPlaneStore, boxId: string, now: number, force: boolean): Promise<void> {
+    private pushConfig(database: ControlPlaneStore, boxId: string, now: number, force: boolean): Promise<void> {
+        const next = this.configPush.catch(() => undefined).then(async () => this.pushConfigNow(database, boxId, now, force));
+
+        this.configPush = next;
+
+        return next;
+    }
+
+    /** One {@link pushConfig}, run after every earlier one has sent. Never throws. */
+    private async pushConfigNow(database: ControlPlaneStore, boxId: string, now: number, force: boolean): Promise<void> {
         const sockets = this.readySockets();
 
         if (sockets.length === 0) {
