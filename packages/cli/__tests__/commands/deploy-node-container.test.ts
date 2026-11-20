@@ -1131,7 +1131,7 @@ describe("lunora deploy --target node", () => {
         const MAIL_PRODUCER = { queues: { producers: [{ binding: "MAIL_QUEUE", queue: "lunora-mail" }] } };
 
         it("gives an app that queues mail a durable mail queue in the data volume, bound to its producer and polled", async () => {
-            expect.assertions(6);
+            expect.assertions(8);
 
             writeFixture(workdir, { wrangler: MAIL_PRODUCER });
 
@@ -1147,6 +1147,22 @@ describe("lunora deploy --target node", () => {
             expect(bundle).toMatch(/setInterval\(pollMail, 1e3\)/u);
             expect(bundle).toMatch(/"requiredEnv": \[[^\]]*"MAIL_FROM",\s*"RESEND_API_KEY"/u);
             expect(readme).toContain("queue producer is bound to a durable mail queue in `mail.sqlite3`");
+            // A provider's outright refusal is acked, not parked: the README must not promise otherwise.
+            expect(readme).toContain("is logged as `lunora.mail.send_refused` and dropped");
+            expect(readme).not.toContain("never dropped");
+        });
+
+        it.each(["MAIL_FROM", "RESEND_API_KEY"])("refuses a lunora-mail producer bound as %s, which the mail host's setting would share", async (binding) => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { queues: { producers: [{ binding, queue: "lunora-mail" }] } } });
+
+            // One name on env for two things: the queue would overwrite the sender or the key, or the other way round.
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 2,
+                error: expect.stringContaining(`${binding} (the lunora-mail queue producers and the mail host's settings)`),
+            });
+            expect(existsSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"))).toBe(false);
         });
 
         it("names an app's lunora-mail consumer as unbound, since the mail host consumes that queue", async () => {

@@ -618,6 +618,12 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         { names: hyperdrive, source: "hyperdrive" },
         { names: durableObjects.map((binding) => binding.name), source: "durable_objects.bindings" },
         { names: mailQueues, source: `the ${MAIL_QUEUE_NAME} queue producers` },
+        // The variables the mail host reads, which the server adds to env unless the app declares them itself: a producer
+        // bound under one of these names would overwrite the sender or the key.
+        {
+            names: mailQueues.length === 0 ? [] : MAIL_ENV.filter((name) => !Object.hasOwn(variables, name) && !workerSecrets.includes(name)),
+            source: "the mail host's settings",
+        },
     ];
 
     refuseEnvCollisions(envSources, configName);
@@ -1201,8 +1207,9 @@ const renderReadme = (env: ReadonlyArray<NodeDeployEnvVariable>, mailQueues: Rea
             : `## Mail
 
 The app's ${bound} bound to a durable mail queue in \`mail.sqlite3\`, which the server polls every
-${String(MAIL_POLL_INTERVAL_MS)} ms and delivers through Resend (\`RESEND_API_KEY\`, from \`MAIL_FROM\`). A failed send is retried and then
-parked, never dropped. A shutdown waits for a poll in flight before closing the database. A \`lunora-mail\` consumer the
+${String(MAIL_POLL_INTERVAL_MS)} ms and delivers through Resend (\`RESEND_API_KEY\`, from \`MAIL_FROM\`). A send that fails for a passing
+reason (a timeout, a 429 or 5xx) is retried and then parked in dead letters; one the provider refuses outright (a bad
+recipient, a malformed body) is logged as \`lunora.mail.send_refused\` and dropped, since no retry would change it. A shutdown waits for a poll in flight before closing the database. A \`lunora-mail\` consumer the
 app declares is never called: the server consumes that queue itself.
 
 `;
