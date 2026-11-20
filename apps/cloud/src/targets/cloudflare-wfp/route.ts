@@ -1,3 +1,4 @@
+import { BoundedCache } from "../../plans/bounded-cache";
 import type { PlanFacts } from "../../plans/plan-facts";
 import { normalizeFacts } from "../../plans/plan-facts";
 import type { PlanResolverOptions } from "../../plans/plan-resolver";
@@ -109,7 +110,7 @@ export const createCustomDomainResolver = (options: PlanResolverOptions): ((host
     const fetchImpl = options.fetch ?? fetch;
     const now = options.now ?? Date.now;
     const ttl = options.ttlMs ?? 60_000;
-    const cache = new Map<string, { expires: number; route: CustomDomainRoute | null }>();
+    const cache = new BoundedCache<{ expires: number; route: CustomDomainRoute | null }>();
 
     return async (hostname: string): Promise<CustomDomainRoute | null> => {
         const cached = cache.get(hostname);

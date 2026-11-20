@@ -1,4 +1,5 @@
 import readJson from "../read-json";
+import { BoundedCache } from "./bounded-cache";
 import type { PlanFacts } from "./plan-facts";
 import { normalizeFacts, SERVABLE_PLANS, toScriptFacts, UNAVAILABLE_PLAN } from "./plan-facts";
 import type { PlanReader, PlanRecord } from "./plan-store";
@@ -225,7 +226,7 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
     const timeoutMs = options.lookupTimeoutMs ?? PLAN_LOOKUP_TIMEOUT_MS;
     const maxStaleMs = (options.maxStaleHours ?? PLAN_MAX_STALE_HOURS_DEFAULT) * 3_600_000;
     const report = options.onStore ?? (() => undefined);
-    const cache = new Map<string, CachedVerdict>();
+    const cache = new BoundedCache<CachedVerdict>();
     // When the control plane last failed a lookup. Inside the backoff window a request goes straight to
     // the fallback, store or no store: every lookup is bounded by the timeout, so without the backoff an
     // outage would add that wait to each request and keep loading a control plane that is down.
