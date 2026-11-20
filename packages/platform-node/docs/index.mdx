@@ -406,6 +406,18 @@ fires without a request; call it once the host serves. A Durable Object that
 defines only one of `webSocketMessage` / `webSocketClose` gets that one.
 `lunora dev --target node` serves apps through it.
 
+### `createNodeDurableObjectFactory`
+
+**Type:** `(DurableObject: NodeDurableObjectClass, env: Record<string, unknown>) => (shard: NodeShard) => Promise<NodeDurableObjectInstance>`
+
+The instance of a Durable Object class for a shard: one per shard for the life of
+the factory, constructed on first use. As on workerd, work the constructor gates
+behind `blockConcurrencyWhile` finishes before the instance takes its first
+event. If that work fails, the instance is broken: each event waiting on it fails
+with the error, the instance is dropped, and the next event constructs a fresh
+one. The rejection is never left unhandled. `createNodeAppHost` and the server
+`lunora deploy --target node` generates both build their instances with it.
+
 ### `createNodeHttpServer`
 
 **Type:** `(options: NodeHttpServerOptions) => Promise<NodeHttpServer>`

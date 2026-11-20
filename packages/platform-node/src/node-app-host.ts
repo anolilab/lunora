@@ -23,27 +23,18 @@ import { LunoraError } from "@lunora/errors";
 
 import type { Drainable, DrainOptions, DrainResult } from "./drain-deadline";
 import { drainTimeoutMs, drainTogether, settlesBefore, startDrainDeadline } from "./drain-deadline";
+import type { NodeDurableObjectClass } from "./node-durable-object";
+import { createNodeDurableObjectFactory } from "./node-durable-object";
 import type { NodeCronJob, NodePlatform } from "./node-platform";
 import { createNodePlatform, walkDeclaredCrons } from "./node-platform";
 import { createNodeShardNamespace } from "./node-shard-namespace";
 import type { NodeShard } from "./node-shard-registry";
-import { bindShardSockets, createNodeShardState } from "./node-shard-state";
 
 /** One `durable_objects.bindings[]` entry: the `env` key and the exported class behind it. */
 interface NodeAppDurableObjectBinding {
     className: string;
     name: string;
 }
-
-/** What a Durable Object instance must answer on this host. The socket and alarm hooks are optional, as on Cloudflare. */
-interface DurableObjectInstance {
-    alarm?: () => Promise<void> | void;
-    fetch: (request: Request) => Promise<Response> | Response;
-    webSocketClose?: (socket: unknown, code: number, reason: string, wasClean: boolean) => Promise<void> | void;
-    webSocketMessage?: (socket: unknown, data: ArrayBuffer | string) => Promise<void> | void;
-}
-
-type DurableObjectClass = new (state: never, env: Record<string, unknown>) => DurableObjectInstance;
 
 /** The request handler a worker module's default export carries. */
 interface WorkerHandler {
@@ -177,39 +168,6 @@ const closePlatforms = (platforms: ReadonlyArray<NodePlatform>): void => {
 const isWorkerHandler = (value: unknown): value is WorkerHandler =>
     typeof value === "object" && value !== null && typeof (value as { fetch?: unknown }).fetch === "function";
 
-/**
- * One instance per shard for the life of the host, as the runtime keeps one per object: an instance built per request loses its
- * in-memory subscribers between a subscribe and the write that should reach them.
- */
-const createInstanceFactory = (DurableObject: DurableObjectClass, env: Record<string, unknown>): ((shard: NodeShard) => DurableObjectInstance) => {
-    const instances = new WeakMap<NodeShard, DurableObjectInstance>();
-
-    return (shard) => {
-        const existing = instances.get(shard);
-
-        if (existing !== undefined) {
-            return existing;
-        }
-
-        const instance = new DurableObject(createNodeShardState(shard) as never, env);
-
-        instances.set(shard, instance);
-
-        // Either hook alone is a valid Durable Object, as on Cloudflare; the missing one is a no-op.
-        if (instance.webSocketClose !== undefined || instance.webSocketMessage !== undefined) {
-            bindShardSockets(
-                {
-                    webSocketClose: async (socket, code, reason, wasClean) => instance.webSocketClose?.(socket, code, reason, wasClean),
-                    webSocketMessage: async (socket, data) => instance.webSocketMessage?.(socket, data),
-                },
-                shard.inbound,
-            );
-        }
-
-        return instance;
-    };
-};
-
 /** The platform behind one Durable Object binding: its class, one instance per shard, and the crons when it is the shard binding. */
 const createBindingPlatform = (
     binding: NodeAppDurableObjectBinding,
@@ -218,7 +176,7 @@ const createBindingPlatform = (
     shardBinding: string,
 ): NodePlatform => {
     // Checked by `checkNodeAppHost` before any binding is built.
-    const instanceFor = createInstanceFactory(options.worker[binding.className] as DurableObjectClass, env);
+    const instanceFor = createNodeDurableObjectFactory(options.worker[binding.className] as NodeDurableObjectClass, env);
 
     // The shard databases sit in the binding's directory; the platform's own database (scheduler and cron rows) sits beside it,
     // never inside, where the registry would read it back as a shard.
@@ -231,10 +189,16 @@ const createBindingPlatform = (
         // is not an app event.
         onAlarm: async (shard?: NodeShard) => {
             if (shard !== undefined) {
-                await instanceFor(shard).alarm?.();
+                const instance = await instanceFor(shard);
+
+                await instance.alarm?.();
             }
         },
-        onFetch: async (request, shard) => instanceFor(shard).fetch(request),
+        onFetch: async (request, shard) => {
+            const instance = await instanceFor(shard);
+
+            return instance.fetch(request);
+        },
         path: options.dataDirectory === undefined ? undefined : join(options.dataDirectory, `${binding.name}.platform.sqlite3`),
     });
 };

@@ -617,4 +617,63 @@ describe(createNodeAppHost, () => {
 
         expect(() => createNodeAppHost({ dataDirectory, durableObjects: [{ className: "Counter", name: "COUNTER" }], worker })).toThrow(/link to nothing/u);
     });
+
+    it("treats a constructor whose blockConcurrencyWhile rejects as broken: the request fails, and the next one constructs anew", async () => {
+        expect.assertions(4);
+
+        let constructions = 0;
+
+        class FailsFirstInit {
+            private ready = false;
+
+            public constructor(state: NodeShardState) {
+                constructions += 1;
+
+                const attempt = constructions;
+
+                // As a Lunora shard does: setup the constructor cannot await, gated behind blockConcurrencyWhile.
+                // eslint-disable-next-line no-void, sonarjs/no-async-constructor -- the scenario under test: the promise is left to the host
+                void state.blockConcurrencyWhile(async () => {
+                    if (attempt === 1) {
+                        throw new Error("schema migration failed");
+                    }
+
+                    this.ready = true;
+                });
+            }
+
+            public async fetch(): Promise<Response> {
+                return Response.json({ constructions, ready: this.ready });
+            }
+        }
+
+        const unhandled = vi.fn<(reason: unknown) => void>();
+
+        process.on("unhandledRejection", unhandled);
+
+        const host = createNodeAppHost({
+            durableObjects: [{ className: "FailsFirstInit", name: "COUNTER" }],
+            worker: { default: worker.default, FailsFirstInit },
+        });
+
+        try {
+            await expect(host.fetch(new Request("https://app.local/tenant-a"))).rejects.toThrow(/schema migration failed/u);
+
+            // One event-loop turn, which is where Node reports a rejection nobody handled.
+            await new Promise<void>((resolve) => {
+                setImmediate(resolve);
+            });
+
+            expect(unhandled).not.toHaveBeenCalled();
+
+            const response = await host.fetch(new Request("https://app.local/tenant-a"));
+
+            // A fresh instance, constructed for this request and ready before it was served.
+            await expect(response.json()).resolves.toStrictEqual({ constructions: 2, ready: true });
+            expect(constructions).toBe(2);
+        } finally {
+            process.off("unhandledRejection", unhandled);
+            await host.close();
+        }
+    });
 });

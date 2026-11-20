@@ -147,6 +147,23 @@ interface NodeDispatchRouteOptions {
 }
 ```
 
+### `NodeDurableObjectClass` (type)
+
+```ts
+type NodeDurableObjectClass = new (state: never, env: Record<string, unknown>) => NodeDurableObjectInstance;
+```
+
+### `NodeDurableObjectInstance` (interface)
+
+```ts
+interface NodeDurableObjectInstance {
+    alarm?: () => Promise<void> | void;
+    fetch: (request: Request) => Promise<Response> | Response;
+    webSocketClose?: (socket: unknown, code: number, reason: string, wasClean: boolean) => Promise<void> | void;
+    webSocketMessage?: (socket: unknown, data: ArrayBuffer | string) => Promise<void> | void;
+}
+```
+
 ### `NodeGlobalContextDatabaseOptions` (type)
 
 ```ts
@@ -560,6 +577,12 @@ const createNodeAppHost: (options: NodeAppHostOptions) => NodeAppHost;
 const createNodeDispatchRoute: (options: NodeDispatchRouteOptions) => ((request: Request) => Promise<Response>);
 ```
 
+### `createNodeDurableObjectFactory` (const)
+
+```ts
+const createNodeDurableObjectFactory: (DurableObject: NodeDurableObjectClass, env: Record<string, unknown>) => ((shard: NodeShard) => Promise<NodeDurableObjectInstance>);
+```
+
 ### `createNodeGlobalStore` (const)
 
 ```ts
@@ -653,7 +676,7 @@ const createNodeShardRegistry: (options?: NodeShardRegistryOptions) => NodeShard
 ### `createNodeShardState` (const)
 
 ```ts
-const createNodeShardState: (shard: NodeShard) => NodeShardState;
+const createNodeShardState: (shard: NodeShard, onBlockConcurrency?: (work: Promise<unknown>) => void) => NodeShardState;
 ```
 
 ### `createNodeSocketHost` (const)

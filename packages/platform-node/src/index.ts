@@ -58,6 +58,8 @@ export type { NodeAppDurableObjectBinding, NodeAppHost, NodeAppHostOptions } fro
 export { checkNodeAppHost, createNodeAppHost } from "./node-app-host";
 export type { NodeDispatchInvocation, NodeDispatchRouteOptions } from "./node-dispatch-route";
 export { createNodeDispatchRoute, NODE_SCHEDULER_DISPATCH_PATH } from "./node-dispatch-route";
+export type { NodeDurableObjectClass, NodeDurableObjectInstance } from "./node-durable-object";
+export { createNodeDurableObjectFactory } from "./node-durable-object";
 export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";
 export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
 export type { NodeHttpServer, NodeHttpServerOptions } from "./node-http-server";
