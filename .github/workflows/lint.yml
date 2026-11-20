@@ -89,6 +89,10 @@
             - "name": "Check project.json target shapes"
               "run": "pnpm run lint:project-json"
 
+            # File-level eslint-disable is not accepted (AGENTS.md); the baseline only shrinks.
+            - "name": "Check file-level eslint-disable"
+              "run": "pnpm run lint:eslint-disable"
+
             - "name": "Build affected packages"
               "run": "pnpm run build:affected:packages"
 
