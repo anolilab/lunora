@@ -17,7 +17,7 @@ import { internal } from "../../lunora/_generated/internal";
 import type { StoredAdminToken } from "../deploy/admin-token";
 import { resolveAdminToken } from "../deploy/admin-token";
 import type { RouterEnv } from "../deploy/routes/shared";
-import { jsonError, rejected, requireContext } from "../deploy/routes/shared";
+import { jsonError, nonEmptyString, readJsonObject, rejected, requireContext } from "../deploy/routes/shared";
 import { targetOf } from "../targets/placement";
 import { targetFleet } from "../targets/registry";
 import { offsiteBucket } from "./offsite";
@@ -35,7 +35,23 @@ const MAX_ERROR_LENGTH = 500;
 
 const describe = (error: unknown, fallback: string): string => (error instanceof Error ? error.message : fallback).slice(0, MAX_ERROR_LENGTH);
 
-const readBody = async <T>(request: Request): Promise<Partial<T> | null> => (await request.json().catch(() => null)) as Partial<T> | null;
+/** The named body fields when every one is a non-empty string, else `undefined` (the caller answers 400). */
+const readIds = async <K extends string>(request: Request, keys: ReadonlyArray<K>): Promise<Record<K, string> | undefined> => {
+    const body = await readJsonObject(request);
+    const ids: Partial<Record<K, string>> = {};
+
+    for (const key of keys) {
+        const value = nonEmptyString(body?.[key]);
+
+        if (value === undefined) {
+            return undefined;
+        }
+
+        ids[key] = value;
+    }
+
+    return ids as Record<K, string>;
+};
 
 /** Unseal the target's admin token and reach it through its driver, or throw when it has none usable. */
 const senderFor = async (target: TenantTarget, environment: RouterEnv): Promise<TenantSend> => {
@@ -113,9 +129,9 @@ export const handleBackupNowRoute = async (request: Request, environment: Router
         return env;
     }
 
-    const body = await readBody<{ organizationId: string; projectId: string }>(request);
+    const body = await readIds(request, ["organizationId", "projectId"]);
 
-    if (!body?.organizationId || !body.projectId) {
+    if (!body) {
         return jsonError(400, "organizationId and projectId are required");
     }
 
@@ -155,9 +171,9 @@ export const handleRestoreRoute = async (request: Request, environment: RouterEn
         return env;
     }
 
-    const body = await readBody<{ backupId: string; organizationId: string }>(request);
+    const body = await readIds(request, ["backupId", "organizationId"]);
 
-    if (!body?.organizationId || !body.backupId) {
+    if (!body) {
         return jsonError(400, "organizationId and backupId are required");
     }
 
@@ -224,9 +240,9 @@ export const handleDownloadRoute = async (request: Request, environment: RouterE
         return env;
     }
 
-    const body = await readBody<{ backupId: string; organizationId: string }>(request);
+    const body = await readIds(request, ["backupId", "organizationId"]);
 
-    if (!body?.organizationId || !body.backupId) {
+    if (!body) {
         return jsonError(400, "organizationId and backupId are required");
     }
 

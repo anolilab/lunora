@@ -638,6 +638,28 @@ describe("tenant backup off-site copy", () => {
         expect(remote.objects.has("manual.ndjson.gz")).toBe(true);
         expect(finished).toStrictEqual([expect.objectContaining({ id: "bk_1", offsiteStatus: "succeeded", status: "succeeded" })]);
     });
+
+    it.each([
+        ["/v1/backups", { organizationId: "org_1", projectId: 42 }],
+        ["/v1/backups/restore", { backupId: ["bk_1"], organizationId: "org_1" }],
+        ["/v1/backups/download", { backupId: "bk_1", organizationId: { id: "org_1" } }],
+        ["/v1/backups/download", ["org_1", "bk_1"]],
+    ])("answers 400 to %s when an id is not a string, without reaching a mutation", async (path, body) => {
+        const { bucket } = memoryBucket();
+        const runMutation = vi.fn<(reference: unknown, args?: Row) => Promise<unknown>>();
+
+        const response = await createDeployRouter().fetch(
+            new Request(`https://control.lunora.app${path}`, {
+                body: JSON.stringify(body),
+                headers: { "cf-connecting-ip": "client-a", "content-type": "application/json" },
+                method: "POST",
+            }),
+            { __lunoraCtx: { runMutation }, TENANT_BACKUPS: bucket },
+        );
+
+        expect(response.status).toBe(400);
+        expect(runMutation).not.toHaveBeenCalled();
+    });
 });
 
 describe(restoreTenantSnapshot, () => {
