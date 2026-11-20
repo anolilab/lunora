@@ -557,7 +557,7 @@ export default crons;
                 port: await findAvailablePort(18_870),
                 projectRoot: workdir,
             }),
-        ).rejects.toThrow(/createNodeAppHost and checkNodeAppHost \(1\.0\.0-alpha\.220 or later\)/u);
+        ).rejects.toThrow(/createNodeAppHost and checkNodeAppHost \(1\.0\.0-alpha\.222 or later\)/u);
     });
 
     it("serves the CLOUDFLARE_ENV environment's entry, bindings, vars and .dev.vars.<env>", async () => {

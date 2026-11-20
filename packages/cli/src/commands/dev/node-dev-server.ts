@@ -277,7 +277,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         typeof (platform as Partial<PlatformNode>).checkNodeAppHost !== "function"
     ) {
         throw new TypeError(
-            "--target node needs a @lunora/platform-node that exports createNodeAppHost and checkNodeAppHost (1.0.0-alpha.220 or later); upgrade it in this project",
+            "--target node needs a @lunora/platform-node that exports createNodeAppHost and checkNodeAppHost (1.0.0-alpha.222 or later); upgrade it in this project",
         );
     }
 
