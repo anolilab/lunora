@@ -30,6 +30,12 @@ interface NodeAppHost {
     rearmPersistedAlarms: () => string[];
 }
 
+/** The listener `createNodeHttpServer` returns: `drain` waits for the responses in flight, `close` ends the rest. */
+interface NodeDevHttpServer {
+    close: () => Promise<void>;
+    drain: (options?: { timeoutMs?: number }) => Promise<{ pending: string[]; timedOut: boolean }>;
+}
+
 /** What `createNodeAppHost` composes: a loaded worker module and its bindings. */
 interface NodeAppHostCandidate {
     crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
@@ -48,7 +54,7 @@ interface PlatformNode {
     /** Throws what `createNodeAppHost` would refuse, without opening a database or arming a timer. */
     checkNodeAppHost: (options: NodeAppHostCandidate) => void;
     createNodeAppHost: (options: NodeAppHostCandidate) => NodeAppHost;
-    createNodeHttpServer: (options: { fetch: (request: Request) => Promise<Response>; port?: number }) => Promise<{ close: () => Promise<void> }>;
+    createNodeHttpServer: (options: { fetch: (request: Request) => Promise<Response>; port?: number }) => Promise<NodeDevHttpServer>;
     createNodeHyperdrive: (url?: string) => unknown;
     createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, unknown>;
 }
@@ -270,6 +276,7 @@ export type {
     LongLivedSpawner,
     NodeAppHost,
     NodeAppHostCandidate,
+    NodeDevHttpServer,
     NodeDevWorker,
     NodeDevWorkerInputs,
     PlatformNode,

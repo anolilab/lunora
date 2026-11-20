@@ -9,7 +9,7 @@ import { checkNodeAppHost, createNodeAppHost, createNodeHttpServer, createNodeHy
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDevCommand } from "../../src/commands/dev/handler";
-import { startNodeDevWorker } from "../../src/commands/dev/node-dev-server";
+import { planNodeDevServer, startNodeDevWorker } from "../../src/commands/dev/node-dev-server";
 import type { NodeDevWorker, PlatformNode } from "../../src/commands/dev/types";
 import { findAvailablePort } from "../../src/util/free-port";
 import type { Logger } from "../../src/util/logger";
@@ -521,6 +521,7 @@ export default crons;
 
                               throw new Error("close failed");
                           },
+                          drain: async (drainOptions) => server.drain(drainOptions),
                       }
                     : server;
             },
@@ -731,21 +732,38 @@ export default crons;
             }
         });
 
-        it("discards a reload whose load a codegen run overlapped", async () => {
+        /** A generation whose run sequence moves once, on the read after `overlapNext()`: one run started during that load. */
+        const overlappingGeneration = (usable = true) => {
+            let sequence = 1;
+            let bump = false;
+            let reads = 0;
+
+            return {
+                generation: () => {
+                    const current = sequence;
+
+                    reads += 1;
+
+                    if (bump) {
+                        sequence += 1;
+                        bump = false;
+                    }
+
+                    return { busy: false, idle: Promise.resolve(), sequence: current, usable };
+                },
+                overlapNext: () => {
+                    bump = true;
+                },
+                reads: () => reads,
+            };
+        };
+
+        it("discards a reload whose load a codegen run overlapped, and reloads once that run finishes", async () => {
             expect.assertions(1);
 
             writeFixture(workdir);
 
-            let sequence = 0;
-            let overlap = false;
-            // Each read during a reload sees a newer run once `overlap` is on: one started between the wait and the check.
-            const generation = () => {
-                if (overlap) {
-                    sequence += 1;
-                }
-
-                return { busy: false, idle: Promise.resolve(), sequence, usable: true };
-            };
+            const runs = overlappingGeneration();
             let composed = 0;
             const platform: PlatformNode = {
                 ...realPlatform,
@@ -755,16 +773,121 @@ export default crons;
                     return realPlatform.createNodeAppHost(options);
                 },
             };
-            const dev = await startWorker({ generation, platform });
+            const dev = await startWorker({ generation: runs.generation, platform });
 
             try {
-                const discarded = dev.next("codegen ran during the reload");
+                // The overlapping run settles nothing (as a failed codegen run would), so the retry is the worker's own.
+                const reloaded = dev.next("node: reloaded");
 
-                overlap = true;
+                runs.overlapNext();
                 dev.worker.reload();
-                await discarded;
+                await reloaded;
 
-                expect(composed).toBe(1);
+                // The start and the retry: the overlapped candidate was never composed.
+                expect(composed).toBe(2);
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("redoes the first load when a codegen run overlapped it", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const runs = overlappingGeneration();
+            const composedAfterReads: number[] = [];
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    composedAfterReads.push(runs.reads());
+
+                    return realPlatform.createNodeAppHost(options);
+                },
+            };
+
+            runs.overlapNext();
+
+            const dev = await startWorker({ generation: runs.generation, platform });
+
+            try {
+                // Two reads around the overlapped load, then two around the one that served.
+                expect(composedAfterReads).toStrictEqual([4]);
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("refuses to start over output a failed postcodegen hook left", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            await expect(startWorker({ generation: overlappingGeneration(false).generation })).rejects.toThrow(/the last postcodegen hook failed/u);
+        });
+
+        it("lets a request in flight finish before a reload closes the listener", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            let release: () => void = () => {};
+            const gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            let started: () => void = () => {};
+            const requestStarted = new Promise<void>((resolve) => {
+                started = resolve;
+            });
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    const host = realPlatform.createNodeAppHost(options);
+
+                    return {
+                        ...host,
+                        fetch: async (request) => {
+                            if (new URL(request.url).pathname !== "/__slow") {
+                                return host.fetch(request);
+                            }
+
+                            started();
+                            await gate;
+
+                            return new Response("finished");
+                        },
+                    };
+                },
+                createNodeHttpServer: async (options) => {
+                    const server = await realPlatform.createNodeHttpServer(options);
+
+                    return {
+                        ...server,
+                        // The request finishes only once the reload has begun draining: a reload that closed at once would cut it.
+                        drain: async (drainOptions) => {
+                            setImmediate(release);
+
+                            return server.drain(drainOptions);
+                        },
+                    };
+                },
+            };
+            const dev = await startWorker({ platform });
+
+            try {
+                const answered = freshFetch(`${dev.origin}/__slow`);
+
+                await requestStarted;
+
+                const reloaded = dev.next("node: reloaded");
+
+                dev.worker.reload();
+
+                const response = await answered;
+
+                await reloaded;
+
+                await expect(response.text()).resolves.toBe("finished");
             } finally {
                 await dev.stop();
             }
@@ -1065,6 +1188,17 @@ export default {
         } finally {
             await dev.stop();
         }
+    });
+});
+
+describe(planNodeDevServer, () => {
+    it("advertises the IPv4 loopback the Node listener binds, not localhost", () => {
+        expect.assertions(1);
+
+        const plan = planNodeDevServer({ cwd: "/app", options: { cwd: "/app", logger: milestoneLogger().logger }, studioPort: 6173, workerPort: 8787 });
+
+        // `localhost` can resolve to ::1 first, where the probe, the Studio proxy and the tunnel would find nothing.
+        expect(plan.workerOrigin).toBe("http://127.0.0.1:8787");
     });
 });
 

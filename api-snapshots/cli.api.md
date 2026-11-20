@@ -1345,6 +1345,20 @@ interface NodeContainerOutput {
 }
 ```
 
+### `NodeDevHttpServer` (interface)
+
+```ts
+interface NodeDevHttpServer {
+    close: () => Promise<void>;
+    drain: (options?: {
+        timeoutMs?: number;
+    }) => Promise<{
+        pending: string[];
+        timedOut: boolean;
+    }>;
+}
+```
+
 ### `NodeDevWorker` (interface)
 
 ```ts
@@ -1438,9 +1452,7 @@ interface PlatformNode {
     createNodeHttpServer: (options: {
         fetch: (request: Request) => Promise<Response>;
         port?: number;
-    }) => Promise<{
-        close: () => Promise<void>;
-    }>;
+    }) => Promise<NodeDevHttpServer>;
     createNodeHyperdrive: (url?: string) => unknown;
     createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, unknown>;
 }

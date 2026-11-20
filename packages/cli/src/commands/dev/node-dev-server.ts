@@ -38,7 +38,16 @@ import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@
 
 import { BINDING_NAME, refuseWorkerEnvOverride, unboundSections, WORKER_ENV } from "../../util/node-target-bindings";
 import { codegenRequested } from "./lifecycle";
-import type { DevCommandOptions, DevCommandPlan, NodeAppHost, NodeAppHostCandidate, NodeDevWorker, NodeDevWorkerInputs, PlatformNode } from "./types";
+import type {
+    DevCommandOptions,
+    DevCommandPlan,
+    NodeAppHost,
+    NodeAppHostCandidate,
+    NodeDevHttpServer,
+    NodeDevWorker,
+    NodeDevWorkerInputs,
+    PlatformNode,
+} from "./types";
 
 /** Where the shard databases persist between sessions; `.lunora/` is already the dev server's gitignored state directory. */
 const NODE_DEV_STATE_DIRECTORY = join(".lunora", "node");
@@ -204,7 +213,9 @@ const planNodeDevServer = (inputs: { cwd: string; options: DevCommandOptions; st
         studioEnabled: options.studio !== false,
         studioPort,
         workerEnabled: options.worker !== false,
-        workerOrigin: `http://localhost:${String(workerPort)}`,
+        // The address `createNodeHttpServer` binds. `localhost` can resolve to ::1 first, where the readiness probe, the Studio
+        // proxy and the tunnel would find nothing listening.
+        workerOrigin: `http://127.0.0.1:${String(workerPort)}`,
         workerPort,
         // Names the worker in the startup line; nothing is spawned from it.
         wrangler: { args: [], command: "node", cwd, tag: "node" },
@@ -280,7 +291,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
 
     let watchers: FSWatcher[] = [];
     let debounce: NodeJS.Timeout | undefined;
-    let running: { host: NodeAppHost; server: { close: () => Promise<void> } } | undefined;
+    let running: { host: NodeAppHost; server: NodeDevHttpServer } | undefined;
     let stopped = false;
     // Until the first version serves, a change only marks a reload for afterwards: one started mid-startup would race it for
     // the port, and one left armed after a failed start would compose a host nobody stops.
@@ -477,8 +488,10 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     const prepare = async (kind: "reload" | "start"): Promise<NodeAppHostCandidate> => {
         const generation = await settledGeneration();
 
-        if (kind === "reload" && generation?.usable === false) {
-            throw new Error("the last postcodegen hook failed, so _generated/* may be half-written — fix it and save to reload");
+        if (generation?.usable === false) {
+            throw new Error(
+                `the last postcodegen hook failed, so _generated/* may be half-written — fix it and ${kind === "reload" ? "save to reload" : "start lunora dev again"}`,
+            );
         }
 
         // Read first, so an edited `main` is the entry this load imports.
@@ -492,10 +505,8 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             vars: { [WORKER_ENV]: "development" },
         });
 
-        // A run that started during the load may have rewritten what it read. Its own settled run reloads once it succeeds, and
-        // the previous version keeps serving if it fails. The first start has no previous version, so it serves what it read
-        // and that run's settlement reloads it.
-        if (kind === "reload" && generation !== undefined && inputs.generation?.().sequence !== generation.sequence) {
+        // A run that started during the load may have rewritten what it read: the load is redone once that run has finished.
+        if (generation !== undefined && inputs.generation?.().sequence !== generation.sequence) {
             throw new SupersededLoad();
         }
 
@@ -523,18 +534,50 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     };
 
     // The host closes whether or not the listener did: its shard databases must not stay open under the next version.
+    // One deadline for the whole shutdown: the responses in flight finish first (the listener stops accepting at once), then the
+    // listener closes, ending event streams and WebSockets, then the host drains what is left. The host closes whether or not
+    // the listener did: its shard databases must not stay open under the next version.
     const shutdown = async (): Promise<void> => {
         const previous = running;
 
         running = undefined;
 
-        try {
-            await previous?.server.close();
-        } finally {
-            const drained = await previous?.host.close({ timeoutMs: NODE_DEV_DRAIN_TIMEOUT_MS });
+        if (previous === undefined) {
+            return;
+        }
 
-            if (drained?.timedOut === true) {
-                logger.warn(`node: closed the previous version with work still running: ${drained.pending.join(", ")}`);
+        const deadlineAt = performance.now() + NODE_DEV_DRAIN_TIMEOUT_MS;
+        const remaining = (): { timeoutMs: number } => {
+            return { timeoutMs: Math.max(0, Math.round(deadlineAt - performance.now())) };
+        };
+        const cutOff: string[] = [];
+
+        try {
+            const responses = await previous.server.drain(remaining());
+
+            cutOff.push(...responses.pending);
+            await previous.server.close();
+        } finally {
+            const drained = await previous.host.close(remaining());
+
+            cutOff.push(...drained.pending);
+
+            if (cutOff.length > 0) {
+                logger.warn(`node: closed the previous version with work still running: ${cutOff.join(", ")}`);
+            }
+        }
+    };
+
+    // The first load, redone while a codegen run overlaps it: there is no previous version to keep serving instead.
+    const prepareStart = async (): Promise<NodeAppHostCandidate> => {
+        for (;;) {
+            try {
+                // eslint-disable-next-line no-await-in-loop -- each attempt waits out the run that overlapped the last
+                return await prepare("start");
+            } catch (error: unknown) {
+                if (!(error instanceof SupersededLoad)) {
+                    throw error;
+                }
             }
         }
     };
@@ -564,7 +607,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             configWatcher?.close();
         });
 
-        await serve(platform.createNodeAppHost(await prepare("start")));
+        await serve(platform.createNodeAppHost(await prepareStart()));
     } catch (error: unknown) {
         stopped = true;
         clearTimeout(debounce);
@@ -577,7 +620,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     // After serving, not in `prepare`: a reload opens shards only once the previous version has closed them.
     running?.host.rearmPersistedAlarms();
 
-    logger.info(`node: serving ${relative(projectRoot, project.entry)} on @lunora/platform-node at http://localhost:${String(port)}`);
+    logger.info(`node: serving ${relative(projectRoot, project.entry)} on @lunora/platform-node at http://127.0.0.1:${String(port)}`);
 
     starting = false;
 
@@ -612,7 +655,11 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             candidate = await prepare("reload");
         } catch (error: unknown) {
             if (error instanceof SupersededLoad) {
-                logger.info("node: codegen ran during the reload; reloading once it settles");
+                // Redone once the run has finished, whether or not it succeeded: a failed codegen run settles nothing, and the
+                // edit that started this reload must not wait for the next one that does.
+                logger.info("node: codegen ran during the reload; reloading once it finishes");
+                await settledGeneration();
+                queued = true;
             } else {
                 logger.error(`node: reload failed, still serving the previous version: ${errorMessage(error)}`);
             }
