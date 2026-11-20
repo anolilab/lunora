@@ -81,7 +81,8 @@ interface NodeAppHostOptions {
 /** A worker module composed over this host. */
 interface NodeAppHost {
     /**
-     * Drain, then close: wait under one deadline (`timeoutMs`, 30 s by default) for the worker's `waitUntil` work and for every
+     * Drain, then close: wait under one deadline (`timeoutMs`, 30 s by default) for the requests `fetch` is still answering, the
+     * worker's `waitUntil` work, and every
      * platform to go idle (in-flight shard requests, alarms, cron deliveries and each shard's own `waitUntil` work), then close
      * every platform, cron timers included. The close runs whether or not the drain finished in time, so a reload never opens the
      * databases while this host still holds them. Resolves with what the drain cut off or saw fail. Safe to call more than once.
@@ -97,25 +98,29 @@ interface NodeAppHost {
     rearmPersistedAlarms: () => string[];
 }
 
-/** The worker's `waitUntil` work as one drainable part: failures are logged as they happen, since nothing else awaits them. */
-const createWaitUntilTracker = (): Drainable & { waitUntil: (promise: Promise<unknown>) => void } => {
+/**
+ * Work the host waits for on close, as one drainable part. `waitUntil` work is the worker's own background work: nothing awaits
+ * it, so a failure is logged and counted. A request is awaited by its caller, who sees its failure, so only its being in
+ * flight counts.
+ */
+const createWorkTracker = (options: { label: string; reportFailures: boolean }): Drainable & { track: (promise: Promise<unknown>) => void } => {
     const pending = new Set<Promise<void>>();
     let failures = 0;
     const takeFailures = (): string[] => {
-        const failed = failures === 0 ? [] : [`${String(failures)} worker waitUntil task(s) failed`];
+        const failed = failures === 0 ? [] : [`${String(failures)} ${options.label} failed`];
 
         failures = 0;
 
         return failed;
     };
-    const labels = (): string[] => (pending.size === 0 ? [] : [`${String(pending.size)} worker waitUntil task(s)`]);
+    const labels = (): string[] => (pending.size === 0 ? [] : [`${String(pending.size)} ${options.label}`]);
 
     return {
-        drain: async (options) => {
-            const deadline = startDrainDeadline(options);
+        drain: async (drainOptions) => {
+            const deadline = startDrainDeadline(drainOptions);
 
             try {
-                // Repeated: work handed to waitUntil can hand more work to it.
+                // Repeated: tracked work can start more of it.
                 while (pending.size > 0) {
                     // eslint-disable-next-line no-await-in-loop -- each pass waits for what the last one let start
                     if (!(await settlesBefore(Promise.all(pending), deadline))) {
@@ -130,14 +135,16 @@ const createWaitUntilTracker = (): Drainable & { waitUntil: (promise: Promise<un
         },
         idle: () => pending.size === 0,
         pending: labels,
-        waitUntil: (promise) => {
+        track: (promise) => {
             const tracked = Promise.resolve(promise)
                 .then(
                     () => undefined,
                     (error: unknown) => {
-                        failures += 1;
-                        // eslint-disable-next-line no-console -- nothing awaits waitUntil work, so the log is the only record of its failure
-                        console.error("[@lunora/platform-node] work handed to waitUntil failed:", error);
+                        if (options.reportFailures) {
+                            failures += 1;
+                            // eslint-disable-next-line no-console -- nothing awaits waitUntil work, so the log is the only record of its failure
+                            console.error("[@lunora/platform-node] work handed to waitUntil failed:", error);
+                        }
                     },
                 )
                 .finally(() => pending.delete(tracked));
@@ -336,7 +343,9 @@ const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
     const handler = options.worker["default"] as WorkerHandler;
     const env: Record<string, unknown> = { ...options.env };
     const platforms: NodePlatform[] = [];
-    const tracker = createWaitUntilTracker();
+    const tracker = createWorkTracker({ label: "worker waitUntil task(s)", reportFailures: true });
+    // A request a caller is still waiting on: the drain finishes it before the shards it may still reach are closed.
+    const requests = createWorkTracker({ label: "worker request(s)", reportFailures: false });
     const shardBinding = options.shardBinding ?? "SHARD";
 
     // Each binding's platform database is a file directly in it, opened before anything else would create the directory.
@@ -365,7 +374,7 @@ const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
         throw error;
     }
 
-    const context = { passThroughOnException: () => undefined, waitUntil: tracker.waitUntil };
+    const context = { passThroughOnException: () => undefined, waitUntil: tracker.track };
     let closing: Promise<DrainResult> | undefined;
 
     return {
@@ -375,7 +384,7 @@ const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
 
             closing ??= (async () => {
                 try {
-                    return await drainTogether([tracker, ...platforms], closeOptions);
+                    return await drainTogether([requests, tracker, ...platforms], closeOptions);
                 } finally {
                     closePlatforms(platforms.splice(0));
                 }
@@ -383,7 +392,13 @@ const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
 
             return closing;
         },
-        fetch: async (request) => handler.fetch(request, env, context),
+        fetch: async (request) => {
+            const response = Promise.resolve(handler.fetch(request, env, context));
+
+            requests.track(response);
+
+            return response;
+        },
         rearmPersistedAlarms: () => platforms.flatMap((platform) => platform.rearmPersistedAlarms()),
     };
 };

@@ -519,4 +519,39 @@ describe(createNodeAppHost, () => {
 
         expect(() => createNodeAppHost({ dataDirectory, durableObjects: [{ className: "Counter", name: "COUNTER" }], worker })).toThrow(/links out of it/u);
     });
+
+    it("finishes a request that reaches its Durable Object only after close began", async () => {
+        expect.assertions(1);
+
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const host = createNodeAppHost({
+            dataDirectory: join(directory, "state"),
+            durableObjects: [{ className: "Counter", name: "COUNTER" }],
+            worker: {
+                Counter,
+                default: {
+                    fetch: async (request: Request, env: Parameters<typeof worker.default.fetch>[1]) => {
+                        // Still before its first shard access when the close starts.
+                        await gate;
+
+                        return worker.default.fetch(request, env);
+                    },
+                },
+            },
+        });
+        const answered = host.fetch(new Request("https://app.local/tenant-a"));
+        const closing = host.close();
+
+        // A turn later, when a drain that saw nothing running would already have closed the shards.
+        setImmediate(release);
+
+        const response = await answered;
+
+        await closing;
+
+        await expect(response.json()).resolves.toMatchObject({ count: 1 });
+    });
 });

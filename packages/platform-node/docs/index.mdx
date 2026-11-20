@@ -169,14 +169,15 @@ resolves `@lunora/platform-node` from the project and serves the worker entry
   with `--no-codegen` it watches the files it loaded under `lunora/` too. Each
   reload re-reads the wrangler config, so an edited `main` takes effect. A
   reload restarts the listener, so open sockets and streams reconnect. The
-  previous version gets 5 s to finish its in-flight work and is then closed
+  previous version gets 5 s to finish its in-flight requests and work and is
+  then closed
   anyway, with a warning naming what was cut off. A reload that fails to load
   keeps the previous version serving, as does one refused by
   `checkNodeAppHost`: the new host is only built once the previous one has
   drained, so two schedulers never run over the same database. A reload waits
   out a running codegen run, is refused while the last `postcodegen` hook has
-  failed, and is dropped if a codegen run started during its load (that run's
-  own reload follows). One that cannot bind the port logs it,
+  failed, and is redone once a codegen run that started during its load has
+  finished. One that cannot bind the port logs it,
   and nothing serves until a later reload succeeds, since the previous version
   held the same port and databases.
 - `CLOUDFLARE_ENV` selects a wrangler environment, as for `wrangler dev`: its
@@ -390,8 +391,8 @@ exported class per shard for the life of the host. `crons` (the generated
 and delivered to its default shard. The map is the whole declared set: an
 omitted one declares none, and the jobs an earlier host declared are deleted. A
 host that declares crons without that binding throws. `fetch` is the worker's own, bound to that `env`. `close(options?)`
-drains under one deadline (`DrainOptions`, 30 s by default) the worker's
-`waitUntil` work and every platform (shard requests, alarms, cron deliveries and
+drains under one deadline (`DrainOptions`, 30 s by default) the requests `fetch`
+is still answering, the worker's `waitUntil` work and every platform (shard requests, alarms, cron deliveries and
 each shard's own `waitUntil` work), then force-closes every platform, cron timers
 included, whether or not the drain finished; it resolves with the `DrainResult`.
 `rearmPersistedAlarms()` opens every stored shard with a persisted alarm, so it
