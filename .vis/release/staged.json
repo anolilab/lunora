@@ -3,6 +3,18 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-20T15:48:15.139Z",
+      "key": "@lunora/config@1.0.0-alpha.468"
+    },
+    {
+      "at": "2026-11-20T15:48:15.139Z",
+      "key": "@lunora/platform-node@1.0.0-alpha.222"
+    },
+    {
+      "at": "2026-11-20T15:48:15.139Z",
+      "key": "@lunora/cli@1.0.0-alpha.504"
+    },
+    {
       "at": "2026-11-20T09:18:08.271Z",
       "key": "@lunora/platform@1.0.0-alpha.82"
     },
@@ -389,20 +401,8 @@
     {
       "at": "2026-11-14T04:47:56.731Z",
       "key": "@lunora/codegen@1.0.0-alpha.411"
-    },
-    {
-      "at": "2026-11-14T04:47:56.731Z",
-      "key": "@lunora/runtime@1.0.0-alpha.287"
-    },
-    {
-      "at": "2026-11-14T04:47:56.731Z",
-      "key": "@lunora/cli@1.0.0-alpha.494"
-    },
-    {
-      "at": "2026-11-14T04:47:56.731Z",
-      "key": "@lunora/platform-node@1.0.0-alpha.218"
     }
   ],
-  "updatedAt": "2026-11-20T09:18:08.272Z",
+  "updatedAt": "2026-11-20T15:48:15.140Z",
   "version": 1
 }
