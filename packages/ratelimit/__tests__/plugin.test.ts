@@ -1,4 +1,4 @@
-import { initLunora } from "@lunora/server";
+import { initLunora, isPerDispatchMiddleware } from "@lunora/server";
 import { describe, expect, it } from "vitest";
 
 import { ratelimitPlugin } from "../src/plugin";
@@ -48,6 +48,37 @@ describe("ratelimitPlugin", () => {
         const result = await procedure.handler({}, {});
 
         expect(result.same).toBe(true);
+    });
+
+    it("tags its middleware per-dispatch, so a query charging the limit in its handler stays out of the reactive cache", () => {
+        expect.assertions(2);
+
+        const { middleware } = ratelimitPlugin(makeLimiter());
+        const c = initLunora.dataModel<Record<string, never>>().create();
+        const registered = c.query.use(middleware!).query(() => null) as unknown as { perDispatch?: boolean };
+
+        expect(isPerDispatchMiddleware(middleware)).toBe(true);
+        expect(registered.perDispatch).toBe(true);
+    });
+
+    it("keeps an existing ctx.api alongside the limiter", async () => {
+        expect.assertions(2);
+
+        const limiter = makeLimiter();
+        const other = { ping: () => "pong" };
+        const c = initLunora.dataModel<Record<string, never>>().create();
+
+        const procedure = c.query
+            .use(async ({ next }) => next({ ctx: { api: { other } } }))
+            .use(ratelimitPlugin<{ api: { other: typeof other } }>(limiter).middleware!)
+            .query(({ ctx }) => {
+                return { other: ctx.api.other === other, ratelimit: ctx.api.ratelimit === limiter };
+            });
+
+        const result = await procedure.handler({}, {});
+
+        expect(result.other).toBe(true);
+        expect(result.ratelimit).toBe(true);
     });
 
     it("is a middleware-only plugin (no schema extension)", () => {
