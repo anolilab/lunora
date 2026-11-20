@@ -10,8 +10,9 @@
  * - Its own connected accounts (`cloudflare-workers`), with the reason itself,
  *   because the fix is usually that organization's token.
  */
+import { isBilledReadback } from "../billing/usage";
 import type { UsageFamily } from "../targets/driver";
-import { USAGE_FAMILIES } from "../targets/driver";
+import { FAMILY_METERS, USAGE_FAMILIES } from "../targets/driver";
 
 /** One source the Usage tab warns about. */
 export interface MeteringNotice {
@@ -117,4 +118,28 @@ export const meteringNotices = (
         // Another organization's account, or a target with no account behind it: not this organization's to see.
         return label === undefined ? [] : [{ family, message: `${problem.own} (${FAMILY_EFFECT[family]})`, source: label }];
     });
+};
+
+/**
+ * The cells whose billed platform usage is incomplete right now: a
+ * `cloudflare-wfp` source of a billed meter that cannot read, or whose last read
+ * failed. Its usage since is missing from the ledger, not zero, so the spend-cap
+ * sweep must not read the ledger as proof an organization there is under its cap.
+ * Any failure counts, not only one past {@link FAILING_NOTICE_MS}: the next read
+ * that succeeds catches up from the checkpoint and clears it. A skipped span too
+ * old to read does not: nothing will ever fill it in.
+ */
+export const cellsWithIncompleteBilling = (rows: ReadonlyArray<SourceStatusRow>): Set<string> => {
+    const cells = new Set<string>();
+
+    for (const row of rows) {
+        const { family, scope } = parseScopeKey(row.scopeKey);
+        const unread = (row.unavailableReason != null && row.unavailableReason !== "") || row.failingSince != null;
+
+        if (row.target === "cloudflare-wfp" && unread && FAMILY_METERS[family].some((meter) => isBilledReadback("cloudflare-wfp", meter))) {
+            cells.add(scope);
+        }
+    }
+
+    return cells;
 };

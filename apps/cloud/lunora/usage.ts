@@ -15,7 +15,7 @@ import {
 import type { UnmeasuredMeter, UsageTotals } from "../src/billing/usage";
 import { aggregateUsage, isBillableUsage, unmeasuredMeters } from "../src/billing/usage";
 import type { SourceStatusRow } from "../src/metering/status";
-import { meteringNotices } from "../src/metering/status";
+import { cellsWithIncompleteBilling, meteringNotices } from "../src/metering/status";
 import type { UsageFamily } from "../src/targets/driver";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
@@ -536,12 +536,30 @@ const liftSpendCapSuspension = async (
 };
 
 /**
+ * The ids of the cells whose billed metering cannot read right now. Their usage is
+ * missing from the ledger, so an organization there is held suspended rather than
+ * lifted on a total that is too low. Suspending stays on: the rows present already
+ * prove that breach.
+ */
+const cellsWithUnreadBilling = async (context: MutationContext): Promise<Set<string>> => {
+    const names = cellsWithIncompleteBilling(await collectAll<SourceStatusRow>((cursor) => context.db.usageSourceStatus.findMany({ cursor })));
+
+    if (names.size === 0) {
+        return names;
+    }
+
+    const cells = await collectAll<{ _id: string; name: string }>((cursor) => context.db.cells.findMany({ cursor }));
+
+    return new Set(cells.flatMap((cell) => (names.has(cell.name) ? [cell._id] : [])));
+};
+
+/**
  * Enforce aggregate spend caps (GAPS.md C1). Estimates each org's current-
  * period spend from the metered platform usage and suspends orgs over their
  * cap (plan default or org override) — the dispatcher serves 503 for a
  * suspended org's tenants. Self-healing: orgs back under the cap (new period,
- * raised cap, upgraded plan) are unsuspended on the next run. SYSTEM only
- * (cron dispatch).
+ * raised cap, upgraded plan) are unsuspended on the next run whose cell's
+ * billed metering reads. SYSTEM only (cron dispatch).
  */
 export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context }): Promise<{ suspended: number; unsuspended: number; warned: number }> => {
     const periodStart = currentPeriodStart();
@@ -553,6 +571,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     // under a future period is not this month's spend.
     const usageRows = await collectAll<PlatformUsageRow>((cursor) => context.db.platformUsage.findMany({ cursor, where: { periodStart } }));
     const byOrg = new Map<string, PeriodUsage>();
+    const incompleteCells = await cellsWithUnreadBilling(context);
 
     // Every meter counts toward the cap, not just requests/CPU — a tenant can
     // run away on Durable Object duration or R2 operations without moving the
@@ -575,6 +594,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     const [organizations, plans] = await Promise.all([
         collectAll<{
             _id: Id<"organizations">;
+            cellId: Id<"cells">;
             name: string;
             paymentFailedAt?: null | number;
             spendCapMinor?: null | number;
@@ -627,7 +647,12 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
                 thresholdMinor: decision.capMinor ?? 0,
             });
             suspended += 1;
-        } else if (decision.level !== "breach" && organization.suspendedAt != null && organization.suspendedReason === "spend-cap") {
+        } else if (
+            decision.level !== "breach" &&
+            organization.suspendedAt != null &&
+            organization.suspendedReason === "spend-cap" &&
+            !incompleteCells.has(organization.cellId)
+        ) {
             // Only lift our own suspensions — dunning/support ones stay (GAPS.md C2).
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
             unsuspended += await liftSpendCapSuspension(context, organizationId, organization.paymentFailedAt, audit, decision);

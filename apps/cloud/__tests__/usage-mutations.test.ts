@@ -60,6 +60,7 @@ const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000, userId:
         auth: { getIdentity: () => Promise.resolve(null), userId },
         db: {
             alertRules: facade("alertRules"),
+            cells: facade("cells"),
             findFirst: () => Promise.resolve(null),
             get: (_table: string, id: string) =>
                 Promise.resolve(
@@ -88,6 +89,7 @@ const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000, userId:
                 return Promise.resolve();
             },
             platformUsage: facade("platformUsage"),
+            usageSourceStatus: facade("usageSourceStatus"),
         },
         now,
         runMutation: () => Promise.resolve(undefined),
@@ -221,7 +223,7 @@ const thisPeriod = (): number => {
 };
 
 const organization = (over: Row = {}): Row => {
-    return { _id: "org_1", plan: "free", ...over };
+    return { _id: "org_1", cellId: "cell_1", plan: "free", ...over };
 };
 
 /** A state-transition patch — not the sweep's rewrite of the admission fast path's accrual. */
@@ -335,6 +337,60 @@ describe("usage.enforceSpendCaps", () => {
         await enforceSpendCaps.handler(ctx, {});
 
         expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedAt: null, suspendedReason: null } });
+    });
+
+    describe("while the cell's billed metering cannot read", () => {
+        const cells = [
+            { _id: "cell_1", name: "cell-a" },
+            { _id: "cell_2", name: "cell-b" },
+        ];
+        const outage = (over: Row): Row[] => [{ _id: "s1", scopeKey: "cell-a#d1", target: "cloudflare-wfp", ...over }];
+
+        it.each([
+            ["is unavailable", { unavailableReason: "storage metering unavailable: no dataset" }],
+            ["last failed", { failingSince: 1, lastError: "HTTP 503" }],
+        ])("keeps a spend-cap suspension while a billed source %s", async (_case, status) => {
+            const { ctx, ops } = makeCtx({
+                cells,
+                organizations: [organization({ suspendedAt: 1, suspendedReason: "spend-cap" })],
+                platformUsage: [],
+                usageSourceStatus: outage(status),
+            });
+
+            await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ unsuspended: 0 });
+            expect(ops.filter((op) => isTransition(op))).toStrictEqual([]);
+        });
+
+        it("still suspends on the rows it has when they already exceed the cap", async () => {
+            const { ctx, ops } = makeCtx({
+                cells,
+                organizations: [organization({ spendCapMinor: 1 })],
+                platformUsage: [usageRow("u1", 10_000_000, { periodStart: thisPeriod() })],
+                usageSourceStatus: outage({ failingSince: 1 }),
+            });
+
+            await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ suspended: 1 });
+            expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedReason: "spend-cap" } });
+        });
+
+        it.each([
+            ["another cell's billed source", outage({ failingSince: 1 })[0]],
+            // `workersCpu` writes only the alert-only `cpuMs`.
+            ["a source of meters it does not bill", { _id: "s2", failingSince: 1, scopeKey: "cell-b#workersCpu", target: "cloudflare-wfp" }],
+            // A connected account is on the customer's own Cloudflare bill.
+            ["a connected account's source", { _id: "s3", failingSince: 1, scopeKey: "cell-b", target: "cloudflare-workers" }],
+        ])("still lifts during an outage of %s", async (_case, status) => {
+            const { ctx, ops } = makeCtx({
+                cells,
+                organizations: [organization({ cellId: "cell_2", suspendedAt: 1, suspendedReason: "spend-cap" })],
+                platformUsage: [],
+                usageSourceStatus: [status],
+            });
+
+            await enforceSpendCaps.handler(ctx, {});
+
+            expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedAt: null, suspendedReason: null } });
+        });
     });
 });
 
