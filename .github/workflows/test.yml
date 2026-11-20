@@ -735,6 +735,11 @@
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20
+        "env":
+            # The one list both the coverage assertion and the run step read, so the
+            # assertion checks what executes. Two hand copies drifted apart once: a
+            # merge kept two suites in the asserted copy and dropped them from the run.
+            "MYSQL_SUITES": "__tests__/create-hyperdrive.test.ts __tests__/global-atomic-writes.integration.test.ts __tests__/global-collation-parity.test.ts __tests__/global-json-paths.test.ts __tests__/global-mysql.integration.test.ts __tests__/global-null-placement.test.ts"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
@@ -757,15 +762,17 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The run step names its suites by path, so a fourth one added against the
+            # The run step names its suites by path, so another one added against the
             # same harness would not be picked up and nothing else would notice — the
             # same hazard the workerd matrix assertion above exists for.
             - "name": "Assert the run covers every suite using the MySQL harness"
+              "working-directory": "packages/hyperdrive"
               "run": |
-                  declared="$(grep -rl '_helpers/mysql-mem' packages/hyperdrive/__tests__/*.test.ts | sort | tr '\n' ' ')"
-                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-atomic-writes.integration.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-json-paths.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts packages/hyperdrive/__tests__/global-null-placement.test.ts '
-                  if [ "$declared" != "$expected" ]; then
-                    echo "::error file=.github/workflows/test.yml::Suites using the MySQL harness are [$declared] but this job runs [$expected]. Update the run step below."
+                  declared="$(grep -l '_helpers/mysql-mem' __tests__/*.test.ts | sort | tr '\n' ' ')"
+                  read -ra suites <<< "$MYSQL_SUITES"
+                  executed="$(printf '%s\n' "${suites[@]}" | sort | tr '\n' ' ')"
+                  if [ "$declared" != "$executed" ]; then
+                    echo "::error file=.github/workflows/test.yml::Suites using the MySQL harness are [$declared] but this job runs [$executed]. Update MYSQL_SUITES."
                     exit 1
                   fi
 
@@ -777,11 +784,8 @@
               "env":
                   "LUNORA_MYSQL_TESTS": "1"
               "run": |
-                  pnpm --filter "@lunora/hyperdrive" run test \
-                      __tests__/create-hyperdrive.test.ts \
-                      __tests__/global-atomic-writes.integration.test.ts \
-                      __tests__/global-collation-parity.test.ts \
-                      __tests__/global-mysql.integration.test.ts \
+                  read -ra suites <<< "$MYSQL_SUITES"
+                  pnpm --filter "@lunora/hyperdrive" run test "${suites[@]}" \
                       --reporter=default --reporter=json --outputFile.json=test-results/mysql.json
 
             # The node -e script is JavaScript, its `${}` is not shell.
@@ -802,6 +806,15 @@
 
                       if (passed === 0 || skipped > 0) {
                           console.error(`::error::The MySQL suites passed ${passed} and skipped ${skipped} cases. This job exists so the gate cannot pass by skipping.`);
+                          process.exit(1);
+                      }
+
+                      // A listed suite vitest never collected (a typo, a moved file) is absent from the report, not failed.
+                      const reported = new Set(report.testResults.map((result) => result.name));
+                      const missing = process.env.MYSQL_SUITES.split(" ").filter((suite) => !reported.has(`${process.cwd()}/packages/hyperdrive/${suite}`));
+
+                      if (missing.length > 0) {
+                          console.error(`::error::MYSQL_SUITES lists ${missing.join(", ")}, which the run did not execute.`);
                           process.exit(1);
                       }
                   '
