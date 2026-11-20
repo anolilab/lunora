@@ -291,7 +291,11 @@
                       exit 1
                   fi
 
-                  if ! "dist/caddy-${PLATFORM}" list-modules | grep -qx 'http.handlers.rate_limit'; then
+                  # Read whole, not piped into `grep -q`: under pipefail, grep exiting on the first match
+                  # SIGPIPEs caddy while it still writes, and a valid build fails the check.
+                  modules="$("dist/caddy-${PLATFORM}" list-modules)"
+
+                  if ! grep -qx 'http.handlers.rate_limit' <<<"${modules}"; then
                       echo "::error::The build lacks http.handlers.rate_limit."
                       exit 1
                   fi
@@ -464,7 +468,9 @@
                       echo
                       echo '```sh'
                       echo "curl -fsSLO https://github.com/anolilab/lunora/releases/download/${TAG}/install.sh"
-                      echo "sha256sum install.sh  # $(sha256sum install.sh | cut -d ' ' -f 1)"
+                      # `-c &&` stops before sudo when the file is not the one this release published,
+                      # the same chain apps/hostd/README.md documents.
+                      echo "echo '$(sha256sum install.sh | cut -d ' ' -f 1)  install.sh' | sha256sum -c - && \\"
                       echo "sudo bash install.sh --version ${VERSION} --control-plane <origin> --bucket <bucket> [--endpoint <url>]"
                       echo '```'
                       echo
