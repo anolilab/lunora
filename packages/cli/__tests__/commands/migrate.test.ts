@@ -373,6 +373,71 @@ export const schema = defineSchema({
             expect(sql).not.toContain("NOT NULL"); // v.optional → nullable
         });
 
+        it("refuses to overwrite a migration generated in the same second", () => {
+            expect.assertions(6);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({ email: v.string() }).global(),
+});
+`,
+            );
+
+            const first = runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
+            const snapshotPath = join(workdir, "lunora", "migrations", ".snapshot.json");
+            const firstBody = readFileSync(first.migrationFile, "utf8");
+            const snapshotBefore = readFileSync(snapshotPath, "utf8");
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({
+        email: v.string(),
+        nickname: v.optional(v.string()),
+    }).global(),
+});
+`,
+            );
+
+            const second = runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
+
+            expect(second.code).not.toBe(0);
+            expect(second.error).toContain("20240401123456_init.sql");
+            expect(readFileSync(first.migrationFile, "utf8")).toBe(firstBody);
+            expect(readFileSync(snapshotPath, "utf8")).toBe(snapshotBefore);
+
+            // A later run still emits the diff the refused run left pending.
+            const third = runMigrateGenerateCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                name: "init",
+                now: () => new Date("2024-04-01T12:34:57.000Z"),
+            });
+
+            expect(third.code).toBe(0);
+            expect(readFileSync(third.migrationFile, "utf8")).toContain("ALTER TABLE");
+        });
+
+        it("leaves no temporary snapshot file behind", () => {
+            expect.assertions(1);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({ email: v.string() }).global(),
+});
+`,
+            );
+
+            runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
+
+            expect(readdirSync(join(workdir, "lunora", "migrations")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+        });
+
         it("detects a same-affinity type change (v.string() -> v.bigint(), both TEXT)", () => {
             expect.assertions(3);
 
