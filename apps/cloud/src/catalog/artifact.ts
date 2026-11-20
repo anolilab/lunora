@@ -22,12 +22,16 @@ export const CATALOG_FORMAT = 1;
 export const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
 
 /**
- * Largest total the files an artifact declares may reach once inflated. An install holds
- * the inflated files, the bundle and the assets' base64 copies at once, and a Worker
- * isolate has 128 MB. The cap is checked against the manifest's declared sizes before
- * anything is inflated, so an archive over it is refused whatever its compressed size.
+ * Largest total the files an artifact declares may reach once inflated, checked against
+ * the manifest's declared sizes before anything is inflated. Sized so an install's peak
+ * fits a 128 MB Worker isolate. With I the inflated total, the most copies are alive at
+ * the release-store write: the release holds the bundle and assets as base64 (4/3 I)
+ * and the decoded bundle (up to I), and `JSON.stringify` of that release plus its UTF-8
+ * body add 4/3 I each, so about 5 I. The archive is gone by then
+ * (`fetchVerifiedArtifact`), and verification itself peaks at the archive plus I. At
+ * 20 MiB, 5 I is 100 MiB, which leaves the rest for the heap the request already uses.
  */
-export const MAX_INFLATED_BYTES = 48 * 1024 * 1024;
+export const MAX_INFLATED_BYTES = 20 * 1024 * 1024;
 
 /** Environment names a form may declare: upper snake case, and never the platform's own `LUNORA_` namespace. */
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/u;

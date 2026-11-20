@@ -710,6 +710,12 @@ describe(installApp, () => {
         expect(outcome).toMatchObject({ kind: "verification", ok: false });
     });
 
+    it("keeps the install limit inside a Worker isolate at the install's peak copy count", () => {
+        // About five copies of the inflated files are alive at the release-store write (see MAX_INFLATED_BYTES);
+        // they must leave headroom in the 128 MB isolate for the request's own heap.
+        expect(5 * MAX_INFLATED_BYTES).toBeLessThanOrEqual(100 * 1024 * 1024);
+    });
+
     it("installs an app whose declared files total exactly the install limit, and changes nothing below it", async () => {
         const key = await generateKey("catalog-2026");
         const app = await publishApp(key, { files: { "worker.js": new Uint8Array(MAX_INFLATED_BYTES) }, name: "Counter", slug: "counter", version: "1.0.0" });
@@ -719,7 +725,7 @@ describe(installApp, () => {
 
         expect(outcome).toMatchObject({ deploymentId: "dep_1", ok: true });
         expect(ports.release).toHaveBeenCalledTimes(1);
-        // Packing, hashing and encoding 48 MB has taken over 30s on a loaded CI runner.
+        // Packing, hashing and encoding the full limit has taken over 30s on a loaded CI runner.
     }, 120_000);
 
     it("refuses an app whose declared files exceed the install limit, before anything is claimed or released", async () => {

@@ -462,6 +462,45 @@ export type InstallOutcome =
     | { deploymentId: string; generated: string[]; kept: string[]; ok: true; recorded: boolean; url?: string }
     | { code?: ArtifactErrorCode; error: string; field?: string; kind: InstallFailureKind; ok: false };
 
+type InstallFailure = Extract<InstallOutcome, { ok: false }>;
+
+/**
+ * Fetch an entry's archive, manifest and signature and verify all of them. The
+ * archive never leaves this call, so only the inflated files outlive it: holding it
+ * through the release would add its size to the peak `MAX_INFLATED_BYTES` is sized for.
+ */
+const fetchVerifiedArtifact = async (
+    deps: CatalogDeps,
+    keys: TrustedCatalogKey[],
+    entry: CatalogIndexEntry,
+): Promise<InstallFailure | { files: Map<string, Uint8Array>; manifest: CatalogManifest; ok: true }> => {
+    let archive: Uint8Array;
+    let manifestBytes: Uint8Array;
+    let signatureBytes: Uint8Array;
+
+    try {
+        archive = await fetchBounded(deps.fetch, entry.artifactUrl, MAX_ARTIFACT_BYTES);
+        manifestBytes = await fetchBounded(deps.fetch, entry.manifestUrl, MAX_MANIFEST_BYTES);
+        signatureBytes = await fetchBounded(deps.fetch, entry.signatureUrl, MAX_SIGNATURE_FILE_BYTES);
+    } catch (error) {
+        return { error: `the app's files could not be fetched: ${messageOf(error)}`, kind: "upstream", ok: false };
+    }
+
+    const checked = await checkManifest(keys, entry, manifestBytes, signatureBytes);
+
+    if (!checked.ok) {
+        return { code: checked.error.code, error: checked.error.message, kind: "verification", ok: false };
+    }
+
+    const archiveChecked = await verifyArchive(archive, checked.value.manifest);
+
+    if (!archiveChecked.ok) {
+        return { code: archiveChecked.error.code, error: archiveChecked.error.message, kind: "verification", ok: false };
+    }
+
+    return { files: archiveChecked.files, manifest: checked.value.manifest, ok: true };
+};
+
 /**
  * Install one app into a project: find its index entry, fetch its archive, manifest
  * and signature, verify all of them, then run the install core. Never returns a
@@ -504,33 +543,15 @@ export const installApp = async (deps: CatalogDeps, request: InstallRequest, ada
         };
     }
 
-    let archive: Uint8Array;
-    let manifestBytes: Uint8Array;
-    let signatureBytes: Uint8Array;
+    const artifact = await fetchVerifiedArtifact(deps, config.keys, entry);
 
-    try {
-        archive = await fetchBounded(deps.fetch, entry.artifactUrl, MAX_ARTIFACT_BYTES);
-        manifestBytes = await fetchBounded(deps.fetch, entry.manifestUrl, MAX_MANIFEST_BYTES);
-        signatureBytes = await fetchBounded(deps.fetch, entry.signatureUrl, MAX_SIGNATURE_FILE_BYTES);
-    } catch (error) {
-        return { error: `the app's files could not be fetched: ${messageOf(error)}`, kind: "upstream", ok: false };
-    }
-
-    const checked = await checkManifest(config.keys, entry, manifestBytes, signatureBytes);
-
-    if (!checked.ok) {
-        return { code: checked.error.code, error: checked.error.message, kind: "verification", ok: false };
-    }
-
-    const archiveChecked = await verifyArchive(archive, checked.value.manifest);
-
-    if (!archiveChecked.ok) {
-        return { code: archiveChecked.error.code, error: archiveChecked.error.message, kind: "verification", ok: false };
+    if (!artifact.ok) {
+        return artifact;
     }
 
     const result = await runInstall(
         {
-            artifact: { files: archiveChecked.files, manifest: checked.value.manifest },
+            artifact: { files: artifact.files, manifest: artifact.manifest },
             installedBy: request.installedBy,
             organizationId: request.organizationId,
             projectId: request.projectId,

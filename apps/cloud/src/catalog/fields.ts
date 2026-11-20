@@ -49,7 +49,7 @@ const BASE64_SLICE_BYTES = 3 * 0x20_00;
 /**
  * Bytes as standard base64. Each slice is encoded on its own, so a large file never
  * becomes one call's arguments, and no binary string the size of the whole file is
- * built next to the bytes and their base64 (a 48 MiB main module would otherwise hold
+ * built next to the bytes and their base64 (a large main module would otherwise hold
  * about four copies of itself against the isolate's 128 MB).
  */
 export const toBase64 = (bytes: Uint8Array): string => {
