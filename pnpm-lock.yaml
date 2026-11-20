@@ -4975,6 +4975,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/mail':
+        specifier: workspace:*
+        version: link:../mail
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
@@ -28295,7 +28298,7 @@ snapshots:
   '@babel/traverse@8.0.7':
     dependencies:
       '@babel/code-frame': 8.0.6
-      '@babel/generator': 8.0.6
+      '@babel/generator': 8.1.0
       '@babel/helper-globals': 8.0.6
       '@babel/parser': 8.1.0
       '@babel/template': 8.0.0

@@ -1,3 +1,7 @@
+## @lunora/studio [1.0.0-alpha.387](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.386...@lunora/studio@1.0.0-alpha.387) (2026-11-20)
+
+- feat(platform-node): deliver mail on the Node target (#1551) (#1624)
+
 ## @lunora/studio [1.0.0-alpha.386](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.385...@lunora/studio@1.0.0-alpha.386) (2026-11-18)
 
 - Updated dependency @lunora/bindings@1.0.0-alpha.152

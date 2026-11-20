@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { randomSessionId } from "../../../shared/random-session-id";
-import { assertSafeAddresses, assertSafeHeaderValue, assertValidIdempotencyKey } from "./address";
+import { assertHasContent, assertSafeAddresses, assertSafeHeaderValue, assertValidIdempotencyKey } from "./address";
 import { isCaptureTransport } from "./capture-transport";
 import { createCloudflareTransport } from "./cloudflare-transport";
 import { toQueuedPayload } from "./queue";
@@ -153,6 +153,11 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
             replyTo: options_.replyTo,
             to: options_.to,
         });
+
+        // Last, after the checks that name a field, and here so `queue()` refuses the message at
+        // enqueue instead of the consumer retrying it into the dead-letter queue.
+        // On what will be sent: `react` is not content in itself, and `html: ""` beside it is kept over the render.
+        assertHasContent({ html, text });
 
         return {
             // Drop an empty optional recipient list rather than carrying `[]` into

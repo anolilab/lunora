@@ -1,6 +1,6 @@
 {
     "name": "@lunora/platform-node",
-    "version": "1.0.0-alpha.220",
+    "version": "1.0.0-alpha.221",
     "description": "Node implementation of the Lunora platform contracts: ShardHost, SocketHost, ShardDirectory, ShardKvStore, SchedulerHost over better-sqlite3 and an in-process socket registry (dev/test target)",
     "keywords": [
         "better-sqlite3",
@@ -61,7 +61,8 @@
     "dependencies": {
         "@lunora/d1": "^1.0.0-alpha.237",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/platform": "^1.0.0-alpha.81",
+        "@lunora/mail": "^1.0.0-alpha.140",
+        "@lunora/platform": "^1.0.0-alpha.82",
         "@lunora/queue": "^1.0.0-alpha.144",
         "@lunora/runtime": "^1.0.0-alpha.292",
         "@lunora/scheduler": "^1.0.0-alpha.171",

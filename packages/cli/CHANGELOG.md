@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.503](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.502...@lunora/cli@1.0.0-alpha.503) (2026-11-20)
+
+- feat(platform-node): deliver mail on the Node target (#1551) (#1624)
+
 ## @lunora/cli [1.0.0-alpha.502](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.501...@lunora/cli@1.0.0-alpha.502) (2026-11-18)
 
 - feat(cli): deploy a Node app as a container (#1551) (#1625)

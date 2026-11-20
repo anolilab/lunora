@@ -79,6 +79,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it. Gate-bearing: codegen refuses an app that declares a durable stream on this target, rather than emitting one that silently behaves as an ephemeral stream",
         },
+        cloudflareModules: {
+            level: "unsupported",
+            note: "Node has none of the built-in modules under the cloudflare: scheme, so an app module importing one (cloudflare:workers for env, cloudflare:email for send_email) fails to load. Codegen refuses the app at build time and names each such module under lunora/. The `mail` registry starter is one: on Node, send through platform.mail.mailer, or build a mailer from your own env",
+        },
         commitOrderedTables: {
             level: "emulated",
             note: "The sequence orders commits correctly, but the serialization it depends on is Lunora's per-shard write gate rather than a platform property — one process, one better-sqlite3 handle per shard key. Correct here; not something the host guarantees the way a Durable Object does",
@@ -244,8 +248,8 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "better-sqlite3 keeps no change log to rewind, and createNodeShardState deliberately exposes no bookmark methods rather than a stub that would report a restore that never happened, so getPitrBookmark / pitrRestore answer PITR_UNAVAILABLE. Recover from `lunora backup` snapshots instead (objectStorageBackups)",
         },
         mail: {
-            level: "unsupported",
-            note: "The queue tier this host lacked when the rating was written now exists (createNodeQueueHost), but nothing here composes a @lunora/mail transport or the queued-send consumer, so a send would be accepted and never delivered",
+            level: "emulated",
+            note: "createNodeMailHost (@lunora/platform-node, or createNodePlatform({ mail })) puts a durable lunora-mail queue on createNodeQueueHost, in a database file of its own (mail.path, never the shard's: the shard's file, the global-tables file and a registry shard file are refused), and drains it through consumeQueuedSend, sending with a caller-supplied transport such as an SMTP client or, without one, Resend (RESEND_API_KEY); a dev env captures as on Cloudflare. A claimed batch stays hidden longer than its sends can take, each send first claims its idempotency key atomically (so two polls or processes never send one key at once, and a key reused for different content is refused), and a SQLite sent-ledger dedupes a sent key and parks a late redelivery that may have landed, never sending or dropping it, measured on the host clock; so it does with one older than the ledger's 15-day attempt record. A send that fails for a passing reason is retried after 30, 60 and 120 seconds and then parked; one the provider refuses outright is logged and dropped. Each failure is logged. Construction throws when MAIL_FROM is unset or nothing can deliver. Emulated, not native: Cloudflare Email Workers (the send_email binding) and inbound Email Routing do not exist here, the `mail` registry starter imports cloudflare:workers and does not load, delivery runs on the host's poll() like every queue on this target (the server `lunora deploy --target node` generates binds an app's lunora-mail producer to it and polls it every second), and a crash between the provider accepting a send and the ledger recording it redelivers, which only Resend's idempotency key drops",
         },
         secrets: {
             level: "emulated",

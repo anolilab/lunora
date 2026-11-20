@@ -206,6 +206,12 @@ interface SentMailStore {
 }
 ```
 
+### `assertValidIdempotencyKey` (const)
+
+```ts
+const assertValidIdempotencyKey: (key: unknown) => void;
+```
+
 ### `consumeQueuedSend` (const)
 
 ```ts

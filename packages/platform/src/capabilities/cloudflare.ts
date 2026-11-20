@@ -36,6 +36,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming. From compatibility_date 2026-10-01 (or the durable_object_io_tasks_prevent_eviction flag) that pending waitUntil holds off idle eviction for up to 15 minutes, so a client disconnect no longer interrupts a shorter run, unless durable_object_io_tasks_do_not_prevent_eviction opts out. Deployed Workers apply it by date; a local workerd older than 1.20261001 ignores the date and needs the explicit durable_object_io_tasks_prevent_eviction flag (it rejects the durable_object_io_tasks_do_not_prevent_eviction opt-out at startup)",
         },
+        cloudflareModules: { level: "native", note: "The Workers runtime provides every cloudflare:* built-in module" },
         commitOrderedTables: {
             level: "native",
             note: "`state.storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a Durable Object executes one event at a time — so the allocation order IS the commit order, with no lock of ours in the path",

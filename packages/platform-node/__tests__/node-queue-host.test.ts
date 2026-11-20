@@ -500,4 +500,20 @@ describe("createNodeQueueHost", () => {
 
         await expect(host.poll()).resolves.toBe(1);
     });
+
+    it("leaves a rejected construction's queue names free for a corrected retry on the same connection", () => {
+        expect.assertions(2);
+
+        const database = freshDatabase();
+        // Dead-letters to a queue nothing declares: refused at construction.
+        const broken = defineQueue({ deadLetterQueue: "jobs-dlq", handler: () => undefined });
+
+        expect(() => createNodeQueueHost(database, { onBatch: () => undefined, queues: { jobs: broken } })).toThrow(/jobs-dlq/u);
+
+        // The same names, now with the dead-letter queue declared: nothing from the failed attempt holds them.
+        const fixed = defineQueue({ deadLetterQueue: "jobs-dlq", handler: () => undefined });
+        const deadLetters = defineQueue({ handler: () => undefined, name: "jobs-dlq" });
+
+        expect(() => createNodeQueueHost(database, { onBatch: () => undefined, queues: { deadLetters, jobs: fixed } })).not.toThrow();
+    });
 });

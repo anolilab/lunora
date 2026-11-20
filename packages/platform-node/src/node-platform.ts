@@ -13,9 +13,13 @@
  * need to guess at that shape.
  */
 
+import { lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+
 import { LunoraError } from "@lunora/errors";
 import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
+import Database from "better-sqlite3";
 
 import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
 import type { Drainable, DrainOptions, DrainResult } from "./drain-deadline";
@@ -24,6 +28,8 @@ import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-rout
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
 import { createNodeShardKvStore } from "./node-kv-store";
+import type { NodeMailHost, NodeMailHostOptions } from "./node-mail-host";
+import { createNodeMailHost } from "./node-mail-host";
 import type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 import { createNodeQueueHost } from "./node-queue-host";
 import { createNodeR2Bucket } from "./node-r2-bucket";
@@ -32,7 +38,7 @@ import { createNodeSchedulerHost } from "./node-scheduler-host";
 import type { NodeShardHostOptions } from "./node-shard-host";
 import { createNodeShardHost } from "./node-shard-host";
 import type { NodeShardRegistryOptions } from "./node-shard-registry";
-import { createNodeShardRegistry } from "./node-shard-registry";
+import { createNodeShardRegistry, SHARD_FILE_SUFFIX } from "./node-shard-registry";
 import { createNodeSocketHost } from "./node-socket-host";
 import type { NodeWorkflowHost } from "./node-workflow-host";
 import { createNodeWorkflowHost } from "./node-workflow-host";
@@ -80,6 +86,261 @@ const deliverableCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCronJ
     }
 
     return declared;
+};
+
+/**
+ * The mail host, on its own connection to its own file. Never the shard's:
+ * `shard.transaction()` holds a raw `BEGIN` on that connection across awaits, so
+ * a poll running meanwhile would claim, record and ack inside it, and the shard's
+ * rollback would undo the ack and the sent record and mail the message again. A
+ * second connection to the shard's file is not enough either: the open `BEGIN`
+ * holds the file's write lock, so every mail write would wait out the busy
+ * timeout on a blocked event loop. The `.global()` store is split off the same way.
+ */
+
+/**
+ * One spelling per file: resolved, then through `realpath` where the file (or,
+ * for one not created yet, its directory) exists, so `./a/../shard.sqlite3` and a
+ * symlink to it name the same database.
+ */
+const canonicalPath = (path: string, { databaseFile }: { databaseFile: boolean }): string => {
+    // better-sqlite3 opens `filename.trim()`, so a database filename with a stray space names the
+    // trimmed file. A directory is used exactly as given (the shard registry joins it untrimmed),
+    // so only a database filename is trimmed.
+    const resolved = resolve(databaseFile ? path.trim() : path);
+
+    try {
+        return realpathSync(resolved);
+    } catch {
+        try {
+            return join(realpathSync(dirname(resolved)), basename(resolved));
+        } catch {
+            return resolved;
+        }
+    }
+};
+
+/** Linux's own limit on symlinks followed in one lookup (`MAXSYMLINKS`). */
+const MAX_SYMLINK_HOPS = 40;
+
+/**
+ * Every name a mail path passes through to the file it opens: the path itself, each
+ * symlink after it, and last the file, which may not exist yet. `realpath` cannot
+ * follow a link to a missing file, so a link outside the registry's directory to a
+ * file inside it read as outside, and better-sqlite3 then created the file there,
+ * where the next start opened it as a shard. Each relative target is resolved
+ * against its link's own directory. A chain past the hop limit (a loop) or a link
+ * that cannot be read is refused: failing closed, as the target is unknown.
+ */
+const mailPathChain = (mailPath: string): string[] => {
+    let current = resolve(mailPath.trim());
+    const chain = [current];
+
+    for (let hop = 0; hop <= MAX_SYMLINK_HOPS; hop += 1) {
+        let isLink: boolean;
+
+        try {
+            isLink = lstatSync(current).isSymbolicLink();
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                return chain;
+            }
+
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: mail.path "${mailPath}" could not be resolved — pass a path it can check`, {
+                cause: error,
+            });
+        }
+
+        if (!isLink) {
+            return chain;
+        }
+
+        try {
+            current = resolve(dirname(current), readlinkSync(current));
+            chain.push(current);
+        } catch (error) {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: mail.path "${mailPath}" is a symlink whose target could not be read`, {
+                cause: error,
+            });
+        }
+    }
+
+    throw new LunoraError(
+        "VALIDATION_ERROR",
+        `@lunora/platform-node: mail.path "${mailPath}" is a chain of more than ${String(MAX_SYMLINK_HOPS)} symlinks (a loop?) — pass the file itself`,
+    );
+};
+
+/**
+ * Whether two paths name one file. Device and inode when both exist, because
+ * `realpath` resolves symlinks but not hard links: a hard link to the shard's file
+ * is another path to the same database. Canonical paths otherwise, for a file not
+ * created yet, which no hard link can point at, compared without case.
+ */
+const sameFile = (a: string, b: string): boolean => {
+    try {
+        // Trimmed as better-sqlite3 trims what it opens. `bigint`, because a device or inode
+        // number past 2^53 (large or network filesystems) loses its low bits as a Number, and two
+        // distinct files would then compare equal.
+        const first = statSync(a.trim(), { bigint: true });
+        const second = statSync(b.trim(), { bigint: true });
+
+        return first.dev === second.dev && first.ino === second.ino;
+    } catch {
+        // Case-insensitively, on every platform: on a case-insensitive volume (APFS, NTFS)
+        // `Mail.sqlite3` and `mail.sqlite3` are one file, and with no file to stat there is no way
+        // to tell which kind of volume this is. A false refusal costs a rename; a miss shares a file.
+        return canonicalPath(a, { databaseFile: true }).toLowerCase() === canonicalPath(b, { databaseFile: true }).toLowerCase();
+    }
+};
+
+/**
+ * Refuse a mail path that does not name a durable database file. `:memory:` and
+ * the empty string (which better-sqlite3 opens as a temporary file deleted on
+ * close) lose the queue and the sent ledger with the process. Every `file:` URI
+ * is refused too, whatever it asks for: better-sqlite3 does not read URIs, so
+ * `file:mail.sqlite3` would quietly open a file literally named that in the
+ * working directory, which is not where the caller would look for their mail.
+ * Recognised by its prefix, as better-sqlite3 itself does, and never parsed.
+ */
+const refuseNonDurableMailPath = (mailPath: string): void => {
+    const trimmed = mailPath.trim();
+
+    if (trimmed === "" || trimmed === ":memory:") {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: mail.path ${JSON.stringify(mailPath)} is not durable — the mail queue and its sent ledger must survive a restart, so give mail a database file`,
+        );
+    }
+
+    if (trimmed.toLowerCase().startsWith("file:")) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: mail.path ${JSON.stringify(mailPath)} is a file: URI — pass a plain filesystem path instead (better-sqlite3 does not read URIs, and would open a file by that literal name)`,
+        );
+    }
+};
+
+/**
+ * Mail's polls as one drainable part of the platform drain: a poll in flight settles its rows
+ * through the database `close()` shuts, and work handed to `shard.waitUntil` can start a poll a
+ * pass never saw, which drainTogether's passes catch like any other part's late work.
+ */
+const mailDrainPart = (mail: NodeMailHost): Drainable => {
+    return {
+        drain: async (drainOptions) => {
+            const deadline = startDrainDeadline(drainOptions);
+
+            try {
+                if (await settlesBefore(mail.drain(), deadline)) {
+                    return { failed: [], pending: [], timedOut: false };
+                }
+
+                // eslint-disable-next-line no-console -- the drain gives up on these polls, so the log is the only record of them
+                console.error("[@lunora/platform-node] platform drain deadline passed with a mail poll still running");
+
+                return { failed: [], pending: ["a mail poll"], timedOut: true };
+            } finally {
+                deadline.cancel();
+            }
+        },
+        idle: () => mail.idle(),
+        pending: () => (mail.idle() ? [] : ["a mail poll"]),
+    };
+};
+
+/**
+ * Refuse a mail file that is one the platform already opens: the shard's, the
+ * `.global()` store's, or one the shard registry would list as a shard. Each
+ * shares a write lock with mail, and the shard's is held across awaits by
+ * `shard.transaction()`, so mail would stall every shard request it overlapped.
+ */
+const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptions, "directory" | "globalTablesPath" | "path">): void => {
+    // The owner checks judge the file the path opens; the registry check judges every name on
+    // the way, since the registry opens any *.sqlite3 entry in its directory, link or file.
+    const chain = mailPathChain(mailPath);
+    const target = chain.at(-1) ?? mailPath;
+    const owners: [string, string | undefined][] = [
+        ["the shard database (`path`)", platform.path],
+        ["the .global() store (`globalTablesPath`)", platform.globalTablesPath],
+    ];
+
+    for (const [owner, ownerPath] of owners) {
+        if (ownerPath !== undefined && ownerPath !== ":memory:" && ownerPath !== "" && sameFile(ownerPath, target)) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: mail.path "${mailPath}" is ${owner} "${ownerPath}" — give mail a database file of its own`,
+            );
+        }
+    }
+
+    const { directory } = platform;
+
+    if (directory === undefined) {
+        return;
+    }
+
+    const registry = canonicalPath(directory, { databaseFile: false });
+    // Where each name sits, its directory resolved but not the name: a link's own entry is what
+    // the registry lists.
+    const inRegistry = chain.some((name) => {
+        const entry = join(canonicalPath(dirname(name), { databaseFile: false }), basename(name));
+
+        return entry.endsWith(SHARD_FILE_SUFFIX) && dirname(entry) === registry;
+    });
+
+    if (inRegistry) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: mail.path "${mailPath}" is a ${SHARD_FILE_SUFFIX} file inside the shard registry's directory "${directory}", which would open it as a shard — move it out of that directory`,
+        );
+    }
+
+    // A hard link outside the directory to one of its shard files passes the check above.
+    let entries: string[];
+
+    try {
+        entries = readdirSync(directory).filter((entry) => entry.endsWith(SHARD_FILE_SUFFIX));
+    } catch {
+        return;
+    }
+
+    const shared = entries.find((entry) => sameFile(join(directory, entry), target));
+
+    if (shared !== undefined) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: mail.path "${mailPath}" is the same file as the shard registry's shard "${join(directory, shared)}" — give mail a database file of its own`,
+        );
+    }
+};
+
+const composeMail = (
+    options: NodePlatformMailOptions | undefined,
+    platform: Pick<NodePlatformOptions, "directory" | "globalTablesPath" | "path">,
+): { close: () => void; mail: NodeMailHost } | undefined => {
+    if (options === undefined) {
+        return undefined;
+    }
+
+    const { path, ...hostOptions } = options;
+
+    refuseNonDurableMailPath(path);
+    refuseSharedMailPath(path, platform);
+    const database = new Database(path);
+
+    try {
+        return {
+            close: () => {
+                database.close();
+            },
+            mail: createNodeMailHost(database, hostOptions),
+        };
+    } catch (error) {
+        database.close();
+
+        throw error;
+    }
 };
 
 /**
@@ -178,10 +439,11 @@ export interface NodePlatform<
     dispatch: (request: Request) => Promise<Response>;
 
     /**
-     * Wait for every promise handed to `shard.waitUntil` to settle, and for the
-     * registry's shards to go idle (`NodeShardRegistry.drain`): in-flight
-     * `onFetch` and `onAlarm` calls, including cron and scheduled-job
-     * deliveries, and each shard's own `waitUntil` work.
+     * Wait for every promise handed to `shard.waitUntil` to settle, for every
+     * `mail.poll()` in flight, and for the registry's shards to go idle
+     * (`NodeShardRegistry.drain`): in-flight `onFetch` and `onAlarm` calls,
+     * including cron and scheduled-job deliveries, and each shard's own
+     * `waitUntil` work.
      *
      * Separate from `close()` because the two answer different questions:
      * `close()` releases handles and stays synchronous (it backs
@@ -225,6 +487,15 @@ export interface NodePlatform<
     /** Durable key-value storage backed by the same `better-sqlite3` database as `shard`. */
     kv: ShardKvStore;
 
+    /**
+     * Queued mail delivery, or `undefined` when the caller passed no `mail`.
+     * Its queue, sent ledger and key records live in `mail.path`, a database file
+     * of its own on its own connection, never the shard's: construction refuses a
+     * path that is the shard's file, the `globalTablesPath` file, or a `.sqlite3`
+     * file in the shard registry's `directory`.
+     */
+    mail?: NodeMailHost;
+
     /** The local-filesystem bucket, or `undefined` when the caller named no bucket directory. */
     objectStorage?: R2BucketLike;
 
@@ -257,6 +528,19 @@ export interface NodePlatform<
      */
     workflows?: NodeWorkflowHost<Workflows>;
 }
+
+/**
+ * `createNodePlatform`'s `mail` option: the {@link NodeMailHostOptions} plus the
+ * database file the mail host keeps its queue, sent ledger and key records in.
+ *
+ * Its own file, never the shard's, and there is no default: a shard transaction
+ * holds the shard file across awaits, and mail written inside it would be rolled
+ * back with it (see `composeMail`). The same reason `globalTablesPath` has none.
+ */
+export type NodePlatformMailOptions = NodeMailHostOptions & {
+    /** The mail database file, for example `./.lunora/mail.sqlite3`. */
+    path: string;
+};
 
 /**
  * The secrets the dispatch route authenticates with. With neither, the route
@@ -315,6 +599,16 @@ export type NodePlatformOptions<
      * default, for the same reason the bucket has none.
      */
     globalTablesPath?: string;
+
+    /**
+     * Deliver `@lunora/mail` sends: a durable `lunora-mail` queue drained
+     * through the given `transport` or, without one, Resend (`RESEND_API_KEY`), exposed as
+     * `platform.mail`. Its queue, sent ledger and key records live in `path`, a
+     * database file of their own (see {@link NodePlatformMailOptions}). Omit when
+     * the app sends no mail. Throws here, not on the first send, when `MAIL_FROM`
+     * is unset or nothing can deliver.
+     */
+    mail?: NodePlatformMailOptions;
 
     /**
      * Directory the object-storage bucket keeps its objects in, one file per
@@ -435,6 +729,14 @@ export const createNodePlatform = <
                       queues: options.queues,
                   });
 
+        const composedMail = composeMail(options.mail, options);
+
+        if (composedMail !== undefined) {
+            teardown.push(composedMail.close);
+        }
+
+        const mail = composedMail?.mail;
+
         const objectStorage = options.objectStorageDirectory === undefined ? undefined : createNodeR2Bucket({ directory: options.objectStorageDirectory });
 
         // Its own connection and its own file: a `.global()` table is shared by every
@@ -512,14 +814,15 @@ export const createNodePlatform = <
             idle: () => pendingBackground() === 0 && pendingAlarms() === 0 && pendingDispatches().waits.length === 0,
             pending: hostPending,
         };
+        const parts: Drainable[] = [host, registry, ...(mail === undefined ? [] : [mailDrainPart(mail)])];
 
         return {
             capabilities: NODE_CAPABILITIES,
             close,
             directory,
             dispatch: (request) => dispatch(request),
-            idle: () => host.idle() && registry.idle(),
-            pending: () => [...host.pending(), ...registry.pending()],
+            idle: () => parts.every((part) => part.idle()),
+            pending: () => parts.flatMap((part) => part.pending()),
             // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
             // would let `close()` dispose a database a handler is still writing. Host work can start shard work after the
             // registry drained (a due job's delivery), which drainTogether's passes, failures and pending re-read account for.
@@ -533,10 +836,11 @@ export const createNodePlatform = <
                 suspendHostAlarms();
                 registry.suspendAlarms();
 
-                return drainTogether([host, registry], drainOptions);
+                return drainTogether(parts, drainOptions);
             },
             globalTables,
             kv,
+            mail,
             objectStorage,
             rearmPersistedAlarms: () => registry.rearmPersistedAlarms(),
             queues,

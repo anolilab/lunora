@@ -50,7 +50,7 @@ describe("mail send classification", () => {
             },
         });
 
-        const error = await mailer.send({ subject: "Hi", to: "a@x.test" }).catch((error_: unknown) => error_);
+        const error = await mailer.send({ subject: "Hi", text: "Hi", to: "a@x.test" }).catch((error_: unknown) => error_);
 
         expect(isRetryableMailError(error)).toBe(true);
         expect((error as Error).message).toBe("@lunora/mail: send failed");
@@ -74,7 +74,7 @@ describe("mail send classification", () => {
             },
         });
 
-        const error = await mailer.send({ subject: "Hi", to: "a@x.test" }).catch((error_: unknown) => error_);
+        const error = await mailer.send({ subject: "Hi", text: "Hi", to: "a@x.test" }).catch((error_: unknown) => error_);
 
         expect(ForeignMailSendError).not.toBe(MailSendError);
         expect(original).toBeInstanceOf(MailSendError);
@@ -124,7 +124,7 @@ describe("send deadline", () => {
         vi.useFakeTimers();
 
         const mailer = hangingMailer(5000);
-        const settled = mailer.send({ subject: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
+        const settled = mailer.send({ subject: "Hi", text: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
 
         await vi.advanceTimersByTimeAsync(5000);
 
@@ -153,7 +153,7 @@ describe("send deadline", () => {
                         }),
                 },
             });
-            const settled = mailer.send({ idempotencyKey, subject: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
+            const settled = mailer.send({ idempotencyKey, subject: "Hi", text: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
 
             await vi.advanceTimersByTimeAsync(1000);
 
@@ -180,7 +180,7 @@ describe("send deadline", () => {
                 },
             });
 
-            return mailer.send({ idempotencyKey, subject: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
+            return mailer.send({ idempotencyKey, subject: "Hi", text: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
         };
 
         const promoted = await unknown(true, "order-42");
@@ -205,7 +205,7 @@ describe("send deadline", () => {
                     },
                 },
             })
-                .send({ idempotencyKey, subject: "Hi", to: "a@x.test" })
+                .send({ idempotencyKey, subject: "Hi", text: "Hi", to: "a@x.test" })
                 .catch((error: unknown) => error);
 
         expect(isRetryableMailError(await unknown(false, "order-42"))).toBe(false);
@@ -223,7 +223,7 @@ describe("send deadline", () => {
         const mailer = hangingMailer();
         let outcome: unknown = "pending";
 
-        const settled = mailer.send({ subject: "Hi", to: "a@x.test" }).catch((error: unknown) => {
+        const settled = mailer.send({ subject: "Hi", text: "Hi", to: "a@x.test" }).catch((error: unknown) => {
             outcome = error;
         });
 
@@ -251,7 +251,7 @@ describe("send deadline", () => {
             },
         });
 
-        await expect(mailer.send({ subject: "Hi", to: "a@x.test" })).resolves.toStrictEqual({ id: "sent" });
+        await expect(mailer.send({ subject: "Hi", text: "Hi", to: "a@x.test" })).resolves.toStrictEqual({ id: "sent" });
         expect(vi.getTimerCount()).toBe(0);
     });
 

@@ -7,6 +7,7 @@ import { dirname, relative, resolve } from "node:path";
 
 import type { WranglerQueueProducerIR, WranglerVariableIR } from "@lunora/codegen";
 
+import { resolveWorkerEntry } from "../worker-entry";
 import { isPlainObject } from "./guards";
 import { spaAssetsBinding as spaAssetsBindingOf } from "./spa-assets";
 import { studioAssetsPlan } from "./studio-assets";
@@ -18,7 +19,6 @@ import type { QueuesShape } from "./wrangler-shape";
 interface WranglerCodegenShape {
     assets?: unknown;
     env?: Record<string, { assets?: unknown; queues?: QueuesShape | null } | null> | null;
-    main?: unknown;
     queues?: QueuesShape | null;
     vars?: Record<string, unknown> | null;
 }
@@ -35,8 +35,16 @@ interface WranglerCodegenInputs {
      * project root. Absent keeps them in the Worker bundle (see `studio-assets.ts`).
      */
     studioAssets?: { binding: string; directory: string };
+
+    /**
+     * The worker entry file the deploy bundles, absolute: the composed `src/worker.ts` when it exists (the deploy
+     * passes it in place of `main`), else wrangler's `main`, else the first `WORKER_ENTRY_FALLBACKS` file. Absent when
+     * none exists, as for the composed `virtual:lunora/worker`. Codegen's `cloudflare:*` import gate starts from it.
+     */
+    workerEntry?: string;
     /** Every well-formed `queues.producers[]` entry of the top level and each `env.<name>` block. */
     wranglerQueueProducers: WranglerQueueProducerIR[];
+
     /** Top-level `vars` entries that look like plaintext secrets. */
     wranglerVariables: WranglerVariableIR[];
 }
@@ -54,16 +62,19 @@ const producersOf = (queues: QueuesShape | null | undefined, env?: string): Wran
 };
 
 /**
- * Both inputs are empty when there is no wrangler config or it does not parse. Pass the `target` codegen runs with, so
+ * The wrangler inputs are empty when there is no wrangler config or it does not parse; `workerEntry` is still probed. Pass the `target` codegen runs with, so
  * an explicit `--target` decides the Studio documents' placement the same way `reconcileStudioAssets` does.
  */
 const wranglerCodegenInputs = (projectRoot: string, target?: string): WranglerCodegenInputs => {
     const wranglerPath = findWranglerFile(projectRoot);
     const read = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerCodegenShape>(wranglerPath);
     const parsed = read?.parsed;
+    // Read whether or not wrangler parses: with no `main` the entry is the first fallback file.
+    const workerEntry = resolveWorkerEntry(projectRoot).path;
+    const entry = workerEntry === undefined ? {} : { workerEntry };
 
     if (wranglerPath === undefined || read?.text === undefined || parsed === undefined) {
-        return { wranglerQueueProducers: [], wranglerVariables: [] };
+        return { ...entry, wranglerQueueProducers: [], wranglerVariables: [] };
     }
 
     const keyLines = variableKeyLines(read.text);
@@ -78,6 +89,7 @@ const wranglerCodegenInputs = (projectRoot: string, target?: string): WranglerCo
         ...(studioAssets === undefined
             ? {}
             : { studioAssets: { binding: studioAssets.binding, directory: relative(projectRoot, resolve(dirname(wranglerPath), studioAssets.directory)) } }),
+        ...entry,
         wranglerQueueProducers: [...producersOf(parsed.queues), ...Object.entries(parsed.env ?? {}).flatMap(([env, block]) => producersOf(block?.queues, env))],
         wranglerVariables: scanWranglerVariablesForSecrets(isPlainObject(parsed.vars) ? parsed.vars : undefined, relative(projectRoot, wranglerPath), (key) =>
             keyLines.get(key),

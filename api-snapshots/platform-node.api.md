@@ -52,6 +52,12 @@ interface Drainable {
 }
 ```
 
+### `MailParkReason` (type)
+
+```ts
+type MailParkReason = "evidence_expired" | "idempotency_key_conflict" | "outcome_unknown" | "retries_exhausted" | "unknown";
+```
+
 ### `NODE_SCHEDULER_DISPATCH_PATH` (const)
 
 ```ts
@@ -171,6 +177,37 @@ interface NodeHyperdriveBinding {
 }
 ```
 
+### `NodeMailHost` (interface)
+
+```ts
+interface NodeMailHost {
+    deadLetters: {
+        list: () => {
+            attempts: number;
+            body: unknown;
+            id: string;
+            reason: MailParkReason;
+        }[];
+        requeue: (id: string) => boolean;
+    };
+    drain: () => Promise<void>;
+    idle: () => boolean;
+    mailer: Mailer;
+    poll: (now?: number) => Promise<number>;
+    queue: QueueLike;
+}
+```
+
+### `NodeMailHostOptions` (interface)
+
+```ts
+interface NodeMailHostOptions {
+    env?: MailEnv;
+    now?: () => number;
+    transport?: MailTransport;
+}
+```
+
 ### `NodePlatform` (interface)
 
 ```ts
@@ -190,6 +227,7 @@ interface NodePlatform<Queues extends Record<string, {
     globalTables?: NodeGlobalStore;
     idle: () => boolean;
     kv: ShardKvStore;
+    mail?: NodeMailHost;
     objectStorage?: R2BucketLike;
     pending: () => string[];
     queues?: NodeQueueHost<Queues>;
@@ -210,6 +248,14 @@ interface NodePlatformDispatchOptions {
 }
 ```
 
+### `NodePlatformMailOptions` (type)
+
+```ts
+type NodePlatformMailOptions = NodeMailHostOptions & {
+    path: string;
+};
+```
+
 ### `NodePlatformOptions` (type)
 
 ```ts
@@ -221,6 +267,7 @@ type NodePlatformOptions<Queues extends Record<string, {
     crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
     dispatch?: NodePlatformDispatchOptions;
     globalTablesPath?: string;
+    mail?: NodePlatformMailOptions;
     objectStorageDirectory?: string;
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
     queues?: Queues;
@@ -485,6 +532,12 @@ const createNodeHttpServer: (options: NodeHttpServerOptions) => Promise<NodeHttp
 
 ```ts
 const createNodeHyperdrive: (url?: string | undefined) => NodeHyperdriveBinding;
+```
+
+### `createNodeMailHost` (const)
+
+```ts
+const createNodeMailHost: (database: Database.Database, options?: NodeMailHostOptions) => NodeMailHost;
 ```
 
 ### `createNodePlatform` (const)

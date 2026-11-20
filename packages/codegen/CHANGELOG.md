@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.427](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.426...@lunora/codegen@1.0.0-alpha.427) (2026-11-20)
+
+- feat(platform-node): deliver mail on the Node target (#1551) (#1624)
+
 ## @lunora/codegen [1.0.0-alpha.426](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.425...@lunora/codegen@1.0.0-alpha.426) (2026-11-18)
 
 - feat(cli): deploy a Node app as a container (#1551) (#1625)

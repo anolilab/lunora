@@ -461,7 +461,14 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         usesSandbox,
         useUmbrella,
         workflows,
-    } = buildDeclarationSurface({ lunoraDirectory, project, projectRoot: options.projectRoot, schema, target: options.target });
+    } = buildDeclarationSurface({
+        lunoraDirectory,
+        project,
+        projectRoot: options.projectRoot,
+        schema,
+        target: options.target,
+        workerEntry: options.workerEntry,
+    });
 
     // Before anything is written: pinning DO-backed auth that was unpinned
     // before would start it out empty, and nothing else about the upgrade

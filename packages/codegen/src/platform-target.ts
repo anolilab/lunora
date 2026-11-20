@@ -43,6 +43,7 @@ import { CELLD_CAPABILITIES, CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "
 import type { StudioFeaturesResult } from "@lunora/shard-engine";
 
 import type { CapabilityKey } from "./capabilities";
+import type { CloudflareModuleImport } from "./discover/cloudflare-modules";
 import type { FeatureUsage } from "./discover/feature-usage";
 import type { VectorIndexIR } from "./ir";
 import { readProjectConfigLiterals } from "./project-config-file";
@@ -327,6 +328,13 @@ const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = 
 interface PlatformSignals {
     /** A `defineAgent` export in `lunora/agents.ts`. */
     agents?: boolean;
+
+    /**
+     * The app modules under `lunora/` that load a `cloudflare:*` built-in. Not a
+     * boolean, because the diagnostic names each module: judged after the
+     * signal loop, against `cloudflareModules`, like `liveContext`.
+     */
+    cloudflareModuleImports?: ReadonlyArray<CloudflareModuleImport>;
     /** A `.commitOrdered()` table. */
     commitOrderedTables?: boolean;
     /** A `defineContainer({ allowedHosts | deniedHosts | interceptHttps })` egress policy. */
@@ -420,6 +428,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
     globalTables: "global tables (`.global()`)",
     liveContext: "the live publisher (`ctx.live`)",
+    cloudflareModuleImports: "imports of the Workers runtime's `cloudflare:*` built-in modules",
     liveStreams: "live topic streams (`defineLiveStream`)",
     queues: "queues (`defineQueue`)",
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
@@ -501,6 +510,38 @@ const unsupportedSignalDiagnostic = (key: keyof PlatformSignals, matrix: Platfor
 };
 
 /**
+ * App modules that load `cloudflare:*` built-ins on a target that has none.
+ * Each module is named: the fix is in those files, and on a Node target the
+ * usual one is the `mail` registry starter, which reads `env` from
+ * `cloudflare:workers`. Rated through `cloudflareModules`, so celld, which
+ * implements the Workers API, passes, and a new host decides in its own matrix.
+ */
+const cloudflareModulesDiagnostic = (
+    matrix: PlatformCapabilities,
+    target: string,
+    imports: ReadonlyArray<CloudflareModuleImport>,
+    level: "unsupported" | undefined,
+): PlatformDiagnostic => {
+    const listed = imports.map(({ module, specifiers }) => `${module} (${specifiers.join(", ")})`).join("; ");
+
+    return level === undefined
+        ? {
+              level: "error",
+              message: `${matrix.name}'s capability matrix does not declare whether its runtime provides the cloudflare:* built-in modules, and these app modules import them: ${listed}. Treated as unsupported.`,
+              name: "platform_undeclared_feature",
+              remediation: `Rate "cloudflareModules" in the ${matrix.name} capability matrix as "native", "emulated", or "unsupported".`,
+              target,
+          }
+        : {
+              level: "error",
+              message: `${matrix.name} has no cloudflare:* built-in modules, so these app modules would fail to load on the "${target}" target: ${listed}.`,
+              name: "platform_unsupported_feature",
+              remediation: `Remove the cloudflare:* imports from those modules (an \`import type { … }\` declaration is fine; inline \`type\` specifiers still load the module), or deploy to a target whose capability matrix marks "cloudflareModules" as native or emulated. For mail on Node, send through platform.mail.mailer instead of the registry starter.`,
+              target,
+          };
+};
+
+/**
  * The app reads `ctx.live` and the target withholds live streams, so the
  * runtime never sets the publisher on the context: the read would throw a
  * TypeError on first use. Refused here rather than left to fail at runtime.
@@ -556,6 +597,25 @@ const undeclaredSignalDiagnostic = (key: keyof PlatformSignals, matrix: Platform
         remediation: `Rate "${key}" in the ${matrix.name} capability matrix as "native", "emulated", or "unsupported" — an undeclared feature fails closed rather than letting the app deploy onto a primitive the host may not provide.`,
         target,
     };
+};
+
+/** Whether `matrix` refuses `cloudflare:*` imports: rated `unsupported`, or not rated at all (fail closed). */
+const refusesCloudflareModules = (matrix: PlatformCapabilities): boolean => {
+    const level = matrix.features.cloudflareModules?.level;
+
+    return level === undefined || level === "unsupported";
+};
+
+/**
+ * Whether codegen has to walk the app's imports for `cloudflare:*` built-ins on
+ * `target`: only where the gate would refuse one. Everywhere else the walk's
+ * result is never read, and it parses the whole worker graph on every run,
+ * watch-mode rebuilds included.
+ */
+const needsCloudflareModuleWalk = (target: string): boolean => {
+    const matrix = PLATFORM_MATRICES[target];
+
+    return matrix !== undefined && refusesCloudflareModules(matrix);
 };
 
 /**
@@ -687,6 +747,15 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
         diagnostics.push(liveContextWithheldDiagnostic(matrix, target));
     }
 
+    const cloudflareImports = signals.cloudflareModuleImports ?? [];
+
+    if (cloudflareImports.length > 0 && refusesCloudflareModules(matrix)) {
+        // Refused means unrated or unsupported, so anything but `unsupported` here is the unrated case.
+        const level = matrix.features.cloudflareModules?.level === "unsupported" ? "unsupported" : undefined;
+
+        diagnostics.push(cloudflareModulesDiagnostic(matrix, target, cloudflareImports, level));
+    }
+
     return { diagnostics, liveStreamsWithheld, signals: gatedSignals, usage: gated };
 };
 
@@ -789,6 +858,7 @@ export {
     gateAgainstMatrix,
     gatePlatformFeatures,
     liveStreamsDeliveryAuthorizationDiagnostic,
+    needsCloudflareModuleWalk,
     platformFeatureAvailable,
     platformMatrixIds,
     readProjectTarget,

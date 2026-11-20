@@ -69,7 +69,7 @@ describe("createCaptureSink", () => {
         const env = { LUNORA_ADMIN_TOKEN: "secret", SHARD: { get, idFromName } };
 
         const sink = createCaptureSink(env);
-        const result = await sink.record({ subject: "Hi", to: "a@b.test" });
+        const result = await sink.record({ subject: "Hi", text: "Hi", to: "a@b.test" });
 
         expect(result).toStrictEqual({ id: "row-1" });
         expect(idFromName).toHaveBeenCalledWith("__root__");
@@ -98,13 +98,13 @@ describe("createCaptureSink", () => {
             },
         });
 
-        await expect(sink.record({ subject: "x", to: "a@b.test" })).resolves.toStrictEqual({ id: "uncaptured" });
+        await expect(sink.record({ subject: "x", text: "Hi", to: "a@b.test" })).resolves.toStrictEqual({ id: "uncaptured" });
         expect(consoleWarn).toHaveBeenCalledTimes(1);
         expect(consoleWarn.mock.calls[0]?.[0]).toMatch(/LUNORA_ADMIN_TOKEN/u);
 
         // Once per isolate: a dev loop sends constantly, and one line per send is
         // noise nobody reads.
-        await sink.record({ subject: "y", to: "a@b.test" });
+        await sink.record({ subject: "y", text: "Hi", to: "a@b.test" });
 
         expect(consoleWarn).toHaveBeenCalledTimes(1);
 
@@ -136,7 +136,7 @@ describe("createCaptureSink", () => {
             },
         };
 
-        const result = await createCaptureSink(env).record({ subject: "Hi", to: "a@b.test" });
+        const result = await createCaptureSink(env).record({ subject: "Hi", text: "Hi", to: "a@b.test" });
 
         // Best-effort: the send still succeeds, but never with a bogus recorded id.
         expect(result).toStrictEqual({ id: "uncaptured" });
@@ -272,7 +272,7 @@ describe("createMailerFromEnv", () => {
         const send = vi.fn<(payload: unknown) => Promise<void>>(async () => undefined);
         const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", RESEND_API_KEY: "k", WORKER_ENV: "production" }, { queue: { send } });
 
-        await expect(mailer.queue({ subject: "Hi", to: "a@x.test" })).resolves.toStrictEqual({ queued: true });
-        expect(send).toHaveBeenCalledWith(expect.objectContaining({ subject: "Hi", to: "a@x.test" }));
+        await expect(mailer.queue({ subject: "Hi", text: "Hi", to: "a@x.test" })).resolves.toStrictEqual({ queued: true });
+        expect(send).toHaveBeenCalledWith(expect.objectContaining({ subject: "Hi", text: "Hi", to: "a@x.test" }));
     });
 });

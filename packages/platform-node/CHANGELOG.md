@@ -1,3 +1,7 @@
+## @lunora/platform-node [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.220...@lunora/platform-node@1.0.0-alpha.221) (2026-11-20)
+
+- feat(platform-node): deliver mail on the Node target (#1551) (#1624)
+
 ## @lunora/platform-node [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.219...@lunora/platform-node@1.0.0-alpha.220) (2026-11-18)
 
 - feat(cli): deploy a Node app as a container (#1551) (#1625)
