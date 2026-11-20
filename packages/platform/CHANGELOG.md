@@ -1,3 +1,7 @@
+## @lunora/platform [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.81...@lunora/platform@1.0.0-alpha.82) (2026-11-20)
+
+- feat(platform-node): deliver mail on the Node target (#1551) (#1624)
+
 ## @lunora/platform [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.80...@lunora/platform@1.0.0-alpha.81) (2026-11-18)
 
 - feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)

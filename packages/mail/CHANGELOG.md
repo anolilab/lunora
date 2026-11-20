@@ -1,3 +1,7 @@
+## @lunora/mail [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.139...@lunora/mail@1.0.0-alpha.140) (2026-11-20)
+
+- feat(platform-node): deliver mail on the Node target (#1551) (#1624)
+
 ## @lunora/mail [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.138...@lunora/mail@1.0.0-alpha.139) (2026-11-05)
 
 - fix(mail): bound sends, dedupe on idempotency keys, guard inbound size (#1483)
