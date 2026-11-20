@@ -969,8 +969,10 @@ const pickSmallestHead = (slices: ShardSlice[], directions: ReadonlyArray<RankPa
 /**
  * Build the next composite cursor from each shard's resume key. `anyRemaining`
  * is true when any ok shard still has unconsumed rows in its slice or reported
- * more locally, OR when a previously-paged shard is missing from this page's
- * slices (it failed/timed out, so it is unresolved — not done).
+ * more locally, OR when any shard failed this page (it is unresolved — not done).
+ * A never-paged failed shard has no resume key, so on retry it restarts from its
+ * first row: its rows that sort before the already-delivered frontier arrive late
+ * (out of global order) on a page already marked partial, rather than never.
  *
  * EVERY recorded resume key carries forward — both the ok shards' keys (updated
  * by the merge) and a prior-paged shard's key when that shard *failed* this page
@@ -979,8 +981,8 @@ const pickSmallestHead = (slices: ShardSlice[], directions: ReadonlyArray<RankPa
  * re-emit rows already delivered on earlier pages → duplicates across the result.
  * @returns the encoded cursor string, or `null` when all shards are drained.
  */
-const buildNextRankPageCursor = (slices: ShardSlice[], lastConsumedKey: Record<string, RankPageKey>): null | string => {
-    let anyRemaining = false;
+const buildNextRankPageCursor = (slices: ShardSlice[], lastConsumedKey: Record<string, RankPageKey>, failedShardKeys: ReadonlyArray<string>): null | string => {
+    let anyRemaining = failedShardKeys.length > 0;
     const sliceKeys = new Set<string>();
 
     for (const slice of slices) {
@@ -1024,6 +1026,7 @@ const kWayMergeRankPages = (
     take: number,
     directions: ReadonlyArray<RankPageDirection>,
     priorPerShard: Record<string, RankPageKey>,
+    failedShardKeys: ReadonlyArray<string>,
 ): { isDone: boolean; nextCursor: null | string; page: ReadonlyArray<Record<string, unknown>> } => {
     const page: Record<string, unknown>[] = [];
     // Seed each shard's resume point from the prior cursor (see
@@ -1042,7 +1045,7 @@ const kWayMergeRankPages = (
         best.slice.head += 1;
     }
 
-    const nextCursor = buildNextRankPageCursor(slices, lastConsumedKey);
+    const nextCursor = buildNextRankPageCursor(slices, lastConsumedKey, failedShardKeys);
 
     return { isDone: nextCursor === null, nextCursor, page };
 };
@@ -2169,6 +2172,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             const slices: ShardSlice[] = [];
             let ok = 0;
             let failed = 0;
+            const failedShardKeys: string[] = [];
             // The shards order their slices by the named index's declared
             // directions and echo them back; trust those over the caller-supplied
             // `directions` so the merge comparator can never disagree with how
@@ -2180,6 +2184,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             for (const outcome of outcomes) {
                 if (outcome.error) {
                     failed += 1;
+                    failedShardKeys.push(outcome.shardKey);
 
                     continue;
                 }
@@ -2193,7 +2198,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 slices.push({ hasMore: outcome.hasMore ?? false, head: 0, rows: outcome.rows ?? [], shardKey: outcome.shardKey });
             }
 
-            const merged = kWayMergeRankPages(slices, take, reportedDirections ?? requestedDirections, cursorState.perShard);
+            const merged = kWayMergeRankPages(slices, take, reportedDirections ?? requestedDirections, cursorState.perShard, failedShardKeys);
 
             return {
                 continueCursor: merged.nextCursor,
