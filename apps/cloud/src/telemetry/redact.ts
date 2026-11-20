@@ -6,9 +6,10 @@
  * with a placeholder, before the ingest persists it. Pure + unit-tested; applied
  * in `decodeObservations`/`decodeLogRecords`.
  *
- * Key-based (not value-based) on purpose: matching arbitrary secret *values* in
- * free text is unreliable, but a sensitive *key* is a strong, cheap signal, and
- * it's where credentials predictably land in structured telemetry.
+ * A sensitive *key* is the strong signal and drops the whole value. An ordinary
+ * key still gets the secret-shaped substring scrub of {@link redactText}: OTel's
+ * own conventions put credentials in innocuous keys — `url.full` with an
+ * `?access_token=`, a `db.statement` with `password=`.
  */
 
 /** The placeholder a redacted value is replaced with. */
@@ -70,7 +71,8 @@ export const redactText = (text: string | undefined): string | undefined => {
 
 /**
  * Return a copy of `record` with every sensitive-keyed value replaced by
- * {@link REDACTED}. Returns the original reference untouched when nothing
+ * {@link REDACTED} and every other string value passed through
+ * {@link redactText}. Returns the original reference untouched when nothing
  * matched (no needless allocation), or `undefined` passed through.
  */
 export const redactRecord = <T extends Record<string, unknown>>(record: T | undefined): T | undefined => {
@@ -85,6 +87,11 @@ export const redactRecord = <T extends Record<string, unknown>>(record: T | unde
         if (isSensitiveKey(key)) {
             out[key] = REDACTED;
             redacted = true;
+        } else if (typeof value === "string") {
+            const scrubbed = redactText(value);
+
+            out[key] = scrubbed;
+            redacted ||= scrubbed !== value;
         } else {
             out[key] = value;
         }

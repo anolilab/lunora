@@ -593,6 +593,40 @@ describe("telemetry free-text redaction", () => {
         expect(decodeTelemetryEvents(payload("@lunora/runtime", spans))[0]?.message).toBe(scrubbed);
         expect(decodeObservations(payload("@lunora/runtime", spans))[0]?.statusMessage).toBe(scrubbed);
     });
+
+    it("redacts credentials inside a log field whose key is not itself sensitive", () => {
+        const [entry] = decodeLogRecords(
+            logsPayload([
+                {
+                    attributes: attributes({
+                        "db.statement": leaked,
+                        "url.full": `https://api.example/?access_token=${"a".repeat(12)}`,
+                    }),
+                    body: { stringValue: "x" },
+                },
+            ]),
+        );
+
+        expect(entry?.fields).toStrictEqual({
+            "db.statement": scrubbed,
+            "url.full": "https://api.example/?access_token=[redacted]",
+        });
+    });
+
+    it("redacts credentials inside a span attribute whose key is not itself sensitive", () => {
+        const spans = [
+            {
+                ...errorSpan({ attributes: { "lunora.upstream": `GET https://api.example/?access_token=${"a".repeat(12)} ${BEARER}` } }),
+                spanId: "a1",
+                startTimeUnixNano: "1700000000000000000",
+                traceId: "t1",
+            },
+        ];
+
+        expect(decodeObservations(payload("@lunora/runtime", spans))[0]?.attributes).toStrictEqual({
+            upstream: "GET https://api.example/?access_token=[redacted] Bearer [redacted]",
+        });
+    });
 });
 
 describe(handleTelemetryRoute, () => {

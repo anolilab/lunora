@@ -50,6 +50,13 @@ describe(redactRecord, () => {
         });
     });
 
+    it("scrubs a secret-shaped substring from an ordinary key's string value", () => {
+        expect(redactRecord({ "http.url": `https://api.example/?access_token=${"a".repeat(12)}`, status: 200 })).toStrictEqual({
+            "http.url": `https://api.example/?access_token=${REDACTED}`,
+            status: 200,
+        });
+    });
+
     it("returns the same reference when nothing is sensitive (no needless copy)", () => {
         const record = { region: "eu", shard_key: "room-9" };
 
