@@ -667,21 +667,25 @@ describe(createNodeMailHost, () => {
         });
 
         it("cannot collide an attempt mark with a real idempotency key", async () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
             const clock = startClock();
             const transport = scriptedTransport(["ok"]);
             const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
 
-            // The shape of an attempt mark. Keys are visible ASCII only, so no producer can mint it, and a
-            // raw body carrying it is refused before the ledger is read, rather than acked as sent.
+            // The shape of an attempt mark. Keys are visible ASCII only, so no producer can mint it: a raw
+            // body carrying it is refused when it is queued, before anything reaches the ledger.
             await mail.mailer.queue({ idempotencyKey: "foo", subject: "Hi", text: "Hi", to: "ada@example.com" });
-            await mail.queue.send({ idempotencyKey: "sending 1 foo", subject: "Hi", text: "Hi", to: "bob@example.com" });
+
+            await expect(mail.queue.send({ idempotencyKey: "sending 1 foo", subject: "Hi", text: "Hi", to: "bob@example.com" })).rejects.toThrow(
+                /visible ASCII/u,
+            );
+
             await mail.poll();
 
             expect(transport.sent.map((payload) => payload.to)).toStrictEqual(["ada@example.com"]);
-            expect(logged(error.mock.calls[0]?.[0])).toMatchObject({ event: "lunora.mail.send_refused" });
+            expect(error).not.toHaveBeenCalled();
         });
 
         it("refuses to requeue parked mail once its attempt record in the ledger has expired", async () => {
@@ -2403,6 +2407,26 @@ describe(createNodeMailHost, () => {
                     path: join(root, "shard.sqlite3"),
                 }),
             ).toThrow(/globalTablesPath/u);
+        });
+    });
+
+    describe("twenty-seventh review", () => {
+        it.each([
+            ["a dot", "."],
+            ["two dots", ".."],
+            ["a space", "a key"],
+            ["a non-ASCII character", "clé"],
+            ["257 characters", "k".repeat(257)],
+            ["a number", 42],
+        ])("refuses a raw queue.send whose idempotencyKey is %s, which the consumer would refuse", async (_label, key) => {
+            expect.assertions(2);
+
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: scriptedTransport(["ok"]) });
+
+            // @lunora/mail's own validator, the consumer's: queued, the mail would be refused and dropped at delivery.
+            await expect(mail.queue.send({ idempotencyKey: key, subject: "Hi", text: "Hi", to: "ada@example.com" })).rejects.toThrow(/idempotencyKey/u);
+            expect(database.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get()).toStrictEqual({ n: 0 });
         });
     });
 });

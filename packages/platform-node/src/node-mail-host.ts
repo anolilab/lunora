@@ -28,6 +28,7 @@ import { createHash } from "node:crypto";
 import { LunoraError } from "@lunora/errors";
 import type { MailEnv, Mailer, MailTransport, QueueLike, SentMailStore } from "@lunora/mail";
 import {
+    assertValidIdempotencyKey,
     consumeQueuedSend,
     createMailer,
     createMailerFromEnv,
@@ -967,6 +968,10 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
             // would reserve one content and queue another, to be parked at delivery as a conflict.
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `host` is assigned
             const { insert, stored } = preparedSendOf(host, "mail")(payload, delaySeconds === undefined ? undefined : { delaySeconds });
+            // `@lunora/mail`'s own rule, the one `consumeQueuedSend` applies: a key it would refuse is refused
+            // here, at the caller, rather than queued to be refused and dropped at delivery.
+            assertValidIdempotencyKey((stored as { idempotencyKey?: unknown } | null)?.idempotencyKey);
+
             const key = idempotencyKeyOf(stored);
 
             if (key === undefined) {
