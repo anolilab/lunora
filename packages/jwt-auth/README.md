@@ -32,6 +32,8 @@ const resolveIdentity = jwtIdentityResolver({ issuer: "https://auth.example.com/
 Defaults fail closed:
 
 - A missing, invalid or foreign token resolves anonymous.
+- `jwtIdentityResolver` refuses to start without an `audience`; pass
+  `audience: false` only for a provider that issues no `aud`.
 - A Supabase anonymous sign-in (`is_anonymous: true`) resolves anonymous
   unless you pass `allowAnonymousUsers: true`.
 - An Auth0 machine-to-machine or agent token resolves anonymous unless you

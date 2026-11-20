@@ -113,6 +113,7 @@ describe(jwtIdentityResolver, () => {
         expect.assertions(2);
 
         const mapped = jwtIdentityResolver({
+            audience: AUDIENCE,
             claims: (payload) => (payload.blocked === true ? null : { roles: ["admin"], userId: `ext:${String(payload.sub)}` }),
             issuer: ISSUER,
             keySet: createLocalJWKSet(jwks),
@@ -127,6 +128,7 @@ describe(jwtIdentityResolver, () => {
 
         const exp = Math.floor(Date.now() / 1000) + 60;
         const mapped = jwtIdentityResolver({
+            audience: AUDIENCE,
             claims: () => {
                 return { exp: exp + 86_400, expiresAtMs: Date.now() + 86_400_000 };
             },
@@ -142,17 +144,56 @@ describe(jwtIdentityResolver, () => {
     it("reads a cookie when the token source falls back to one", async () => {
         expect.assertions(1);
 
-        const fromCookie = jwtIdentityResolver({ issuer: ISSUER, keySet: createLocalJWKSet(jwks), token: firstToken(bearerToken, cookieToken("__session")) });
+        const fromCookie = jwtIdentityResolver({
+            audience: AUDIENCE,
+            issuer: ISSUER,
+            keySet: createLocalJWKSet(jwks),
+            token: firstToken(bearerToken, cookieToken("__session")),
+        });
         const token = await sign({ sub: "user_c" });
 
         await expect(fromCookie(request({ cookie: `theme=dark; __session=${token}` }))).resolves.toMatchObject({ userId: "user_c" });
     });
 
+    it("refuses to build without an audience, or with an empty one", () => {
+        expect.assertions(4);
+
+        // @ts-expect-error -- exercising the runtime guard for JS callers and env-derived undefined
+        expect(() => jwtIdentityResolver({ issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
+        expect(() => jwtIdentityResolver({ audience: "", issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
+        expect(() => jwtIdentityResolver({ audience: [], issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
+        expect(() => jwtIdentityResolver({ audience: [AUDIENCE, ""], issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
+    });
+
+    it("accepts only a token minted for the configured audience", async () => {
+        expect.assertions(2);
+
+        const scoped = jwtIdentityResolver({ audience: "api://a", issuer: ISSUER, keySet: createLocalJWKSet(jwks) });
+
+        await expect(scoped(request({ authorization: `Bearer ${await sign({ sub: "user_1" }, { aud: "api://b" })}` }))).resolves.toBeNull();
+        await expect(scoped(request({ authorization: `Bearer ${await sign({ sub: "user_1" }, { aud: "api://a" })}` }))).resolves.toMatchObject({
+            userId: "user_1",
+        });
+    });
+
+    it("verifies a token without aud when the audience check is opted out of", async () => {
+        expect.assertions(1);
+
+        const unscoped = jwtIdentityResolver({ audience: false, issuer: ISSUER, keySet: createLocalJWKSet(jwks) });
+        const token = await new SignJWT({ sub: "user_1" })
+            .setProtectedHeader({ alg: "RS256", kid: "a" })
+            .setIssuer(ISSUER)
+            .setExpirationTime("1h")
+            .sign(keyA.privateKey);
+
+        await expect(unscoped(request({ authorization: `Bearer ${token}` }))).resolves.toMatchObject({ userId: "user_1" });
+    });
+
     it("throws at construction when neither issuer nor jwksUrl is configured", () => {
         expect.assertions(2);
 
-        expect(() => jwtIdentityResolver({ issuer: "" })).toThrow(/issuer/);
-        expect(() => jwtIdentityResolver({ jwksUrl: "http://insecure.example.test/jwks" })).toThrow(/https/);
+        expect(() => jwtIdentityResolver({ audience: AUDIENCE, issuer: "" })).toThrow(/issuer/);
+        expect(() => jwtIdentityResolver({ audience: AUDIENCE, jwksUrl: "http://insecure.example.test/jwks" })).toThrow(/https/);
     });
 
     it("refetches the remote JWKS on an unknown kid after rotation", async () => {
@@ -164,7 +205,7 @@ describe(jwtIdentityResolver, () => {
         vi.stubGlobal("fetch", fetchMock);
         vi.useFakeTimers({ toFake: ["Date"] });
 
-        const remote = jwtIdentityResolver({ issuer: ISSUER, jwksUrl: "https://issuer.example.test/rotation/jwks.json" });
+        const remote = jwtIdentityResolver({ audience: AUDIENCE, issuer: ISSUER, jwksUrl: "https://issuer.example.test/rotation/jwks.json" });
 
         await expect(remote(request({ authorization: `Bearer ${await sign({ sub: "user_1" })}` }))).resolves.toMatchObject({ userId: "user_1" });
 
@@ -201,7 +242,7 @@ describe(jwtIdentityResolver, () => {
 
         vi.stubGlobal("fetch", fetchMock);
 
-        const discovered = jwtIdentityResolver({ issuer });
+        const discovered = jwtIdentityResolver({ audience: AUDIENCE, issuer });
         const token = await sign({ sub: "user_d" }, { iss: issuer });
 
         await expect(discovered(request({ authorization: `Bearer ${token}` }))).resolves.toBeNull();
@@ -252,14 +293,14 @@ describe(jwtIdentityResolver, () => {
     it("refuses OIDC discovery for a non-https issuer at construction", () => {
         expect.assertions(1);
 
-        expect(() => jwtIdentityResolver({ issuer: "http://issuer.example.test" })).toThrow(/https `issuer`/);
+        expect(() => jwtIdentityResolver({ audience: AUDIENCE, issuer: "http://issuer.example.test" })).toThrow(/https `issuer`/);
     });
 
     it("refuses a malformed https jwksUrl or issuer at construction, not per request", () => {
         expect.assertions(2);
 
-        expect(() => jwtIdentityResolver({ jwksUrl: "https://[bad" })).toThrow(/https URL/);
-        expect(() => jwtIdentityResolver({ issuer: "https://[bad" })).toThrow(/https `issuer`/);
+        expect(() => jwtIdentityResolver({ audience: AUDIENCE, jwksUrl: "https://[bad" })).toThrow(/https URL/);
+        expect(() => jwtIdentityResolver({ audience: AUDIENCE, issuer: "https://[bad" })).toThrow(/https `issuer`/);
     });
 
     it("refuses a discovery document that names another issuer", async () => {
@@ -276,7 +317,7 @@ describe(jwtIdentityResolver, () => {
 
         vi.stubGlobal("fetch", fetchMock);
 
-        const discovered = jwtIdentityResolver({ issuer });
+        const discovered = jwtIdentityResolver({ audience: AUDIENCE, issuer });
 
         await expect(discovered(request({ authorization: `Bearer ${await sign({ sub: "user_d" }, { iss: issuer })}` }))).resolves.toBeNull();
         expect(fetchMock.mock.calls.map(([input]) => String(input instanceof Request ? input.url : input))).not.toContain(`${issuer}/keys`);
@@ -297,6 +338,7 @@ describe(jwtVerifier, () => {
 
         const onError = vi.fn<(error: unknown) => void>();
         const throwing = jwtVerifier({
+            audience: AUDIENCE,
             issuer: ISSUER,
             keySet: createLocalJWKSet(jwks),
             onError,
@@ -309,10 +351,17 @@ describe(jwtVerifier, () => {
         expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "unparseable" }), expect.any(Request));
     });
 
+    it("applies the audience check to a direct verifyJwt call", async () => {
+        expect.assertions(1);
+
+        // @ts-expect-error -- exercising the runtime guard for JS callers and env-derived undefined
+        await expect(verifyJwt(await sign({ sub: "user_1" }), { issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).rejects.toThrow(/audience/);
+    });
+
     it("applies the key-source checks to a direct verifyJwt call", async () => {
         expect.assertions(1);
 
-        await expect(verifyJwt(await sign({ sub: "user_1" }), { issuer: "http://issuer.example.test" })).rejects.toThrow(/https `issuer`/);
+        await expect(verifyJwt(await sign({ sub: "user_1" }), { audience: AUDIENCE, issuer: "http://issuer.example.test" })).rejects.toThrow(/https `issuer`/);
     });
 
     it("flags an expired-but-genuine token and drops an expired forgery", async () => {

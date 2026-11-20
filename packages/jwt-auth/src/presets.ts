@@ -267,6 +267,9 @@ const clerk = (options: ClerkOptions): JwtIdentityResolver => {
 
     return presetResolver(options, {
         algorithms: ["RS256"],
+        // Clerk session tokens carry no `aud`. The instance's own issuer and JWKS bind a token to this app, and
+        // `clerkClaims` checks `azp` when present; a native app's token has no `azp`, so nothing else can be required.
+        audience: false,
         claims: clerkClaims(authorizedParties),
         clockTolerance: 5,
         issuer,
@@ -372,6 +375,9 @@ const workos = (options: WorkOsOptions): JwtIdentityResolver => {
 
     return presetResolver(options, {
         algorithms: ["RS256"],
+        // WorkOS access tokens carry no `aud`. The per-client JWKS (`/sso/jwks/<clientId>`) binds a token to this
+        // app, and `workosClaims` checks `client_id` when present.
+        audience: false,
         claims: workosClaims,
         issuer: issuers,
         jwksUrl: `${origin}/sso/jwks/${encodeURIComponent(clientId)}`,

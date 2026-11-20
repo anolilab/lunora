@@ -244,7 +244,7 @@ type JwtVerifierOf<Claims> = (request: Request) => Promise<VerifiedJwtOf<Claims>
 ```ts
 interface JwtVerifierOptionsOf<Key> {
     algorithms?: string[];
-    audience?: string | string[];
+    audience: string | string[] | false;
     clockTolerance?: number;
     issuer?: string | string[];
     jwksUrl?: string | URL;
