@@ -8,6 +8,7 @@ import { installApp, listCatalog } from "../src/catalog/service";
 import { createDeployPacer } from "../src/deploy/pacing";
 import { handleCatalogInstallRoute, handleCatalogRoute } from "../src/deploy/routes/catalog";
 import type { RouterEnv } from "../src/deploy/routes/shared";
+import { MAX_JSON_BODY_BYTES, withContext } from "../src/deploy/routes/shared";
 import readJson from "./_helpers/read-json";
 
 const session = vi.hoisted(() => {
@@ -145,6 +146,16 @@ describe("the catalog routes", () => {
 
             expect(response.status).toBe(400);
             await expect(readJson(response)).resolves.toStrictEqual({ error: "a JSON object body is required" });
+            expect(installApp).not.toHaveBeenCalled();
+        });
+
+        it("refuses an oversized body with 413 before reading past the cap", async () => {
+            const body = { ...validBody, values: { secrets: {}, vars: { BIG: "a".repeat(MAX_JSON_BODY_BYTES) } } };
+            const route = withContext((request, environment) => handleCatalogInstallRoute(request, environment, pacer));
+
+            const response = await route(installRequest(body), environmentWith(OWNER));
+
+            expect(response.status).toBe(413);
             expect(installApp).not.toHaveBeenCalled();
         });
 

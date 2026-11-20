@@ -23,7 +23,7 @@ import type { DeployPacer } from "../pacing";
 import { startRelease } from "../release-core";
 import { deployDeps } from "./deploy";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
+import { jsonError, readJsonObject, rejected, requireContext } from "./shared";
 
 /** The catalog keys ride on the control-plane env, which the router's env is a superset of. */
 type CatalogRouterEnv = CatalogEnv & RouterEnv;
@@ -357,7 +357,8 @@ const runStreamedInstall = async (
 export const handleCatalogInstallRoute = async (request: Request, environment: RouterEnv, pacer: DeployPacer): Promise<Response> => {
     const context = requireContext(environment);
     const env = environment as CatalogRouterEnv;
-    const parsed = parseInstallBody(await request.json().catch(() => null));
+    // Capped while it streams: an unbounded `request.json()` would buffer any size of `values` before the parse refused it.
+    const parsed = parseInstallBody(await readJsonObject(request));
 
     if (!parsed.ok) {
         return Response.json({ error: parsed.error, ...(parsed.field === undefined ? {} : { field: parsed.field }) }, { status: 400 });
