@@ -233,6 +233,27 @@ describe(deliverQueueBatch, () => {
         expect(outcomes).toStrictEqual(["retry"]);
     });
 
+    it("delays a batch no dispatcher path can carry, so a binding gap does not spend the retry budget", async () => {
+        const outcomes: [string, unknown][] = [];
+
+        await deliverQueueBatch(
+            {
+                messages: [
+                    {
+                        ack: () => outcomes.push(["ack", undefined]),
+                        body: "b",
+                        id: "m1",
+                        retry: (options?: { delaySeconds?: number }) => outcomes.push(["retry", options]),
+                    },
+                ],
+                queue: tenantResourceName("shop", { binding: "JOBS", type: "queue_producer" }),
+            },
+            { dispatches: new Map(), live: [], now: Date.UTC(2026, 9, 9, 12) },
+        );
+
+        expect(outcomes).toStrictEqual([["retry", { delaySeconds: OWNERLESS_RETRY_DELAY_SECONDS }]]);
+    });
+
     it("retries, never acks, a batch no live release owns yet, so a gap between releases loses nothing", async () => {
         expect.assertions(1);
 

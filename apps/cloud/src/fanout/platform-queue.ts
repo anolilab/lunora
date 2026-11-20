@@ -235,10 +235,12 @@ const readQueueTarget = async (queue: string, ports: QueueDeliveryPorts): Promis
 /** Route one batch to its tenant, then ack or retry each message. */
 export const deliverQueueBatch = async (batch: QueueBatchLike, ports: QueueDeliveryPorts): Promise<void> => {
     // No dispatcher target has an in-network path bound here: nothing can
-    // deliver, so the whole batch waits for one.
+    // deliver, so the whole batch waits for one — delayed like an ownerless batch,
+    // since a binding gap clears on a deploy, and immediate retries would spend
+    // the queue's `max_retries` before it does.
     if (ports.dispatches.size === 0) {
         batch.messages.forEach((message) => {
-            message.retry();
+            message.retry({ delaySeconds: OWNERLESS_RETRY_DELAY_SECONDS });
         });
 
         return;
