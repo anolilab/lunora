@@ -434,14 +434,13 @@ const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cron
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
-    bindShardSockets,
+    createNodeDurableObjectFactory,
     createNodeHttpServer,
     createNodeHyperdrive,
     createNodePlatform,
     createNodeSecretBindings,
     createNodeShardNamespace,
     createNodeShardRegistry,
-    createNodeShardState,
     DEFAULT_DRAIN_TIMEOUT_MS,
     drainTogether,
 } from "@lunora/platform-node";
@@ -564,25 +563,9 @@ const instanceFactory = (className) => {
         throw new TypeError(\`lunora: the worker entry does not export Durable Object class \${className}\`);
     }
 
-    const instances = new WeakMap();
-
-    return (shard) => {
-        let instance = instances.get(shard);
-
-        if (instance === undefined) {
-            instance = new DurableObject(createNodeShardState(shard), env);
-            instances.set(shard, instance);
-
-            if (instance.webSocketClose !== undefined && instance.webSocketMessage !== undefined) {
-                bindShardSockets(
-                    { webSocketClose: instance.webSocketClose.bind(instance), webSocketMessage: instance.webSocketMessage.bind(instance) },
-                    shard.inbound,
-                );
-            }
-        }
-
-        return instance;
-    };
+    // The same instances createNodeAppHost keeps: one per shard, ready only once the constructor's blockConcurrencyWhile work
+    // has finished, and dropped (the event failing with its error) when that work fails.
+    return createNodeDurableObjectFactory(DurableObject, env);
 };
 
 let platform;
@@ -604,10 +587,10 @@ for (const binding of CONFIG.durableObjects) {
         // The platform's own host fires this with no shard; only registry shards carry a Durable Object.
         onAlarm: async (shard) => {
             if (shard !== undefined) {
-                await instanceFor(shard).alarm?.();
+                await (await instanceFor(shard)).alarm?.();
             }
         },
-        onFetch: async (request, shard) => instanceFor(shard).fetch(request),
+        onFetch: async (request, shard) => (await instanceFor(shard)).fetch(request),
     };
 
     if (binding.name === PRIMARY_BINDING) {
@@ -1049,11 +1032,13 @@ const missingExportRefusal = (error: unknown, project: NodeDeployProject, projec
     // A missing platform-node export means the project's copy is older than this deploy needs, not that the entry is wrong.
     // Matched by where the file really is, inside that package's directory, not by name: an app file named
     // src/platform-node-worker.ts gets the ordinary missing-export message.
-    if (unmatched.some((entry) => isInside(realPath(resolve(entry.file)), platformNodeDirectory))) {
+    const fromPlatform = unmatched.filter((entry) => isInside(realPath(resolve(entry.file)), platformNodeDirectory)).map((entry) => entry.name);
+
+    if (fromPlatform.length > 0) {
         const version = installedVersion(join(projectRoot, "package.json"), "@lunora/platform-node") ?? "unknown";
 
         return new Error(
-            `--target node needs an @lunora/platform-node with deadline-bounded drains, and this project installs ${version}, which predates them, so every container shutdown would fail. Upgrade @lunora/platform-node to the release this CLI came with.`,
+            `--target node needs an @lunora/platform-node that exports ${[...new Set(fromPlatform)].join(", ")} (deadline-bounded drains, and Durable Objects whose failed setup fails their events), and this project installs ${version}, which predates them. Upgrade @lunora/platform-node to the release this CLI came with.`,
             { cause: error },
         );
     }

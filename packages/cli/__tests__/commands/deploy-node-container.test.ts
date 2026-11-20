@@ -1516,10 +1516,10 @@ globalThis.fetch = async (input, init) => {
             expect(result.error).not.toContain("predates");
         });
 
-        it("refuses a project whose @lunora/platform-node predates deadline-bounded drains", async () => {
-            expect.assertions(1);
+        it("refuses a project whose @lunora/platform-node predates the exports the server needs, naming them", async () => {
+            expect.assertions(2);
 
-            // A stand-in for an older release: the same exports, minus the bounded-drain one this deploy needs.
+            // A stand-in for an older release: the same exports, minus the bounded-drain and Durable Object ones this deploy needs.
             const oldPlatform = join(workdir, "old-platform-node");
 
             mkdirSync(oldPlatform);
@@ -1551,10 +1551,10 @@ globalThis.fetch = async (input, init) => {
             );
             writeFixture(workdir, { extraModules: { "@lunora/platform-node": oldPlatform } });
 
-            await expect(deploy(workdir)).resolves.toMatchObject({
-                code: 1,
-                error: expect.stringContaining("this project installs 1.0.0-alpha.200, which predates them, so every container shutdown would fail"),
-            });
+            const deployed = await deploy(workdir);
+
+            expect(deployed).toMatchObject({ code: 1, error: expect.stringContaining("this project installs 1.0.0-alpha.200, which predates them") });
+            expect(deployed.error).toMatch(/exports [^(]*createNodeDurableObjectFactory/u);
         });
 
         it("refuses a name that is both a secrets.required entry and a secrets_store binding, which would replace the plain secret", async () => {
