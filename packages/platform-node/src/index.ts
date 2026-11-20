@@ -33,11 +33,14 @@
  * delivery is driven by an explicit `poll()`. Absent are the Cloudflare product
  * bindings with no local equivalent — Vectorize, Workers AI, Browser Rendering,
  * Containers, Analytics Engine, Pipelines. `ctx.secrets` reads environment
- * variables through `createNodeSecretBindings` (`./node-secrets`), the
+ * variables through `createNodeSecretBindings` (`./node-secrets`), and the
  * Hyperdrive binding is built from `DATABASE_URL` by `createNodeHyperdrive`
- * (`./node-hyperdrive`), and `@lunora/mail` sends are queued and delivered by
+ * (`./node-hyperdrive`). Queued `@lunora/mail` sends are delivered by
  * `createNodeMailHost` (`./node-mail-host`) through Resend or a caller-supplied
- * transport.
+ * transport, for a process that composes it and polls it, as the server
+ * `lunora deploy --target node` writes does. `lunora dev --target node` composes
+ * none: there mail is captured to the Studio inbox, and with capture turned off
+ * a queued send is not delivered.
  *
  * `lunora deploy --target node` bundles an app into a container build context
  * whose generated entry composes this package (crons, `ctx.secrets`,

@@ -15,7 +15,8 @@
  * left for the caller to add through `env`.
  */
 
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import type { Stats } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -270,12 +271,52 @@ const checkBindingStorage = (name: string, dataDirectory: string | undefined): v
     const root = realpathSync(dataDirectory);
 
     for (const path of [join(dataDirectory, name), join(dataDirectory, `${name}.platform.sqlite3`)]) {
-        if (existsSync(path) && !isInside(root, realpathSync(path))) {
+        let entry: Stats | undefined;
+
+        try {
+            entry = lstatSync(path);
+        } catch {
+            continue;
+        }
+
+        // A link to nothing passes `existsSync`, yet SQLite follows it and creates the database wherever it points.
+        if (entry.isSymbolicLink() && !existsSync(path)) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: Durable Object binding ${name} would store data outside ${dataDirectory}: ${path} is a link to nothing, which SQLite would follow`,
+            );
+        }
+
+        if (!isInside(root, realpathSync(path))) {
             throw new LunoraError(
                 "VALIDATION_ERROR",
                 `@lunora/platform-node: Durable Object binding ${name} would store data outside ${dataDirectory}: ${path} links out of it`,
             );
         }
+    }
+};
+
+/**
+ * Refuse two bindings whose storage could be one: the same name twice, or names that differ only in case, which a
+ * case-insensitive volume (the default on macOS and Windows, and a data directory can move to one) maps to one shard directory
+ * and one platform database, so two classes would read and write each other's state.
+ */
+const checkDistinctStorage = (bindings: ReadonlyArray<NodeAppDurableObjectBinding>): void => {
+    const seen = new Map<string, string>();
+
+    for (const { name } of bindings) {
+        const earlier = seen.get(name.toLowerCase());
+
+        if (earlier !== undefined) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                earlier === name
+                    ? `@lunora/platform-node: Durable Object binding ${name} is declared twice, and both would share one shard directory and platform database`
+                    : `@lunora/platform-node: Durable Object bindings ${earlier} and ${name} differ only in case, so on a case-insensitive volume they would share one shard directory and platform database — rename one`,
+            );
+        }
+
+        seen.set(name.toLowerCase(), name);
     }
 };
 
@@ -305,10 +346,13 @@ const checkNodeAppHost = (options: NodeAppHostOptions): void => {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the worker module has no default export with a `fetch` handler");
     }
 
+    checkDistinctStorage(options.durableObjects);
+
     for (const binding of options.durableObjects) {
         checkBindingStorage(binding.name, options.dataDirectory);
 
-        const exported = options.worker[binding.className];
+        // An own export only: `constructor` and the rest of `Object.prototype` are on every module record.
+        const exported = Object.hasOwn(options.worker, binding.className) ? options.worker[binding.className] : undefined;
 
         if (exported === undefined) {
             throw new LunoraError(
@@ -360,7 +404,14 @@ const createNodeAppHost = (options: NodeAppHostOptions): NodeAppHost => {
             const platform = createBindingPlatform(binding, options, env, shardBinding);
 
             platforms.push(platform);
-            env[binding.name] = createNodeShardNamespace(platform.directory);
+            // Defined, not assigned: assigning a binding named `__proto__` would replace `env`'s prototype instead of adding a
+            // property, and a worker that copies `env` would lose it.
+            Object.defineProperty(env, binding.name, {
+                configurable: true,
+                enumerable: true,
+                value: createNodeShardNamespace(platform.directory),
+                writable: true,
+            });
         }
     } catch (error: unknown) {
         try {

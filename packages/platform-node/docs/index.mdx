@@ -376,8 +376,10 @@ stops them waiting for the rest.
 
 Throws what `createNodeAppHost` would refuse for the same options (no default
 `fetch` handler, a binding whose export is missing or cannot be constructed with
-`new`, a binding name that is not an identifier or whose existing shard
-directory or platform database links out of `dataDirectory`, crons with no shard
+`new` or is only inherited, a binding name that is not an identifier, that
+repeats another or differs from it only in case (one directory on a
+case-insensitive volume), or whose shard directory or platform database links
+out of `dataDirectory` or to nothing, crons with no shard
 binding or a workflow target) without opening a
 database or arming a timer. `createNodeAppHost` runs it before building
 anything, so a refused composition leaves stored state, cron rows included, as

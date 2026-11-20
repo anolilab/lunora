@@ -554,4 +554,67 @@ describe(createNodeAppHost, () => {
 
         await expect(response.json()).resolves.toMatchObject({ count: 1 });
     });
+
+    it("refuses two bindings whose names differ only in case, or one declared twice", () => {
+        expect.assertions(2);
+
+        expect(() => {
+            checkNodeAppHost({
+                durableObjects: [
+                    { className: "Counter", name: "CACHE" },
+                    { className: "Counter", name: "cache" },
+                ],
+                worker,
+            });
+        }).toThrow(/differ only in case/u);
+        expect(() => {
+            checkNodeAppHost({
+                durableObjects: [
+                    { className: "Counter", name: "CACHE" },
+                    { className: "Counter", name: "CACHE" },
+                ],
+                worker,
+            });
+        }).toThrow(/declared twice/u);
+    });
+
+    it("refuses a class name the worker module only inherits", () => {
+        expect.assertions(1);
+
+        // `constructor` resolves to Object through the prototype of any module record.
+        expect(() => {
+            checkNodeAppHost({ durableObjects: [{ className: "constructor", name: "COUNTER" }], worker });
+        }).toThrow(/does not export/u);
+    });
+
+    it("installs a binding named __proto__ as an own property of env", async () => {
+        expect.assertions(1);
+
+        const host = createNodeAppHost({
+            durableObjects: [{ className: "Counter", name: "__proto__" }],
+            worker: { Counter, default: { fetch: async (_request: Request, env: Record<string, unknown>) => Response.json(Object.hasOwn(env, "__proto__")) } },
+        });
+
+        try {
+            const response = await host.fetch(new Request("https://app.local/"));
+
+            await expect(response.json()).resolves.toBe(true);
+        } finally {
+            await host.close();
+        }
+    });
+
+    it("refuses a platform database path that is a link to nothing", () => {
+        expect.assertions(1);
+
+        const dataDirectory = join(directory, "state");
+
+        mkdirSync(dataDirectory, { recursive: true });
+        // SQLite would follow this and create the database outside the data directory.
+        const databaseFile = ["COUNTER", "platform", "sqlite3"].join(".");
+
+        symlinkSync(join(directory, "elsewhere", databaseFile), join(dataDirectory, databaseFile));
+
+        expect(() => createNodeAppHost({ dataDirectory, durableObjects: [{ className: "Counter", name: "COUNTER" }], worker })).toThrow(/link to nothing/u);
+    });
 });
