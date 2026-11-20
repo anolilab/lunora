@@ -2,10 +2,10 @@ import { LunoraError } from "@lunora/server";
 
 import type { AdmissionRow } from "../src/billing/spend";
 import { organizationServing } from "../src/billing/spend";
-import { sha256Hex } from "../src/deploy/keys";
 import { domainNotificationDetail } from "../src/domains/check";
 import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
 import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
+import { domainTxtToken, normalizeHostname, TXT_PREFIX } from "../src/domains/verify";
 import type { TargetId } from "../src/provision-contract";
 import { storedTarget, TARGETS } from "../src/provision-contract";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
@@ -33,7 +33,6 @@ type DomainRow = Document_<"domains">;
 
 const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
 
-/** Add a hostname to a project (owner/admin) and mint its TXT verification token. */
 /** Whether a redirect target is an absolute http(s) URL — the only form the dispatcher may echo as a `Location`. */
 const isRedirectTarget = (value: string): boolean => {
     try {
@@ -81,88 +80,127 @@ const assertTargetServesDomains = async (context: QueryContext, projectId: Id<"p
     }
 };
 
-export const add = mutation
-    .use(rateLimit("provision"))
-    .input({
-        hostname: boundedString(LIMITS.hostname),
-        organizationId: v.id("organizations"),
-        projectId: v.id("projects"),
-        redirectStatusCode: v.optional(v.number()),
-        redirectTo: v.optional(boundedString(LIMITS.url)),
-    })
-    .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"domains">; txtName: string; txtToken: string }> => {
-        const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
+const addInput = {
+    hostname: boundedString(LIMITS.hostname),
+    organizationId: v.id("organizations"),
+    projectId: v.id("projects"),
+    redirectStatusCode: v.optional(v.number()),
+    redirectTo: v.optional(boundedString(LIMITS.url)),
+};
 
-        await assertRowInOrg(context, "projects", arguments_.projectId, arguments_.organizationId, "project");
-        await assertServing(context, member.organizationId);
-        await assertTargetServesDomains(context, arguments_.projectId);
+interface AddArguments {
+    hostname: string;
+    organizationId: Id<"organizations">;
+    projectId: Id<"projects">;
+    redirectStatusCode?: number;
+    redirectTo?: string;
+}
 
-        // Custom domains are a plan feature (GAPS.md B1) — enforce the
-        // entitlement, not just the flag on the pricing page.
-        const entitlements = await orgEntitlements(context, arguments_.organizationId);
+/**
+ * Add a hostname to a project (owner/admin) and mint its TXT verification token.
+ * `proven` is set only by {@link addProven}, after the edge read the caller's own
+ * TXT token on the hostname: that, not the add itself, is what may displace
+ * another organization's unverified claim.
+ */
+const addDomain = async (
+    context: MutationContext,
+    arguments_: AddArguments,
+    proven: boolean,
+): Promise<{ id: Id<"domains">; txtName: string; txtToken: string }> => {
+    const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
-        if (!entitlements.has("customDomains")) {
-            throw new LunoraError("FORBIDDEN", "custom domains require a plan with the customDomains feature");
+    await assertRowInOrg(context, "projects", arguments_.projectId, arguments_.organizationId, "project");
+    await assertServing(context, member.organizationId);
+    await assertTargetServesDomains(context, arguments_.projectId);
+
+    // Custom domains are a plan feature (GAPS.md B1) — enforce the
+    // entitlement, not just the flag on the pricing page.
+    const entitlements = await orgEntitlements(context, arguments_.organizationId);
+
+    if (!entitlements.has("customDomains")) {
+        throw new LunoraError("FORBIDDEN", "custom domains require a plan with the customDomains feature");
+    }
+
+    const hostname = normalizeHostname(arguments_.hostname);
+
+    if (!HOSTNAME_PATTERN.test(hostname)) {
+        throw new LunoraError("BAD_REQUEST", "not a valid hostname");
+    }
+
+    // `redirectTo` is echoed to the eyeball as a 308 `Location` by the
+    // dispatcher, so an unvalidated value turns a custom domain into an open
+    // redirect pointing anywhere — including `javascript:` in clients that
+    // still honour it. Only absolute http(s) targets are accepted.
+    if (arguments_.redirectTo !== undefined && !isRedirectTarget(arguments_.redirectTo)) {
+        throw new LunoraError("BAD_REQUEST", "redirectTo must be an absolute http(s) URL");
+    }
+
+    const { now } = context;
+    // The same for every claim of this organization on this hostname, so the
+    // owner can publish it before its claim exists and keeps it across re-adds.
+    const txtToken = await domainTxtToken(member.organizationId, hostname);
+    const txtName = `${TXT_PREFIX}.${hostname}`;
+
+    // `by_hostname` is unique, so another organization's claim blocks this one. An
+    // unverified claim proves nothing, but neither does this add: displacing it
+    // here let any entitled admin erase a pending claim at will. It goes only once
+    // this organization's own TXT token is on the hostname. One that ever verified
+    // or got a certificate is a lapsed verification, not a claim, and stays.
+    const { page: held } = await context.db.domains.findMany({ where: { hostname } });
+    const claim = held.at(0);
+
+    if (claim !== undefined && claim.organizationId !== member.organizationId) {
+        if (!proven || claim.verifiedAt != null || claim.customHostnameId != null) {
+            throw new LunoraError(
+                "CONFLICT",
+                `${hostname} is claimed by another organization; publish the TXT record ${txtName} = ${txtToken} to prove you control it, then add it again`,
+            );
         }
 
-        const hostname = arguments_.hostname.toLowerCase().trim();
-
-        if (!HOSTNAME_PATTERN.test(hostname)) {
-            throw new LunoraError("BAD_REQUEST", "not a valid hostname");
-        }
-
-        // `redirectTo` is echoed to the eyeball as a 308 `Location` by the
-        // dispatcher, so an unvalidated value turns a custom domain into an open
-        // redirect pointing anywhere — including `javascript:` in clients that
-        // still honour it. Only absolute http(s) targets are accepted.
-        if (arguments_.redirectTo !== undefined && !isRedirectTarget(arguments_.redirectTo)) {
-            throw new LunoraError("BAD_REQUEST", "redirectTo must be an absolute http(s) URL");
-        }
-
-        const { now } = context;
-
-        // A claim proves nothing until its TXT record verifies, and `by_hostname` is
-        // unique, so an unverified claim of another organization would hold a hostname
-        // it may not own until the unverified-domain sweep. It is displaced instead.
-        // One that ever got a certificate is a lapsed verification, not a claim, and stays.
-        const { page: held } = await context.db.domains.findMany({ where: { hostname } });
-        const claim = held.at(0);
-
-        if (claim !== undefined && claim.organizationId !== member.organizationId && claim.verifiedAt == null && claim.customHostnameId == null) {
-            await context.db.delete("domains", claim._id);
-            await context.db.insert("auditLog", {
-                action: "domain.displaced",
-                actorUserId: member.userId,
-                createdAt: now,
-                organizationId: claim.organizationId,
-                target: hostname,
-            });
-        }
-
-        // The same for every claim of this organization on this hostname, so a claim
-        // displaced and added again keeps the TXT record its owner already published.
-        const txtToken = await sha256Hex(`lunora-domain\0${member.organizationId}\0${hostname}`);
-        const id = await context.db.insert("domains", {
-            createdAt: now,
-            hostname,
-            organizationId: member.organizationId,
-            projectId: arguments_.projectId, // secret-scanner:allow -- domain field name
-            ...(arguments_.redirectStatusCode === undefined ? {} : { redirectStatusCode: arguments_.redirectStatusCode }),
-            ...(arguments_.redirectTo === undefined ? {} : { redirectTo: arguments_.redirectTo }),
-            txtToken,
-            updatedAt: now,
-        });
-
+        await context.db.delete("domains", claim._id);
         await context.db.insert("auditLog", {
-            action: "domain.add",
+            action: "domain.displaced",
             actorUserId: member.userId,
             createdAt: now,
-            organizationId: member.organizationId,
+            organizationId: claim.organizationId,
             target: hostname,
         });
+    }
 
-        return { id, txtName: `_lunora.${hostname}`, txtToken };
+    const id = await context.db.insert("domains", {
+        createdAt: now,
+        hostname,
+        organizationId: member.organizationId,
+        projectId: arguments_.projectId, // secret-scanner:allow -- domain field name
+        ...(arguments_.redirectStatusCode === undefined ? {} : { redirectStatusCode: arguments_.redirectStatusCode }),
+        ...(arguments_.redirectTo === undefined ? {} : { redirectTo: arguments_.redirectTo }),
+        txtToken,
+        updatedAt: now,
     });
+
+    await context.db.insert("auditLog", {
+        action: "domain.add",
+        actorUserId: member.userId,
+        createdAt: now,
+        organizationId: member.organizationId,
+        target: hostname,
+    });
+
+    return { id, txtName, txtToken };
+};
+
+/** Add a hostname to a project (owner/admin); refused while another organization holds it. */
+export const add = mutation
+    .use(rateLimit("provision"))
+    .input(addInput)
+    .mutation(async ({ ctx: context, args: arguments_ }) => addDomain(context, arguments_, false));
+
+/**
+ * {@link add}, displacing another organization's unverified claim. SYSTEM only —
+ * `POST /v1/domains` calls it once the caller's TXT token resolved on the
+ * hostname; reachable over RPC, the DNS proof would be the caller's say-so.
+ */
+export const addProven = internalMutation.input(addInput).mutation(async ({ ctx: context, args: arguments_ }) => addDomain(context, arguments_, true));
 
 /** A project's domains (members). */
 export const list = query
@@ -389,7 +427,7 @@ export const routeForHostname = query
             ctx: context,
             args: { hostname },
         }): Promise<null | { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; suspended?: true }> => {
-            const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase().trim() } });
+            const { page } = await context.db.domains.findMany({ where: { hostname: normalizeHostname(hostname) } });
             const domain = page[0];
 
             if (domain?.verifiedAt == null) {

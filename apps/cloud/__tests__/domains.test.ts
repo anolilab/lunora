@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { add, markVerified, remove, routeForHostname } from "../lunora/domains";
+import { add, addProven, markVerified, remove, routeForHostname } from "../lunora/domains";
+import { domainTxtToken } from "../src/domains/verify";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
@@ -71,11 +72,27 @@ describe("domains.add", () => {
         await expect(add.handler(ctx, args({ redirectTo }) as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
-    it("displaces another organization's unverified claim, so a squatter cannot hold a hostname", async () => {
+    /** An add proves nothing, so it must not erase a claim its owner may be verifying right now. */
+    it("refuses another organization's unverified claim instead of removing it", async () => {
+        const pending = { _id: "dom_pending", createdAt: 1, hostname: "app.example.com", organizationId: "org_other", projectId: "prj_2", txtToken: "t" };
+        const { ctx, ops } = makeCtx(world({ domains: [pending] }));
+        const token = await domainTxtToken(ORG, "app.example.com");
+
+        await expect(add.handler(ctx, args() as never)).rejects.toMatchObject({
+            code: "CONFLICT",
+            message: expect.stringContaining(`_lunora.app.example.com = ${token}`) as unknown as string,
+        });
+        expect(ops).not.toContainEqual({ id: "dom_pending", kind: "delete" });
+        expect(ops.filter((op) => op.kind === "insert" && op.table !== "rateLimits")).toStrictEqual([]);
+    });
+
+    it("displaces another organization's unverified claim once the caller's TXT token is proven, so a squatter cannot hold a hostname", async () => {
         const squat = { _id: "dom_squat", createdAt: 1, hostname: "app.example.com", organizationId: "org_squatter", projectId: "prj_2", txtToken: "t" };
         const { ctx, ops } = makeCtx(world({ domains: [squat] }));
 
-        await add.handler(ctx, args() as never);
+        expect(addProven.visibility).toBe("internal");
+
+        await addProven.handler(ctx, args() as never);
 
         expect(ops).toContainEqual({ id: "dom_squat", kind: "delete" });
         expect(ops).toContainEqual(
@@ -86,12 +103,11 @@ describe("domains.add", () => {
     it.each([
         ["verified", { verifiedAt: 5 }],
         ["holding a certificate", { customHostnameId: "ch_1" }],
-    ])("keeps another organization's claim that is %s", async (_label, over) => {
+    ])("keeps another organization's claim that is %s, even against a proven token", async (_label, over) => {
         const claim = { _id: "dom_owner", createdAt: 1, hostname: "app.example.com", organizationId: "org_owner", projectId: "prj_2", txtToken: "t", ...over };
         const { ctx, ops } = makeCtx(world({ domains: [claim] }));
 
-        await add.handler(ctx, args() as never);
-
+        await expect(addProven.handler(ctx, args() as never)).rejects.toMatchObject({ code: "CONFLICT" });
         expect(ops).not.toContainEqual({ id: "dom_owner", kind: "delete" });
     });
 

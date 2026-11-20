@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { api as publicApi } from "../lunora/_generated/api";
 import { internal } from "../lunora/_generated/internal";
 import { add, recordCertificate, removalTarget, remove, routeForHostname, verifyTarget } from "../lunora/domains";
 import { purgeDeleted } from "../lunora/organizations";
@@ -8,11 +9,12 @@ import { remove as removeProject } from "../lunora/projects";
 import { certificateBadge } from "../src/client/domains";
 import type { CloudflareApi, CustomHostname } from "../src/cloudflare/api";
 import { createHttpCloudflareApi } from "../src/cloudflare/api";
-import { handleDomainRemoveRoute, handleDomainVerifyRoute } from "../src/deploy/routes/domains";
+import { handleDomainAddRoute, handleDomainRemoveRoute, handleDomainVerifyRoute } from "../src/deploy/routes/domains";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import { MAX_CERTIFICATES_PER_TICK, runCertificateSweep } from "../src/domains/certificate-sweep";
 import type { RecordedCertificate } from "../src/domains/issuers";
 import { localIssuer, requireIssuer } from "../src/domains/issuers";
+import { domainTxtToken } from "../src/domains/verify";
 import { issueCertificate, refreshCertificate, removeCertificate } from "../src/targets/cloudflare-wfp/certificates";
 import { createCloudflareWfpDriver, createCloudflareWfpFleet, UNCONFIGURED_CERTIFICATE } from "../src/targets/cloudflare-wfp/driver";
 import type { CertificateIssuer } from "../src/targets/driver";
@@ -593,6 +595,65 @@ describe("the domain routes", () => {
         expect(response.status).toBe(403);
         expect(fetched).toStrictEqual([]);
         expect(mutations).toStrictEqual([]);
+    });
+
+    /** Another organization holds the hostname: only this organization's own TXT token may displace it. */
+    describe("adding a hostname another organization holds", () => {
+        const conflict = new LunoraError("CONFLICT", "app.example.com is claimed by another organization");
+        const addContext = () => {
+            const called: unknown[] = [];
+            const context = {
+                runMutation: (reference: unknown) => {
+                    called.push(reference);
+
+                    return reference === publicApi.domains.add
+                        ? Promise.reject(conflict)
+                        : Promise.resolve({ id: "dom_2", txtName: "_lunora.app.example.com", txtToken: "x" });
+                },
+                runQuery: () => Promise.reject(new Error("no placement")),
+            } as unknown as NonNullable<RouterEnv["__lunoraCtx"]>;
+
+            return { called, context };
+        };
+        const post = (context: NonNullable<RouterEnv["__lunoraCtx"]>) =>
+            handleDomainAddRoute(
+                new Request("https://cloud.test/v1/domains", {
+                    body: JSON.stringify({ hostname: "App.Example.com", organizationId: "org_1", projectId: "proj_1" }),
+                    method: "POST",
+                }),
+                environment(context),
+            );
+        const publishing = (token: string) => {
+            vi.stubGlobal("fetch", (input: FetchInput) => {
+                const url = input instanceof Request ? input.url : input.toString();
+
+                expect(url).toContain("name=_lunora.app.example.com");
+
+                return Promise.resolve(Response.json({ Answer: [{ data: `"${token}"`, type: 16 }] }));
+            });
+        };
+
+        it("answers 409 and displaces nothing while the caller's token is not published", async () => {
+            const { called, context } = addContext();
+
+            publishing("someone-elses-token");
+
+            const response = await post(context);
+
+            expect(response.status).toBe(409);
+            expect(called).toStrictEqual([publicApi.domains.add]);
+        });
+
+        it("displaces the claim once the caller's own token resolves", async () => {
+            const { called, context } = addContext();
+
+            publishing(await domainTxtToken("org_1", "app.example.com"));
+
+            const response = await post(context);
+
+            expect(response.status).toBe(200);
+            expect(called).toStrictEqual([publicApi.domains.add, internal.domains.addProven]);
+        });
     });
 
     it("deletes the domain's custom hostname before the domain, and keeps the domain when that fails", async () => {

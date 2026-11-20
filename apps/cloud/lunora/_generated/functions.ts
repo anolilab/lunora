@@ -192,6 +192,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deployments:rollback": lunora_deployments_12.rollback as unknown as RegisteredLunoraFunction,
     "deployments:updateStatus": lunora_deployments_12.updateStatus as unknown as RegisteredLunoraFunction,
     "domains:add": lunora_domains_13.add as unknown as RegisteredLunoraFunction,
+    "domains:addProven": lunora_domains_13.addProven as unknown as RegisteredLunoraFunction,
     "domains:edgeBlockMode": lunora_domains_13.edgeBlockMode as unknown as RegisteredLunoraFunction,
     "domains:get": lunora_domains_13.get as unknown as RegisteredLunoraFunction,
     "domains:list": lunora_domains_13.list as unknown as RegisteredLunoraFunction,
@@ -1380,6 +1381,7 @@ export interface Caller {
     };
     domains: {
         add: (args: { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
+        addProven: (args: { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
         edgeBlockMode: (args: { organizationId: Id<"organizations"> }) => Promise<import("../../src/domains/edge-block-mode.js").EdgeBlockMode>;
         get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_domains | null>;
         list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<import("./dataModel.js").Doc_domains[]>;
@@ -1718,6 +1720,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     domains: {
         add: (args) => callRegistered(context, "domains:add", args),
+        addProven: (args) => callRegistered(context, "domains:addProven", args),
         edgeBlockMode: (args) => callRegistered(context, "domains:edgeBlockMode", args),
         get: (args) => callRegistered(context, "domains:get", args),
         list: (args) => callRegistered(context, "domains:list", args),

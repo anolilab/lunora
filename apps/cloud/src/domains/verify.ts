@@ -1,3 +1,4 @@
+import { sha256Hex } from "../deploy/keys";
 import readJson from "../read-json";
 
 /**
@@ -17,6 +18,18 @@ export type DnsResolve = (name: string, type: "CNAME" | "TXT") => Promise<DnsAns
 
 /** TXT record label prefix carrying the verification token. */
 export const TXT_PREFIX = "_lunora";
+
+/** The form a hostname is stored, routed and verified in. */
+export const normalizeHostname = (hostname: string): string => hostname.toLowerCase().trim();
+
+/**
+ * An organization's TXT token for a hostname. Derived rather than random, so it
+ * exists before the organization's claim does: the owner of a hostname another
+ * organization holds publishes it first, and `POST /v1/domains` reads it to let
+ * that owner displace the unverified claim.
+ */
+export const domainTxtToken = (organizationId: string, hostname: string): Promise<string> =>
+    sha256Hex(`lunora-domain\0${organizationId}\0${normalizeHostname(hostname)}`);
 
 /**
  * Build a resolver over Cloudflare's DNS-over-HTTPS JSON API (1.1.1.1).

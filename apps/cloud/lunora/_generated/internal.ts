@@ -77,6 +77,7 @@ export interface InternalApiTypes {
         rollback: FunctionReference<"mutation", { deployKey?: unknown; expectedLiveId?: Id<"deployments">; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
     };
     domains: {
+        addProven: FunctionReference<"mutation", { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }, { id: Id<"domains">; txtName: string; txtToken: string; }>;
         markVerified: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }, void>;
         recordCertificate: FunctionReference<"mutation", { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; issuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; organizationId: Id<"organizations">; scope?: unknown; sslStatus: unknown }, void>;
         removalTarget: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, { certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: string; customHostnameId?: string; hostname: string; projectId: Id<"projects"> }>;
@@ -229,6 +230,7 @@ export const internal: InternalApiTypes = {
         rollback: { __lunoraRef: "deployments:rollback" },
     },
     domains: {
+        addProven: { __lunoraRef: "domains:addProven" },
         markVerified: { __lunoraRef: "domains:markVerified" },
         recordCertificate: { __lunoraRef: "domains:recordCertificate" },
         removalTarget: { __lunoraRef: "domains:removalTarget" },

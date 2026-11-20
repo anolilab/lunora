@@ -10,10 +10,12 @@
  *
  * Each tells the placement's driver afterwards (`DomainOps.domainsChanged`).
  */
+import { isLunoraError } from "@lunora/errors";
+
 import { api } from "../../../lunora/_generated/api";
 import { internal } from "../../../lunora/_generated/internal";
 import { requireIssuer } from "../../domains/issuers";
-import { createDohResolver, verifyDomain } from "../../domains/verify";
+import { createDohResolver, domainTxtToken, normalizeHostname, verifyDomain } from "../../domains/verify";
 import type { DomainCertificate, TargetDriver } from "../../targets/driver";
 import { registeredFleet, resolveTargetDriver } from "../../targets/registry";
 import { placementFor } from "./deploy";
@@ -93,18 +95,32 @@ export const handleDomainAddRoute = async (request: Request, environment: Router
         return jsonError(400, "redirectTo, when given, is a string, and redirectStatusCode a number");
     }
 
+    const args = { hostname, organizationId, projectId, redirectStatusCode, redirectTo }; // secret-scanner:allow -- domain field name
     let result: { id: string; txtName: string; txtToken: string };
 
     try {
-        result = await context.runMutation<{ id: string; txtName: string; txtToken: string }>(api.domains.add, {
-            hostname,
-            organizationId,
-            projectId, // secret-scanner:allow -- domain field name
-            redirectStatusCode,
-            redirectTo,
-        });
+        result = await context.runMutation<{ id: string; txtName: string; txtToken: string }>(api.domains.add, args);
     } catch (error) {
-        return rejected(error, "domain add failed");
+        // Another organization holds the hostname. Its claim yields only to this
+        // organization's TXT token on the hostname — the proof `add` cannot see.
+        if (!isLunoraError(error) || error.code !== "CONFLICT") {
+            return rejected(error, "domain add failed");
+        }
+
+        const proof = await verifyDomain(normalizeHostname(hostname), {
+            resolve: createDohResolver(),
+            txtToken: await domainTxtToken(organizationId, hostname),
+        });
+
+        if (!proof.txtOk) {
+            return rejected(error, "domain add failed");
+        }
+
+        try {
+            result = await context.runMutation<{ id: string; txtName: string; txtToken: string }>(internal.domains.addProven, args);
+        } catch (error_) {
+            return rejected(error_, "domain add failed");
+        }
     }
 
     const driver = await driverFor(context, environment, organizationId, projectId).catch(() => undefined);
