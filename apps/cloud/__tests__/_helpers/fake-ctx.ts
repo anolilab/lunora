@@ -57,6 +57,22 @@ const inRange = (actual: unknown, range: { gt?: number; lt?: number }): boolean 
 const matches = (row: Row, where: Row): boolean =>
     Object.entries(where).every(([field, value]) => (isRange(value) ? inRange(row[field], value) : row[field] === value));
 
+/** The store's `orderBy`: each key in turn, rows missing it sorting first. */
+const compareBy = (a: Row, b: Row, orderBy: ReadonlyArray<Record<string, "asc" | "desc">>): number => {
+    for (const [field, direction] of orderBy.flatMap((entry) => Object.entries(entry))) {
+        const left = a[field] as number | string | undefined;
+        const right = b[field] as number | string | undefined;
+
+        if (left !== right) {
+            const ascending = left !== undefined && (right === undefined || left > right) ? 1 : -1;
+
+            return direction === "asc" ? ascending : -ascending;
+        }
+    }
+
+    return 0;
+};
+
 /** Tables the account erasure, export and plan lookups read; a test that does not seed one sees it empty. */
 const EMPTY_UNLESS_SEEDED = [
     "anomalySilences",
@@ -75,7 +91,7 @@ const EMPTY_UNLESS_SEEDED = [
  * `tables` maps table name → rows. `userId` is the signed-in caller, or `null`
  * for an anonymous one; supply a `members` row to satisfy `assertMember`.
  */
-const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; userId?: null | string } = {}): FakeCtx => {
+const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; pageSize?: number; userId?: null | string } = {}): FakeCtx => {
     const ops: Op[] = [];
     const userId = options.userId === undefined ? "usr_1" : options.userId;
 
@@ -96,9 +112,20 @@ const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; userId?
 
                 return Promise.resolve();
             },
-            // One page holding every match: `isDone` stops a draining reader (`collectAll`) after it.
-            findMany: (args?: { where?: Row }) =>
-                Promise.resolve({ continueCursor: null, isDone: true, page: (tables[table] ?? []).filter((row) => matches(row, args?.where ?? {})) }),
+            // Ordered and limited like the store. Without `pageSize` every match fits one page, which
+            // `isDone` reports so a draining reader (`collectAll`) stops after it.
+            findMany: (args?: { cursor?: null | string; limit?: number; orderBy?: ReadonlyArray<Record<string, "asc" | "desc">>; where?: Row }) => {
+                const ordered = (tables[table] ?? []).filter((row) => matches(row, args?.where ?? {})).toSorted((a, b) => compareBy(a, b, args?.orderBy ?? []));
+                const start = Number(args?.cursor ?? 0);
+                const size = Math.min(args?.limit ?? Number.POSITIVE_INFINITY, options.pageSize ?? Number.POSITIVE_INFINITY);
+                const end = start + size;
+
+                return Promise.resolve(
+                    end >= ordered.length
+                        ? { continueCursor: null, isDone: true, page: ordered.slice(start) }
+                        : { continueCursor: String(end), isDone: false, page: ordered.slice(start, end) },
+                );
+            },
             // Pinned to the table, like the real facade: an id of another table answers null.
             get: (id: string) => Promise.resolve(pinned(table, id)),
             patch: (id: string, patch: Row) => {

@@ -75,8 +75,8 @@ type ProjectPushResult =
  * with it for the webhook to post again — the same success status twice is harmless.
  */
 const redelivered = async (context: MutationContext, projectId: Id<"projects">, commitSha: string, trigger: BuildTrigger): Promise<ProjectPushResult> => {
-    const { page } = await context.db.builds.findMany({ where: { commitSha, projectId } }); // secret-scanner:allow -- domain field name
-    const skip = page.find((row) => row.status === "skipped" && row.pathFiltered === true && (row.trigger ?? "push") === trigger);
+    const builds = await collectAll<BuildRow>((cursor) => context.db.builds.findMany({ cursor, where: { commitSha, projectId } })); // secret-scanner:allow -- domain field name
+    const skip = builds.find((row) => row.status === "skipped" && row.pathFiltered === true && (row.trigger ?? "push") === trigger);
 
     return skip?.skipReason == null ? { duplicate: true, projectId } : { duplicate: true, pathFiltered: true, projectId, skipped: skip.skipReason };
 };
@@ -99,11 +99,14 @@ type ClaimResult = null | { buildId: Id<"builds">; commitSha: string; projectId:
  * pushed to it (`before`), so it is a deliberate reset to that commit rather
  * than an older push arriving late.
  */
-const staleRelease = (projectBuilds: ReadonlyArray<BuildRow>, branch: string, before: string | undefined): string | undefined => {
-    const head = projectBuilds
-        .filter((build) => build.trigger === "push" && build.branch === branch)
-        .toSorted((a, b) => b.createdAt - a.createdAt)
-        .at(0);
+const staleRelease = async (
+    context: MutationContext,
+    push: { before: string | undefined; branch: string; projectId: Id<"projects"> },
+): Promise<string | undefined> => {
+    const { before, branch, projectId } = push;
+    // The head alone, asked for directly: a page of the project's whole build history may not hold it.
+    const { page } = await context.db.builds.findMany({ limit: 1, orderBy: [{ createdAt: "desc" }], where: { branch, projectId, trigger: "push" } }); // secret-scanner:allow -- domain field name
+    const head = page.at(0);
 
     if (head === undefined || before === head.commitSha) {
         return undefined;
@@ -118,20 +121,16 @@ const staleRelease = (projectBuilds: ReadonlyArray<BuildRow>, branch: string, be
  * push rolling production back ({@link staleRelease}), which is skipped.
  */
 const planBuild = (push: {
-    before: string | undefined;
-    branch: string;
     changes: PushChanges;
-    projectBuilds: ReadonlyArray<BuildRow>;
     rereleased: BuildRow | undefined;
     rootDirectory: string | undefined;
-    trigger: BuildTrigger;
+    staleReason: string | undefined;
     watchPaths: ReadonlyArray<string> | undefined;
     workspacePackages: undefined | { paths: ReadonlyArray<string>; rootDirectory: string };
 }): { decision: BuildDecision; filtered: { pathFiltered?: true }; reusesBuildId?: Id<"builds"> } => {
-    const { rereleased } = push;
+    const { rereleased, staleReason } = push;
     // Recorded for another root directory, the set describes another app.
     const packages = push.workspacePackages?.rootDirectory === (push.rootDirectory ?? "") ? push.workspacePackages.paths : undefined;
-    const staleReason = push.trigger === "push" && rereleased !== undefined ? staleRelease(push.projectBuilds, push.branch, push.before) : undefined;
 
     if (staleReason !== undefined) {
         return { decision: { build: false, reason: staleReason }, filtered: {} };
@@ -160,8 +159,8 @@ const priorBuild = async (
     projectId: Id<"projects">,
     key: { commitSha: string; fromFork: boolean | undefined; rootDirectory: string | undefined; runtime: ProjectRuntime; trigger: BuildTrigger },
 ): Promise<undefined | { build: BuildRow; deployment: null | { status: string } }> => {
-    const { page } = await context.db.builds.findMany({ where: { commitSha: key.commitSha, projectId } }); // secret-scanner:allow -- domain field name
-    const build = page
+    const builds = await collectAll<BuildRow>((cursor) => context.db.builds.findMany({ cursor, where: { commitSha: key.commitSha, projectId } })); // secret-scanner:allow -- domain field name
+    const build = builds
         .toSorted((a, b) => b.createdAt - a.createdAt)
         .find(
             (candidate) =>
@@ -210,6 +209,9 @@ const isRedelivery = async (context: MutationContext, deliveryId: string): Promi
     return false;
 };
 
+/** Unfinished (pending or building) builds one project may hold before a push is refused. */
+const MAX_UNFINISHED_BUILDS = 5;
+
 /** A lease older than this is stale — the runner died; the build is reclaimable. */
 export const LEASE_STALE_MS = 30 * 60 * 1000;
 
@@ -240,18 +242,9 @@ const recordProjectPush = async (
 
     // Only a build that recorded a deployment has a stored release to re-release.
     const rereleased = prior?.deployment == null ? undefined : prior.build;
-    const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
-    const { decision, filtered, reusesBuildId } = planBuild({
-        before: push.before,
-        branch,
-        changes,
-        projectBuilds,
-        rereleased,
-        rootDirectory,
-        trigger,
-        watchPaths,
-        workspacePackages,
-    });
+    const staleReason =
+        trigger === "push" && rereleased !== undefined ? await staleRelease(context, { before: push.before, branch, projectId: project._id }) : undefined;
+    const { decision, filtered, reusesBuildId } = planBuild({ changes, rereleased, rootDirectory, staleReason, watchPaths, workspacePackages });
     const common = {
         branch,
         commitSha,
@@ -276,9 +269,15 @@ const recordProjectPush = async (
 
     // Backpressure: cap unfinished builds per project so a webhook storm
     // (or spoofed spam) can't flood the queue.
-    const inFlight = projectBuilds.filter((build) => build.status === "pending" || build.status === "building").length;
+    const unfinished = await Promise.all(
+        (["pending", "building"] as const).map(async (status) => {
+            const { page } = await context.db.builds.findMany({ limit: MAX_UNFINISHED_BUILDS, where: { projectId: project._id, status } }); // secret-scanner:allow -- domain field name
 
-    if (inFlight >= 5) {
+            return page.length;
+        }),
+    );
+
+    if (unfinished.reduce((sum, count) => sum + count, 0) >= MAX_UNFINISHED_BUILDS) {
         throw new LunoraError("TOO_MANY_REQUESTS", "too many unfinished builds for this project");
     }
 

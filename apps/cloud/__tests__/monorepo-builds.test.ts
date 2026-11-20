@@ -149,7 +149,7 @@ describe("builds.recordPush path filter", () => {
     });
 
     /** Two builds of `abc123` (the newest re-released), then `def456` pushed on top of it. */
-    const rebuiltCommit = (status: string) => {
+    const rebuiltCommit = (status: string, options: { pageSize?: number } = {}) => {
         const builds = [
             {
                 _id: "bld_first",
@@ -187,21 +187,35 @@ describe("builds.recordPush path filter", () => {
             },
         ];
 
-        return makeCtx({
-            ...world(project(), builds),
-            deployments: [
-                { _id: "dep_first", projectId: "prj_1", status: "superseded" },
-                { _id: "dep_newest", projectId: "prj_1", status },
-                { _id: "dep_head", projectId: "prj_1", status: "live" },
-            ],
-            githubDeliveries: [],
-        });
+        return makeCtx(
+            {
+                ...world(project(), builds),
+                deployments: [
+                    { _id: "dep_first", projectId: "prj_1", status: "superseded" },
+                    { _id: "dep_newest", projectId: "prj_1", status },
+                    { _id: "dep_head", projectId: "prj_1", status: "live" },
+                ],
+                githubDeliveries: [],
+            },
+            options,
+        );
     };
 
     it.each(["superseded", "failed", "destroyed"])("re-releases a commit already built whose release is %s, naming the build it reuses", async (status) => {
         const { ctx, ops } = rebuiltCommit(status);
 
         // The branch was reset from the newest commit pushed to it back to abc123.
+        await expect(recordPush.handler(ctx, { ...push, before: "def456", changes: { unknown: "forced push" } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
+        expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { reusesBuildId: "bld_newest", status: "pending" } });
+    });
+
+    it("finds the branch head and the commit's release past the first page of the project's builds", async () => {
+        // A page of one: the head (def456) and the re-releasable build sit past the first page of
+        // the project's history and of the commit's builds, as on a project with a long history.
+        const { ctx, ops } = rebuiltCommit("superseded", { pageSize: 1 });
+
         await expect(recordPush.handler(ctx, { ...push, before: "def456", changes: { unknown: "forced push" } })).resolves.toStrictEqual([
             { buildId: "builds_new", projectId: "prj_1", reused: false },
         ]);
