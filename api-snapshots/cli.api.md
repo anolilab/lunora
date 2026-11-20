@@ -1333,6 +1333,7 @@ interface NodeAppHostCandidate {
         name: string;
     }>;
     env?: Record<string, unknown>;
+    shardBinding?: string;
     worker: Record<string, unknown>;
 }
 ```

@@ -521,8 +521,10 @@ malformed entry in a section the host composes, or one name declared by two
 sources (a var and a binding, say), is refused at startup rather than left for
 the first request to find. Unlike the container, which lets an environment
 variable override each var and so needs environment-variable names, dev accepts
-any wrangler var name (`API-URL`, `app.mode`, even `constructor`) except
-`__proto__`. As in the container, at most one Hyperdrive binding is accepted, since
+any wrangler var or `secrets.required` name (`API-URL`, `stripe.key`, even
+`constructor`) except `__proto__`. The shard binding is picked by its class
+(`ShardDO`, or `LunoraDO`), as the container picks it, so crons fire on it
+whatever it is named. As in the container, at most one Hyperdrive binding is accepted, since
 the binding is built from the one `DATABASE_URL`. An `exports` entry with a `type` (a workflow) is
 named in the warning; one that only sets cache options is not. A `main` outside the project
 (a worker shared between apps) is watched and reloaded like one inside it, and

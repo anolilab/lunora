@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, wr
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-import { COMPOSED_WORKER_ENTRY, DURABLE_OBJECT_BINDINGS, resolveSchemaDirectory } from "@lunora/config";
+import { COMPOSED_WORKER_ENTRY, resolveSchemaDirectory } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import {
@@ -32,6 +32,7 @@ import {
     refusePrototypeKeys,
     refuseWorkerEnvOverride,
     requiredSecretNames,
+    shardBindingOf,
     unboundSections,
     WORKER_ENV,
 } from "../../util/node-target-bindings";
@@ -63,11 +64,6 @@ const DEFAULT_PORT = 8787;
  * project does install one, it stays external and the image installs the same version, since a native addon cannot be bundled.
  */
 const OPTIONAL_NATIVE_MODULES = ["bufferutil", "utf-8-validate"] as const;
-
-/** The classes `@lunora/config` binds as the app's shard (`DURABLE_OBJECT_BINDINGS`): the one that receives crons and jobs. */
-const SHARD_DURABLE_OBJECT_CLASSES: ReadonlySet<string> = new Set(
-    Object.keys(DURABLE_OBJECT_BINDINGS).filter((className) => DURABLE_OBJECT_BINDINGS[className as keyof typeof DURABLE_OBJECT_BINDINGS] === "SHARD"),
-);
 
 /** What the mail host reads to deliver: the sender, and Resend's key, the only transport the container has. */
 const MAIL_ENV = ["MAIL_FROM", "RESEND_API_KEY"] as const;
@@ -294,7 +290,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         );
     }
 
-    const workerSecrets = requiredSecretNames(parsed.secrets, configName);
+    const workerSecrets = requiredSecretNames(parsed.secrets, configName, "environment");
     const variables = declaredVariables(parsed.vars, configName, "environment");
     const mailQueues = mailQueueBindings(parsed.queues, configName);
 
@@ -418,12 +414,8 @@ const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cron
         storeSecrets: project.storeSecrets,
         vars: project.vars,
     };
-    // The shard binding is the one whose class is the app's shard Durable Object (ShardDO, or LunoraDO when its roles are
-    // merged), as @lunora/config binds it, whatever the binding is named: crons and scheduled jobs are delivered there.
-    const primary =
-        project.durableObjects.find((binding) => SHARD_DURABLE_OBJECT_CLASSES.has(binding.className)) ??
-        project.durableObjects.find((binding) => binding.name === "SHARD") ??
-        project.durableObjects[0];
+    // Crons and scheduled jobs are delivered to the shard binding, chosen by class whatever it is named.
+    const primary = shardBindingOf(project.durableObjects);
     // Named, not a namespace import: esbuild then fails the bundle when the entry does not export one of them, so an entry that
     // is not a Lunora worker (a framework adapter exporting only \`fetch\`) is refused at deploy time instead of at startup.
     const classNames = [...new Set(project.durableObjects.map((binding) => binding.className))];

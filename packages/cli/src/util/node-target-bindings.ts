@@ -4,6 +4,7 @@
  * container refuse and report the same config the same way.
  */
 
+import { DURABLE_OBJECT_BINDINGS } from "@lunora/config";
 import type { Node as JsonNode } from "jsonc-parser";
 import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
@@ -244,14 +245,20 @@ const declaredVariables = (value: unknown, configName: string, names: "binding" 
  * The `secrets.required` names, or a throw naming the field when it is not a list of names. Dropping a malformed value would
  * deploy a server that starts without the secrets the app needs, the failure this check exists to prevent.
  */
-const requiredSecretNames = (secrets: unknown, configName: string): string[] => {
+
+/**
+ * The `secrets.required` names. Like vars, they follow one of two rules: the container (`"environment"`) reads each from its
+ * environment, so it must be a name a container runtime can set; the dev host (`"binding"`) reads them from `.dev.vars` and the
+ * shell as wrangler dev does, so any non-empty name but `__proto__` works there (`API-KEY`, `stripe.key`).
+ */
+const requiredSecretNames = (secrets: unknown, configName: string, names: "binding" | "environment"): string[] => {
     if (secrets === undefined || secrets === null) {
         return [];
     }
 
     const refuse = (problem: string): never => {
         throw new Error(
-            `--target node checks every secrets.required name at startup, and ${problem} in ${configName}: secrets must be { "required": [...] }, an array of environment variable names such as ["API_KEY"]`,
+            `--target node checks every secrets.required name at startup, and ${problem} in ${configName}: secrets must be { "required": [...] }, an array of ${names === "environment" ? "environment variable names" : "secret names"} such as ["API_KEY"]`,
         );
     };
 
@@ -272,13 +279,17 @@ const requiredSecretNames = (secrets: unknown, configName: string): string[] => 
         return refuse(`secrets.required is ${JSON.stringify(required)}`);
     }
 
-    // An environment variable name: anything else could never be set on a container, so the server could never start.
-    // Not `__proto__` either: a secret of that name can never be read back out of `.dev.vars` or the environment.
-    const invalid = required.filter((name) => typeof name !== "string" || !ENV_NAME.test(name) || RESERVED_OBJECT_KEYS.has(name));
+    // In the container an environment variable name: anything else could never be set on it, so the server could never start.
+    // Never `__proto__`: a secret of that name can never be read back out of `.dev.vars` or the environment.
+    const invalid = required.filter(
+        (name) => typeof name !== "string" || name === "" || RESERVED_OBJECT_KEYS.has(name) || (names === "environment" && !ENV_NAME.test(name)),
+    );
 
     if (invalid.length > 0) {
+        const one = invalid.length === 1;
+
         return refuse(
-            `secrets.required lists ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
+            `secrets.required lists ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${one ? "is not" : "are not"} ${names === "environment" ? "an environment variable name" : "a secret name"}`,
         );
     }
 
@@ -357,6 +368,19 @@ const hyperdriveBindingNames = (value: unknown, configName: string): string[] =>
 
     return names;
 };
+
+/** The classes `@lunora/config` binds as the app's shard (`DURABLE_OBJECT_BINDINGS`): the one that receives crons and jobs. */
+const SHARD_DURABLE_OBJECT_CLASSES: ReadonlySet<string> = new Set(
+    Object.keys(DURABLE_OBJECT_BINDINGS).filter((className) => DURABLE_OBJECT_BINDINGS[className as keyof typeof DURABLE_OBJECT_BINDINGS] === "SHARD"),
+);
+
+/**
+ * The app's shard binding: the one whose class is the shard Durable Object (`ShardDO`, or `LunoraDO` when its roles are merged),
+ * as `@lunora/config` binds it, whatever the binding is named. Crons and scheduled jobs are delivered there. Failing that, a
+ * binding named `SHARD`, then the first.
+ */
+const shardBindingOf = <Binding extends { className: string; name: string }>(bindings: ReadonlyArray<Binding>): Binding | undefined =>
+    bindings.find((binding) => SHARD_DURABLE_OBJECT_CLASSES.has(binding.className)) ?? bindings.find((binding) => binding.name === "SHARD") ?? bindings[0];
 
 /** Whether a declared section binds anything: an empty list or object is no binding. */
 const isDeclared = (value: unknown): boolean => {
@@ -439,6 +463,7 @@ export {
     refusePrototypeKeys,
     refuseWorkerEnvOverride,
     requiredSecretNames,
+    shardBindingOf,
     unboundSections,
     WORKER_ENV,
 };

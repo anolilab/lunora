@@ -47,6 +47,8 @@ interface NodeAppHostCandidate {
     dataDirectory?: string;
     durableObjects: ReadonlyArray<{ className: string; name: string }>;
     env?: Record<string, unknown>;
+    /** The Durable Object binding whose shards run functions, which is where crons fire. */
+    shardBinding?: string;
     worker: Record<string, unknown>;
 }
 

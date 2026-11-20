@@ -47,6 +47,7 @@ import {
     refusePrototypeKeys,
     refuseWorkerEnvOverride,
     requiredSecretNames,
+    shardBindingOf,
     unboundSections,
     WORKER_ENV,
 } from "../../util/node-target-bindings";
@@ -169,7 +170,7 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
     const scope = view as { secrets?: unknown; vars?: unknown };
     // Read as the container reads them: an absent field is no filter, a malformed one is refused by name rather than taken
     // as an empty list, which would filter the intended secret out of `.dev.vars` or turn an array into numbered vars.
-    const required = requiredSecretNames(scope.secrets, configName);
+    const required = requiredSecretNames(scope.secrets, configName, "binding");
     const variables = declaredVariables(scope.vars, configName, "binding");
     const envSources = [
         { names: Object.keys(variables), source: "vars" },
@@ -622,6 +623,8 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             dataDirectory: join(projectRoot, NODE_DEV_STATE_DIRECTORY),
             durableObjects: current.durableObjects,
             env: bindPlatformEnv(current, env),
+            // Chosen by class, as the container deploy chooses it: a shard bound under another name still gets the crons.
+            shardBinding: shardBindingOf(current.durableObjects)?.name,
             worker,
         };
 

@@ -1119,6 +1119,63 @@ export default crons;
             );
         });
 
+        it("arms the crons on the shard class's binding when it is not named SHARD", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, {
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "APP" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
+            });
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/server";\n\nimport { internal } from "./_generated/internal.js";\n\nconst crons = cronJobs();\n\ncrons.cron("tick", "0 * * * *", internal.notes.tick, {});\n\nexport default crons;\n`,
+                "utf8",
+            );
+
+            const dev = await startWorker();
+
+            try {
+                // Picked by its class, as the container deploy picks it: the declared cron is armed on APP's platform database.
+                const database = new DatabaseSync(join(workdir, ".lunora", "node", "APP.platform.sqlite3"), { readOnly: true });
+
+                try {
+                    expect(
+                        (database.prepare("SELECT expression FROM _lunora_scheduler_crons").all() as { expression: string }[]).map((row) => row.expression),
+                    ).toStrictEqual(["0 * * * *"]);
+                } finally {
+                    database.close();
+                }
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("accepts any secret name wrangler dev reads from .dev.vars, such as API-KEY or stripe.key", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { secrets: { required: ["API-KEY", "stripe.key"] } });
+            writeFileSync(join(workdir, ".dev.vars"), "API-KEY=dashed\nstripe.key=dotted\n", "utf8");
+
+            let env: Record<string, unknown> | undefined;
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    ({ env } = options);
+
+                    return realPlatform.createNodeAppHost(options);
+                },
+            };
+            const dev = await startWorker({ platform });
+
+            try {
+                // The container needs environment-variable names, since it reads secrets from its environment; dev reads them as
+                // wrangler dev does.
+                expect(env).toMatchObject({ "API-KEY": "dashed", "stripe.key": "dotted" });
+            } finally {
+                await dev.stop();
+            }
+        });
+
         it("resyncs the cron schedule when the generated cron map changes without the codegen watcher", async () => {
             expect.assertions(2);
 
