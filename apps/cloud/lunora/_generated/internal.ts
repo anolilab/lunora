@@ -48,6 +48,7 @@ export interface InternalApiTypes {
         claimInstall: FunctionReference<"mutation", { installedBy: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; slug: unknown; version: unknown }, { busy: true; } | { busy: false; installId: string; }>;
         finishInstall: FunctionReference<"mutation", { deploymentId: unknown; installId: Id<"catalogInstalls"> }, void>;
         holdsClaim: FunctionReference<"query", { installId: Id<"catalogInstalls"> }, boolean>;
+        indexStateIssuedAt: FunctionReference<"query", { indexUrl: unknown }, number | null>;
     };
     cells: {
         register: FunctionReference<"mutation", { cloudflareAccountId: string; config?: Record<string, string>; dispatchNamespacePrefix: string; jurisdiction?: string; name: string; target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers" }, Id<"cells">>;
@@ -202,6 +203,7 @@ export const internal: InternalApiTypes = {
         claimInstall: { __lunoraRef: "catalog:claimInstall" },
         finishInstall: { __lunoraRef: "catalog:finishInstall" },
         holdsClaim: { __lunoraRef: "catalog:holdsClaim" },
+        indexStateIssuedAt: { __lunoraRef: "catalog:indexStateIssuedAt" },
     },
     cells: {
         register: { __lunoraRef: "cells:register" },

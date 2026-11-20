@@ -160,6 +160,13 @@ export const holdsClaim = internalQuery.input({ installId: v.id("catalogInstalls
 
 type IndexStateRow = Document_<"catalogIndexState">;
 
+/** The newest `issuedAt` accepted for `indexUrl` (SYSTEM), or `null` before any was: what a cached index is checked against. */
+export const indexStateIssuedAt = internalQuery.input({ indexUrl: boundedString(LIMITS.url) }).query(async ({ ctx: context, args }): Promise<null | number> => {
+    const { page } = await context.db.catalogIndexState.findMany({ where: { indexUrl: args.indexUrl } });
+
+    return (page as unknown as IndexStateRow[]).at(0)?.issuedAt ?? null;
+});
+
 /**
  * Record a verified catalog index for its URL, and say whether it may be served (SYSTEM).
  * The watermark is per URL and shared by every signing key: `issuedAt` only moves forward,

@@ -151,6 +151,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "catalog:claimInstall": lunora_catalog_6.claimInstall as unknown as RegisteredLunoraFunction,
     "catalog:finishInstall": lunora_catalog_6.finishInstall as unknown as RegisteredLunoraFunction,
     "catalog:holdsClaim": lunora_catalog_6.holdsClaim as unknown as RegisteredLunoraFunction,
+    "catalog:indexStateIssuedAt": lunora_catalog_6.indexStateIssuedAt as unknown as RegisteredLunoraFunction,
     "catalog:installs": lunora_catalog_6.installs as unknown as RegisteredLunoraFunction,
     "cells:list": lunora_cells_7.list as unknown as RegisteredLunoraFunction,
     "cells:register": lunora_cells_7.register as unknown as RegisteredLunoraFunction,
@@ -1327,6 +1328,7 @@ export interface Caller {
         claimInstall: (args: { installedBy: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; slug: unknown; version: unknown }) => Promise<{ busy: true; } | { busy: false; installId: string; }>;
         finishInstall: (args: { deploymentId: unknown; installId: Id<"catalogInstalls"> }) => Promise<void>;
         holdsClaim: (args: { installId: Id<"catalogInstalls"> }) => Promise<boolean>;
+        indexStateIssuedAt: (args: { indexUrl: unknown }) => Promise<number | null>;
         installs: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: string; createdAt: number; deploymentId: string; installedBy: string; organizationId: string; projectId: string; slug: string; version: string }[]>;
     };
     cells: {
@@ -1667,6 +1669,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         claimInstall: (args) => callRegistered(context, "catalog:claimInstall", args),
         finishInstall: (args) => callRegistered(context, "catalog:finishInstall", args),
         holdsClaim: (args) => callRegistered(context, "catalog:holdsClaim", args),
+        indexStateIssuedAt: (args) => callRegistered(context, "catalog:indexStateIssuedAt", args),
         installs: (args) => callRegistered(context, "catalog:installs", args),
     },
     cells: {

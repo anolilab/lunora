@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { advanceIndexState } from "../lunora/catalog";
+import { advanceIndexState, indexStateIssuedAt } from "../lunora/catalog";
 import type { CatalogForm } from "../src/catalog/artifact";
 import { MAX_INFLATED_BYTES } from "../src/catalog/artifact";
 import { verifyCatalogIndex } from "../src/catalog/catalog-index";
@@ -177,6 +177,7 @@ const indexStateDb = (): { rows: IndexStateRow[]; store: IndexStateStore } => {
     };
     const store: IndexStateStore = {
         advance: async (indexUrl, keyId, issuedAt) => advanceIndexState.handler(ctx, { indexUrl, issuedAt, keyId }),
+        latest: async (indexUrl) => (await indexStateIssuedAt.handler(ctx, { indexUrl })) ?? undefined,
     };
 
     return { rows, store };
@@ -420,6 +421,7 @@ describe(listCatalog, () => {
 
                 return { accepted: true };
             },
+            latest: async () => undefined,
         };
         const clock = { now: NOW };
         const depsOver = (routes: Map<string, Served>) => {
@@ -487,6 +489,36 @@ describe(listCatalog, () => {
         await expect(
             listCatalog({ ...catalogDeps(envFor([key]), hostFrom(older).fetch, clock, store), installs: async () => [] }, "org_1"),
         ).resolves.toMatchObject({ error: expect.stringContaining("older than one"), ok: false });
+    });
+
+    it("reloads a cached index once another isolate accepted a newer one, so a withdrawn app stops listing", async () => {
+        const key = await generateKey("catalog-2026");
+        const counter = await publishApp(key, { name: "Counter", slug: "counter", version: "1.0.0" });
+        const notes = await publishApp(key, { name: "Notes", slug: "notes", version: "1.0.0" });
+        const counterNext = await publishApp(key, { name: "Counter", slug: "counter", version: "1.1.0" });
+        const older = await publishIndex(key, [counter, notes], { issuedAt: new Date(NOW - 60 * 60 * 1000).toISOString() });
+        const newer = await publishIndex(key, [counterNext], { issuedAt: ISSUED });
+        // Every release's files stay served, so only the index decides what is listed.
+        const everything = new Map([...older, ...newer]);
+        const { store } = indexStateDb();
+        const clock = { now: NOW };
+        const listed = async (): Promise<string[]> => {
+            const result = await listCatalog({ ...catalogDeps(envFor([key]), hostFrom(everything).fetch, clock, store), installs: async () => [] }, "org_1");
+
+            return (result as { apps: { slug: string; version: string }[] }).apps.map((app) => `${app.slug}@${app.version}`);
+        };
+
+        everything.set(INDEX_URL, older.get(INDEX_URL) as Served);
+        everything.set(new URL("index.sig", INDEX_URL).href, older.get(new URL("index.sig", INDEX_URL).href) as Served);
+
+        await expect(listed()).resolves.toStrictEqual(["counter@1.0.0", "notes@1.0.0"]);
+
+        // Another isolate accepts the newer index, which withdraws Notes; this isolate's cache is still fresh.
+        everything.set(INDEX_URL, newer.get(INDEX_URL) as Served);
+        everything.set(new URL("index.sig", INDEX_URL).href, newer.get(new URL("index.sig", INDEX_URL).href) as Served);
+        await store.advance(INDEX_URL, "catalog-2026", Date.parse(ISSUED));
+
+        await expect(listed()).resolves.toStrictEqual(["counter@1.1.0"]);
     });
 
     it("keeps the watermark per index URL, so another catalog URL is not held back by this one", async () => {

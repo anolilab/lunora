@@ -120,6 +120,8 @@ export const readCatalogConfig = (env: CatalogEnv): CatalogConfig => {
  */
 export interface IndexStateStore {
     advance: (indexUrl: string, keyId: string, issuedAt: number) => Promise<{ accepted: boolean }>;
+    /** The newest `issuedAt` any isolate accepted for `indexUrl`, or `undefined` before one was. */
+    latest: (indexUrl: string) => Promise<number | undefined>;
 }
 
 /** The transport the service reads through: a fetch, a clock, and the index watermark. */
@@ -264,7 +266,15 @@ const loadIndex = async (deps: CatalogDeps, config: ReadyConfig): Promise<IndexL
     const now = deps.now();
 
     if (cachedIndex?.fingerprint === config.fingerprint && now < cachedIndex.expiresAt) {
-        return { entries: cachedIndex.entries, ok: true };
+        // Another isolate may have accepted a newer index — one that withdraws an app — so the
+        // cache stands only while the shared watermark has not moved past it. An unreadable
+        // watermark reloads: the reload records through the same store, so it fails there too.
+        const cached = cachedIndex;
+        const latest = await deps.indexState.latest(config.indexUrl).catch(() => Number.POSITIVE_INFINITY);
+
+        if (latest === undefined || latest <= cached.issuedAt) {
+            return { entries: cached.entries, ok: true };
+        }
     }
 
     cachedIndex = undefined;

@@ -51,6 +51,8 @@ const catalogTransport = (environment: CatalogRouterEnv, context: ReturnType<typ
         indexState: {
             advance: (indexUrl, keyId, issuedAt) =>
                 context.runMutation<{ accepted: boolean }>(internal.catalog.advanceIndexState, { indexUrl, issuedAt, keyId }),
+            latest: async (indexUrl) =>
+                context.runQuery<number | null>(internal.catalog.indexStateIssuedAt, { indexUrl }).then((issuedAt) => issuedAt ?? undefined),
         },
         now: () => Date.now(),
     };
