@@ -36,6 +36,10 @@ const SECRET_IN_TEXT = new RegExp(
         String.raw`\bsk-[a-z\d]{16,}\b`, // OpenAI-style api keys
         String.raw`\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{6,}`, // JWTs
         String.raw`\bAKIA[a-z\d]{16}\b`, // AWS access key ids
+        // Lunora deploy keys (`src/deploy/keys.ts`): the scope before `|` is kept, the 64-hex secret goes.
+        String.raw`(?<scope>\b(?:production|preview|dev):[^\s|:]+(?::[^\s|:]+)?\|)[a-f\d]{64}\b`,
+        String.raw`\bgh[opsur]_[a-z\d]{36,}\b`, // GitHub classic, OAuth, user, server and refresh tokens
+        String.raw`\bgithub_pat_\w{22,}`, // GitHub fine-grained personal access tokens
         String.raw`(?<kv>(?:password|passwd|secret|token|api[_-]?key)\s*[=:]\s*)\S+`, // key=value / key: value
     ].join("|"),
     "gi",
@@ -53,14 +57,14 @@ export const redactText = (text: string | undefined): string | undefined => {
         return undefined;
     }
 
-    // The regex has two prefix-capturing alternatives — a named `bearer ` and a
-    // named `key=` group — so keep whichever one matched (the other alternatives
-    // capture nothing) and drop only the secret that follows. Named groups arrive
-    // as the final `groups` argument, robust to alternatives being reordered.
+    // The regex has three prefix-capturing alternatives — named `bearer `, `key=`
+    // and deploy-key `scope|` groups — so keep whichever one matched (the other
+    // alternatives capture nothing) and drop only the secret that follows. Named
+    // groups arrive as the final `groups` argument, robust to alternatives being reordered.
     return text.replaceAll(SECRET_IN_TEXT, (...arguments_: unknown[]) => {
-        const groups = arguments_.at(-1) as { bearer?: string; kv?: string } | undefined;
+        const groups = arguments_.at(-1) as { bearer?: string; kv?: string; scope?: string } | undefined;
 
-        return `${groups?.bearer ?? groups?.kv ?? ""}${REDACTED}`;
+        return `${groups?.bearer ?? groups?.kv ?? groups?.scope ?? ""}${REDACTED}`;
     });
 };
 

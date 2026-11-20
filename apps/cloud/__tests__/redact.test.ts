@@ -70,6 +70,38 @@ describe(redactText, () => {
         expect(redactText("token=supersecretvalue123 in the log")).toBe(`token=${REDACTED} in the log`);
     });
 
+    it("scrubs Lunora deploy keys, keeping the scope that names them", () => {
+        // Built from parts so no literal in the source looks like a live key.
+        const secret = "9f".repeat(32);
+
+        for (const scope of ["production:org_1", "preview:org_1:prj_2", "dev:org_1"]) {
+            expect(redactText(`deploy failed for ${scope}|${secret} at step 2`)).toBe(`deploy failed for ${scope}|${REDACTED} at step 2`);
+        }
+    });
+
+    it.each(["ghp_", "gho_", "ghu_", "ghs_", "ghr_"])("scrubs a GitHub %s token", (prefix) => {
+        expect(redactText(`clone with ${prefix}${"a1".repeat(18)} failed`)).toBe(`clone with ${REDACTED} failed`);
+    });
+
+    it("scrubs a GitHub fine-grained personal access token", () => {
+        const token = ["github", "pat", `${"A1".repeat(11)}_${"b2".repeat(29)}c`].join("_");
+
+        expect(redactText(`push rejected for ${token}`)).toBe(`push rejected for ${REDACTED}`);
+    });
+
+    it("leaves text that only resembles those shapes alone", () => {
+        const lines = [
+            "promoted to production:org_1 at 12:00",
+            "preview:org_1|not-a-key",
+            "the ghp_ prefix marks a classic token",
+            `commit ${"ab".repeat(20)} deployed`,
+        ];
+
+        for (const line of lines) {
+            expect(redactText(line)).toBe(line);
+        }
+    });
+
     it("leaves ordinary prose untouched and passes undefined through", () => {
         const prose = "The user asked about the weather in Berlin.";
 
