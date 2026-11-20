@@ -309,6 +309,39 @@ describe("rolling a release out", () => {
         expect(records.tables["boxes"]?.[0]).toMatchObject({ allowDowngrade: true, desiredReleaseId: "hostd-v1_1_0" });
     });
 
+    it("keeps a rollout started after the halted run last read the box", async () => {
+        const records = memoryStore({ boxes: [{ _id: "box_1", desiredReleaseId: "hostd-v1_1_0", status: "offline" }] });
+        const { get, patchIf } = records;
+        let rolledBack = false;
+        // An operator rolls the box back once the halted run has started on it: after its first read
+        // returns, or just before its first write lands.
+        const rollBack = async (): Promise<void> => {
+            if (!rolledBack) {
+                rolledBack = true;
+                await records.patch("boxes", "box_1", { allowDowngrade: true, desiredReleaseId: "hostd-v1_0_0" });
+            }
+        };
+
+        records.get = async (table, id) => {
+            const row = (await get(table, id)) as null | Record<string, unknown>;
+            // The row as read: the rollback below mutates the stored object in place.
+            const snapshot = row === null ? null : { ...row };
+
+            await rollBack();
+
+            return snapshot;
+        };
+        records.patchIf = async (table, id, args) => {
+            await rollBack();
+
+            return patchIf(table, id, args);
+        };
+
+        await withdrawDesiredRelease(records, { kind: "upgrade", manifestUrl: "https://cloud.test/m", releaseId: "hostd-v1_1_0" })(["box_1"]);
+
+        expect(records.tables["boxes"]?.[0]).toMatchObject({ allowDowngrade: true, desiredReleaseId: "hostd-v1_0_0" });
+    });
+
     it("points boxes at a stored release, never a revoked one", async () => {
         const { ctx, ops } = makeCtx({
             boxes: [

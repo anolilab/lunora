@@ -140,6 +140,11 @@ const fakeControlPlaneDb = (
 
             return Promise.resolve(undefined);
         },
+        patchIf: (_table, _id, args) => {
+            assertNoExplicitUndefined(args.patch);
+
+            return Promise.resolve({ applied: true });
+        },
         ...spies,
     };
 };

@@ -165,19 +165,21 @@ const desiresJob = (row: null | { allowDowngrade?: boolean | null; desiredReleas
 /**
  * A {@link runHostdRollout} `withdraw` port over the control-plane store: clears the intent only where it is still
  * `job`'s. Matching the release id alone would let a halted rollout clear a rollback an operator started onto the
- * same release since.
+ * same release since. The match and the clear are one conditional write, so a rollout started between a read and
+ * the write keeps its intent.
  */
 export const withdrawDesiredRelease =
     (database: ControlPlaneStore, job: UpgradeJob) =>
     async (boxIds: string[]): Promise<void> => {
-        for (const boxId of boxIds) {
-            // eslint-disable-next-line no-await-in-loop -- re-read per box: a newer rollout may have re-pointed it since
-            const row = (await database.get("boxes", boxId)) as null | { allowDowngrade?: boolean | null; desiredReleaseId?: null | string };
+        // `desiresJob` as a `where`: a box that never had a rollback stores no `allowDowngrade`.
+        const where =
+            job.allowDowngrade === true
+                ? { allowDowngrade: true, desiredReleaseId: job.releaseId }
+                : { desiredReleaseId: job.releaseId, OR: [{ allowDowngrade: false }, { allowDowngrade: null }] };
 
-            if (desiresJob(row, job)) {
-                // eslint-disable-next-line no-await-in-loop -- see above
-                await database.patch("boxes", boxId, { allowDowngrade: false, desiredReleaseId: null });
-            }
+        for (const boxId of boxIds) {
+            // eslint-disable-next-line no-await-in-loop -- one box at a time keeps the writer simple; a halt withdraws a handful
+            await database.patchIf("boxes", boxId, { patch: { allowDowngrade: false, desiredReleaseId: null }, where });
         }
     };
 

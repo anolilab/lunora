@@ -46,6 +46,7 @@ const storeOf = (database: MutationContext["db"]): ControlPlaneStore => {
         get: (table: string, id: string) => Promise<unknown>;
         insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
         patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<unknown>;
+        patchIf: (table: string, id: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }) => Promise<{ applied: boolean }>;
     };
 
     return {
@@ -62,6 +63,8 @@ const storeOf = (database: MutationContext["db"]): ControlPlaneStore => {
         get: async (table: string, id: string) => generic.get(table, id),
         insert: async (table: string, document: Record<string, unknown>) => generic.insert(table, document),
         patch: async (table: string, id: string, patch: Record<string, unknown>) => generic.patch(table, id, patch),
+        patchIf: async (table: string, id: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }) =>
+            generic.patchIf(table, id, args),
     };
 };
 

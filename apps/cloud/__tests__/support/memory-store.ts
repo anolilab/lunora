@@ -1,8 +1,8 @@
 /**
  * A mutable in-memory {@link ControlPlaneStore}: writes land in the tables and
  * later reads see them. For suites that drive a sequence (a box session, a
- * report replayed twice) rather than one call. `where` matches by equality and
- * the `{ gt, gte, lt, lte }` operators; SQL NULL is modelled as `null`.
+ * report replayed twice) rather than one call. `where` matches by equality, the
+ * `{ gt, gte, lt, lte }` operators and an `OR` of such clauses; SQL NULL is modelled as `null`.
  */
 import type { ControlPlaneStore } from "../../src/d1-store";
 
@@ -15,6 +15,10 @@ const isComparison = (value: unknown): value is Comparison =>
 
 const matches = (row: Row, where: Row): boolean =>
     Object.entries(where).every(([field, expected]) => {
+        if (field === "OR") {
+            return (expected as Row[]).some((clause) => matches(row, clause));
+        }
+
         const actual = row[field] ?? null;
 
         if (!isComparison(expected)) {
@@ -95,6 +99,17 @@ export const memoryStore = (seed: Record<string, Row[]> = {}): MemoryStore => {
             }
 
             return Promise.resolve();
+        },
+        patchIf: (_table, id, { patch, where }) => {
+            const row = find(id);
+
+            if (row === undefined || !matches(row, where)) {
+                return Promise.resolve({ applied: false });
+            }
+
+            Object.assign(row, patch);
+
+            return Promise.resolve({ applied: true });
         },
         tables,
     };
