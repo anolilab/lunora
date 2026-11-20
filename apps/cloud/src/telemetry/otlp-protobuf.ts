@@ -214,7 +214,9 @@ const readAnyValue = (reader: Reader): AnyValue => {
         } else if (field === 2 && wire === WIRE_VARINT) {
             value.boolValue = reader.varint() !== 0n;
         } else if (field === 3 && wire === WIRE_VARINT) {
-            value.intValue = reader.varint().toString();
+            // `int_value` is `int64`, not `sint64`: a negative is the ten-byte
+            // two's-complement varint, so the unsigned read must be reinterpreted.
+            value.intValue = BigInt.asIntN(64, reader.varint()).toString();
         } else if (field === 4 && wire === WIRE_FIXED64) {
             value.doubleValue = reader.double();
         } else {

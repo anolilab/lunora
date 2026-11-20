@@ -110,6 +110,43 @@ describe(decodeTracePayloadProto, () => {
         expect(observation?.spanId).toBe("0ff001107f8000ff");
         expect(observation?.traceId).toBe("0ff0".repeat(8));
     });
+
+    it("decodes a negative int64 attribute as a negative, not as its unsigned two's complement", () => {
+        // A protobuf `int64` writes a negative as the ten-byte varint of its 64-bit two's complement.
+        const int64Varint = (value: bigint): number[] => {
+            const out: number[] = [];
+            let remaining = BigInt.asUintN(64, value);
+
+            do {
+                const group = Number(remaining % 0x80n);
+
+                remaining /= 0x80n;
+                out.push(remaining > 0n ? group + 0x80 : group);
+            } while (remaining > 0n);
+
+            return out;
+        };
+        const intAttribute = (key: string, value: bigint): number[] =>
+            lenField(9, [...stringField(1, key), ...lenField(2, [...tag(3, 0), ...int64Varint(value)])]);
+
+        const span = [
+            ...lenField(1, Array.from<number>({ length: 16 }).fill(1)),
+            ...lenField(2, Array.from<number>({ length: 8 }).fill(2)),
+            ...intAttribute("minus.one", -1n),
+            ...intAttribute("min.int64", -(2n ** 63n)),
+            ...intAttribute("positive", 42n),
+        ];
+        const payload = new Uint8Array(lenField(1, lenField(2, lenField(2, span))));
+
+        const [resourceSpans] = decodeTracePayloadProto(payload).resourceSpans ?? [];
+        const attributes = resourceSpans?.scopeSpans?.[0]?.spans?.[0]?.attributes ?? [];
+
+        expect(attributes.map((attribute) => [attribute.key, attribute.value?.intValue])).toStrictEqual([
+            ["minus.one", "-1"],
+            ["min.int64", "-9223372036854775808"],
+            ["positive", "42"],
+        ]);
+    });
 });
 
 describe(decodeMetricsPayloadProto, () => {
