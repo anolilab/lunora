@@ -39,6 +39,9 @@ vi.mock(import("node:fs"), async (importOriginal) => {
 /** The project's real `@lunora/platform-node`, which a test wraps to inject a failure. */
 const realPlatform = { checkNodeAppHost, createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } as unknown as PlatformNode;
 
+/** The worker's reload debounce (`RELOAD_DEBOUNCE_MS` in node-dev-server.ts), which identifies its timer among the rest. */
+const RELOAD_DEBOUNCE_MS = 100;
+
 /** This package's node_modules: the fixture links it so `@lunora/*` resolve to the workspace builds. */
 const PACKAGE_NODE_MODULES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "node_modules");
 
@@ -969,33 +972,41 @@ export default crons;
             expect.assertions(2);
 
             writeFixture(workdir);
+            // An entry that reads nothing generated: no codegen session runs first, so no late write of its can reach a watcher
+            // and arm a reload of its own.
+            writeFileSync(
+                join(workdir, "src", "worker.ts"),
+                `export class ShardDO {\n    public async fetch(): Promise<Response> {\n        return new Response("shard");\n    }\n}\n\nexport default { fetch: async (): Promise<Response> => new Response("plain") };\n`,
+                "utf8",
+            );
 
             const later = new Date(Date.now() + 60_000);
 
             utimesSync(join(workdir, "src", "worker.ts"), later, later);
 
-            const generating = await startDev(workdir);
-
-            await generating.stop();
-            utimesSync(join(workdir, "src", "worker.ts"), later, later);
-            // Not advanced on their own: a reload timer stays pending until the test fires it, where the count below sees it.
-            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-
+            const setTimeoutCalls = vi.spyOn(globalThis, "setTimeout");
+            // Only the reload debounce is counted, by its delay: `scheduleReload` arms it, and nothing else in the worker waits 100 ms.
+            const reloadDebounces = (): number => setTimeoutCalls.mock.calls.filter(([, delay]) => delay === RELOAD_DEBOUNCE_MS).length;
             const { logger, next } = milestoneLogger();
-            const reloaded = next("node: reloaded");
+            const firstReload = next("node: reloaded");
             const worker = await startNodeDevWorker({ codegenWatch: false, logger, port: await findAvailablePort(18_870), projectRoot: workdir });
 
             try {
-                // The start saw the stamp and marked one reload.
-                expect(vi.getTimerCount()).toBe(1);
+                await firstReload;
 
-                await vi.advanceTimersByTimeAsync(200);
-                await reloaded;
+                // The start saw the stamp and armed one reload. That reload's own load saw the same stamp: armed again, it would
+                // have called setTimeout before logging "reloaded", so the count at that milestone is final.
+                expect(reloadDebounces()).toBe(1);
 
-                // That reload saw the same stamp again, and arms nothing.
-                expect(vi.getTimerCount()).toBe(0);
+                // A real edit still arms one (or more: a single write can raise more than one change event).
+                const edited = next("node: reloaded");
+
+                writeFileSync(join(workdir, "src", "worker.ts"), `${readFileSync(join(workdir, "src", "worker.ts"), "utf8")}// edited\n`, "utf8");
+                await edited;
+
+                expect(reloadDebounces()).toBeGreaterThanOrEqual(2);
             } finally {
-                vi.useRealTimers();
+                setTimeoutCalls.mockRestore();
                 worker.kill("SIGTERM");
                 await worker.exited;
             }
