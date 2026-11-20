@@ -55,6 +55,7 @@
         "lint:node-capabilities-docs": "node --experimental-strip-types scripts/check-node-capabilities-docs.js",
         "lint:package-json": "./scripts/sort-package-json-all.sh --check",
         "lint:package-json:fix": "./scripts/sort-package-json-all.sh",
+        "lint:test-clock": "node scripts/check-test-real-clock.js",
         "lint:oxlint": "oxlint",
         "lint:oxfmt": "oxfmt --check && prettier --check \"**/*.{md,mdx}\"",
         "lint:oxfmt:fix": "oxfmt && prettier --write \"**/*.{md,mdx}\"",
