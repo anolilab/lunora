@@ -61,6 +61,30 @@ describe("the enrol route, POST /v1/boxes/enrol", () => {
         expect(response.status).toBe(403);
         expect(calls).toStrictEqual([]);
     });
+
+    it.each(["{not json", "null", "[]"])("answers 400, not the dead-token 403, for the body %s", async (text) => {
+        const { calls, context } = contextRecording();
+
+        const response = await handleBoxEnrolRoute(new Request("https://cloud.test/v1/boxes/enrol", { body: text, method: "POST" }), { __lunoraCtx: context });
+
+        expect(response.status).toBe(400);
+        expect(calls).toStrictEqual([]);
+    });
+
+    it.each([
+        ["publicKey", { ...body, publicKey: 42 }],
+        ["versions", { ...body, versions: "1.0.0" }],
+        ["versions", { ...body, versions: { ...body.versions, hostd: 1 } }],
+        ["ipv4", { ...body, ipv4: 203 }],
+    ])("answers 400 naming a mistyped %s without reaching the store", async (field, payload) => {
+        const { calls, context } = contextRecording();
+
+        const response = await handleBoxEnrolRoute(enrolRequest(payload), { __lunoraCtx: context });
+
+        expect(response.status).toBe(400);
+        await expect(readJson(response)).resolves.toMatchObject({ field });
+        expect(calls).toStrictEqual([]);
+    });
 });
 
 describe("the session upgrade, GET /v1/boxes/connect", () => {

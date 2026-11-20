@@ -77,41 +77,65 @@ const applyBoxDns = async (
     }
 };
 
-/** The enrolment body, untrusted: `boxes.enrol` validates every field but the token, which only its hash reaches. */
-interface EnrolBody {
-    ipv4?: unknown;
-    ipv6?: unknown;
-    publicKey?: unknown;
-    singleTrust?: unknown;
-    token?: unknown;
-    versions?: unknown;
-}
+const isOptionalString = (value: unknown): boolean => value === undefined || typeof value === "string";
+
+/** The field of an enrolment body whose type `boxes.enrol` would refuse, or `undefined` when every one fits. */
+const misTypedEnrolField = (body: Record<string, unknown>): string | undefined => {
+    const { versions } = body;
+
+    if (typeof body["publicKey"] !== "string") {
+        return "publicKey";
+    }
+
+    if (typeof versions !== "object" || versions === null || Array.isArray(versions)) {
+        return "versions";
+    }
+
+    const versionsRecord = versions as Record<string, unknown>;
+
+    if (["caddy", "celld", "hostd"].some((name) => typeof versionsRecord[name] !== "string")) {
+        return "versions";
+    }
+
+    return ["ipv4", "ipv6"].find((name) => !isOptionalString(body[name]));
+};
 
 /**
  * `POST /v1/boxes/enrol` — consume a one-time enrolment token (plan 458 D4).
  *
  * The token is the whole credential, so it is checked for shape here and
- * hashed at the edge: its plaintext never reaches the store or a log. Every
- * other field is validated once, by the mutation, which refuses expired,
- * unknown and replayed tokens alike, and answers a retry with the same key with
- * the box it already created.
+ * hashed at the edge: its plaintext never reaches the store or a log. The other
+ * fields are type-checked here so a malformed body answers 400, not the 403 a
+ * box's `hostd enrol` reads as a dead token; their bounds and formats are the
+ * mutation's, which also refuses expired, unknown and replayed tokens alike and
+ * answers a retry with the same key with the box it already created.
  */
 export const handleBoxEnrolRoute = async (request: Request, environment: BoxRouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as EnrolBody | null;
+    const body = await readJsonObject(request);
 
-    if (!body || !isEnrolmentTokenShape(body.token)) {
+    if (!body) {
+        return jsonError(400, "a JSON object body is required");
+    }
+
+    if (!isEnrolmentTokenShape(body["token"])) {
         return jsonError(403, "invalid or expired enrolment token");
+    }
+
+    const misTyped = misTypedEnrolField(body);
+
+    if (misTyped !== undefined) {
+        return Response.json({ error: `${misTyped} has the wrong type`, field: misTyped }, { status: 400 });
     }
 
     try {
         const result = await context.runMutation<EnrolResult>(internal.boxes.enrol, {
-            hashedToken: await sha256Hex(body.token),
-            ...(body.ipv4 === undefined ? {} : { ipv4: body.ipv4 }),
-            ...(body.ipv6 === undefined ? {} : { ipv6: body.ipv6 }),
-            publicKey: body.publicKey,
-            singleTrust: body.singleTrust === true,
-            versions: body.versions,
+            hashedToken: await sha256Hex(body["token"]),
+            ...(body["ipv4"] === undefined ? {} : { ipv4: body["ipv4"] }),
+            ...(body["ipv6"] === undefined ? {} : { ipv6: body["ipv6"] }),
+            publicKey: body["publicKey"],
+            singleTrust: body["singleTrust"] === true,
+            versions: body["versions"],
         });
 
         // Idempotent, so a retried enrolment re-converges the records too. A failure
