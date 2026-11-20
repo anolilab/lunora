@@ -428,6 +428,26 @@ const placementColumns = (
     return { ...(placementRef === undefined ? {} : { placementRef }), resourceRef: resourceRefOf({ placementRef, target }, alias) };
 };
 
+/**
+ * Refuse a release whose driver was chosen for a placement the project has since left. The deploy
+ * route reads the placement, then provisions there; the row this mutation writes must name the same
+ * target and host, or activation and teardown would act on one the release never ran on.
+ * @throws {LunoraError} `CONFLICT` when the project's target or host changed.
+ */
+const assertExpectedPlacement = (
+    expected: { expectedPlacementRef?: string; expectedTarget?: string },
+    target: TargetId,
+    placementRef: string | undefined,
+): void => {
+    if (expected.expectedTarget === undefined) {
+        return;
+    }
+
+    if (expected.expectedTarget !== target || expected.expectedPlacementRef !== placementRef) {
+        throw new LunoraError("CONFLICT", "the project's deploy target changed while this release was being prepared; deploy again");
+    }
+};
+
 /** What {@link create} answers: the new row, its release number, and the release live on the alias before it (the revert target). */
 interface CreatedDeployment {
     deploymentId: Id<"deployments">;
@@ -463,6 +483,10 @@ export const create = mutation
         allowDeleteClasses: v.optional(v.array(boundedString(LIMITS.name))),
         // CI deploy path: a valid deploy key authorizes in lieu of a member session.
         deployKey: v.optional(boundedString(LIMITS.token)),
+        // The placement the deploy route chose its driver from: refused when the project has
+        // moved since, so the row cannot name a target or host the release was not converged on.
+        expectedPlacementRef: v.optional(boundedString(LIMITS.id)),
+        expectedTarget: v.optional(boundedString(LIMITS.tag)),
         // The stateful classes the release binds — what a later release must keep. Stored as `durableObjectClasses`.
         statefulClasses: v.optional(v.array(boundedString(LIMITS.name))),
         kind: v.union(v.literal("production"), v.literal("preview"), v.literal("dev")),
@@ -529,6 +553,10 @@ export const create = mutation
         const { now } = context;
         // A row predating targets answers NULL, which is the default target.
         const target = storedTarget(project.target) ?? DEFAULT_TARGET;
+        const placement = placementColumns(target, project, arguments_.scriptName);
+
+        assertExpectedPlacement(arguments_, target, placement.placementRef);
+
         const deletedClasses = assertKeepsWorkerData(
             aliasWorkerReleases(existing, arguments_.scriptName),
             await convergedClasses(context, arguments_.scriptName),
@@ -542,7 +570,7 @@ export const create = mutation
                 ? { adminTokenCiphertext: arguments_.adminTokenCiphertext, adminTokenIv: arguments_.adminTokenIv }
                 : {}),
             alias: arguments_.scriptName,
-            ...placementColumns(target, project, arguments_.scriptName),
+            ...placement,
             branch: arguments_.branch,
             ...(arguments_.cronSpecs && arguments_.cronSpecs.length > 0 ? { cronSpecs: arguments_.cronSpecs } : {}),
             createdAt: now,

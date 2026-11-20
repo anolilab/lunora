@@ -262,4 +262,37 @@ describe("deployments.create", () => {
     it("records cloudflare-wfp for a project that predates targets", async () => {
         await expect(insertedDeployment({})).resolves.toMatchObject({ document: { resourceRef: "web", scriptName: "web", target: "cloudflare-wfp" } });
     });
+
+    it("refuses a release whose driver was chosen for a placement the project has since left", async () => {
+        const createFor = async (project: Record<string, unknown>, expected: Record<string, unknown>) => {
+            const { ctx, ops } = makeCtx({
+                aliasOwnership: [],
+                deployments: [],
+                halts: [],
+                members: [owner("org_1")],
+                organizations: [{ _id: "org_1" }],
+                projects: [{ _id: "proj_1", organizationId: "org_1", slug: "web", ...project }],
+            });
+            const outcome = await Promise.resolve(
+                create.handler(ctx, { kind: "production", organizationId: "org_1", projectId: "proj_1", scriptName: "web", ...expected } as never),
+            ).then(
+                () => "created",
+                (error: unknown) => (error as { code?: string }).code,
+            );
+
+            return { inserted: ops.some((op) => op.kind === "insert" && op.table === "deployments"), outcome };
+        };
+
+        // Moved to another target, or to another box of the same one, after the route chose its driver.
+        await expect(createFor({ target: "celld-vps", placementRef: "box_1" }, { expectedTarget: "cloudflare-wfp" })).resolves.toStrictEqual({
+            inserted: false,
+            outcome: "CONFLICT",
+        });
+        await expect(
+            createFor({ target: "celld-vps", placementRef: "box_2" }, { expectedPlacementRef: "box_1", expectedTarget: "celld-vps" }),
+        ).resolves.toStrictEqual({ inserted: false, outcome: "CONFLICT" });
+        await expect(
+            createFor({ target: "celld-vps", placementRef: "box_1" }, { expectedPlacementRef: "box_1", expectedTarget: "celld-vps" }),
+        ).resolves.toStrictEqual({ inserted: true, outcome: "created" });
+    });
 });

@@ -50,6 +50,12 @@ export interface DeployBackend extends ReleaseBackend {
         /** The tenant's compiled cron expressions for the WfP cron fan-out (§2.4). */
         cronSpecs?: string[];
 
+        /**
+         * The placement the release's driver was chosen from. `deployments.create` refuses when the
+         * project's target or host changed since, so the row never names a placement other than
+         * the one the release converges on.
+         */
+        expectedPlacement: { placementRef?: string; target: string };
         key: string;
         kind: DeployKind;
         organizationId: string;
@@ -596,6 +602,7 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
             ...(request.allowDeleteClasses === undefined ? {} : { allowDeleteClasses: request.allowDeleteClasses }),
             branch,
             ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
+            expectedPlacement: { target: placement.target, ...("host" in placement ? { placementRef: placement.host.id } : {}) },
             // Stateful classes: Durable Object storage and Workflow instances. A deploy
             // that drops one of these deletes its data, so the keep-check needs both.
             statefulClasses,
