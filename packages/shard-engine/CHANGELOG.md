@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.200...@lunora/shard-engine@1.0.0-alpha.201) (2026-11-19)
+
+- fix(shard-engine): refresh subscriptions after .global() writes (#1629)
+
 ## @lunora/shard-engine [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.199...@lunora/shard-engine@1.0.0-alpha.200) (2026-11-18)
 
 - Updated dependency @lunora/platform@1.0.0-alpha.81

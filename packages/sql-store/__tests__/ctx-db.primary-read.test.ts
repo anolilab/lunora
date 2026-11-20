@@ -171,3 +171,112 @@ describe("a global read that asks for the primary", () => {
         expect(headroom.headroom().readRows).toBe(0);
     });
 });
+
+/** A replica session that has not caught up on `tables`: its reads of them come back empty, while its writes land. */
+const replicaMissingReadsOf = (plain: SqlCtxExec, tables: ReadonlyArray<string>): SqlCtxExec => {
+    return {
+        ...plain,
+        all: async (text, parameters) => (/^\s*SELECT/iu.test(text) && tables.some((table) => text.includes(`"${table}"`)) ? [] : plain.all(text, parameters)),
+        primary: plain,
+    };
+};
+
+describe("a global write whose row the replica has not seen yet", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const storedRows = async (table = TABLE): Promise<Record<string, unknown>[]> => harness.exec.all(`SELECT * FROM "${table}" ORDER BY id`, []);
+
+    const lateStore = async (): Promise<ReturnType<typeof createSqlCtxDb>> => {
+        const provisionScope = {};
+
+        await createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: harness.exec, provisionScope, schema }).findMany(TABLE, { limit: 1 });
+        await harness.exec.run(`INSERT INTO "${TABLE}" (id, _creationTime, _version, bucket, label) VALUES ('a', 1, 0, 1, 'locked')`, []);
+
+        return createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: replicaMissingReadsOf(harness.exec, [TABLE]), provisionScope, schema });
+    };
+
+    it("deletes the row instead of treating it as absent", async () => {
+        expect.assertions(1);
+
+        const store = await lateStore();
+
+        await store.delete(TABLE, "a");
+
+        await expect(storedRows()).resolves.toStrictEqual([]);
+    });
+
+    it("patches the row instead of reporting it not found", async () => {
+        expect.assertions(2);
+
+        const store = await lateStore();
+
+        await expect(store.patch(TABLE, "a", { label: "patched" })).resolves.toBeUndefined();
+        await expect(storedRows()).resolves.toMatchObject([{ id: "a", label: "patched" }]);
+    });
+
+    it("applies patchIf against the row the primary holds", async () => {
+        expect.assertions(2);
+
+        const store = await lateStore();
+
+        await expect(store.patchIf?.(TABLE, "a", { patch: { label: "patched" }, where: { label: "locked" } })).resolves.toMatchObject({ applied: true });
+        await expect(storedRows()).resolves.toMatchObject([{ id: "a", label: "patched" }]);
+    });
+
+    it("replaces the row instead of reporting it not found", async () => {
+        expect.assertions(1);
+
+        const store = await lateStore();
+
+        await store.replace(TABLE, "a", { bucket: 2, label: "replaced" });
+
+        await expect(storedRows()).resolves.toMatchObject([{ bucket: 2, id: "a", label: "replaced" }]);
+    });
+
+    it("honours onDelete: restrict for a holder row only the primary has seen", async () => {
+        expect.assertions(2);
+
+        const relationalSchema = {
+            tables: {
+                [TABLE]: {
+                    indexes: [],
+                    relationMap: {},
+                    shape: { label: { _meta: { column: { notNull: true } }, kind: "string" } },
+                    shardMode: { kind: "global" },
+                },
+                notes: {
+                    indexes: [],
+                    relationMap: { item: { field: "itemId", kind: "one", onDelete: "restrict", references: "_id", table: TABLE } },
+                    shape: { itemId: { _meta: { column: { notNull: true } }, kind: "string" } },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+        const provisionScope = {};
+
+        await createSqlCtxDb({ clock, dialect: makeSqliteDialect(), exec: harness.exec, provisionScope, schema: relationalSchema }).findMany(TABLE, {
+            limit: 1,
+        });
+        await harness.exec.run(`INSERT INTO "${TABLE}" (id, _creationTime, _version, label) VALUES ('a', 1, 0, 'parent')`, []);
+        await harness.exec.run(`INSERT INTO "notes" (id, _creationTime, _version, itemId) VALUES ('n', 2, 0, 'a')`, []);
+
+        const store = createSqlCtxDb({
+            clock,
+            dialect: makeSqliteDialect(),
+            exec: replicaMissingReadsOf(harness.exec, [TABLE, "notes"]),
+            provisionScope,
+            schema: relationalSchema,
+        });
+
+        await expect(store.delete(TABLE, "a")).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(storedRows()).resolves.toMatchObject([{ id: "a" }]);
+    });
+});
