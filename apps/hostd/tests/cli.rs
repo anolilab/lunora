@@ -185,7 +185,12 @@ fn refuses_an_older_release_unless_allow_downgrade_is_given() {
     install.install(&[]);
 
     let mut older = install.manifest.clone();
+    // A binary that reports the version its manifest claims: the install refuses one that does not.
+    let older_hostd = script("1.0.0-rc.1");
 
+    older["hostd"]["artifacts"][0]["sha256"] = json!(sha256_hex(&older_hostd));
+    older["hostd"]["artifacts"][0]["size"] = json!(older_hostd.len());
+    std::fs::write(install.from.join("lunora-hostd"), older_hostd).unwrap();
     older["hostd"]["version"] = json!("1.0.0-rc.1");
     older["releaseId"] = json!("hostd-v1_0_0-rc_1");
     install.sign(&older, &release_key());

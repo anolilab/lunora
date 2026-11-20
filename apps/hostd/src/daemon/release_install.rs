@@ -175,8 +175,25 @@ fn invalid(component: ReleaseComponent, message: impl std::fmt::Display) -> JobE
     JobError::new(codes::ARTIFACT_INVALID, format!("{}: {message}", component.as_str()))
 }
 
+/// Whether a version command's output names `expected` as one whole token. The leading `v` is optional on either
+/// side: the manifest records celld as `v0.6.0` while it prints `celld 0.6.0`, and Caddy prints `v2.11.6 h1:…`.
+fn reports_version(printed: &str, expected: &str) -> bool {
+    fn bare(version: &str) -> &str {
+        version.strip_prefix('v').unwrap_or(version)
+    }
+
+    printed.split_whitespace().any(|token| bare(token) == bare(expected))
+}
+
 /// Obtain, check, decompress and test-run one component, leaving the binary at `target`.
-async fn stage(component: ReleaseComponent, artifact: &Artifact, target: PathBuf, obtain: Obtain<'_>, progress: Progress<'_>) -> Result<(), JobError> {
+async fn stage(
+    component: ReleaseComponent,
+    artifact: &Artifact,
+    version: &str,
+    target: PathBuf,
+    obtain: Obtain<'_>,
+    progress: Progress<'_>,
+) -> Result<(), JobError> {
     let downloaded = PathBuf::from(format!("{}.download", target.display()));
 
     obtain(component, artifact.clone(), downloaded.clone()).await?;
@@ -215,6 +232,15 @@ async fn stage(component: ReleaseComponent, artifact: &Artifact, target: PathBuf
     let Some(printed) = version_output(&target, component.version_args()).await else {
         return Err(JobError::new(codes::ARTIFACT_INVALID, format!("{} from {} does not run on this machine", component.as_str(), artifact.url)));
     };
+
+    // The recorded release claims the manifest's versions, and the next install's downgrade check trusts them: an
+    // artifact that runs but reports another version (or none) would make that claim false.
+    if !reports_version(&printed, version) {
+        return Err(invalid(
+            component,
+            format!("{} reports {:?}, but the manifest pins version {version}", artifact.url, printed.trim().chars().take(120).collect::<String>()),
+        ));
+    }
 
     progress(&format!("{} verified: {printed}", component.as_str()));
 
@@ -285,7 +311,7 @@ pub async fn install_release(input: InstallInput<'_>) -> Result<Installed, JobEr
     let staged = async {
         for (component, artifact) in &artifacts {
             // One download at a time on a small box.
-            stage(*component, artifact, staging.join(component.binary_name()), input.obtain, input.progress).await?;
+            stage(*component, artifact, manifest.version_of(*component), staging.join(component.binary_name()), input.obtain, input.progress).await?;
         }
 
         let mut kept = serde_json::to_string(input.envelope).map_err(|error| JobError::from(error.to_string()))?;
@@ -546,6 +572,46 @@ mod tests {
 
         left.sort();
         assert_eq!(left, ["backups", "current", "hostd-v0", "hostd-v2", "hostd-v3", "hostd-v4.partial", "notes.txt"]);
+    }
+
+    #[tokio::test]
+    async fn refuses_an_artifact_that_reports_another_version_than_the_manifest_pins() {
+        let directory = tempfile::tempdir().unwrap();
+        let install_dir = directory.path().to_str().unwrap();
+
+        for (printed, reported) in [("echo celld 0.5.9", "celld 0.5.9"), ("echo celld 0.6.0-dirty", "celld 0.6.0-dirty"), ("true", "")] {
+            let (result, _) = install(install_dir, &release("hostd-v0_0_1", "0.0.1", gzip(&script(printed))), false).await;
+            let error = result.unwrap_err();
+
+            assert_eq!(error.code, codes::ARTIFACT_INVALID);
+            assert_eq!(error.message, format!("celld: https://example.com/celld reports {reported:?}, but the manifest pins version v0.6.0"));
+            assert_eq!(current_release(install_dir), None);
+            assert!(!directory.path().join("hostd-v0_0_1.partial").exists());
+        }
+
+        let mut lagging = release("hostd-v0_0_2", "0.0.2", gzip(&script("echo celld 0.6.0")));
+
+        // A hostd that still reports the release before it.
+        lagging.files[0].1 = script("echo 0.0.1");
+        lagging.envelope.manifest.hostd.artifacts.iter_mut().for_each(|artifact| {
+            artifact.sha256 = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&lagging.files[0].1));
+            artifact.size = lagging.files[0].1.len() as u64;
+        });
+
+        let error = install(install_dir, &lagging, false).await.0.unwrap_err();
+
+        assert_eq!(error.message, "hostd: https://example.com/lunora-hostd reports \"0.0.1\", but the manifest pins version 0.0.2");
+        assert!(install(install_dir, &release("hostd-v0_0_2", "0.0.2", gzip(&script("echo celld 0.6.0"))), false).await.0.unwrap().installed);
+    }
+
+    #[test]
+    fn matches_the_version_a_binary_prints_as_a_whole_token() {
+        assert!(reports_version("celld 0.6.0\n", "v0.6.0"));
+        assert!(reports_version("v2.11.6 h1:abc=", "v2.11.6"));
+        assert!(reports_version("1.0.0-alpha.1", "1.0.0-alpha.1"));
+        assert!(!reports_version("celld 0.6.0.1", "v0.6.0"));
+        assert!(!reports_version("v2.11.60 h1:abc=", "v2.11.6"));
+        assert!(!reports_version("", "1.0.0"));
     }
 
     #[test]

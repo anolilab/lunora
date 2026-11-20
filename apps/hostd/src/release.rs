@@ -178,6 +178,15 @@ impl Manifest {
 
         artifacts.iter().find(|artifact| artifact.platform == platform)
     }
+
+    /// The version this manifest records for `component`.
+    pub fn version_of(&self, component: ReleaseComponent) -> &str {
+        match component {
+            ReleaseComponent::Hostd => &self.hostd.version,
+            ReleaseComponent::Celld => &self.celld.version,
+            ReleaseComponent::Caddy => &self.caddy.version,
+        }
+    }
 }
 
 /// A manifest with its detached signature: the published `manifest.json`.
