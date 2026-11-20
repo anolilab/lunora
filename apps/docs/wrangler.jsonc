@@ -17,4 +17,14 @@
             "id": "<replace-with-kv-create-id>",
         },
     ],
+    // Sign-ups per client address: five a minute covers a typo and a retry. alchemy.run.ts
+    // deploys this same entry. The namespace id is the account-wide key the counters live
+    // under, so keep it stable.
+    "ratelimits": [
+        {
+            "name": "WAITLIST_LIMITER",
+            "namespace_id": "1001",
+            "simple": { "limit": 5, "period": 60 },
+        },
+    ],
 }

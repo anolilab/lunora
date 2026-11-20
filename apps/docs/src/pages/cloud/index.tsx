@@ -22,6 +22,12 @@ import { TEST_SITE_KEY } from "@/lib/turnstile";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/;
 
+/** Error codes from `/api/waitlist` that a visitor can act on; anything else gets the generic message. */
+const FAILURE_MESSAGES: Record<string, string> = {
+    rate_limited: "Too many sign-ups from your network. Please try again in a minute.",
+    verification_failed: "We couldn't verify you're human. Please try again.",
+};
+
 type Status = "error" | "idle" | "sending" | "success";
 
 // A deploy sets the real key (alchemy.run.ts refuses to run without it); the test
@@ -93,7 +99,11 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                 return;
             }
 
-            fail(response.status === 403 ? "We couldn't verify you're human. Please try again." : "Something went wrong. Please try again.");
+            const { error } = (await response.json().catch(() => {
+                return {};
+            })) as { error?: string };
+
+            fail((error && FAILURE_MESSAGES[error]) ?? "Something went wrong. Please try again.");
         } catch {
             fail("Something went wrong. Please try again.");
         }
