@@ -27,7 +27,7 @@ use super::identity::Identity;
 use super::log::Logger;
 use crate::wire::codec::{Frame, decode_cloud_message, encode_box_message};
 use crate::wire::signing::challenge_payload;
-use crate::wire::types::{BoxMessage, CloudMessage, HelloMessage, HostdJob, ReportMessage, RouteEntry, TelemetryConfig};
+use crate::wire::types::{BoxMessage, CloudMessage, HelloMessage, HostdJob, ReportMessage, ResultMessage, RouteEntry, TelemetryConfig};
 
 /// Backoff between connection attempts: 1 s doubling to 60 s, jittered.
 pub const RECONNECT_MIN: Duration = Duration::from_secs(1);
@@ -103,7 +103,11 @@ fn is_refusal_code(reason: &str) -> bool {
 }
 
 struct Shared {
+    /// Flipped only under the `held` lock, so a result is either held or queued on an authenticated socket.
     authenticated: AtomicBool,
+    /// Results no socket carried yet, oldest first. A job's effects on the box are real whether or not the socket
+    /// survived it, so its result waits for the next connection rather than being lost with the old one.
+    held: Mutex<VecDeque<ResultMessage>>,
     outbox: Mutex<VecDeque<BoxMessage>>,
     pump: Notify,
     stop: Notify,
@@ -123,11 +127,24 @@ impl SessionHandle {
     }
 
     /// Queue a frame. `false` when the session is not authenticated, or for a report when the outbox is full of
-    /// results and reports, so the caller can keep it for later.
+    /// results and reports, so the caller can keep it for later. A result is always taken: while disconnected it is
+    /// held and sent first on the next connection.
     pub fn send(&self, message: BoxMessage) -> bool {
-        if !self.ready() {
-            return false;
-        }
+        let message = match message {
+            BoxMessage::Result(result) => {
+                let mut held = self.shared.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+
+                if !self.ready() {
+                    held.push_back(result);
+
+                    return true;
+                }
+
+                BoxMessage::Result(result)
+            }
+            _ if !self.ready() => return false,
+            other => other,
+        };
 
         {
             let mut outbox = self.shared.outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -214,6 +231,7 @@ impl Session {
     pub fn new(box_id: String, control_plane: String, identity: Identity, logger: Logger, callbacks: SessionCallbacks) -> (Self, SessionHandle) {
         let shared = Arc::new(Shared {
             authenticated: AtomicBool::new(false),
+            held: Mutex::new(VecDeque::new()),
             outbox: Mutex::new(VecDeque::new()),
             pump: Notify::new(),
             stop: Notify::new(),
@@ -234,22 +252,30 @@ impl Session {
 
             let closed = self.connection(&mut attempt).await;
 
-            self.shared.authenticated.store(false, Ordering::SeqCst);
+            let mut unsent: Vec<ReportMessage> = Vec::new();
 
-            // Frames for a socket that is gone: the control plane failed their jobs already.
-            // A report has no job to fail and is otherwise gone for good; the control plane
-            // ignores a window it already recorded, so handing it back is safe.
-            let unsent: Vec<ReportMessage> = self
-                .shared
-                .outbox
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .drain(..)
-                .filter_map(|message| match message {
-                    BoxMessage::Report(report) => Some(report),
-                    _ => None,
-                })
-                .collect();
+            {
+                let mut held = self.shared.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+
+                self.shared.authenticated.store(false, Ordering::SeqCst);
+
+                // Progress is for a socket that is gone. A result is held for the next connection: the control
+                // plane drops one for a job it already failed, so a resend is harmless. A report is handed back,
+                // as the control plane ignores a window it already recorded.
+                let mut results = Vec::new();
+
+                for message in self.shared.outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain(..) {
+                    match message {
+                        BoxMessage::Report(report) => unsent.push(report),
+                        BoxMessage::Result(result) => results.push(result),
+                        _ => {}
+                    }
+                }
+
+                for result in results.into_iter().rev() {
+                    held.push_front(result);
+                }
+            }
 
             if !unsent.is_empty() {
                 (self.callbacks.on_unsent_reports)(unsent);
@@ -411,7 +437,20 @@ impl Session {
                                 return Closed::Lost { code: 4003, reason: "out of order".into(), refusal };
                             }
 
-                            if !self.shared.authenticated.swap(true, Ordering::SeqCst) {
+                            if !self.shared.authenticated.load(Ordering::SeqCst) {
+                                {
+                                    let mut held = self.shared.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                                    let mut outbox = self.shared.outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+
+                                    // Under the lock `send` takes for a result, so none is held after the flip and left there.
+                                    for result in held.drain(..).rev() {
+                                        outbox.push_front(BoxMessage::Result(result));
+                                    }
+
+                                    self.shared.authenticated.store(true, Ordering::SeqCst);
+                                }
+
+                                self.shared.pump.notify_one();
                                 *attempt = 0;
                                 self.logger.info("connected to the control plane");
                                 (self.callbacks.on_ready)();
@@ -663,10 +702,84 @@ mod tests {
         assert_eq!(windows, (0..REPORTS).collect::<Vec<_>>());
     }
 
+    fn results_received(plane: &FakePlane) -> Vec<String> {
+        plane
+            .record
+            .lock()
+            .unwrap()
+            .received
+            .iter()
+            .filter_map(|message| match message {
+                BoxMessage::Result(result) => Some(result.job_id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn sends_a_result_finished_while_disconnected_once_it_reconnects() {
+        let identity = identity();
+        let plane = FakePlane::start(BOX_ID, identity.verifying_key(), vec![Script::Send(vec![CloudMessage::Ping])]).await;
+        let (session, handle, _) = session(&plane.origin, identity, Logger::silent());
+
+        assert!(handle.send(BoxMessage::Result(ResultMessage { error: None, job_id: "job_1".into(), ok: true, url: None })));
+
+        let running = tokio::spawn(session.run());
+
+        eventually(|| results_received(&plane) == ["job_1"]).await;
+        handle.stop();
+        running.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sends_again_a_result_a_lost_connection_left_in_the_outbox() {
+        let identity = identity();
+        let routes = encode_cloud_message(&CloudMessage::Routes { table: vec![route()] }).unwrap();
+        // As above: the reports outrun the burst, so the result behind them is still queued when the socket ends.
+        let plane = FakePlane::start(
+            BOX_ID,
+            identity.verifying_key(),
+            vec![Script::Raw(vec![routes, r#"{"type":"bogus"}"#.into()]), Script::Send(vec![CloudMessage::Ping])],
+        )
+        .await;
+        let cell: Arc<std::sync::OnceLock<SessionHandle>> = Arc::new(std::sync::OnceLock::new());
+        let flood = Arc::clone(&cell);
+        let flooded = AtomicBool::new(false);
+        let callbacks = SessionCallbacks {
+            hello: Box::new(hello),
+            on_config: Box::new(|_| {}),
+            on_job: Box::new(|_, _| {}),
+            on_ready: Box::new(move || {
+                if !flooded.swap(true, Ordering::SeqCst) {
+                    let handle = flood.get().unwrap();
+
+                    for index in 0..150 {
+                        handle.send(BoxMessage::Report(ReportMessage { per_alias: vec![], window_end: index + 1, window_start: index }));
+                    }
+
+                    assert!(handle.send(BoxMessage::Result(ResultMessage { error: None, job_id: "job_1".into(), ok: true, url: None })));
+                }
+            }),
+            on_routes: Box::new(|_| {}),
+            on_unsent_reports: Box::new(|_| {}),
+        };
+        let (session, handle) = Session::new(BOX_ID.into(), plane.origin.clone(), identity, Logger::silent(), callbacks);
+
+        let _ = cell.set(handle.clone());
+        let running = tokio::spawn(session.run());
+
+        eventually(|| plane.record.lock().unwrap().authenticated == 2 && results_received(&plane) == ["job_1"]).await;
+        handle.stop();
+        running.await.unwrap();
+
+        assert_eq!(plane.record.lock().unwrap().closes.first(), Some(&4002));
+    }
+
     #[tokio::test]
     async fn puts_back_a_report_the_socket_refused_to_write() {
         let shared = Shared {
             authenticated: AtomicBool::new(true),
+            held: Mutex::new(VecDeque::new()),
             outbox: Mutex::new(VecDeque::from([
                 BoxMessage::Report(ReportMessage { per_alias: vec![], window_end: 1, window_start: 0 }),
                 BoxMessage::Report(ReportMessage { per_alias: vec![], window_end: 2, window_start: 1 }),
