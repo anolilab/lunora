@@ -4,7 +4,7 @@
  * state its deploy needs, and says what it could not do.
  *
  * ```bash
- * node --experimental-strip-types scripts/bootstrap-cell.ts staging [--dry-run]
+ * node --experimental-strip-types scripts/bootstrap-cell.ts staging [--dry-run] [--repo owner/name]
  * ```
  *
  * Everything is read from `env.<cell>` in `wrangler.jsonc`, so a resource name
@@ -33,7 +33,7 @@ const environment = process.argv[2];
 const dryRun = process.argv.includes("--dry-run");
 
 if (environment !== "staging" && environment !== "production") {
-    console.error("usage: bootstrap-cell.ts staging|production [--dry-run]");
+    console.error("usage: bootstrap-cell.ts staging|production [--dry-run] [--repo owner/name]");
     process.exitCode = 2;
     throw new Error(`unknown environment: ${environment}`);
 }
@@ -250,10 +250,36 @@ const bootstrapPipelines = (): void => {
 
 // --- GitHub Environment secrets --------------------------------------------
 
+/**
+ * The repository whose Environment secrets are written. `--repo owner/name`, or
+ * the checkout's own repository. Never a hard-coded default: from a fork, a guess
+ * would write generated secrets into the upstream repository.
+ */
 const REPO = (() => {
-    const result = run("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+    const flag = process.argv.indexOf("--repo");
 
-    return result.code === 0 ? result.stdout.trim() : "anolilab/lunora";
+    if (flag !== -1) {
+        const value = process.argv.at(flag + 1);
+
+        if (!value?.includes("/")) {
+            console.error("--repo needs owner/name");
+            process.exitCode = 2;
+            throw new Error("--repo needs owner/name");
+        }
+
+        return value;
+    }
+
+    const result = run("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+    const name = result.stdout.trim();
+
+    if (result.code !== 0 || name === "") {
+        console.error(`could not resolve this checkout's GitHub repository (${firstLine(result.stderr)}); pass --repo owner/name`);
+        process.exitCode = 1;
+        throw new Error("GitHub repository not resolved");
+    }
+
+    return name;
 })();
 
 /** Generated here, never typed. Each is set once and then kept. */
