@@ -90,7 +90,7 @@ export interface BoxDnsReconcileResult {
     deleted: number;
     /** Failures that belong to no box row — an orphan record that could not be removed. */
     orphanFailures: string[];
-    /** Per live box whose names were visited: `null` when converged, else why not — for `boxes.dnsError`. */
+    /** Per live box judged this pass: `null` when converged, else why not — for `boxes.dnsError`. */
     outcomes: Map<string, null | string>;
     /** The write budget ran out; the rest converges on the next pass. */
     writesCapped: boolean;
@@ -140,7 +140,7 @@ const wantedOf = (box: LiveBoxDns): { content: string; type: "A" | "AAAA" }[] =>
 ];
 
 /** The writes that converge one live box's two names on its addresses. */
-const planLiveBox = (box: LiveBoxDns, existing: ReadonlyArray<DnsRecord>, domain: string, allowCreate: boolean): DnsOperation[] => {
+const planLiveBox = (box: LiveBoxDns, existing: ReadonlyArray<DnsRecord>, domain: string): DnsOperation[] => {
     const wanted = wantedOf(box);
     const operations: DnsOperation[] = [];
 
@@ -152,7 +152,7 @@ const planLiveBox = (box: LiveBoxDns, existing: ReadonlyArray<DnsRecord>, domain
             operations.push({ boxId: box.boxId, kind: "delete", record });
         }
 
-        for (const want of allowCreate ? wanted.filter((candidate) => !atName.some((record) => same(candidate, record))) : []) {
+        for (const want of wanted.filter((candidate) => !atName.some((record) => same(candidate, record)))) {
             operations.push({ boxId: box.boxId, content: want.content, kind: "create", name, type: want.type });
         }
     }
@@ -161,7 +161,7 @@ const planLiveBox = (box: LiveBoxDns, existing: ReadonlyArray<DnsRecord>, domain
 };
 
 /** Every write a pass needs: orphans' records first (the security half), then the live boxes'. */
-const planBoxDns = (records: ReadonlyArray<DnsRecord>, domain: string, live: ReadonlyArray<LiveBoxDns>, allowCreate: boolean): DnsOperation[] => {
+const planBoxDns = (records: ReadonlyArray<DnsRecord>, domain: string, live: ReadonlyArray<LiveBoxDns>): DnsOperation[] => {
     const liveSlugs = new Set(live.map((box) => box.slug));
     const bySlug = new Map<string, DnsRecord[]>();
 
@@ -181,7 +181,7 @@ const planBoxDns = (records: ReadonlyArray<DnsRecord>, domain: string, live: Rea
             }),
         );
 
-    return [...orphans, ...live.flatMap((box) => planLiveBox(box, bySlug.get(box.slug) ?? [], domain, allowCreate))];
+    return [...orphans, ...live.flatMap((box) => planLiveBox(box, bySlug.get(box.slug) ?? [], domain))];
 };
 
 /** Run one planned write: `null` when it took, else what went wrong. */
@@ -197,6 +197,25 @@ const applyOperation = async (api: CloudflareApi, zoneId: string, operation: Dns
             ? `could not remove ${operation.record.type} ${operation.record.name}: ${errorText(error)}`
             : `could not write ${operation.type} ${operation.name}: ${errorText(error)}`;
     }
+};
+
+/**
+ * From a truncated listing a planned create may be for a record on a page not
+ * read, so it is not written — and its box is not judged either: `null` would
+ * clear a real `dnsError` on a box whose hostname may be unrouted, and an error
+ * would flag a healthy box whose records merely sit past the bound. Its row
+ * keeps what it last said; `zoneTruncated` tells the operator why. A box whose
+ * records were all seen plans no create and is still judged.
+ */
+const withholdUnseenCreates = (planned: DnsOperation[], truncated: boolean): { operations: DnsOperation[]; unseen: string[] } => {
+    if (!truncated) {
+        return { operations: planned, unseen: [] };
+    }
+
+    return {
+        operations: planned.filter((operation) => operation.kind !== "create"),
+        unseen: planned.flatMap((operation) => (operation.kind === "create" ? [operation.boxId] : [])),
+    };
 };
 
 /**
@@ -225,7 +244,7 @@ export const reconcileBoxDns = async (
     const { records, truncated } = await api.listDnsRecordsUnder({ domain: input.domain, zoneId: input.zoneId });
     // react-doctor-disable-next-line react-doctor/server-sequential-independent-await -- the order is the fix: read in parallel, a box enrolled mid-pass loses its records (see above)
     const live = await input.live();
-    const operations = planBoxDns(records, input.domain, live, !truncated);
+    const { operations, unseen } = withholdUnseenCreates(planBoxDns(records, input.domain, live), truncated);
     const executed = operations.slice(0, input.maxWrites);
     const failures = new Map<string, string[]>(live.map((box) => [box.boxId, []]));
     const result: BoxDnsReconcileResult = {
@@ -251,10 +270,13 @@ export const reconcileBoxDns = async (
     }
 
     // A box with writes the budget cut off is not converged yet: its outcome waits for the pass that finishes it.
-    const unfinished = new Set(operations.slice(executed.length).flatMap((operation) => (operation.boxId === undefined ? [] : [operation.boxId])));
+    const unjudged = new Set([
+        ...unseen,
+        ...operations.slice(executed.length).flatMap((operation) => (operation.boxId === undefined ? [] : [operation.boxId])),
+    ]);
 
     for (const [boxId, messages] of failures) {
-        if (!unfinished.has(boxId)) {
+        if (!unjudged.has(boxId)) {
             result.outcomes.set(boxId, messages.length === 0 ? null : messages.join("; ").slice(0, MAX_DNS_ERROR));
         }
     }

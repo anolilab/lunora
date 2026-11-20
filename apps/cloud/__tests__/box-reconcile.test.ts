@@ -192,6 +192,31 @@ describe(reconcileBoxDns, () => {
 
         expect(result).toMatchObject({ created: 0, deleted: 2, zoneTruncated: true });
     });
+
+    it("judges from a truncated listing only the boxes whose records it saw, so an unseen box keeps its dnsError", async () => {
+        const unseen = "bunseen0001";
+        const zone = memoryZone(boxRecords(LIVE));
+        const truncatedApi: CloudflareApi = {
+            ...zone.api,
+            listDnsRecordsUnder: async (input) => {
+                return { ...(await zone.api.listDnsRecordsUnder(input)), truncated: true };
+            },
+        };
+
+        const result = await reconcileBoxDns(truncatedApi, {
+            domain: DOMAIN,
+            live: () =>
+                Promise.resolve([
+                    { boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE },
+                    { boxId: "box_unseen", ipv4: "203.0.113.9", slug: unseen },
+                ]),
+            maxWrites: 100,
+            zoneId: "zone",
+        });
+
+        expect(zone.writes).toStrictEqual([]);
+        expect(result.outcomes).toStrictEqual(new Map([["box_live", null]]));
+    });
 });
 
 describe(runBoxSweep, () => {
