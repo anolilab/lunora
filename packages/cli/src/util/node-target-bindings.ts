@@ -31,6 +31,8 @@ const COMPOSED_OR_CONFIG_KEYS: ReadonlySet<string> = new Set([
     "dev",
     "durable_objects",
     "env",
+    // Cache options for named entrypoints, not an `env` binding.
+    "exports",
     "find_additional_modules",
     "first_party_worker",
     "hyperdrive",

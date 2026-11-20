@@ -125,7 +125,7 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
         throw new Error(`--target node could not read ${relative(projectRoot, configPath)} as JSONC`);
     }
 
-    const { error, merged } = mergeWranglerEnvironment(parsed as WranglerConfig, environment);
+    const { error, merged, unverifiedKeys } = mergeWranglerEnvironment(parsed as WranglerConfig, environment);
 
     if (error !== undefined) {
         throw new Error(`CLOUDFLARE_ENV: ${error}`);
@@ -176,7 +176,11 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
         "development",
     );
 
-    const unbound = [...unboundSections(view as Record<string, unknown>), ...external];
+    // A section the environment declares and the merge cannot classify stays out of `merged`; it still binds nothing here.
+    const environmentBlock =
+        environment === undefined ? undefined : (parsed as { env?: Record<string, Record<string, unknown> | undefined> }).env?.[environment];
+    const environmentOnly = unboundSections(Object.fromEntries(unverifiedKeys.map((key) => [key, environmentBlock?.[key]])));
+    const unbound = [...new Set([...unboundSections(view as Record<string, unknown>), ...environmentOnly]), ...external];
     const mailQueues = mailQueueBindings((view as Record<string, unknown>)["queues"], configName);
 
     return {
@@ -295,11 +299,35 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         );
     }
 
-    // The project and, when `main` sits outside it (a worker shared between apps), the entry's own directory: both are source
-    // the developer edits. Packages are not, wherever they resolve to, since a workspace package's realpath is outside
-    // `node_modules`; they load once and stay.
-    let sourceRoots: string[] = [projectRoot];
-    const isProjectSource = (path: string): boolean => sourceRoots.some((root) => isUnder(path, root)) && !path.split(sep).includes("node_modules");
+    // The directory of the nearest `package.json` above a file, or "" when there is none: the package a module belongs to.
+    const packageScopes = new Map<string, string>();
+    const packageScopeOf = (path: string): string => {
+        const directory = dirname(path);
+        const known = packageScopes.get(directory);
+
+        if (known !== undefined) {
+            return known;
+        }
+
+        let scope = "";
+
+        if (existsSync(join(directory, "package.json"))) {
+            scope = directory;
+        } else if (dirname(directory) !== directory) {
+            scope = packageScopeOf(directory);
+        }
+
+        packageScopes.set(directory, scope);
+
+        return scope;
+    };
+
+    // Source the developer edits: the project, and every module in the entry's own package, so a worker shared between apps
+    // (`main` outside the project) is followed with its helpers wherever they sit in that package. Packages it imports are not,
+    // wherever they resolve: a workspace package's realpath is outside `node_modules`, but it has a `package.json` of its own.
+    let entryScope = projectRoot;
+    const isProjectSource = (path: string): boolean =>
+        !path.split(sep).includes("node_modules") && (isUnder(path, projectRoot) || packageScopeOf(path) === entryScope);
 
     let watchers: FSWatcher[] = [];
     let debounce: NodeJS.Timeout | undefined;
@@ -314,6 +342,8 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     let lastLoadedSources = new Set<string>();
     // The modification time each watched source had when it was last checked, so a reload follows each change once.
     const seenModified = new Map<string, number>();
+
+    const isStopped = (): boolean => stopped;
 
     const unwatch = (): void => {
         for (const watcher of watchers) {
@@ -342,10 +372,20 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         const byDirectory = new Map<string, Set<string>>();
 
         for (const path of paths) {
-            const names = byDirectory.get(dirname(path)) ?? new Set<string>();
+            let directory = dirname(path);
+            let name = basename(path);
 
-            names.add(basename(path));
-            byDirectory.set(dirname(path), names);
+            // A directory that does not exist yet (`_generated/` before codegen first runs) cannot be watched: its nearest
+            // existing ancestor is, for the directory's own creation, and the reload that follows watches the file itself.
+            while (!existsSync(directory) && dirname(directory) !== directory) {
+                name = basename(directory);
+                directory = dirname(directory);
+            }
+
+            const names = byDirectory.get(directory) ?? new Set<string>();
+
+            names.add(name);
+            byDirectory.set(directory, names);
         }
 
         for (const [directory, names] of byDirectory) {
@@ -420,16 +460,17 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
 
         // Only the project's own modules are evicted: packages under node_modules load natively once and stay, so a reload
         // re-evaluates the app and nothing else.
-        const entryDirectory = dirname(existsSync(entry) ? realpathSync(entry) : entry);
+        // Re-read per load: a `package.json` added or moved changes which package a module belongs to.
+        packageScopes.clear();
 
-        // The previous load's roots still apply to what it cached, so an entry that moved back inside the project still evicts
-        // the shared one's modules.
-        const previousRoots = sourceRoots;
+        // The previous load's package still applies to what it cached, so an entry that moved back inside the project still
+        // evicts the shared one's modules.
+        const previousScope = entryScope;
 
-        sourceRoots = isUnder(entryDirectory, projectRoot) ? [projectRoot] : [projectRoot, entryDirectory];
+        entryScope = packageScopeOf(existsSync(entry) ? realpathSync(entry) : entry);
 
         for (const path of Object.keys(jiti.cache)) {
-            if (isProjectSource(path) || previousRoots.some((root) => isUnder(path, root) && !path.split(sep).includes("node_modules"))) {
+            if (isProjectSource(path) || (!path.split(sep).includes("node_modules") && packageScopeOf(path) === previousScope)) {
                 // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- jiti's module cache is keyed by file path
                 delete jiti.cache[path];
             }
@@ -689,6 +730,12 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         } catch (error: unknown) {
             // Still serving the new version: if the old listener kept the port, `serve` fails below and says so.
             logger.error(`node: closing the previous version failed: ${errorMessage(error)}`);
+        }
+
+        // Stopped while the previous version drained: the stop waits for this reload, and must find nothing new behind it. Read
+        // through a call: `kill` sets the flag across the await above, which narrowing here cannot see.
+        if (isStopped()) {
+            return;
         }
 
         let host: NodeAppHost;

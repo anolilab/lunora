@@ -1121,10 +1121,12 @@ export default crons;
         });
 
         it("names every declared binding it does not compose in the startup warning", async () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             writeFixture(workdir, {
                 assets: { binding: "ASSETS", directory: "./public" },
+                // Cache options for named entrypoints: configuration, not a binding.
+                exports: { Reports: { cache: { enabled: true } } },
                 durable_objects: {
                     bindings: [
                         { class_name: "ShardDO", name: "SHARD" },
@@ -1138,8 +1140,97 @@ export default crons;
             try {
                 expect(dev.warnings.join("\n")).toMatch(/not bound[^\n]*assets/u);
                 expect(dev.warnings.join("\n")).toMatch(/durable_objects\.ROOMS/u);
+                expect(dev.warnings.join("\n")).not.toMatch(/exports/u);
             } finally {
                 await dev.stop();
+            }
+        });
+
+        it("names an unsupported binding the selected environment declares on its own", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, {
+                env: { preview: { ai: { binding: "AI" }, durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } } },
+            });
+            vi.stubEnv("CLOUDFLARE_ENV", "preview");
+
+            try {
+                const dev = await startWorker();
+
+                try {
+                    expect(dev.warnings.join("\n")).toMatch(/not bound[^\n]*[ ,]ai(?:,|$)/mu);
+                } finally {
+                    await dev.stop();
+                }
+            } finally {
+                vi.unstubAllEnvs();
+            }
+        });
+
+        it("starts nothing for a reload that a stop overtook while the previous version drained", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            let composed = 0;
+            let stop: () => void = () => {};
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    composed += 1;
+
+                    const host = realPlatform.createNodeAppHost(options);
+
+                    return {
+                        ...host,
+                        // The stop lands while the previous version is closing, after the reload passed its first check.
+                        close: async (closeOptions) => {
+                            stop();
+
+                            return host.close(closeOptions);
+                        },
+                    };
+                },
+            };
+            const dev = await startWorker({ platform });
+            const stopped = new Promise<number>((resolve) => {
+                stop = () => {
+                    dev.worker.kill("SIGTERM");
+                    resolve(0);
+                };
+            });
+
+            dev.worker.reload();
+            await stopped;
+            await dev.worker.exited;
+
+            expect(composed).toBe(1);
+        });
+
+        it("reloads when _generated/ first appears, with the codegen watcher off", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+            // An entry that reads nothing generated, so it loads before codegen has ever run.
+            writeFileSync(
+                join(workdir, "src", "worker.ts"),
+                `export class ShardDO {\n    public async fetch(): Promise<Response> {\n        return new Response("shard");\n    }\n}\n\nexport default { fetch: async (): Promise<Response> => new Response("plain") };\n`,
+                "utf8",
+            );
+
+            const { logger, next } = milestoneLogger();
+            const worker = await startNodeDevWorker({ codegenWatch: false, logger, port: await findAvailablePort(18_870), projectRoot: workdir });
+
+            try {
+                const reloaded = next("node: reloaded");
+
+                mkdirSync(join(workdir, "lunora", "_generated"));
+                writeFileSync(join(workdir, "lunora", "_generated", "crons.ts"), "export const LUNORA_CRONS = {};\n", "utf8");
+
+                await expect(reloaded).resolves.toBeUndefined();
+            } finally {
+                worker.kill("SIGTERM");
+                await worker.exited;
             }
         });
 
@@ -1199,6 +1290,48 @@ export default {
             await reloaded;
 
             await expect(readWhich(dev.origin)).resolves.toBe("shared-v2");
+        } finally {
+            await dev.stop();
+        }
+    });
+
+    it("follows a shared worker's helper that sits outside the entry's own directory", async () => {
+        expect.assertions(2);
+
+        const appRoot = join(workdir, "app");
+        const flag = join(workdir, "shared", "lib", "flag.ts");
+
+        mkdirSync(appRoot);
+        mkdirSync(join(workdir, "shared", "worker"), { recursive: true });
+        mkdirSync(join(workdir, "shared", "lib"));
+        writeFixture(appRoot, { main: "../shared/worker/entry.ts" });
+        writeFileSync(flag, `export const FLAG = "one";\n`, "utf8");
+        writeFileSync(
+            join(workdir, "shared", "worker", "entry.ts"),
+            `import worker from "../../app/src/worker";
+import { FLAG } from "../lib/flag";
+
+export { ShardDO } from "../../app/src/worker";
+
+export default {
+    fetch: (request: Request, env: never, ctx: never): Promise<Response> | Response =>
+        new URL(request.url).pathname === "/__which" ? new Response(FLAG) : worker.fetch(request, env, ctx),
+};
+`,
+            "utf8",
+        );
+
+        const dev = await startDev(appRoot);
+
+        try {
+            await expect(readWhich(dev.origin)).resolves.toBe("one");
+
+            const reloaded = dev.next("node: reloaded");
+
+            writeFileSync(flag, `export const FLAG = "two";\n`, "utf8");
+            await reloaded;
+
+            await expect(readWhich(dev.origin)).resolves.toBe("two");
         } finally {
             await dev.stop();
         }

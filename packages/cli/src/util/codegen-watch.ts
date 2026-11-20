@@ -209,14 +209,20 @@ const createReusableProject = (projectRoot: string, absoluteLunoraDirectory: str
  *
  * A run that throws drops the reused Project: it may be left half-mutated, so
  * the next run starts clean.
+ *
+ * `runCodegen` writes `_generated/*` only once it has generated all of it, so a
+ * failure inside it leaves the previous output; one in a step after it (the
+ * Studio assets, the diagnostics report) leaves new output whose run never
+ * reaches `postcodegen`, which `"failed-after-write"` reports.
  */
 const runOnce = (
     options: Pick<CodegenWatcherOptions, "apiSpec" | "lazyFunctions" | "logger" | "projectRoot" | "target">,
     lunoraDirectory: string,
     reason: string,
     project: ReusableProject,
-): boolean => {
+): "failed" | "failed-after-write" | "ok" => {
     const { apiSpec, lazyFunctions, logger, projectRoot, target } = options;
+    let wrote = false;
 
     try {
         // Codegen takes a built Project, so a missing schema is reported here, before one is constructed and seeded.
@@ -236,6 +242,7 @@ const runOnce = (
             ...wranglerCodegenInputs(projectRoot, target),
         });
 
+        wrote = true;
         reconcileStudioAssets(projectRoot, target, logger);
 
         logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
@@ -247,10 +254,10 @@ const runOnce = (
         project.drop();
         logger.error(renderCodegenFailure(error, reason));
 
-        return false;
+        return wrote ? "failed-after-write" : "failed";
     }
 
-    return true;
+    return "ok";
 };
 
 /**
@@ -358,11 +365,18 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     // Codegen also reads the app's wrangler config (cron triggers, the companion Worker's name and observability), at the project root.
     const configPaths = [...projectConfigCandidatePaths(watchDirectory), ...WRANGLER_FILES.map((name) => join(options.projectRoot, name))];
     let idle: Promise<void> = Promise.resolve();
-    // Runs started so far, and whether the last one that finished left `_generated/*` usable: a failed codegen run writes
-    // nothing, so only a failed `postcodegen` hook can leave it half-written.
+    // Runs started so far, and whether the last one that finished left `_generated/*` usable: output that was written but never
+    // finished, by a step after codegen or by the `postcodegen` hook failing, is not. A codegen run that fails before writing
+    // leaves the previous output, and this as it was.
     let sequence = 0;
     let usable = true;
     const project = createReusableProject(options.projectRoot, watchDirectory);
+    // A run that wrote and then failed leaves output nothing finished; one that failed before writing leaves the last good one.
+    const recordFailedRun = (outcome: "failed" | "failed-after-write"): void => {
+        if (outcome === "failed-after-write") {
+            usable = false;
+        }
+    };
     const generation = (): CodegenGeneration => {
         return { busy: running || pending !== undefined, idle, sequence, usable };
     };
@@ -406,7 +420,11 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     if (next.codegen) {
                         codegenDigest = configDigest(configPaths);
                     }
-                    if (next.codegen && !runOnce(options, lunoraDirectory, next.reason, project)) {
+                    const outcome = next.codegen ? runOnce(options, lunoraDirectory, next.reason, project) : "ok";
+
+                    if (outcome !== "ok") {
+                        recordFailedRun(outcome);
+
                         continue;
                     }
 
@@ -743,7 +761,11 @@ export interface CodegenGeneration {
     idle: Promise<void>;
     /** How many runs have started. */
     sequence: number;
-    /** `false` after a run whose `postcodegen` hook failed, until a later run succeeds: its output may be half-written. */
+
+    /**
+     * `false` after a run that wrote output and then failed (a step after codegen, or its `postcodegen` hook), until a later run
+     * succeeds: that output may be unfinished.
+     */
     usable: boolean;
 }
 
