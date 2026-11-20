@@ -110,7 +110,8 @@ const loadDotenv = (
     includeProcessEnv: boolean,
     processEnv: Record<string, string | undefined>,
 ): { files: string[]; values: Record<string, string> } => {
-    const parsed: Record<string, string> = {};
+    // Null-prototype records here and below: a key such as `__proto__` must stay an ordinary entry, not set a prototype.
+    const parsed: Record<string, string> = Object.create(null) as Record<string, string>;
     const files: string[] = [];
 
     for (const file of wranglerDotenvFiles(environment)) {
@@ -128,7 +129,7 @@ const loadDotenv = (
         }
     }
 
-    const expanded: Record<string, string> = {};
+    const expanded: Record<string, string> = Object.create(null) as Record<string, string>;
 
     if (includeProcessEnv) {
         for (const [key, value] of Object.entries(processEnv)) {
@@ -148,7 +149,8 @@ const resolveLocalWorkerEnv = (options: LocalWorkerEnvOptions): LocalWorkerEnv =
     const processEnv = options.processEnv ?? process.env;
     const directory = options.configPath === undefined ? options.projectRoot : dirname(options.configPath);
     const scope = activeScope(options.config, options.environment);
-    const env: Record<string, unknown> = { ...scope.vars };
+    // A null prototype, so a var or a `.dev.vars` key named `__proto__` is an entry like any other rather than a prototype.
+    const env: Record<string, unknown> = Object.assign(Object.create(null) as Record<string, unknown>, scope.vars);
     const sources = options.config === undefined ? [] : ["wrangler vars"];
     const secrets = scope.secrets ?? undefined;
     let loaded: Record<string, string> | undefined;
