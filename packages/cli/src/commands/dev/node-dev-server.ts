@@ -166,7 +166,7 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
     // Read as the container reads them: an absent field is no filter, a malformed one is refused by name rather than taken
     // as an empty list, which would filter the intended secret out of `.dev.vars` or turn an array into numbered vars.
     const required = requiredSecretNames(scope.secrets, configName);
-    const variables = declaredVariables(scope.vars, configName);
+    const variables = declaredVariables(scope.vars, configName, "binding");
     const envSources = [
         { names: Object.keys(variables), source: "vars" },
         { names: required, repeatable: true, source: "secrets.required" },

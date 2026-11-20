@@ -344,7 +344,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     }
 
     const workerSecrets = requiredSecretNames(parsed.secrets, configName);
-    const variables = declaredVariables(parsed.vars, configName);
+    const variables = declaredVariables(parsed.vars, configName, "environment");
     const mailQueues = mailQueueBindings(parsed.queues, configName);
 
     const envSources = [

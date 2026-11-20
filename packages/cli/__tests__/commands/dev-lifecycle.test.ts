@@ -333,6 +333,35 @@ describe("lunora dev lifecycle", () => {
             expect(claimedAtSpawn).toBe("1");
         });
 
+        it("forwards --remote to the daemon only when the flag asked for it, so a default stays a default", async () => {
+            expect.assertions(2);
+
+            const seen: ReadonlyArray<string>[] = [];
+            const start = async (options: DevOptions): Promise<void> => {
+                await startBackground({
+                    cwd: workdir,
+                    jsonLogs: false,
+                    logger: recordingLogger().logger,
+                    options,
+                    // Resolved remote in both cases: from LUNORA_REMOTE or the config in the first, from --remote in the second.
+                    remote: true,
+                    run: (runOptions) => {
+                        seen.push(runOptions.command.args);
+
+                        return Promise.resolve({ code: 0 });
+                    },
+                });
+                clearDevServerState(workdir, process.pid);
+            };
+
+            await start({ target: "node" } as DevOptions);
+            await start({ remote: true, target: "node" } as DevOptions);
+
+            // The daemon re-reads the default itself; forwarded as --remote, --target node would refuse it as explicit.
+            expect(seen[0]).not.toContain("--remote");
+            expect(seen[1]).toContain("--remote");
+        });
+
         it("starts the daemon, not the Vite dev script, for a Vite project that targets node", async () => {
             expect.assertions(2);
 

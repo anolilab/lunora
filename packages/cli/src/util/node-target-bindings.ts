@@ -31,7 +31,7 @@ const COMPOSED_OR_CONFIG_KEYS: ReadonlySet<string> = new Set([
     "dev",
     "durable_objects",
     "env",
-    // Cache options for named entrypoints, not an `env` binding.
+    // Cache options for named entrypoints; a typed entry (a workflow) is reported on its own by `unboundExports`.
     "exports",
     "find_additional_modules",
     "first_party_worker",
@@ -198,8 +198,13 @@ const ENV_NAME = /^[A-Z_a-z]\w*$/u;
 /** Names that act on an object's prototype rather than being an ordinary key; never valid as a var name. */
 const RESERVED_OBJECT_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
 
-/** `vars`: an object of environment variable names, since an override comes from the variable of the same name. */
-const declaredVariables = (value: unknown, configName: string): Record<string, unknown> => {
+/**
+ * `vars`: an object of names and values. Its names follow one of two rules. The container (`"environment"`) lets the
+ * environment variable of the same name override each var, so every name must be one a container runtime can set. The dev
+ * host (`"binding"`) reads them only from the config and `.dev.vars`, so any wrangler var name is fine there (`API-URL`,
+ * `app.mode`) except the ones that act on an object's prototype. Values must be what wrangler accepts: anything JSON but `null`.
+ */
+const declaredVariables = (value: unknown, configName: string, names: "binding" | "environment"): Record<string, unknown> => {
     if (value === undefined || value === null) {
         return {};
     }
@@ -208,11 +213,28 @@ const declaredVariables = (value: unknown, configName: string): Record<string, u
         throw new Error(`--target node reads vars in ${configName} as an object of names and values, and it is ${JSON.stringify(value)}`);
     }
 
-    const invalid = Object.keys(value).filter((name) => !ENV_NAME.test(name) || RESERVED_OBJECT_KEYS.has(name));
+    const invalid = Object.keys(value).filter((name) => RESERVED_OBJECT_KEYS.has(name) || (names === "environment" && !ENV_NAME.test(name)));
 
     if (invalid.length > 0) {
+        const list = invalid.map((name) => JSON.stringify(name)).join(", ");
+        const one = invalid.length === 1;
+
+        if (names === "environment") {
+            throw new Error(
+                `--target node lets the environment variable of the same name override each var, and vars in ${configName} has ${list}, which ${one ? "is not" : "are not"} an environment variable name`,
+            );
+        }
+
         throw new Error(
-            `--target node lets the environment variable of the same name override each var, and vars in ${configName} has ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
+            `--target node puts each var on env under its name, and vars in ${configName} has ${list}, which ${one ? "names" : "name"} a property of every object rather than a var`,
+        );
+    }
+
+    const empty = Object.keys(value).filter((name) => value[name] === null);
+
+    if (empty.length > 0) {
+        throw new Error(
+            `--target node reads each var as a string or a JSON value, and vars in ${configName} sets ${empty.map((name) => JSON.stringify(name)).join(", ")} to null`,
         );
     }
 
@@ -252,7 +274,8 @@ const requiredSecretNames = (secrets: unknown, configName: string): string[] => 
     }
 
     // An environment variable name: anything else could never be set on a container, so the server could never start.
-    const invalid = required.filter((name) => typeof name !== "string" || !ENV_NAME.test(name));
+    // Not a prototype name either: a secret named `__proto__` can never be read back out of `.dev.vars` or the environment.
+    const invalid = required.filter((name) => typeof name !== "string" || !ENV_NAME.test(name) || RESERVED_OBJECT_KEYS.has(name));
 
     if (invalid.length > 0) {
         return refuse(
@@ -276,9 +299,24 @@ const isDeclared = (value: unknown): boolean => {
     return value !== undefined && value !== null;
 };
 
-/** The declared top-level sections of a wrangler config (or one environment's view of it) that the Node host leaves unbound. */
-const unboundSections = (config: Readonly<Record<string, unknown>>): string[] =>
-    Object.keys(config).filter((key) => !COMPOSED_OR_CONFIG_KEYS.has(key) && isDeclared(config[key]));
+/**
+ * The `exports` entries that declare something rather than configure it: an entry with a `type` (a `workflow`, or any other)
+ * defines what the Cloudflare runtime would run, which neither Node host composes. An untyped entry only sets a named
+ * entrypoint's cache options.
+ */
+const unboundExports = (exportsMap: unknown): string[] =>
+    isRecord(exportsMap)
+        ? Object.entries(exportsMap).flatMap(([name, entry]) => (isRecord(entry) && typeof entry.type === "string" ? [`exports.${name} (${entry.type})`] : []))
+        : [];
+
+/**
+ * The declared top-level sections of a wrangler config (or one environment's view of it) that the Node host leaves unbound,
+ * and each typed `exports` entry by name.
+ */
+const unboundSections = (config: Readonly<Record<string, unknown>>): string[] => [
+    ...Object.keys(config).filter((key) => !COMPOSED_OR_CONFIG_KEYS.has(key) && isDeclared(config[key])),
+    ...unboundExports(config["exports"]),
+];
 
 /**
  * The host sets `WORKER_ENV` itself. A var, secret or binding of that name would replace it on `env`, and the app would no

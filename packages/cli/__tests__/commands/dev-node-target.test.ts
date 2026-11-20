@@ -1158,12 +1158,12 @@ export default crons;
         });
 
         it("names every declared binding it does not compose in the startup warning", async () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             writeFixture(workdir, {
                 assets: { binding: "ASSETS", directory: "./public" },
-                // Cache options for named entrypoints: configuration, not a binding.
-                exports: { Reports: { cache: { enabled: true } } },
+                // Cache options for named entrypoints are configuration; a typed entry declares a workflow nothing here runs.
+                exports: { Nightly: { name: "nightly", type: "workflow" }, Reports: { cache: { enabled: true } } },
                 durable_objects: {
                     bindings: [
                         { class_name: "ShardDO", name: "SHARD" },
@@ -1177,7 +1177,8 @@ export default crons;
             try {
                 expect(dev.warnings.join("\n")).toMatch(/not bound[^\n]*assets/u);
                 expect(dev.warnings.join("\n")).toMatch(/durable_objects\.ROOMS/u);
-                expect(dev.warnings.join("\n")).not.toMatch(/exports/u);
+                expect(dev.warnings.join("\n")).not.toMatch(/exports\.Reports/u);
+                expect(dev.warnings.join("\n")).toMatch(/not bound[^\n]*exports\.Nightly \(workflow\)/u);
             } finally {
                 await dev.stop();
             }
@@ -1349,6 +1350,38 @@ export default crons;
             // A misspelled field would otherwise filter the intended secret out of .dev.vars.
             await expect(startOverConfig({ secrets: { require: ["API_KEY"] } })).rejects.toThrow(/checks every secrets\.required name at startup/u);
             await expect(startOverConfig({ vars: ["SECRET"] })).rejects.toThrow(/reads vars in wrangler\.jsonc as an object of names and values/u);
+        });
+
+        it("refuses a required secret with a prototype name, which no env file can deliver", async () => {
+            expect.assertions(1);
+
+            await expect(startOverConfig({ secrets: { required: ["__proto__"] } })).rejects.toThrow(/secrets\.required lists "__proto__"/u);
+        });
+
+        it("accepts any wrangler var name but a prototype one, since dev reads vars only from the config", async () => {
+            expect.assertions(2);
+
+            await expect(startOverConfig({ vars: { constructor: "x" } })).rejects.toThrow(/names a property of every object/u);
+
+            writeFixture(workdir, { vars: { "API-URL": "https://api.local", "app.mode": "demo" } });
+
+            let env: Record<string, unknown> | undefined;
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    ({ env } = options);
+
+                    return realPlatform.createNodeAppHost(options);
+                },
+            };
+            const dev = await startWorker({ platform });
+
+            try {
+                // The container's environment-variable rule is for overrides from its environment; dev has none.
+                expect(env).toMatchObject({ "API-URL": "https://api.local", "app.mode": "demo" });
+            } finally {
+                await dev.stop();
+            }
         });
 
         it("binds a Hyperdrive binding named __proto__ as an own env property", async () => {

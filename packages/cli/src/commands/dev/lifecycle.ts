@@ -610,7 +610,7 @@ const startBackground = async (context: {
 
         // Re-invoke this same CLI entry as the detached daemon.
         return await run({
-            command: { args: [process.argv[1] ?? "lunora", ...daemonArguments(options, remote)], command: process.execPath },
+            command: { args: [process.argv[1] ?? "lunora", ...daemonArguments(options)], command: process.execPath },
             cwd,
             env: handoff,
             json: jsonLogs,

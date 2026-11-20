@@ -1897,6 +1897,22 @@ globalThis.fetch = async (input, init) => {
             await expect(deploy(workdir)).resolves.toMatchObject({ code: 2, error: expect.stringContaining("LUNORA_SIGNING_KEY") });
         });
 
+        it("names a typed exports entry as unbound, and leaves an entrypoint's cache settings alone", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir, {
+                wrangler: { exports: { Nightly: { name: "nightly", type: "workflow" }, Reports: { cache: { enabled: true } } } },
+            });
+
+            const { logger, warnings } = recordingLogger();
+            const deployed = await runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" });
+
+            expect(deployed.code).toBe(0);
+            // The container composes no workflow, so the declared one is named rather than silently missing.
+            expect(warnings.join("\n")).toMatch(/not bound.*exports\.Nightly \(workflow\)/u);
+            expect(warnings.join("\n")).not.toMatch(/exports\.Reports/u);
+        });
+
         it("names every declared binding the server leaves unbound, including an external Durable Object", async () => {
             expect.assertions(2);
 
