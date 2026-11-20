@@ -5,7 +5,7 @@ import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "../src/boxes/jobs";
 import type { SessionAttachment, SessionEffect, SessionPorts } from "../src/boxes/session";
 import { FRAME_BUCKET, HANDSHAKE_TIMEOUT_MS, livenessOf, openSession, receiveFrame, SILENCE_LIMIT_MS } from "../src/boxes/session";
 import { boxSession } from "../src/boxes/session-client";
-import { CONFIG_REFRESH_MS, TICK_MS } from "../src/boxes/session-do";
+import { CONFIG_REFRESH_MS, MAX_HANDSHAKE_FRAMES, TICK_MS } from "../src/boxes/session-do";
 import { hashDeployKey } from "../src/deploy/keys";
 import type { CloudMessage, DeployJob } from "../src/hostd/protocol";
 import { decryptSecret, encryptSecret } from "../src/secrets/crypto";
@@ -289,6 +289,16 @@ describe("boxSessionDO", () => {
         await Promise.all([session.webSocketMessage(socket, auth), session.webSocketMessage(socket, auth)]);
 
         expect(socket.received().filter((frame) => frame.type === "routes")).toHaveLength(1);
+    });
+
+    it("refuses a socket that floods frames before its handshake completes", async () => {
+        const { session, state } = await setup();
+        const socket = fakeSocket(openSession("box_1", Date.now()));
+
+        state.acceptWebSocket(socket);
+        await Promise.all(Array.from({ length: MAX_HANDSHAKE_FRAMES + 1 }, async () => session.webSocketMessage(socket, helloFrame("box_1"))));
+
+        expect(socket.closedWith).toMatchObject({ reason: "RATE_LIMITED" });
     });
 
     /**

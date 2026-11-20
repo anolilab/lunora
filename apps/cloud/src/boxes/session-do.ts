@@ -97,6 +97,9 @@ const REPORT_ALIGNMENT_MS = 60_000;
  */
 export const MAX_REPORTS_PER_MINUTE = 60;
 
+/** Frames a socket may have in flight before its handshake completes: a box sends `hello`, then `auth`. */
+export const MAX_HANDSHAKE_FRAMES = 8;
+
 /** Reports queued behind the one being recorded. Beyond it a report is dropped and logged, never chained. */
 export const MAX_PENDING_REPORTS = 8;
 
@@ -183,12 +186,14 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
     private readonly reportBudgets = new WeakMap<SessionSocket, { count: number; minute: number }>();
 
     /**
-     * The frame of each socket that is still being handled. Frames of one socket run one at a
-     * time, in arrival order: each reads the attachment before awaiting D1 and writes it after,
-     * so two interleaved auth frames could both consume one challenge and replay the box's
-     * desired release twice. In memory is enough: a hibernated object has no frame in flight.
+     * The handshake frames of each socket, run one at a time in arrival order. A frame reads the
+     * attachment before awaiting D1 and writes it after, so two auth frames for one challenge
+     * could both authenticate and replay the box's desired release twice. Only frames that
+     * arrive before the socket is ready queue, and at most {@link MAX_HANDSHAKE_FRAMES} of them:
+     * a ready socket's frames are bounded by their own caps (reports, the rate bucket) and must
+     * not chain here. In memory is enough: a hibernated object has no frame in flight.
      */
-    private readonly frameQueues = new WeakMap<SessionSocket, Promise<void>>();
+    private readonly handshakes = new WeakMap<SessionSocket, { queued: number; tail: Promise<void> }>();
 
     /**
      * The box's WebSocket upgrade (`GET /v1/boxes/connect?box={id}`, forwarded
@@ -212,13 +217,30 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
 
     /** One frame from a box. */
     public override async webSocketMessage(socket: SessionSocket, message: ArrayBuffer | string): Promise<void> {
-        const previous = this.frameQueues.get(socket) ?? Promise.resolve();
-        const handled = previous.then(async () => this.handleFrame(socket, message));
+        if (attachmentOf(socket).phase === "ready") {
+            await this.handleFrame(socket, message);
 
-        this.frameQueues.set(
-            socket,
-            handled.catch(() => undefined),
-        );
+            return;
+        }
+
+        const handshake = this.handshakes.get(socket) ?? { queued: 0, tail: Promise.resolve() };
+
+        if (handshake.queued >= MAX_HANDSHAKE_FRAMES) {
+            refuseSocket(socket, "RATE_LIMITED", "too many frames before the handshake completed");
+
+            return;
+        }
+
+        handshake.queued += 1;
+
+        const handled = handshake.tail
+            .then(async () => this.handleFrame(socket, message))
+            .finally(() => {
+                handshake.queued -= 1;
+            });
+
+        handshake.tail = handled.catch(() => undefined);
+        this.handshakes.set(socket, handshake);
 
         await handled;
     }
