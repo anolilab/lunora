@@ -11,6 +11,7 @@
  * ports are read off the control plane's Worker env.
  */
 import { LunoraError } from "@lunora/server";
+
 import { tenantSender } from "../../backup/tenant-transport";
 import { createHttpCloudflareApi } from "../../cloudflare/api";
 import { readDurableObjectDurationByScript, readDurableObjectRequestsByScript, readWorkersCpuByScript } from "../../cloudflare/compute-usage";
@@ -59,6 +60,7 @@ export interface CloudflareWfpPorts {
     box: () => ProvisionBox;
     /** This control plane's cell (`LUNORA_CELL`) — forwarded to the box with every deploy. */
     cell: string;
+
     /**
      * The dispatch namespace every tenant of this environment deploys into
      * (`LUNORA_DISPATCH_NAMESPACE`). Read on use, like `box`, so a cell without one
@@ -273,13 +275,16 @@ const saasZoneOf = (environment: CloudflareWfpEnvironment): SaasZone | undefined
  * dispatcher is bound to. Deploying per kind (`lunora-preview`, `lunora-dev`) put
  * previews where no dispatcher routes, and staging's tenants outside `lunora-staging`.
  * Aliases are unique platform-wide (the ownership ledger), so kinds share it safely.
- * `||`, not `??`: a blank value names no namespace either.
+ * A blank value names no namespace either.
  */
-export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string | undefined =>
-    environment.LUNORA_DISPATCH_NAMESPACE?.trim() || undefined;
+export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string | undefined => {
+    const namespace = environment.LUNORA_DISPATCH_NAMESPACE?.trim();
+
+    return namespace === "" ? undefined : namespace;
+};
 
 /**
- * {@link dispatchNamespaceOf}, refusing when it is unset. No default: any guess is
+ * The {@link dispatchNamespaceOf} result, refusing when it is unset. No default: any guess is
  * some other environment's namespace, and a staging cell that guessed production
  * would deploy its tenants where production's dispatcher routes them.
  * @throws {LunoraError} `MISCONFIGURED` when `LUNORA_DISPATCH_NAMESPACE` is unset.
