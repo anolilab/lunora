@@ -894,9 +894,11 @@ export const closePreview = internalMutation
 
         for (const project of await installedProjects(context, repository, installationId)) {
             // eslint-disable-next-line no-await-in-loop -- a repository connects to a handful of projects
-            const { page } = await context.db.deployments.findMany({ where: { branch, kind: "preview", projectId: project._id } });
+            const rows = await collectAll<DeploymentRow>((cursor) =>
+                context.db.deployments.findMany({ cursor, where: { branch, kind: "preview", projectId: project._id } }),
+            );
 
-            open.push(...page.filter((deployment) => deployment.status !== "destroyed"));
+            open.push(...rows.filter((deployment) => deployment.status !== "destroyed"));
         }
 
         for (const deployment of open) {

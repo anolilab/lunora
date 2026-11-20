@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { installedProjects } from "../lunora/builds";
-import { activate, create } from "../lunora/deployments";
+import { activate, closePreview, create } from "../lunora/deployments";
 import { remove } from "../lunora/projects";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -142,5 +142,21 @@ describe("pull request bookkeeping past the first page", () => {
         const projects = await installedProjects(ctx, "Acme/App", 7);
 
         expect(projects.map((project) => project._id)).toStrictEqual([PROJECT]);
+    });
+
+    it("retires an open preview of a closed pull request that sits past the first page", async () => {
+        expect.assertions(2);
+
+        const history = destroyedHistory().map((row) => {
+            return { ...row, branch: "feat/x", kind: "preview" };
+        });
+        const { ctx, ops } = storeWith([...history, liveRow({ _id: "dep_preview", branch: "feat/x", kind: "preview" })]);
+        const database = ctx.db as unknown as Record<string, Record<string, unknown>>;
+
+        database["projects"] = { findMany: pagedFindMany([{ _id: PROJECT, githubRepo: "acme/app", organizationId: ORG }]) };
+        database["githubInstallations"] = { findMany: pagedFindMany([{ _id: "claim_org_1", installationId: 7, organizationId: ORG }]) };
+
+        await expect(closePreview.handler(ctx, { branch: "feat/x", installationId: 7, repository: "Acme/App" })).resolves.toStrictEqual({ destroyed: 1 });
+        expect(ops).toContainEqual({ id: "dep_preview", kind: "patch", patch: expect.objectContaining({ status: "destroyed" }) });
     });
 });
