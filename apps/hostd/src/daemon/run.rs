@@ -111,7 +111,11 @@ struct Shared {
     edge_retrying: std::sync::atomic::AtomicBool,
     config: HostdConfig,
     logger: Logger,
+    /// How many routing tables the session has handed over, numbering each in the order it arrived.
+    route_frames: std::sync::atomic::AtomicU64,
     routes: Mutex<Vec<RouteEntry>>,
+    /// The number of the last routing table applied, held across the whole of [`Shared::on_routes`].
+    routing: tokio::sync::Mutex<u64>,
     starts_fleets: bool,
     state: Arc<Mutex<HostdState>>,
     supervisor: Arc<Supervisor>,
@@ -178,9 +182,26 @@ impl Shared {
         }
     }
 
+    /// Number the next routing table the session received.
+    fn next_route_frame(&self) -> u64 {
+        self.route_frames.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+    }
+
     /// A new routing table: the control plane is the source of truth, so a fleet it no longer routes is stopped
     /// (never deleted — a `destroy` deletes) and one it routes again is started.
-    async fn on_routes(self: &Arc<Self>, table: Vec<RouteEntry>, busy: impl Fn(&str) -> bool) {
+    ///
+    /// Each table is applied on its own task, so two can overlap and a newer one can take the lock first. One at
+    /// a time, then, and never one older than the last applied: a stale table would put its routes back and stop
+    /// a fleet the newest one routes.
+    async fn on_routes(self: &Arc<Self>, sequence: u64, table: Vec<RouteEntry>, busy: impl Fn(&str) -> bool) {
+        let mut applied = self.routing.lock().await;
+
+        if sequence <= *applied {
+            return;
+        }
+
+        *applied = sequence;
+
         let routed: std::collections::BTreeSet<String> = table.iter().map(|route| route.alias.clone()).collect();
 
         *lock(&self.routes) = table;
@@ -286,7 +307,9 @@ pub async fn run_daemon(options: DaemonOptions, stop: Arc<tokio::sync::Notify>) 
         config: config.clone(),
         edge_retrying: std::sync::atomic::AtomicBool::new(false),
         logger: logger.clone(),
+        route_frames: std::sync::atomic::AtomicU64::new(0),
         routes: Mutex::new(Vec::new()),
+        routing: tokio::sync::Mutex::new(0),
         starts_fleets: isolation.report.starts_fleets,
         state: Arc::new(Mutex::new(load_state(&config.data_dir))),
         supervisor: Arc::clone(&supervisor),
@@ -433,8 +456,9 @@ pub async fn run_daemon(options: DaemonOptions, stop: Arc<tokio::sync::Notify>) 
                 lock(&reports).set_routes(&table);
 
                 let (shared, runner) = (Arc::clone(&shared), Arc::clone(&runner));
+                let sequence = shared.next_route_frame();
 
-                tokio::spawn(async move { shared.on_routes(table, |alias| runner.busy(alias)).await });
+                tokio::spawn(async move { shared.on_routes(sequence, table, |alias| runner.busy(alias)).await });
             })
         },
         on_unsent_reports: {
@@ -538,13 +562,12 @@ pub fn status_text(config: &HostdConfig) -> String {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn restores_only_the_fleets_that_were_up() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
+    /// A daemon's shared parts over `state`, with no Caddy to reach and a celld that never starts.
+    fn shared_over(root: &Path, state: HostdState) -> (Arc<Shared>, Arc<Supervisor>) {
         let config = super::super::config::parse_config(&serde_json::json!({
             "boxId": "box_1",
             "bucket": { "name": "b" },
+            "caddy": { "adminAddress": "127.0.0.1:9" },
             "controlPlane": "https://cloud.example",
             "credentialsFile": root.join("bucket.env"),
             "dataDir": root.join("data"),
@@ -554,14 +577,37 @@ mod tests {
         }))
         .unwrap();
         let logger = Logger::silent();
-        let supervisor = Arc::new(Supervisor::new(super::super::supervisor::SupervisorOptions {
+        let supervisor = Supervisor::new(super::super::supervisor::SupervisorOptions {
             backoff: super::super::process::RESTART_BACKOFF,
             config: config.clone(),
             credentials: Arc::new(BTreeMap::new),
             health_deadline: Duration::from_secs(1),
             logger: logger.clone(),
             on_stderr: None,
-        }));
+        });
+        let shared = Arc::new(Shared {
+            caddy: Arc::new(CaddyController::new(config.caddy.clone(), &config.data_dir, &config.hostname, logger.clone(), http::no_redirect_client())),
+            config,
+            edge_retrying: std::sync::atomic::AtomicBool::new(false),
+            logger,
+            route_frames: std::sync::atomic::AtomicU64::new(0),
+            routes: Mutex::new(Vec::new()),
+            routing: tokio::sync::Mutex::new(0),
+            starts_fleets: true,
+            state: Arc::new(Mutex::new(state)),
+            supervisor: Arc::clone(&supervisor),
+        });
+
+        (shared, supervisor)
+    }
+
+    fn record(port: u16, state: FleetState) -> FleetRecord {
+        FleetRecord { deployment_id: None, internal_port: port, public_port: port + 1, state, updated_at: 0 }
+    }
+
+    #[tokio::test]
+    async fn restores_only_the_fleets_that_were_up() {
+        let directory = tempfile::tempdir().unwrap();
         let mut state = HostdState::new();
 
         for (index, (alias, fleet_state)) in
@@ -569,23 +615,10 @@ mod tests {
                 .into_iter()
                 .enumerate()
         {
-            let port = 9000 + u16::try_from(index).unwrap() * 2;
-
-            state
-                .fleets
-                .insert(alias.to_owned(), FleetRecord { deployment_id: None, internal_port: port, public_port: port + 1, state: fleet_state, updated_at: 0 });
+            state.fleets.insert(alias.to_owned(), record(9000 + u16::try_from(index).unwrap() * 2, fleet_state));
         }
 
-        let shared = Shared {
-            caddy: Arc::new(CaddyController::new(config.caddy.clone(), &config.data_dir, &config.hostname, logger.clone(), http::no_redirect_client())),
-            config,
-            edge_retrying: std::sync::atomic::AtomicBool::new(false),
-            logger,
-            routes: Mutex::new(Vec::new()),
-            starts_fleets: true,
-            state: Arc::new(Mutex::new(state)),
-            supervisor: Arc::clone(&supervisor),
-        };
+        let (shared, supervisor) = shared_over(directory.path(), state);
 
         shared.restore_fleets();
 
@@ -593,6 +626,28 @@ mod tests {
 
         started.sort();
         assert_eq!(started, ["running", "starting"]);
+
+        supervisor.shutdown().await;
+    }
+
+    /// Two tables in flight at once, the older one applied last: it must not put its routes back or stop the fleet
+    /// the newer one routes.
+    #[tokio::test]
+    async fn an_older_routing_table_applied_last_changes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = HostdState::new();
+
+        state.fleets.insert("shop".to_owned(), record(9000, FleetState::Running));
+
+        let (shared, supervisor) = shared_over(directory.path(), state);
+        let (older, newer) = (shared.next_route_frame(), shared.next_route_frame());
+        let shop = RouteEntry { alias: "shop".into(), hostname: "shop.box-1.boxes.lunora.app".into() };
+
+        shared.on_routes(newer, vec![shop.clone()], |_| false).await;
+        shared.on_routes(older, Vec::new(), |_| false).await;
+
+        assert_eq!(*lock(&shared.routes), [shop]);
+        assert_eq!(lock(&shared.state).fleets["shop"].state, FleetState::Running);
 
         supervisor.shutdown().await;
     }
