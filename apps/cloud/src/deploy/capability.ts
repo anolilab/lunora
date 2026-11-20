@@ -1,3 +1,5 @@
+import type { DeployKind } from "../provision-contract";
+
 /**
  * The scoped-key capability check, as one pure predicate.
  *
@@ -20,3 +22,14 @@ export const isDeployCapable = (row: { capability?: "deploy" | "ingest" | null }
  */
 export const isKeyLive = (row: { expiresAt?: null | number; revokedAt?: null | number }, now: number): boolean =>
     row.revokedAt == null && (row.expiresAt == null || row.expiresAt > now);
+
+/**
+ * Deploy kinds ordered by privilege, least to most.
+ *
+ * `production` is the only one that can move a project's stable URL, so it sits
+ * at the top; a key scoped to a lower rung may act at or below its own.
+ */
+const DEPLOY_RANK: Record<DeployKind, number> = { dev: 0, preview: 1, production: 2 };
+
+/** Whether a deployment of kind `requested` is within the ceiling of a key typed `allowed`. */
+export const deployKindWithin = (requested: DeployKind, allowed: DeployKind): boolean => DEPLOY_RANK[requested] <= DEPLOY_RANK[allowed];

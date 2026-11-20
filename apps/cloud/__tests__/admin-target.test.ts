@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { adminTarget, ejectTarget } from "../lunora/deployments";
+import { listEncrypted } from "../lunora/secrets";
 import { isMemberAdminRead } from "../src/admin/proxy";
 import { hashDeployKey } from "../src/deploy/keys";
 import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
 import { makeCtx } from "./_helpers/fake-ctx";
 
-const deployment = { _id: "dep_1", adminToken: "sealed", organizationId: "org_1", status: "live", url: "https://acme.example" };
+const deployment = { _id: "dep_1", adminToken: "sealed", kind: "production", organizationId: "org_1", status: "live", url: "https://acme.example" };
 
 const as = (role: string) => makeCtx({ deployments: [deployment], members: [{ _id: "mem_1", organizationId: "org_1", role, userId: "usr_1" }] }).ctx;
 
@@ -54,7 +55,7 @@ describe("the studio admin proxy's target", () => {
 
     it("refuses to eject a plain Cloudflare Worker, which has no data export", async () => {
         const key = "lk_eject_test";
-        const deployKey = { _id: "dk_1", hashedKey: await hashDeployKey(key), organizationId: "org_1", projectId: "prj_1" };
+        const deployKey = { _id: "dk_1", hashedKey: await hashDeployKey(key), organizationId: "org_1", projectId: "prj_1", type: "production" };
         const tables = (runtime?: string) => {
             return {
                 deployKeys: [deployKey],
@@ -71,6 +72,40 @@ describe("the studio admin proxy's target", () => {
             code: "CONFLICT",
             message: PLAIN_WORKER_NO_ADMIN,
         });
+    });
+
+    it("holds an eject to the key's kind ceiling, so a preview key cannot export production", async () => {
+        const key = "lk_eject_kind";
+        const eject = async (type: string, kind: string) =>
+            ejectTarget.handler(
+                makeCtx({
+                    deployKeys: [{ _id: "dk_1", hashedKey: await hashDeployKey(key), organizationId: "org_1", projectId: "prj_1", type }],
+                    deployments: [{ ...deployment, kind, projectId: "prj_1" }],
+                    projects: [],
+                }).ctx,
+                { deployKey: key, deploymentId: "dep_1" as never },
+            );
+
+        await expect(eject("preview", "production")).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(eject("dev", "preview")).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(eject("production", "production")).resolves.toMatchObject({ url: "https://acme.example" });
+        await expect(eject("preview", "preview")).resolves.toMatchObject({ url: "https://acme.example" });
+    });
+
+    it("holds a deploy key's secret read to its kind ceiling", async () => {
+        const key = "lk_secrets_kind";
+        const read = async (environment: "preview" | "production") =>
+            listEncrypted.handler(
+                makeCtx({
+                    deployKeys: [{ _id: "dk_1", hashedKey: await hashDeployKey(key), organizationId: "org_1", projectId: "prj_1", type: "preview" }],
+                    projects: [{ _id: "prj_1", organizationId: "org_1" }],
+                    secrets: [],
+                }).ctx,
+                { deployKey: key, environment, organizationId: "org_1" as never, projectId: "prj_1" as never },
+            );
+
+        await expect(read("production")).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(read("preview")).resolves.toStrictEqual([]);
     });
 
     it("matches a member read by exact path and verb", () => {

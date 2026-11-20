@@ -1,7 +1,8 @@
 import { defineIdentityGuard, LunoraError } from "@lunora/server";
 
-import { isDeployCapable, isKeyLive } from "../src/deploy/capability";
+import { deployKindWithin, isDeployCapable, isKeyLive } from "../src/deploy/capability";
 import { hashDeployKey } from "../src/deploy/keys";
+import type { DeployKind } from "../src/provision-contract";
 import type { Doc as Document_, Id, TableName } from "./_generated/dataModel";
 import type { QueryCtx as QueryContext } from "./_generated/server";
 
@@ -150,6 +151,25 @@ export const authorizeBillingKey = async (context: QueryContext, organizationId:
 export const authorizeDeployKey = defineIdentityGuard(
     async (context: QueryContext, organizationId: Id<"organizations">, key: string, scope: "org-wide" | Id<"projects">): Promise<Id<"deployKeys">> => {
         const row = await authorizeDeployKeyRow(context, organizationId, key, scope);
+
+        return row._id;
+    },
+);
+
+/**
+ * {@link authorizeDeployKey} for an action on a deployment of `kind`. A key's type is a
+ * ceiling, as `POST /v1/deploy` holds it: a preview key that may not ship production may
+ * not export, roll back, activate or read the secrets of production either. Every path
+ * where a deploy key meets a deployment's kind calls this, so the ceiling cannot hold at
+ * the HTTP edge and be missing one RPC away.
+ */
+export const authorizeDeployKeyForKind = defineIdentityGuard(
+    async (context: QueryContext, organizationId: Id<"organizations">, key: string, projectId: Id<"projects">, kind: DeployKind): Promise<Id<"deployKeys">> => {
+        const row = await authorizeDeployKeyRow(context, organizationId, key, projectId);
+
+        if (!deployKindWithin(kind, row.type)) {
+            throw new LunoraError("FORBIDDEN", `this deploy key is scoped to ${row.type} and cannot act on a ${kind} deployment`);
+        }
 
         return row._id;
     },

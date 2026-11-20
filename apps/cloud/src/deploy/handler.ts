@@ -7,6 +7,7 @@
 import { declaresOver, readCappedBytes } from "../lib/read-capped-bytes";
 import { DEFAULT_RUNTIME, isProjectRuntime, PROJECT_RUNTIMES } from "../project-runtime";
 import type { DeployKind } from "../provision-contract";
+import { deployKindWithin } from "./capability";
 import type { DeployHandlerDeps } from "./release-core";
 import { startRelease } from "./release-core";
 
@@ -91,14 +92,6 @@ const readBody = async (request: Request): Promise<{ body: DeployBody } | { resp
 };
 
 /**
- * Deploy kinds ordered by privilege, least to most.
- *
- * `production` is the only one that can move a project's stable URL, so it sits
- * at the top; a key scoped to a lower rung may deploy at or below its own.
- */
-const DEPLOY_RANK: Record<DeployKind, number> = { dev: 0, preview: 1, production: 2 };
-
-/**
  * Whether a value is one of the three deploy kinds.
  *
  * `body.kind` arrives as an arbitrary string and flowed straight into the
@@ -110,9 +103,6 @@ const DEPLOY_RANK: Record<DeployKind, number> = { dev: 0, preview: 1, production
  * the other.
  */
 const isDeployKind = (value: string): value is DeployKind => value === "dev" || value === "preview" || value === "production";
-
-/** Whether a requested deploy kind is within the key's own scope. */
-const deployKindWithin = (requested: DeployKind, allowed: DeployKind): boolean => DEPLOY_RANK[requested] <= DEPLOY_RANK[allowed];
 
 const bearerKey = (request: Request): null | string => {
     const header = request.headers.get("authorization") ?? "";

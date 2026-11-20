@@ -1,7 +1,7 @@
 import { SECRET_CIPHER_VERSION, secretsForKind } from "../src/secrets/select";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
-import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
+import { assertMember, assertRowInOrg, authorizeDeployKeyForKind } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
@@ -110,7 +110,9 @@ export const listEncrypted = query
             ctx: context,
             args: { deployKey, environment, organizationId, projectId },
         }): Promise<{ ciphertext: string; cipherVersion?: null | number; environment: string; iv: string; name: string }[]> => {
-            await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId, ["owner", "admin"]));
+            await (deployKey
+                ? authorizeDeployKeyForKind(context, organizationId, deployKey, projectId, environment ?? "production")
+                : assertMember(context, organizationId, ["owner", "admin"]));
             await assertRowInOrg(context, "projects", projectId, organizationId, "project");
 
             // Every page: a deploy is provisioned from this list, so a secret past the first page would

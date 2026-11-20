@@ -15,7 +15,7 @@ import { isCellPlaced, resourceRefOf } from "../src/targets/placement";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
-import { assertMember, authorizeDeployKey } from "./authz";
+import { assertMember, authorizeDeployKeyForKind } from "./authz";
 import { installedProjects } from "./builds";
 import { claimDeploymentAlias, refuseWhileTearingDown } from "./deployment-aliases";
 import { installBadgeOf, isWebUrl, onEnter, PHASE_TIMESTAMP, projectNameOf, releaseDetail } from "./deployment-lifecycle";
@@ -480,7 +480,13 @@ export const create = mutation
         let createdBy: string;
 
         if (arguments_.deployKey) {
-            const deployKeyId = await authorizeDeployKey(context, arguments_.organizationId, arguments_.deployKey, arguments_.projectId);
+            const deployKeyId = await authorizeDeployKeyForKind(
+                context,
+                arguments_.organizationId,
+                arguments_.deployKey,
+                arguments_.projectId,
+                arguments_.kind,
+            );
 
             createdBy = `deploy-key:${deployKeyId}`;
         } else {
@@ -600,7 +606,7 @@ export const activate = mutation
         }
 
         await (deployKey
-            ? authorizeDeployKey(context, deployment.organizationId, deployKey, deployment.projectId)
+            ? authorizeDeployKeyForKind(context, deployment.organizationId, deployKey, deployment.projectId, deployment.kind)
             : assertMember(context, deployment.organizationId, ["owner", "admin"]));
 
         if (deployment.status !== "live" && deployment.status !== "verifying") {
@@ -696,7 +702,7 @@ export const rollback = internalMutation
         // project A must not be able to roll back project B's deployment in the same
         // org (every sibling — create/activate/updateStatus — passes projectId).
         await (deployKey
-            ? authorizeDeployKey(context, organizationId, deployKey, target.projectId)
+            ? authorizeDeployKeyForKind(context, organizationId, deployKey, target.projectId, target.kind)
             : assertMember(context, organizationId, ["owner", "admin"]));
 
         if (target.status !== "superseded" && target.status !== "live") {
@@ -774,7 +780,7 @@ export const releaseTarget = internalQuery
             }
 
             await (deployKey
-                ? authorizeDeployKey(context, organizationId, deployKey, target.projectId)
+                ? authorizeDeployKeyForKind(context, organizationId, deployKey, target.projectId, target.kind)
                 : assertMember(context, organizationId, ["owner", "admin"]));
 
             if (target.status !== "superseded" && target.status !== "live") {
@@ -948,7 +954,7 @@ export const updateStatus = mutation
         }
 
         await (deployKey
-            ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
+            ? authorizeDeployKeyForKind(context, existing.organizationId, deployKey, existing.projectId, existing.kind)
             : assertMember(context, existing.organizationId, ["owner", "admin"]));
 
         // The URL is what the admin proxy sends the tenant's bearer to, so only web schemes are stored.
@@ -986,8 +992,8 @@ export const updateStatus = mutation
  * non-revoked key and checks neither capability nor project scope, so a full tenant data
  * export would be reachable from a telemetry `ingest` token, the lowest-privilege
  * credential on the platform, which the platform injects into every tenant Worker as an
- * env secret. `authorizeDeployKey` runs inside this query instead, against the
- * deployment's own org and project, exactly as {@link rollback} does — a route cannot
+ * env secret. The deploy-key guard runs inside this query instead, against the
+ * deployment's own org, project and kind, exactly as {@link rollback} does — a route cannot
  * forget to do what it does not perform.
  *
  * The admin token is returned sealed. The edge decrypts it with
@@ -1016,7 +1022,7 @@ export const ejectTarget = internalQuery.input({ deployKey: boundedString(LIMITS
         // Throws for a revoked key, a telemetry-only ingest key, or a key scoped to
         // another project — the tenant boundary, enforced before anything about the
         // deployment is read out.
-        await authorizeDeployKey(context, deployment.organizationId, deployKey, deployment.projectId);
+        await authorizeDeployKeyForKind(context, deployment.organizationId, deployKey, deployment.projectId, deployment.kind);
 
         const hasToken = deployment.adminToken ?? (deployment.adminTokenCiphertext && deployment.adminTokenIv);
 
