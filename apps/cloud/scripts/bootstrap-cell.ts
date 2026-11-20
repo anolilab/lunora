@@ -110,11 +110,24 @@ const d1IdFor = (name: string): { found: true; uuid: string } | { error?: string
     return existing === undefined ? { found: false } : { found: true, uuid: existing.uuid };
 };
 
+/**
+ * Names of D1 bindings whose configured id is not the account's database.
+ * `check-deploy-config.ts` only refuses placeholders, so a stale concrete id
+ * would pass it; this run fails on it instead.
+ */
+const staleD1Ids: string[] = [];
+
 /** A stale id in the config is the "green deploy, first query fails" case the deploy gate exists for. */
-const reportExistingD1 = (name: string, configured: string | undefined, uuid: string): string =>
-    configured === uuid
-        ? `  d1 ${name}: exists (${uuid})`
-        : `  d1 ${name}: exists as ${uuid}, but env.${environment}.d1_databases has ${configured ?? "no id"} — fix wrangler.jsonc`;
+const reportExistingD1 = (name: string, configured: string | undefined, uuid: string): void => {
+    if (configured === uuid) {
+        say(`  d1 ${name}: exists (${uuid})`);
+
+        return;
+    }
+
+    staleD1Ids.push(name);
+    say(`  d1 ${name}: exists as ${uuid}, but env.${environment}.d1_databases has ${configured ?? "no id"} — fix wrangler.jsonc`);
+};
 
 const bootstrapD1 = (): void => {
     for (const database of cell.d1_databases ?? []) {
@@ -128,7 +141,7 @@ const bootstrapD1 = (): void => {
         const found = d1IdFor(name);
 
         if (found.found) {
-            say(reportExistingD1(name, configured, found.uuid));
+            reportExistingD1(name, configured, found.uuid);
             continue;
         }
 
@@ -358,4 +371,9 @@ console.log("\nDeploy gate:");
 const gate = run(process.execPath, ["--experimental-strip-types", "scripts/check-deploy-config.ts", environment]);
 
 console.log(gate.code === 0 ? `  ${environment}: deploy config has no placeholders.` : `  ${environment}: still refused —\n${gate.stderr || gate.stdout}`);
-process.exitCode = gate.code;
+
+if (staleD1Ids.length > 0) {
+    console.log(`  ${environment}: refused — d1 ${staleD1Ids.join(", ")} binds an id that is not the account's database; fix wrangler.jsonc`);
+}
+
+process.exitCode = gate.code === 0 && staleD1Ids.length > 0 ? 1 : gate.code;
