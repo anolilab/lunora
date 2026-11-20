@@ -661,6 +661,28 @@ describe(handleTelemetryRoute, () => {
         expect(runMutation.mock.calls[0]?.[1].events).toHaveLength(500);
     });
 
+    it("archives only the events it ingested, not the ones past the cap", async () => {
+        const runMutation = vi.fn<() => Promise<unknown>>(() => Promise.resolve({ alerts: [], incidents: 0, issues: 0 }));
+        const archived: unknown[] = [];
+        const TELEMETRY_PIPELINE = {
+            send: async (records: { recordType?: string }[]) => {
+                archived.push(...records.filter((record) => record.recordType === "event"));
+            },
+        };
+        const spans = Array.from({ length: 501 }, (_unused, index) => {
+            return { endTimeUnixNano: "1700000000100000000", name: "f", spanId: `s${String(index)}`, status: { code: 2 }, traceId: `t${String(index)}` };
+        });
+        const request = new Request("https://control.lunora.app/v1/telemetry", {
+            body: JSON.stringify({ deployKey: "k", organizationId: "org_1", resourceSpans: [{ scopeSpans: [{ scope: { name: "@lunora/runtime" }, spans }] }] }),
+            method: "POST",
+        });
+
+        const response = await handleTelemetryRoute(request, { ...environment(runMutation), TELEMETRY_PIPELINE });
+
+        expect(response.status).toBe(200);
+        expect(archived).toHaveLength(500);
+    });
+
     it("stamps only the alerts it sent delivered, leaving a failed send firing for the drain to retry", async () => {
         const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(new Response(null, { status: 200 })));
 

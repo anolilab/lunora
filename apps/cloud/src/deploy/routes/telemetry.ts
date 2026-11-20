@@ -61,7 +61,9 @@ export const handleTelemetryRoute = async (request: Request, environment: Router
         return jsonError(400, "deployKey and organizationId are required strings");
     }
 
-    const events = decodeTelemetryEvents(body);
+    // `telemetry.ingest` refuses more than 500 events outright; trim like the
+    // observations, and archive only what was ingested so the two agree.
+    const events = decodeTelemetryEvents(body).slice(0, 500);
     // Every span (not just the error spans `events` keeps) → observations for
     // Traces. Sliced to the mutation's per-call cap so an oversized batch trims
     // rather than rejecting the whole ingest (and losing the Issue fold with it).
@@ -71,8 +73,7 @@ export const handleTelemetryRoute = async (request: Request, environment: Router
         const result = await context.runMutation<{ alerts: AlertDelivery[]; incidents: number; issues: number }>(api.telemetry.ingest, {
             deployKey,
             deploymentId: body.deploymentId,
-            // `telemetry.ingest` refuses more than 500 events outright; trim like the observations.
-            events: events.slice(0, 500),
+            events,
             observations,
             organizationId,
         });
