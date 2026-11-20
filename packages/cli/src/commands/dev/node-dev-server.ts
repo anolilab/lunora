@@ -36,7 +36,16 @@ import { resolveLocalWorkerEnv, resolveSchemaDirectory, wranglerDotenvFiles } fr
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 
-import { BINDING_NAME, MAIL_QUEUE_NAME, mailQueueBindings, refuseWorkerEnvOverride, unboundSections, WORKER_ENV } from "../../util/node-target-bindings";
+import {
+    bindingNames,
+    durableObjectEntries,
+    MAIL_QUEUE_NAME,
+    mailQueueBindings,
+    refuseEnvCollisions,
+    refuseWorkerEnvOverride,
+    unboundSections,
+    WORKER_ENV,
+} from "../../util/node-target-bindings";
 import { codegenRequested } from "./lifecycle";
 import type {
     DevCommandOptions,
@@ -95,9 +104,6 @@ interface NodeDevProject {
     unbound: string[];
 }
 
-const bindingNames = (entries: ReadonlyArray<{ binding?: unknown }> | undefined): string[] =>
-    (entries ?? []).flatMap((entry) => (typeof entry.binding === "string" ? [entry.binding] : []));
-
 /**
  * The wrangler environment `lunora dev` runs, read as `wrangler dev` reads it: `CLOUDFLARE_ENV`, empty meaning none. Read on
  * every load, as the rest of the config is.
@@ -141,40 +147,33 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
     const durableObjects: DurableObjectBinding[] = [];
     const external: string[] = [];
 
-    for (const binding of view.durable_objects?.bindings ?? []) {
-        if (typeof binding.name !== "string" || typeof binding.class_name !== "string") {
-            continue;
-        }
-
-        // The name becomes a directory under `.lunora/node/`: anything but an identifier ("..", "a/b") could put shard files
-        // outside it.
-        if (!BINDING_NAME.test(binding.name)) {
-            throw new Error(
-                `--target node stores each Durable Object binding's shards in a directory named after it, and the binding ${JSON.stringify(binding.name)} in ${configName} is not a valid binding name (a JavaScript identifier such as SHARD)`,
-            );
-        }
-
+    // The deploy's own readers: a malformed entry in a section this host composes is refused here, by name, rather than left
+    // for the app's first access to find.
+    for (const binding of durableObjectEntries(view.durable_objects, configName)) {
         // A binding to another worker's class has no class in this entry to construct, and no other worker runs here.
-        if (binding.script_name === undefined) {
-            durableObjects.push({ className: binding.class_name, name: binding.name });
+        if (binding.scriptName === undefined) {
+            durableObjects.push({ className: binding.className, name: binding.name });
         } else {
             external.push(`durable_objects.${binding.name}`);
         }
     }
 
-    const hyperdrive = bindingNames(view.hyperdrive);
-    const secrets = bindingNames(view.secrets_store_secrets);
+    const hyperdrive = bindingNames(view.hyperdrive, "hyperdrive", configName);
+    const secrets = bindingNames(view.secrets_store_secrets, "secrets_store_secrets", configName);
+    const scope = view as { secrets?: { required?: unknown } | null; vars?: Record<string, unknown> | null };
+    const required = Array.isArray(scope.secrets?.required) ? scope.secrets.required.filter((name): name is string => typeof name === "string") : [];
+    const envSources = [
+        { names: Object.keys(scope.vars ?? {}), source: "vars" },
+        { names: required, repeatable: true, source: "secrets.required" },
+        { names: secrets, source: "secrets_store_secrets" },
+        { names: hyperdrive, source: "hyperdrive" },
+        { names: durableObjects.map((binding) => binding.name), source: "durable_objects.bindings" },
+    ];
 
-    // `WORKER_ENV` is set to `development` on the env these bindings are spread over; a binding of that name would replace it.
-    refuseWorkerEnvOverride(
-        [
-            { names: secrets, source: "secrets_store_secrets" },
-            { names: hyperdrive, source: "hyperdrive" },
-            { names: durableObjects.map((binding) => binding.name), source: "durable_objects.bindings" },
-        ],
-        configName,
-        "development",
-    );
+    // Every name lands on one env: a later source would silently replace an earlier one. `WORKER_ENV` is set to
+    // `development` over all of them, so a binding of that name would replace it.
+    refuseEnvCollisions(envSources, configName);
+    refuseWorkerEnvOverride(envSources.slice(2), configName, "development");
 
     // A section the environment declares and the merge cannot classify stays out of `merged`; it still binds nothing here.
     const environmentBlock =
@@ -245,6 +244,9 @@ class SupersededLoad extends Error {
 }
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** The error with its stack when it has one: a reload that fails keeps the session running, so the log is where it is traced. */
+const errorDetail = (error: unknown): string => (error instanceof Error && error.stack !== undefined ? error.stack : String(error));
 
 /**
  * Start the Node dev worker and serve the app on `port`.
@@ -397,8 +399,12 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
                     }
                 });
 
-                watcher.on("error", () => {
+                // A watch that fails (the directory was replaced, the watch limit was reached) is not retried in place: a reload
+                // re-reads the source set and watches it afresh, and says so, so edits there are not silently missed.
+                watcher.on("error", (error: unknown) => {
                     watcher.close();
+                    logger.warn(`node: stopped watching ${relative(projectRoot, directory) || "."} (${errorMessage(error)}); reloading to watch it again`);
+                    scheduleReload();
                 });
                 watchers.push(watcher);
             } catch {
@@ -714,7 +720,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
                 await settledGeneration();
                 queued = true;
             } else {
-                logger.error(`node: reload failed, still serving the previous version: ${errorMessage(error)}`);
+                logger.error(`node: reload failed, still serving the previous version: ${errorDetail(error)}`);
             }
 
             return;

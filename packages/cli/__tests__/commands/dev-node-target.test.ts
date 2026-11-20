@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import type { FSWatcher } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, watch, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,6 +14,13 @@ import { planNodeDevServer, startNodeDevWorker } from "../../src/commands/dev/no
 import type { NodeDevWorker, PlatformNode } from "../../src/commands/dev/types";
 import { findAvailablePort } from "../../src/util/free-port";
 import type { Logger } from "../../src/util/logger";
+
+// A pass-through spy, so a test can reach the watcher a call returned and make it fail.
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, watch: vi.fn<typeof actual.watch>(actual.watch) as unknown as typeof actual.watch };
+});
 
 /** The project's real `@lunora/platform-node`, which a test wraps to inject a failure. */
 const realPlatform = { checkNodeAppHost, createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } as unknown as PlatformNode;
@@ -278,6 +286,8 @@ describe("lunora dev --target node", () => {
     afterEach(() => {
         vi.useRealTimers();
         Reflect.deleteProperty(globalThis, SHARD_CALL_HOOK);
+        // The spy keeps every watcher it returned, and each watcher's listener holds a whole worker (its module graph included).
+        vi.mocked(watch).mockClear();
         rmSync(workdir, { force: true, recursive: true });
     });
 
@@ -670,6 +680,23 @@ export default crons;
             };
         };
 
+        /** Start the worker alone over a fresh fixture with `wrangler` merged into its config, then clear the fixture away. */
+        const startOverConfig = async (wrangler: Record<string, unknown>): Promise<unknown> => {
+            writeFixture(workdir, wrangler);
+
+            try {
+                return await startNodeDevWorker({
+                    codegenWatch: false,
+                    logger: milestoneLogger().logger,
+                    port: await findAvailablePort(18_870),
+                    projectRoot: workdir,
+                });
+            } finally {
+                rmSync(workdir, { force: true, recursive: true });
+                mkdirSync(workdir);
+            }
+        };
+
         it("waits out a busy codegen run before the first load", async () => {
             expect.assertions(1);
 
@@ -1041,22 +1068,10 @@ export default crons;
         it("refuses a Secrets Store or Hyperdrive binding named WORKER_ENV, which dev sets itself", async () => {
             expect.assertions(2);
 
-            const { logger } = milestoneLogger();
-            const start = async (wrangler: Record<string, unknown>): Promise<unknown> => {
-                writeFixture(workdir, wrangler);
-
-                try {
-                    return await startNodeDevWorker({ codegenWatch: false, logger, port: await findAvailablePort(18_870), projectRoot: workdir });
-                } finally {
-                    rmSync(workdir, { force: true, recursive: true });
-                    mkdirSync(workdir);
-                }
-            };
-
-            await expect(start({ secrets_store_secrets: [{ binding: "WORKER_ENV", secret_name: "mode", store_id: "local" }] })).rejects.toThrow(
+            await expect(startOverConfig({ secrets_store_secrets: [{ binding: "WORKER_ENV", secret_name: "mode", store_id: "local" }] })).rejects.toThrow(
                 /sets WORKER_ENV to development itself, and wrangler\.jsonc also declares it in secrets_store_secrets/u,
             );
-            await expect(start({ hyperdrive: [{ binding: "WORKER_ENV", id: "local" }] })).rejects.toThrow(/also declares it in hyperdrive/u);
+            await expect(startOverConfig({ hyperdrive: [{ binding: "WORKER_ENV", id: "local" }] })).rejects.toThrow(/also declares it in hyperdrive/u);
         });
 
         it("refuses a Durable Object binding name that is not an identifier", async () => {
@@ -1231,6 +1246,78 @@ export default crons;
             } finally {
                 worker.kill("SIGTERM");
                 await worker.exited;
+            }
+        });
+
+        it("refuses a malformed entry in a section it composes instead of starting without it", async () => {
+            expect.assertions(2);
+
+            await expect(startOverConfig({ durable_objects: { bindings: [{ name: "SHARD" }] } })).rejects.toThrow(/from its "name" and "class_name"/u);
+            await expect(startOverConfig({ hyperdrive: [{ id: "local" }] })).rejects.toThrow(/binds each hyperdrive entry by its "binding" name/u);
+        });
+
+        it("refuses a name two sources would both put on env", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, {
+                secrets_store_secrets: [{ binding: "API_KEY", secret_name: "api-key", store_id: "local" }],
+                vars: { API_KEY: "plain" },
+            });
+
+            const { logger } = milestoneLogger();
+
+            await expect(startNodeDevWorker({ codegenWatch: false, logger, port: await findAvailablePort(18_870), projectRoot: workdir })).rejects.toThrow(
+                /declares API_KEY \(vars and secrets_store_secrets\) more than once/u,
+            );
+        });
+
+        it("logs a failed reload with its stack", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const dev = await startWorker();
+
+            try {
+                const failed = dev.next("reload failed");
+
+                editFile(join(workdir, "src", "worker.ts"), /^/u, `throw new Error("entry refused to load");\n`);
+                await failed;
+
+                // The stack names where the throw happened, not only its message.
+                expect(dev.errors.join("\n")).toMatch(/entry refused to load[\s\S]*worker\.ts/u);
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("watches a source directory again after its watcher fails", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const dev = await startWorker();
+            const sourceWatcher = (): FSWatcher | undefined => {
+                const { calls } = vi.mocked(watch).mock;
+                const index = calls.findLastIndex(([path]) => path === join(workdir, "src"));
+
+                return index === -1 ? undefined : (vi.mocked(watch).mock.results[index]?.value as FSWatcher);
+            };
+
+            try {
+                const rewatched = dev.next("node: reloaded");
+
+                sourceWatcher()?.emit("error", new Error("EMFILE: too many open files, watch"));
+                await rewatched;
+
+                // The reload watched the directory afresh, so an edit there reloads again.
+                const reloaded = dev.next("node: reloaded");
+
+                editFile(join(workdir, "src", "worker.ts"), /^/u, "// edited\n");
+
+                await expect(reloaded).resolves.toBeUndefined();
+            } finally {
+                await dev.stop();
             }
         });
 

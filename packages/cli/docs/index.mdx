@@ -516,7 +516,10 @@ R2, queues, a Durable Object bound to another worker's class, and any other
 section) is named in one startup warning. A Secrets Store, Hyperdrive or Durable
 Object binding named `WORKER_ENV` is refused, since dev sets it to `development`
 itself, and so is a Durable Object binding name that is not an identifier,
-since it names a directory under `.lunora/node/`. A `main` outside the project
+since it names a directory under `.lunora/node/`. As for the container, a
+malformed entry in a section the host composes, or one name declared by two
+sources (a var and a binding, say), is refused at startup rather than left for
+the first request to find. A `main` outside the project
 (a worker shared between apps) is watched and reloaded like one inside it. Mail
 is captured to the Studio inbox while `WORKER_ENV` is `development`, as under
 `wrangler dev`; Node dev composes no mail host, so with

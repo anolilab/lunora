@@ -22,11 +22,13 @@ import type { Node as JsonNode } from "jsonc-parser";
 import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
 import {
-    BINDING_NAME,
+    bindingNames,
+    durableObjectEntries,
     isDeclared,
     MAIL_QUEUE_NAME,
     mailQueueBindings,
     queueEntries,
+    refuseEnvCollisions,
     refuseWorkerEnvOverride,
     unboundSections,
     WORKER_ENV,
@@ -165,97 +167,6 @@ const frameworkRefusal = (projectRoot: string, main: string, configName: string)
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
-/**
- * A binding list the deploy reads (`hyperdrive`, `secrets_store_secrets`): every entry must name its binding. One that
- * does not used to be dropped, so the deploy succeeded and the worker read `undefined` where the app expected a binding.
- */
-const bindingNames = (value: unknown, section: string, configName: string): string[] => {
-    if (value === undefined || value === null) {
-        return [];
-    }
-
-    if (!Array.isArray(value)) {
-        throw new TypeError(`--target node reads ${section} in ${configName} as a list of bindings, and it is ${JSON.stringify(value)}`);
-    }
-
-    return value.map((entry: unknown, index) => {
-        const name = isRecord(entry) ? entry.binding : undefined;
-
-        if (typeof name !== "string" || !BINDING_NAME.test(name)) {
-            throw new Error(
-                `--target node binds each ${section} entry by its "binding" name, and ${section}[${String(index)}] in ${configName} has ${name === undefined ? "none" : `${JSON.stringify(name)}, which is not a valid binding name`}`,
-            );
-        }
-
-        return name;
-    });
-};
-
-/** `durable_objects.bindings`: each entry needs a string `name` and `class_name`, both identifiers. */
-const durableObjectEntries = (value: unknown, configName: string): { className: string; name: string; scriptName: unknown }[] => {
-    if (value === undefined || value === null) {
-        return [];
-    }
-
-    const bindings = isRecord(value) ? value.bindings : undefined;
-
-    if (bindings !== undefined && !Array.isArray(bindings)) {
-        throw new Error(`--target node reads durable_objects.bindings in ${configName} as a list of bindings, and it is ${JSON.stringify(bindings)}`);
-    }
-
-    if (!isRecord(value)) {
-        throw new Error(`--target node reads durable_objects in ${configName} as { "bindings": [...] }, and it is ${JSON.stringify(value)}`);
-    }
-
-    return (bindings ?? []).map((entry: unknown, index) => {
-        const where = `durable_objects.bindings[${String(index)}] in ${configName}`;
-
-        if (!isRecord(entry) || typeof entry.name !== "string" || typeof entry.class_name !== "string") {
-            throw new Error(`--target node constructs each Durable Object binding from its "name" and "class_name", and ${where} lacks one`);
-        }
-
-        // The name becomes a directory under LUNORA_DATA_DIR: anything but an identifier ("..", "a/b") could put shard files
-        // outside the data volume, where a replaced container loses them.
-        if (!BINDING_NAME.test(entry.name)) {
-            throw new Error(
-                `--target node stores each Durable Object binding's shards in a directory named after it, and the binding ${JSON.stringify(entry.name)} in ${configName} is not a valid binding name (a JavaScript identifier such as SHARD)`,
-            );
-        }
-
-        if (!BINDING_NAME.test(entry.class_name)) {
-            throw new Error(
-                `--target node imports each Durable Object class by name, and ${where} names ${JSON.stringify(entry.class_name)}, which is not a class name`,
-            );
-        }
-
-        return { className: entry.class_name, name: entry.name, scriptName: entry.script_name };
-    });
-};
-
-/**
- * Every name that lands on `env` comes from one place. Built in a fixed order (vars, then each secret, Hyperdrive and the
- * Durable Objects), a later source would silently replace an earlier one, and the code reading it gets the wrong kind of value.
- */
-const refuseEnvCollisions = (sources: ReadonlyArray<{ names: ReadonlyArray<string>; repeatable?: boolean; source: string }>, configName: string): void => {
-    const owners = new Map<string, string[]>();
-
-    for (const { names, repeatable, source } of sources) {
-        // A repeat within secrets.required asks for one variable twice, which is harmless; a repeat within a binding list
-        // declares two bindings under one name, and the later replaces the earlier.
-        for (const name of repeatable === true ? new Set(names) : names) {
-            owners.set(name, [...(owners.get(name) ?? []), source]);
-        }
-    }
-
-    const collisions = [...owners].filter(([, from]) => from.length > 1).map(([name, from]) => `${name} (${from.join(" and ")})`);
-
-    if (collisions.length > 0) {
-        throw new Error(
-            `--target node puts every var, secret and binding on env under its own name, and ${configName} declares ${collisions.join(", ")} more than once: one would silently replace the other. Rename one of them`,
-        );
-    }
-};
 
 /** `define` or `alias`: an object of string values, refused otherwise rather than passed to the bundler half-read. */
 const stringMap = (value: unknown, section: string, configName: string): Record<string, string> => {
