@@ -20,6 +20,39 @@ describe(archiveRowToObservation, () => {
         expect(archiveRowToObservation(row)).toMatchObject(observation);
     });
 
+    it("keeps a span's attributes, evaluations and session through the archive", () => {
+        const observation = {
+            attributes: { "lunora.user_id": "usr_1" },
+            durationMs: 100,
+            endedAt: 1100,
+            evaluations: [
+                { label: "pass", name: "helpfulness", score: 0.9 },
+                { name: "toxicity", score: 0 },
+            ],
+            kind: "generation" as const,
+            level: "info" as const,
+            name: "chat",
+            sessionId: "conv_1",
+            spanId: "s1",
+            startedAt: 1000,
+            traceId: "t1",
+        };
+
+        expect(archiveRowToObservation(spanArchiveRecord(observation, "org_1"))).toStrictEqual(observation);
+    });
+
+    it("reads nested columns R2 SQL hands back as JSON text", () => {
+        const mapped = archiveRowToObservation({
+            attributes: JSON.stringify({ "lunora.shard_key": "a", "not.a.string": 1 }),
+            evaluations: JSON.stringify([{ name: "helpfulness", score: "0.5" }, { name: "no-score" }]),
+            spanId: "s3",
+            traceId: "t3",
+        });
+
+        expect(mapped.attributes).toStrictEqual({ "lunora.shard_key": "a" });
+        expect(mapped.evaluations).toStrictEqual([{ name: "helpfulness", score: 0.5 }]);
+    });
+
     it("coerces numeric strings (Iceberg types) and drops absent generation fields", () => {
         const mapped = archiveRowToObservation({
             durationMs: "50",
