@@ -13,11 +13,9 @@
  *
  * SCOPE. The registry is built from ONE declaration's guards
  * (`defineShape({ use })`), never from every registered function in the project.
- * A project-wide registry is a union, and `resolveReadBaseWhere` treats a group
- * that grants unrestricted access as unrestricting the whole table — so one
- * admin-only procedure carrying `rls([{ on: "read", when: () => true }])`
- * collapsed every tenant shape on that table to "no filter", for every
- * subscriber. It could not be otherwise: an `rls()` bundle is only half of a
+ * A project-wide registry would intersect the read policies of procedures that
+ * never run together, so a shape's filter would depend on unrelated functions.
+ * An `rls()` bundle is only half of a
  * procedure's authorization, the other half being the middlewares around it
  * (`requireAdmin`) that a shape cannot run. Request-time scope is per-procedure,
  * so a shape's has to be per-shape.
@@ -221,32 +219,31 @@ const resolveReadBaseWhere = (registry: RlsReadRegistry, request: ShapeReadWhere
 
     const predicates: WhereInput[] = [];
 
-    // Each group carries one rls() middleware's read policies and its OWN
-    // role→permission map; OR the grants across groups — the same broadening
-    // semantics `computeReadBaseWhere` applies to policies within one middleware.
+    // Each group is one rls() guard, and guards AND — exactly as the query
+    // path's `readBase` ANDs `.use(rls(...))` steps. Anything looser lets a
+    // shape replicate rows the equivalent query hides: one allow-all guard
+    // would otherwise erase a sibling guard's tenant filter.
     for (const group of groups) {
         const base = evaluateGroupBaseWhere(group, request);
 
-        // A group granting unrestricted access makes the whole table unrestricted.
+        // An unrestricted guard adds no condition; the others still apply.
         if (base === undefined) {
-            return undefined;
+            continue;
         }
 
-        // A group that denies (all its policies abstained/denied) can't broaden
-        // access — another group may still grant, so skip it rather than fail.
+        // One denying guard denies the row whatever the others grant.
         if (isFalsePredicate(base)) {
-            continue;
+            return FALSE_PREDICATE;
         }
 
         predicates.push(base);
     }
 
-    // Every group denied/abstained: fail closed (never reveal the whole table).
     if (predicates.length === 0) {
-        return FALSE_PREDICATE;
+        return undefined;
     }
 
-    return predicates.length === 1 ? predicates[0] : { OR: predicates };
+    return predicates.length === 1 ? predicates[0] : { AND: predicates };
 };
 
 /**
@@ -260,10 +257,11 @@ const resolveReadBaseWhere = (registry: RlsReadRegistry, request: ShapeReadWhere
  * de-duplicated within a tag). The same tag listed twice (a shared
  * `const guard = rls(...)`) is folded once. Within a group this mirrors the
  * request-time `rls()` path: a policy's `auth.can(...)` resolves against the
- * roles of the middleware that declared it, never a union.
+ * roles of the middleware that declared it, never a union. Across groups the
+ * guards AND, as `.use(rls(...))` steps do on a query.
  *
  * Do NOT hand this every registered function in the project — see the SCOPE
- * paragraph in the module docblock for what that silently did to tenant shapes.
+ * paragraph in the module docblock.
  */
 const buildRlsReadRegistry = (guards: Iterable<unknown>): RlsReadRegistry => {
     const byTable = new Map<string, ScopedReadPolicies[]>();
@@ -297,9 +295,8 @@ interface ShapeGuardDeclaration {
  * Fail a project's startup closed when a shape would replicate AROUND the read
  * policies its table is governed by.
  *
- * Scoping shape RLS to `defineShape({ use })` fixed one direction (a project-wide
- * union let one admin-only `rls([{ on: "read", when: () => true }])` unrestrict
- * every tenant shape) and opened the other: under the OPT-IN default a shape that
+ * Scoping shape RLS to `defineShape({ use })` keeps a shape's filter to its own
+ * guards, and opens the other direction: under the OPT-IN default a shape that
  * names no guard has an empty registry, `resolveReadBaseWhere` returns
  * `undefined`, and the shape replicates on its own `where` alone. An app whose
  * `messages` table is tenant-scoped on its queries and exposes
