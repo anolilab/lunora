@@ -138,7 +138,7 @@ export interface InternalApiTypes {
     telemetry: {
         orgForDeployKey: FunctionReference<"query", { deployKey: unknown }, { organizationId: Id<"organizations">; } | null>;
         pruneObservations: FunctionReference<"mutation", {}, { pruned: number; }>;
-        servicesOutsideKeyProject: FunctionReference<"query", { deployKey: unknown; organizationId: Id<"organizations">; serviceNames: Array<string> }, string[]>;
+        servicesOutsideKeyProject: FunctionReference<"query", { deployKey: unknown; organizationId: Id<"organizations">; serviceNames: Array<string> }, { barred: string[]; projectScoped: boolean; }>;
     };
     tenant_backups: {
         authorizeDownload: FunctionReference<"mutation", { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }, { alias: string; createdAt: number; key: string; }>;

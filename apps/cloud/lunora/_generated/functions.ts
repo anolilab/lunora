@@ -1522,7 +1522,7 @@ export interface Caller {
         ingest: (args: { deployKey: unknown; deploymentId?: Id<"deployments">; events: Array<{ code?: string; container?: string; functionPath: string; instance?: string; kind: "error" | "container"; message: string; traceId?: string; ts: number }>; observations?: Array<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: Array<{ label?: string; name: string; score: number }>; functionPath?: string; input?: string; kind: "container" | "generation" | "worker"; level: "error" | "info"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; serviceName?: string; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }>; organizationId: Id<"organizations"> }) => Promise<{ alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
         orgForDeployKey: (args: { deployKey: unknown }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
-        servicesOutsideKeyProject: (args: { deployKey: unknown; organizationId: Id<"organizations">; serviceNames: Array<string> }) => Promise<string[]>;
+        servicesOutsideKeyProject: (args: { deployKey: unknown; organizationId: Id<"organizations">; serviceNames: Array<string> }) => Promise<{ barred: string[]; projectScoped: boolean; }>;
     };
     tenant_backups: {
         authorizeDownload: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ alias: string; createdAt: number; key: string; }>;
