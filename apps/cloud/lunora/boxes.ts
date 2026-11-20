@@ -4,7 +4,7 @@ import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
 import { isBoxPublicKey } from "../src/boxes/encoding";
 import { ENROLMENT_TTL_MS, installCommandFor, mintBoxSlug, mintEnrolmentToken } from "../src/boxes/enrolment";
 import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
-import { installerSha256Of, newestStableRelease } from "../src/boxes/hostd-releases";
+import { installerSha256Of, newestStableRelease, refusesWithoutDowngrade } from "../src/boxes/hostd-releases";
 import { boxDomainOf } from "../src/boxes/urls";
 import { sha256Hex } from "../src/deploy/keys";
 import type { BoxVersions, FleetSummary } from "../src/hostd/protocol";
@@ -528,6 +528,21 @@ export const setDesiredRelease = internalMutation
         const fetched = everyBox === undefined ? await Promise.all((boxIds ?? []).map((id) => context.db.get("boxes", id))) : [];
         const rows = everyBox === undefined ? fetched.filter((row): row is BoxRow => row !== null) : (everyBox.page as BoxRow[]);
         const targets = rows.filter((row) => row.status !== "revoked");
+        const release = releases[0] as { versions: BoxVersions };
+
+        // The box refuses an older release unless its job allows the downgrade, and a desired
+        // release it refuses is re-sent on every reconnect. Refused here instead, before any
+        // box is pointed at it, so the operator learns it is a rollback and asks for one.
+        if (!allowDowngrade) {
+            const newer = targets.filter((row) => refusesWithoutDowngrade(release.versions, row.versions ?? undefined));
+
+            if (newer.length > 0) {
+                throw new LunoraError(
+                    "CONFLICT",
+                    `${releaseId} is older than what ${newer.map((row) => row.slug).join(", ")} run (or not ordered against it); roll back with allowDowngrade`,
+                );
+            }
+        }
 
         for (const row of targets) {
             // eslint-disable-next-line no-await-in-loop -- one patch per box; a fleet rollout is an operator action

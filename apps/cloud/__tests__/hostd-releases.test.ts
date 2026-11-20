@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { list, setDesiredRelease } from "../lunora/boxes";
 import { store } from "../lunora/hostd-releases";
 import { randomBase64Url } from "../src/boxes/encoding";
-import { versionKey, versionsOf } from "../src/boxes/hostd-releases";
+import { compareHostdVersions, versionKey, versionsOf } from "../src/boxes/hostd-releases";
 import type { RolloutTarget } from "../src/boxes/rollout";
 import { desiresRelease, planHostdRollout, resumeHostdRollouts, runHostdRollout, withdrawDesiredRelease } from "../src/boxes/rollout";
 import { createDeployRouter } from "../src/deploy/router";
@@ -355,6 +355,47 @@ describe("rolling a release out", () => {
         // A normal rollout clears a rollback's flag and audits nothing.
         expect(ops).toStrictEqual([{ id: "box_1", kind: "patch", patch: { allowDowngrade: false, desiredReleaseId: "hostd-v1_1_0" } }]);
         await expect(setDesiredRelease.handler(ctx, { releaseId: "nope" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it.each([
+        ["1.2.0", "1.10.0", -1],
+        ["v1.2.0", "1.2.0", 0],
+        ["1.2.0-rc.1", "1.2.0", -1],
+        ["1.2.0-rc.2", "1.2.0-rc.10", -1],
+        ["1.2.0-alpha", "1.2.0-1", 1],
+        ["1.2.0-rc", "1.2.0-rc.1", -1],
+        ["1.2.0+build.5", "1.2.0", 0],
+        ["01.2.0", "1.2.0", undefined],
+        ["nightly", "1.2.0", undefined],
+    ])("orders hostd %s against %s as lunora-hostd does", (left, right, order) => {
+        expect(compareHostdVersions(left, right)).toBe(order);
+    });
+
+    it("refuses to point a box at an older release unless the rollout is a rollback", async () => {
+        const running = { caddy: "2.8.4", celld: "0.6.0", hostd: "1.2.0" };
+        const older = { caddy: "2.8.4", celld: "0.6.0", hostd: "1.1.0" };
+        const world = () =>
+            makeCtx({
+                boxes: [boxRow({ publicKey: "" } as never, { _id: "box_1", slug: "bslug000001", status: "online", versions: running })],
+                hostdReleases: [{ _id: "rel_1", releaseId: "hostd-v1_1_0", versions: older }],
+            });
+        const plain = world();
+
+        await expect(setDesiredRelease.handler(plain.ctx, { releaseId: "hostd-v1_1_0" })).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(plain.ops).toStrictEqual([]);
+
+        const rollback = world();
+
+        await expect(setDesiredRelease.handler(rollback.ctx, { allowDowngrade: true, releaseId: "hostd-v1_1_0" })).resolves.toHaveLength(1);
+    });
+
+    it("refuses a release whose hostd version cannot be ordered against a box's", async () => {
+        const { ctx } = makeCtx({
+            boxes: [boxRow({ publicKey: "" } as never, { _id: "box_1", status: "online", versions: { caddy: "2.8.4", celld: "0.6.0", hostd: "1.2.0" } })],
+            hostdReleases: [{ _id: "rel_1", releaseId: "hostd-nightly", versions: { caddy: "2.8.4", celld: "0.6.0", hostd: "nightly" } }],
+        });
+
+        await expect(setDesiredRelease.handler(ctx, { releaseId: "hostd-nightly" })).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
     it("marks a rollback on each box it points, and audits it in the box's organization", async () => {
