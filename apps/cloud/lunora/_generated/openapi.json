@@ -3453,6 +3453,8 @@
                         "type": "array"
                       },
                       "deployKey": {},
+                      "expectedPlacementRef": {},
+                      "expectedTarget": {},
                       "statefulClasses": {
                         "items": {},
                         "type": "array"
