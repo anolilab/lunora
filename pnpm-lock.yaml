@@ -4315,6 +4315,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/wire':
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@react-email/render':
         specifier: catalog:mail
         version: 2.1.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
