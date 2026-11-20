@@ -225,6 +225,7 @@ interface DevCommandOptions {
     port?: number;
     probeReady?: ReadinessProbe;
     remote?: boolean;
+    remoteFromDefault?: boolean;
     startCelldSession?: typeof startCelldDevSession;
     startCodegen?: typeof startCodegenWatch;
     startHyperdrive?: typeof startLocalHyperdrive;
@@ -1058,6 +1059,7 @@ interface CodegenWatcherOptions {
     lunoraDirectory?: string;
     onSettled?: (run: {
         hookRan: boolean;
+        sequence: number;
         startup: boolean;
     }) => void;
     projectRoot: string;
@@ -1363,6 +1365,7 @@ interface NodeDevHttpServer {
 
 ```ts
 interface NodeDevWorker extends WorkerProcess {
+    loadedSequence?: number;
     reload: () => void;
 }
 ```

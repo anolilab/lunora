@@ -9,11 +9,25 @@ import { fileURLToPath } from "node:url";
 import { checkNodeAppHost, createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } from "@lunora/platform-node";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { provisionBindings } from "../../src/commands/deploy/handler";
 import { runDevCommand } from "../../src/commands/dev/handler";
 import { planNodeDevServer, startNodeDevWorker } from "../../src/commands/dev/node-dev-server";
+import { startContainerLogStreaming } from "../../src/commands/dev/supervise";
 import type { NodeDevWorker, PlatformNode } from "../../src/commands/dev/types";
 import { findAvailablePort } from "../../src/util/free-port";
 import type { Logger } from "../../src/util/logger";
+
+// Pass-through spies: what Node dev must not call (binding provisioning under a refused --remote, container log tailing).
+vi.mock(import("../../src/commands/deploy/handler"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, provisionBindings: vi.fn<typeof actual.provisionBindings>(actual.provisionBindings) };
+});
+vi.mock(import("../../src/commands/dev/supervise"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, startContainerLogStreaming: vi.fn<typeof actual.startContainerLogStreaming>(actual.startContainerLogStreaming) };
+});
 
 // A pass-through spy, so a test can reach the watcher a call returned and make it fail.
 vi.mock(import("node:fs"), async (importOriginal) => {
@@ -235,9 +249,9 @@ const callQuery = async (origin: string, functionPath: string, args: Record<stri
  * Start `lunora dev --target node` on `workdir` and resolve once it serves; `stop` ends it and resolves with its result.
  * `firstReload` is armed before the start, so a reload the start itself triggers is not missed.
  */
-const startDev = async (workdir: string, options: { codegen?: boolean; platform?: PlatformNode } = {}) => {
+const startDev = async (workdir: string, options: { codegen?: boolean; platform?: PlatformNode; remote?: boolean; remoteFromDefault?: boolean } = {}) => {
     const port = await findAvailablePort(18_870);
-    const { errors, logger, next } = milestoneLogger();
+    const { errors, logger, next, warnings } = milestoneLogger();
     const serving = next("node: serving");
     const firstReload = next("node: reloaded");
     let worker: NodeDevWorker | undefined;
@@ -246,6 +260,8 @@ const startDev = async (workdir: string, options: { codegen?: boolean; platform?
         codegen: options.codegen,
         cwd: workdir,
         logger,
+        remote: options.remote,
+        remoteFromDefault: options.remoteFromDefault,
         studio: false,
         startNodeWorker: async (inputs) => {
             worker = await startNodeDevWorker({ ...inputs, platform: options.platform });
@@ -267,6 +283,7 @@ const startDev = async (workdir: string, options: { codegen?: boolean; platform?
         errors,
         firstReload,
         next,
+        warnings,
         origin: `http://localhost:${String(port)}`,
         stop: async () => {
             worker?.kill("SIGTERM");
@@ -288,6 +305,8 @@ describe("lunora dev --target node", () => {
         Reflect.deleteProperty(globalThis, SHARD_CALL_HOOK);
         // The spy keeps every watcher it returned, and each watcher's listener holds a whole worker (its module graph included).
         vi.mocked(watch).mockClear();
+        vi.mocked(provisionBindings).mockClear();
+        vi.mocked(startContainerLogStreaming).mockClear();
         rmSync(workdir, { force: true, recursive: true });
     });
 
@@ -747,7 +766,7 @@ export default crons;
             });
 
             try {
-                const refused = dev.next("the last postcodegen hook failed");
+                const refused = dev.next("the last codegen run did not finish");
 
                 usable = false;
                 dev.worker.reload();
@@ -850,7 +869,10 @@ export default crons;
 
             writeFixture(workdir);
 
-            await expect(startWorker({ generation: overlappingGeneration(false).generation })).rejects.toThrow(/the last postcodegen hook failed/u);
+            // The message names the run, not only the hook: a codegen step after the write can be what failed.
+            await expect(startWorker({ generation: overlappingGeneration(false).generation })).rejects.toThrow(
+                /the last codegen run did not finish \(a step after writing _generated\/\*, or its postcodegen hook, failed/u,
+            );
         });
 
         it("lets a request in flight finish before a reload closes the listener", async () => {
@@ -1321,6 +1343,94 @@ export default crons;
             }
         });
 
+        it("refuses a malformed secrets block or vars instead of reading it as empty", async () => {
+            expect.assertions(2);
+
+            // A misspelled field would otherwise filter the intended secret out of .dev.vars.
+            await expect(startOverConfig({ secrets: { require: ["API_KEY"] } })).rejects.toThrow(/checks every secrets\.required name at startup/u);
+            await expect(startOverConfig({ vars: ["SECRET"] })).rejects.toThrow(/reads vars in wrangler\.jsonc as an object of names and values/u);
+        });
+
+        it("binds a Hyperdrive binding named __proto__ as an own env property", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { hyperdrive: [{ binding: "__proto__", id: "local" }] });
+            // eslint-disable-next-line no-secrets/no-secrets -- a fixture dev-vars line with a passwordless local URL
+            writeFileSync(join(workdir, ".dev.vars"), "DATABASE_URL=postgres://app@db.local:5433/app\n", "utf8");
+
+            let ownBinding: boolean | undefined;
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    ownBinding = options.env !== undefined && Object.hasOwn(options.env, "__proto__");
+
+                    return realPlatform.createNodeAppHost(options);
+                },
+            };
+            const dev = await startWorker({ platform });
+
+            try {
+                expect(ownBinding).toBe(true);
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("reloads once a main that named a missing file is created", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const dev = await startWorker();
+
+            try {
+                const failed = dev.next("reload failed");
+
+                editFile(join(workdir, "wrangler.jsonc"), /"main":\s*"src\/worker\.ts"/u, `"main": "src/later.ts"`);
+                await failed;
+
+                const reloaded = dev.next("node: reloaded");
+
+                writeAlternateEntry(workdir, "later.ts", "later");
+                await reloaded;
+
+                await expect(readWhich(dev.origin)).resolves.toBe("later");
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("watches the wrangler config and .dev.vars again after their watcher fails", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { secrets_store_secrets: [{ binding: "API_KEY", secret_name: "api-key", store_id: "local" }] });
+            writeFileSync(join(workdir, ".dev.vars"), "API_KEY=first\n", "utf8");
+
+            const dev = await startWorker();
+            const configWatcher = (): FSWatcher | undefined => {
+                const { calls } = vi.mocked(watch).mock;
+                const index = calls.findLastIndex(([path]) => path === workdir);
+
+                return index === -1 ? undefined : (vi.mocked(watch).mock.results[index]?.value as FSWatcher);
+            };
+
+            try {
+                const rewatched = dev.next("node: reloaded");
+
+                configWatcher()?.emit("error", new Error("EMFILE: too many open files, watch"));
+                await rewatched;
+
+                const reloaded = dev.next("node: reloaded");
+
+                editFile(join(workdir, ".dev.vars"), /API_KEY=first/u, "API_KEY=second");
+                await reloaded;
+
+                await expect(readEnv(dev.origin)).resolves.toMatchObject({ secret: "second" });
+            } finally {
+                await dev.stop();
+            }
+        });
+
         it("fails the start with the port released when the config directory cannot be watched", async () => {
             expect.assertions(2);
 
@@ -1423,6 +1533,95 @@ export default {
             await dev.stop();
         }
     });
+
+    it("reloads on an edit to a sibling workspace package the app imports", async () => {
+        expect.assertions(2);
+
+        const appRoot = join(workdir, "apps", "demo");
+        const flag = join(workdir, "packages", "flags", "src", "flag.ts");
+
+        writeFileSync(join(workdir, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n  - packages/*\n", "utf8");
+        mkdirSync(appRoot, { recursive: true });
+        mkdirSync(dirname(flag), { recursive: true });
+        writeFileSync(join(workdir, "packages", "flags", "package.json"), JSON.stringify({ name: "flags", private: true, type: "module" }), "utf8");
+        writeFileSync(flag, `export const FLAG = "one";\n`, "utf8");
+        writeFixture(appRoot, { main: "src/entry.ts" });
+        writeFileSync(
+            join(appRoot, "src", "entry.ts"),
+            `import worker from "./worker";
+import { FLAG } from "../../../packages/flags/src/flag";
+
+export { ShardDO } from "./worker";
+
+export default {
+    fetch: (request: Request, env: never, ctx: never): Promise<Response> | Response =>
+        new URL(request.url).pathname === "/__which" ? new Response(FLAG) : worker.fetch(request, env, ctx),
+};
+`,
+            "utf8",
+        );
+
+        const dev = await startDev(appRoot);
+
+        try {
+            await expect(readWhich(dev.origin)).resolves.toBe("one");
+
+            const reloaded = dev.next("node: reloaded");
+
+            writeFileSync(flag, `export const FLAG = "two";\n`, "utf8");
+            await reloaded;
+
+            await expect(readWhich(dev.origin)).resolves.toBe("two");
+        } finally {
+            await dev.stop();
+        }
+    });
+
+    it("refuses an explicit --remote before provisioning anything", async () => {
+        expect.assertions(2);
+
+        writeFixture(workdir);
+
+        await expect(
+            runDevCommand({
+                cwd: workdir,
+                logger: milestoneLogger().logger,
+                remote: true,
+                studio: false,
+                target: "node",
+                workerPort: await findAvailablePort(18_900),
+            }),
+        ).rejects.toThrow(/the Node target has no remote bindings/u);
+        expect(provisionBindings).not.toHaveBeenCalled();
+    });
+
+    it("runs local, with a warning, when remote is only the project's or the shell's default", async () => {
+        expect.assertions(1);
+
+        writeFixture(workdir);
+
+        const dev = await startDev(workdir, { remote: true, remoteFromDefault: true });
+
+        try {
+            expect(dev.warnings.join("\n")).toMatch(/does not apply to --target node/u);
+        } finally {
+            await dev.stop();
+        }
+    });
+
+    it("does not tail Docker containers, which the Node host never runs", async () => {
+        expect.assertions(1);
+
+        writeFixture(workdir);
+
+        const dev = await startDev(workdir);
+
+        try {
+            expect(startContainerLogStreaming).not.toHaveBeenCalled();
+        } finally {
+            await dev.stop();
+        }
+    });
 });
 
 describe(planNodeDevServer, () => {
@@ -1449,11 +1648,15 @@ describe("lunora dev --target node codegen settlements", () => {
     });
 
     /** Run `lunora dev` with a fake codegen watcher and a fake Node worker, settling one run at `when`. */
-    const runWithFakes = async (when: "after-start" | "before-start" | "during-start", run?: { hookRan: boolean; startup: boolean }) => {
-        const settled = run ?? { hookRan: false, startup: false };
+    const runWithFakes = async (
+        when: "after-start" | "before-start" | "during-start",
+        run?: { hookRan: boolean; sequence?: number; startup: boolean },
+        loadedSequence?: number,
+    ) => {
+        const settled = { hookRan: run?.hookRan ?? false, sequence: run?.sequence ?? 1, startup: run?.startup ?? false };
 
         const reload = vi.fn<() => void>();
-        let onSettled: ((settled: { hookRan: boolean; startup: boolean }) => void) | undefined;
+        let onSettled: ((settled: { hookRan: boolean; sequence: number; startup: boolean }) => void) | undefined;
         let exit: (code: number) => void = () => {};
         const exited = new Promise<number>((resolve) => {
             exit = resolve;
@@ -1487,7 +1690,7 @@ describe("lunora dev --target node codegen settlements", () => {
                     exit(0);
                 });
 
-                return { exited, kill: () => {}, reload };
+                return { exited, kill: () => {}, loadedSequence, reload };
             },
             studio: false,
             target: "node",
@@ -1499,6 +1702,45 @@ describe("lunora dev --target node codegen settlements", () => {
 
         return reload;
     };
+
+    it("does not restart for a hooked run the first load already waited out", async () => {
+        expect.assertions(2);
+
+        // The first load read run 1, so its settlement during the start is already in what serves; run 2 is not.
+        await expect(runWithFakes("during-start", { hookRan: true, sequence: 1, startup: true }, 1)).resolves.not.toHaveBeenCalled();
+        await expect(runWithFakes("during-start", { hookRan: false, sequence: 2, startup: false }, 1)).resolves.toHaveBeenCalledTimes(1);
+    });
+
+    it("tells the worker to watch lunora/ and the config itself when the codegen watcher could not start", async () => {
+        expect.assertions(1);
+
+        let codegenWatch: boolean | undefined;
+        let exit: (code: number) => void = () => {};
+        const exited = new Promise<number>((resolve) => {
+            exit = resolve;
+        });
+
+        await runDevCommand({
+            cwd: workdir,
+            logger: milestoneLogger().logger,
+            // Requested, but unavailable: no settled run will ever reach the worker.
+            startCodegen: () => ({ close: async () => {}, watchAvailable: false }) as never,
+            startNodeWorker: async (inputs) => {
+                ({ codegenWatch } = inputs);
+                setImmediate(() => {
+                    exit(0);
+                });
+
+                return { exited, kill: () => {}, reload: () => {} };
+            },
+            studio: false,
+            target: "node",
+            waitForInterrupt: async () => 0,
+            workerPort: await findAvailablePort(18_900),
+        });
+
+        expect(codegenWatch).toBe(false);
+    });
 
     it("reloads once the host is up for a run that settled while it was loading", async () => {
         expect.assertions(1);

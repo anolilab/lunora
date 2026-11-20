@@ -19,6 +19,11 @@ interface WorkerProcess {
 
 /** A running Node dev worker (`--target node`): the {@link WorkerProcess} the supervisor stops, plus the reload the codegen watcher calls. */
 interface NodeDevWorker extends WorkerProcess {
+    /**
+     * The codegen run (`CodegenGeneration.sequence`) whose output the first load read, once the worker serves; `undefined`
+     * without a codegen watcher. A run up to it is already in what serves.
+     */
+    loadedSequence?: number;
     /** Restart on the current sources. Calls made while one runs collapse into one more. */
     reload: () => void;
 }
@@ -154,6 +159,8 @@ interface DevCommandOptions {
     probeReady?: ReadinessProbe;
     /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`LUNORA_REMOTE=1` / `--remote`); DO shards stay local. */
     remote?: boolean;
+    /** `remote` came from LUNORA_REMOTE or the project's `lunora.config` default rather than an explicit `--remote`. */
+    remoteFromDefault?: boolean;
     /** Starts the celld dev session for the celld target; injected in tests. */
     startCelldSession?: typeof startCelldDevSession;
     /** Injection seam for tests — defaults to the real codegen watcher. */

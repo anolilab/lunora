@@ -646,8 +646,8 @@ describe("startCodegenWatch", () => {
 
             const workdir = projectWithPostCodegen();
             const { logger } = silentLogger();
-            const settledAfterSuccess = vi.fn<(run: { hookRan: boolean; startup: boolean }) => void>();
-            const settledAfterFailure = vi.fn<(run: { hookRan: boolean; startup: boolean }) => void>();
+            const settledAfterSuccess = vi.fn<(run: { hookRan: boolean; sequence: number; startup: boolean }) => void>();
+            const settledAfterFailure = vi.fn<(run: { hookRan: boolean; sequence: number; startup: boolean }) => void>();
 
             await startCodegenWatch({
                 logger,
@@ -666,7 +666,7 @@ describe("startCodegenWatch", () => {
             }).close();
 
             // The startup run, whose hook ran after codegen wrote: a dev server that loaded before the hook finished must reload.
-            expect(settledAfterSuccess).toHaveBeenCalledExactlyOnceWith({ hookRan: true, startup: true });
+            expect(settledAfterSuccess).toHaveBeenCalledExactlyOnceWith({ hookRan: true, sequence: 1, startup: true });
             expect(settledAfterFailure).not.toHaveBeenCalled();
 
             rmSync(workdir, { force: true, recursive: true });

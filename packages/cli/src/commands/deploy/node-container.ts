@@ -23,6 +23,7 @@ import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
 import {
     bindingNames,
+    declaredVariables,
     durableObjectEntries,
     isDeclared,
     MAIL_QUEUE_NAME,
@@ -30,6 +31,7 @@ import {
     queueEntries,
     refuseEnvCollisions,
     refuseWorkerEnvOverride,
+    requiredSecretNames,
     unboundSections,
     WORKER_ENV,
 } from "../../util/node-target-bindings";
@@ -66,9 +68,6 @@ const OPTIONAL_NATIVE_MODULES = ["bufferutil", "utf-8-validate"] as const;
 const SHARD_DURABLE_OBJECT_CLASSES: ReadonlySet<string> = new Set(
     Object.keys(DURABLE_OBJECT_BINDINGS).filter((className) => DURABLE_OBJECT_BINDINGS[className as keyof typeof DURABLE_OBJECT_BINDINGS] === "SHARD"),
 );
-
-/** An environment variable name as a container runtime sets one. */
-const ENV_NAME = /^[A-Z_a-z]\w*$/u;
 
 /** What the mail host reads to deliver: the sender, and Resend's key, the only transport the container has. */
 const MAIL_ENV = ["MAIL_FROM", "RESEND_API_KEY"] as const;
@@ -183,9 +182,6 @@ const stringMap = (value: unknown, section: string, configName: string): Record<
     return value as Record<string, string>;
 };
 
-/** Names that act on an object's prototype rather than being an ordinary key; never valid as a var name. */
-const RESERVED_OBJECT_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
-
 /**
  * Every `__proto__` key under `vars`, at any depth, read from the config's raw syntax: parsing applies such a key as a
  * prototype instead of keeping it, so after parsing it cannot be seen and its value is silently lost.
@@ -243,71 +239,6 @@ const deliveredCronSchedules = async (cronsModule: string): Promise<string[]> =>
     const crons = await createJiti(cronsModule).import<{ LUNORA_CRONS?: Record<string, unknown> }>(cronsModule);
 
     return Object.keys(crons.LUNORA_CRONS ?? {});
-};
-
-/** `vars`: an object of environment variable names, since an override comes from the variable of the same name. */
-const declaredVariables = (value: unknown, configName: string): Record<string, unknown> => {
-    if (value === undefined || value === null) {
-        return {};
-    }
-
-    if (!isRecord(value)) {
-        throw new Error(`--target node reads vars in ${configName} as an object of names and values, and it is ${JSON.stringify(value)}`);
-    }
-
-    const invalid = Object.keys(value).filter((name) => !ENV_NAME.test(name) || RESERVED_OBJECT_KEYS.has(name));
-
-    if (invalid.length > 0) {
-        throw new Error(
-            `--target node lets the environment variable of the same name override each var, and vars in ${configName} has ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
-        );
-    }
-
-    return { ...value };
-};
-
-/**
- * The `secrets.required` names, or a throw naming the field when it is not a list of names. Dropping a malformed value would
- * deploy a server that starts without the secrets the app needs, the failure this check exists to prevent.
- */
-const requiredSecretNames = (secrets: unknown, configName: string): string[] => {
-    if (secrets === undefined || secrets === null) {
-        return [];
-    }
-
-    const refuse = (problem: string): never => {
-        throw new Error(
-            `--target node checks every secrets.required name at startup, and ${problem} in ${configName}: secrets must be { "required": [...] }, an array of environment variable names such as ["API_KEY"]`,
-        );
-    };
-
-    if (typeof secrets !== "object" || Array.isArray(secrets)) {
-        return refuse(`secrets is ${JSON.stringify(secrets)}`);
-    }
-
-    // `required` is the object's only field: a misspelling ("require") would otherwise read as "no secrets" and skip the check.
-    const unknown = Object.keys(secrets).filter((key) => key !== "required");
-
-    if (unknown.length > 0) {
-        return refuse(`secrets has ${unknown.map((key) => JSON.stringify(key)).join(", ")} instead of "required"`);
-    }
-
-    const { required } = secrets as { required?: unknown };
-
-    if (!Array.isArray(required)) {
-        return refuse(`secrets.required is ${JSON.stringify(required)}`);
-    }
-
-    // An environment variable name: anything else could never be set on a container, so the server could never start.
-    const invalid = required.filter((name) => typeof name !== "string" || !ENV_NAME.test(name));
-
-    if (invalid.length > 0) {
-        return refuse(
-            `secrets.required lists ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
-        );
-    }
-
-    return required as string[];
 };
 
 /**

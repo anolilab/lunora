@@ -192,6 +192,77 @@ const refuseEnvCollisions = (sources: ReadonlyArray<{ names: ReadonlyArray<strin
     }
 };
 
+/** An environment variable name as a container runtime sets one. */
+const ENV_NAME = /^[A-Z_a-z]\w*$/u;
+
+/** Names that act on an object's prototype rather than being an ordinary key; never valid as a var name. */
+const RESERVED_OBJECT_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
+/** `vars`: an object of environment variable names, since an override comes from the variable of the same name. */
+const declaredVariables = (value: unknown, configName: string): Record<string, unknown> => {
+    if (value === undefined || value === null) {
+        return {};
+    }
+
+    if (!isRecord(value)) {
+        throw new Error(`--target node reads vars in ${configName} as an object of names and values, and it is ${JSON.stringify(value)}`);
+    }
+
+    const invalid = Object.keys(value).filter((name) => !ENV_NAME.test(name) || RESERVED_OBJECT_KEYS.has(name));
+
+    if (invalid.length > 0) {
+        throw new Error(
+            `--target node lets the environment variable of the same name override each var, and vars in ${configName} has ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
+        );
+    }
+
+    return { ...value };
+};
+
+/**
+ * The `secrets.required` names, or a throw naming the field when it is not a list of names. Dropping a malformed value would
+ * deploy a server that starts without the secrets the app needs, the failure this check exists to prevent.
+ */
+const requiredSecretNames = (secrets: unknown, configName: string): string[] => {
+    if (secrets === undefined || secrets === null) {
+        return [];
+    }
+
+    const refuse = (problem: string): never => {
+        throw new Error(
+            `--target node checks every secrets.required name at startup, and ${problem} in ${configName}: secrets must be { "required": [...] }, an array of environment variable names such as ["API_KEY"]`,
+        );
+    };
+
+    if (typeof secrets !== "object" || Array.isArray(secrets)) {
+        return refuse(`secrets is ${JSON.stringify(secrets)}`);
+    }
+
+    // `required` is the object's only field: a misspelling ("require") would otherwise read as "no secrets" and skip the check.
+    const unknown = Object.keys(secrets).filter((key) => key !== "required");
+
+    if (unknown.length > 0) {
+        return refuse(`secrets has ${unknown.map((key) => JSON.stringify(key)).join(", ")} instead of "required"`);
+    }
+
+    const { required } = secrets as { required?: unknown };
+
+    if (!Array.isArray(required)) {
+        return refuse(`secrets.required is ${JSON.stringify(required)}`);
+    }
+
+    // An environment variable name: anything else could never be set on a container, so the server could never start.
+    const invalid = required.filter((name) => typeof name !== "string" || !ENV_NAME.test(name));
+
+    if (invalid.length > 0) {
+        return refuse(
+            `secrets.required lists ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
+        );
+    }
+
+    return required as string[];
+};
+
 /** Whether a declared section binds anything: an empty list or object is no binding. */
 const isDeclared = (value: unknown): boolean => {
     if (Array.isArray(value)) {
@@ -236,6 +307,7 @@ const refuseWorkerEnvOverride = (
 export {
     BINDING_NAME,
     bindingNames,
+    declaredVariables,
     durableObjectEntries,
     isDeclared,
     MAIL_QUEUE_NAME,
@@ -243,6 +315,7 @@ export {
     queueEntries,
     refuseEnvCollisions,
     refuseWorkerEnvOverride,
+    requiredSecretNames,
     unboundSections,
     WORKER_ENV,
 };

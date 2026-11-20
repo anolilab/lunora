@@ -520,7 +520,10 @@ since it names a directory under `.lunora/node/`. As for the container, a
 malformed entry in a section the host composes, or one name declared by two
 sources (a var and a binding, say), is refused at startup rather than left for
 the first request to find. A `main` outside the project
-(a worker shared between apps) is watched and reloaded like one inside it. Mail
+(a worker shared between apps) is watched and reloaded like one inside it, and
+so is a sibling package of the monorepo the app sits in (one with a
+`pnpm-workspace.yaml` or a `workspaces` field above it); packages from the
+registry load once. Mail
 is captured to the Studio inbox while `WORKER_ENV` is `development`, as under
 `wrangler dev`; Node dev composes no mail host, so with
 `LUNORA_MAIL_CAPTURE=0` a send to the `lunora-mail` queue stays queued, and a
@@ -529,7 +532,8 @@ startup warning says so whenever the app produces to that queue.
 Studio works against it (data browser, logs, live subscriptions). Durable Object
 bindings, vars, declared crons, Secrets Store secrets (read from `.dev.vars` or
 the shell) and Hyperdrive (built from `DATABASE_URL`) are bound; any other
-declared binding is named in a startup warning. `--remote` is refused, `--inspector-port` is ignored, and a Vite or
+declared binding is named in a startup warning. `--remote` is refused before anything is provisioned, a remote default from
+`LUNORA_REMOTE` or `lunora.config` is ignored with a warning, `--inspector-port` is ignored, and a Vite or
 framework project still gets this standalone stack, so start its frontend dev
 server separately. Shard data persists in `.lunora/node/`.
 

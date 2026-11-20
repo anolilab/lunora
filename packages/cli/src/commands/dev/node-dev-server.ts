@@ -29,7 +29,7 @@
  * read from the dev env; and each `hyperdrive` binding, built from `DATABASE_URL`.
  */
 import type { FSWatcher } from "node:fs";
-import { existsSync, realpathSync, statSync, watch } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync, watch } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { resolveLocalWorkerEnv, resolveSchemaDirectory, wranglerDotenvFiles } from "@lunora/config";
@@ -38,11 +38,13 @@ import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@
 
 import {
     bindingNames,
+    declaredVariables,
     durableObjectEntries,
     MAIL_QUEUE_NAME,
     mailQueueBindings,
     refuseEnvCollisions,
     refuseWorkerEnvOverride,
+    requiredSecretNames,
     unboundSections,
     WORKER_ENV,
 } from "../../util/node-target-bindings";
@@ -160,10 +162,13 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
 
     const hyperdrive = bindingNames(view.hyperdrive, "hyperdrive", configName);
     const secrets = bindingNames(view.secrets_store_secrets, "secrets_store_secrets", configName);
-    const scope = view as { secrets?: { required?: unknown } | null; vars?: Record<string, unknown> | null };
-    const required = Array.isArray(scope.secrets?.required) ? scope.secrets.required.filter((name): name is string => typeof name === "string") : [];
+    const scope = view as { secrets?: unknown; vars?: unknown };
+    // Read as the container reads them: an absent field is no filter, a malformed one is refused by name rather than taken
+    // as an empty list, which would filter the intended secret out of `.dev.vars` or turn an array into numbered vars.
+    const required = requiredSecretNames(scope.secrets, configName);
+    const variables = declaredVariables(scope.vars, configName);
     const envSources = [
-        { names: Object.keys(scope.vars ?? {}), source: "vars" },
+        { names: Object.keys(variables), source: "vars" },
         { names: required, repeatable: true, source: "secrets.required" },
         { names: secrets, source: "secrets_store_secrets" },
         { names: hyperdrive, source: "hyperdrive" },
@@ -234,6 +239,29 @@ const stringValues = (env: Record<string, unknown>): Record<string, string> =>
     Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 
 const isUnder = (path: string, directory: string): boolean => path === directory || path.startsWith(`${directory}${sep}`);
+
+/** The nearest directory above `projectRoot` that roots a workspace, or `undefined` when the project is in none. */
+const findWorkspaceRoot = (projectRoot: string): string | undefined => {
+    for (let directory = dirname(projectRoot); dirname(directory) !== directory; directory = dirname(directory)) {
+        if (existsSync(join(directory, "pnpm-workspace.yaml"))) {
+            return directory;
+        }
+
+        const manifest = join(directory, "package.json");
+
+        if (existsSync(manifest)) {
+            try {
+                if ((JSON.parse(readFileSync(manifest, "utf8")) as { workspaces?: unknown }).workspaces !== undefined) {
+                    return directory;
+                }
+            } catch {
+                // An unreadable manifest roots no workspace.
+            }
+        }
+    }
+
+    return undefined;
+};
 
 /** A reload whose load a codegen run overlapped; that run's settlement reloads again. */
 class SupersededLoad extends Error {
@@ -324,12 +352,17 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         return scope;
     };
 
-    // Source the developer edits: the project, and every module in the entry's own package, so a worker shared between apps
-    // (`main` outside the project) is followed with its helpers wherever they sit in that package. Packages it imports are not,
-    // wherever they resolve: a workspace package's realpath is outside `node_modules`, but it has a `package.json` of its own.
+    // The monorepo the project sits in, if any: the nearest directory above it with a `pnpm-workspace.yaml` or a `package.json`
+    // that declares `workspaces`.
+    const workspaceRoot = findWorkspaceRoot(projectRoot);
+
+    // Source the developer edits: the project; every module in the entry's own package, so a worker shared between apps (`main`
+    // outside the project) is followed with its helpers; and every package of the monorepo the project sits in, which a
+    // `workspace:` dependency or a link resolves to. A package from the registry resolves under `node_modules` and loads once.
     let entryScope = projectRoot;
     const isProjectSource = (path: string): boolean =>
-        !path.split(sep).includes("node_modules") && (isUnder(path, projectRoot) || packageScopeOf(path) === entryScope);
+        !path.split(sep).includes("node_modules") &&
+        (isUnder(path, projectRoot) || packageScopeOf(path) === entryScope || (workspaceRoot !== undefined && isUnder(path, workspaceRoot)));
 
     let watchers: FSWatcher[] = [];
     let debounce: NodeJS.Timeout | undefined;
@@ -342,6 +375,10 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     // The source set of the last load that succeeded, kept until another one does: a load that fails on a moved file has none
     // of the files it could not import, and restoring one must still reload.
     let lastLoadedSources = new Set<string>();
+    // The entry the last load imported, or tried to.
+    let requestedEntry: string | undefined;
+    // The codegen run the last prepared load read; the first one's is reported to the caller as the worker's loaded sequence.
+    let preparedSequence: number | undefined;
     // The modification time each watched source had when it was last checked, so a reload follows each change once.
     const seenModified = new Map<string, number>();
 
@@ -426,9 +463,12 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         const watchable = (path: string): boolean => !(inputs.codegenWatch && isUnder(path, schemaDirectory));
         // The generated cron map is read after the entry, and without the codegen watcher nothing else reloads on it. Watched by
         // name even before it exists, so a first `crons.ts` is seen too.
+        // The entry the load asked for is watched by name too: one that failed because the file is missing is not in the cache,
+        // and creating it must still reload.
         const current = [
             ...Object.keys(jiti.cache).filter((path) => isProjectSource(path) && watchable(path)),
             ...(watchable(cronsModule) ? [cronsModule] : []),
+            ...(requestedEntry === undefined ? [] : [requestedEntry]),
         ];
         const sources = loaded ? new Set(current) : new Set([...lastLoadedSources, ...current]);
 
@@ -466,6 +506,8 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
 
         // Only the project's own modules are evicted: packages under node_modules load natively once and stay, so a reload
         // re-evaluates the app and nothing else.
+        requestedEntry = entry;
+
         // Re-read per load: a `package.json` added or moved changes which package a module belongs to.
         packageScopes.clear();
 
@@ -508,7 +550,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     const bindPlatformEnv = (current: NodeDevProject, env: Record<string, unknown>): Record<string, unknown> => {
         const local = resolveLocalWorkerEnv({ config: undefined, configPath: current.configPath, environment: current.environment, projectRoot });
         const source = { ...process.env, ...stringValues(local.env), ...stringValues(env) };
-        const hyperdrive: Record<string, unknown> = {};
+        let hyperdrive: Record<string, unknown> = {};
         const url = source["DATABASE_URL"];
 
         if (current.hyperdrive.length > 0 && (url === undefined || url === "")) {
@@ -517,9 +559,9 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
                 logger.warn(`node: Hyperdrive ${current.hyperdrive.join(", ")} is not bound — set DATABASE_URL in .dev.vars or the shell to bind it`);
             }
         } else {
-            for (const name of current.hyperdrive) {
-                hyperdrive[name] = platform.createNodeHyperdrive(url);
-            }
+            // Built as entries, not assigned: assigning a binding named `__proto__` would set the object's prototype, and the
+            // spread below would drop it.
+            hyperdrive = Object.fromEntries(current.hyperdrive.map((name) => [name, platform.createNodeHyperdrive(url)]));
         }
 
         return { ...env, ...platform.createNodeSecretBindings(current.secrets, source), ...hyperdrive };
@@ -547,9 +589,11 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     const prepare = async (kind: "reload" | "start"): Promise<NodeAppHostCandidate> => {
         const generation = await settledGeneration();
 
+        preparedSequence = generation?.sequence;
+
         if (generation?.usable === false) {
             throw new Error(
-                `the last postcodegen hook failed, so _generated/* may be half-written — fix it and ${kind === "reload" ? "save to reload" : "start lunora dev again"}`,
+                `the last codegen run did not finish (a step after writing _generated/*, or its postcodegen hook, failed; the error is logged above), so _generated/* may be half-written — fix it and ${kind === "reload" ? "save to reload" : "start lunora dev again"}`,
             );
         }
 
@@ -643,12 +687,12 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
 
     let configWatcher: FSWatcher | undefined;
 
-    try {
-        // The files the env is read from, and the wrangler config itself when no codegen watcher does (it reruns on a config edit
-        // and its settled run reloads here), watched through their directory so a file created or replaced later is seen too.
-        // The name set is rebuilt per event, so it follows CLOUDFLARE_ENV. Installed before the listener, so a watch that
-        // cannot be opened fails the start with nothing bound.
-        configWatcher = watch(dirname(project.configPath), (_event, filename) => {
+    // The files the env is read from, and the wrangler config itself when no codegen watcher does (it reruns on a config edit and
+    // its settled run reloads here), watched through their directory so a file created or replaced later is seen too. The name
+    // set is rebuilt per event, so it follows CLOUDFLARE_ENV. A watch that fails is reported and opened again, with a reload for
+    // any edit it may have missed.
+    const installConfigWatcher = (): void => {
+        const watcher = watch(dirname(project.configPath), (_event, filename) => {
             const environment = activeWranglerEnvironment();
             const watched = new Set([
                 ...(inputs.codegenWatch ? [] : [basename(project.configPath), "wrangler.json", "wrangler.jsonc"]),
@@ -662,9 +706,30 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
                 scheduleReload();
             }
         });
-        configWatcher.on("error", () => {
-            configWatcher?.close();
+
+        watcher.on("error", (error: unknown) => {
+            watcher.close();
+
+            if (isStopped()) {
+                return;
+            }
+
+            logger.warn(`node: stopped watching the wrangler config and .dev.vars (${errorMessage(error)}); watching them again`);
+
+            try {
+                installConfigWatcher();
+            } catch (reopenError: unknown) {
+                logger.warn(`node: could not watch the wrangler config and .dev.vars again (${errorMessage(reopenError)}); edits there need a restart`);
+            }
+
+            scheduleReload();
         });
+        configWatcher = watcher;
+    };
+
+    try {
+        // Before the listener, so a watch that cannot be opened fails the start with nothing bound.
+        installConfigWatcher();
 
         await serve(platform.createNodeAppHost(await prepareStart()));
     } catch (error: unknown) {
@@ -678,6 +743,8 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
 
     // After serving, not in `prepare`: a reload opens shards only once the previous version has closed them.
     running?.host.rearmPersistedAlarms();
+
+    const startSequence = preparedSequence;
 
     logger.info(`node: serving ${relative(projectRoot, project.entry)} on @lunora/platform-node at http://127.0.0.1:${String(port)}`);
 
@@ -786,6 +853,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
 
     return {
         exited,
+        loadedSequence: startSequence,
         kill: (signal) => {
             // The supervisor's second Ctrl-C: a shutdown waiting on a `waitUntil` that never settles must not hold the
             // process, so the worker reports itself gone without waiting for it.
@@ -800,7 +868,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             stopped = true;
             clearTimeout(debounce);
             unwatch();
-            configWatcher.close();
+            configWatcher?.close();
             (reloading ?? Promise.resolve())
                 .then(shutdown)
                 .then(

@@ -414,6 +414,8 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     pending = undefined;
                     sequence += 1;
 
+                    const runSequence = sequence;
+
                     // No hook on a failed run: `postcodegen` exists to finish
                     // generated output, and running it over a tree codegen did
                     // not write is the one way to make a bad state worse.
@@ -480,7 +482,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     usable = !hookFailed;
 
                     if (!hookFailed) {
-                        options.onSettled?.({ hookRan, startup: next.reason === "startup" });
+                        options.onSettled?.({ hookRan, sequence: runSequence, startup: next.reason === "startup" });
                     }
                 }
             } catch (error: unknown) {
@@ -744,7 +746,7 @@ export interface CodegenWatcherOptions {
      * `postcodegen` hook (`hookRan`) can change `_generated/*` after that. A dev server that loads `_generated/*` itself reloads
      * here rather than on the raw file event, which fires mid-write.
      */
-    onSettled?: (run: { hookRan: boolean; startup: boolean }) => void;
+    onSettled?: (run: { hookRan: boolean; sequence: number; startup: boolean }) => void;
     /** Project root containing the `lunora/` directory. */
     projectRoot: string;
     /** Process spawner for the `postcodegen` hook. Injectable so tests need no real subprocess. */

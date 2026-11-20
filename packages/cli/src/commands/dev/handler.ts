@@ -41,7 +41,7 @@ import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveDevTargetOrError } from "../../util/deploy-target-resolve";
+import { resolveDevTargetOrError, servesDevInProcess } from "../../util/deploy-target-resolve";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
@@ -58,7 +58,7 @@ import { buildDevPlan } from "./plan";
 import type { Teardown } from "./supervise";
 import { defaultWorkerSpawner, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt } from "./supervise";
 import { normalizeAllowMail, printPublicWarning, startTunnelForPlan } from "./tunnel";
-import type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, WorkerProcess, WorkerSpawner } from "./types";
+import type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, NodeDevWorker, WorkerProcess, WorkerSpawner } from "./types";
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
 const printBanner = (logger: Logger, plan: DevCommandPlan, cwd: string, studioUrl: string | undefined, manifestPath: string | undefined): void => {
@@ -274,11 +274,15 @@ const afterWorkerSpawn = (
     let containerLogs: ContainerLogStreamHandle | undefined;
 
     // Tail the local dev containers' own stdout/stderr (no-op when the project
-    // declares none). Best-effort — a Docker hiccup must not break dev.
-    try {
-        containerLogs = startContainerLogStreaming(cwd, logger);
-    } catch {
-        /* never fatal */
+    // declares none). Best-effort — a Docker hiccup must not break dev. The Node
+    // host runs no containers (the startup warning names the section unbound), so
+    // there is nothing of its to tail.
+    if (plan.nodeHost !== true) {
+        try {
+            containerLogs = startContainerLogStreaming(cwd, logger);
+        } catch {
+            /* never fatal */
+        }
     }
 
     printBanner(logger, plan, cwd, studioUrl, manifestPath);
@@ -497,24 +501,45 @@ const attachedCelldProjectionReady = async (plan: DevCommandPlan, options: DevCo
 };
 
 /**
+ * The options to plan with, decided before anything writes (binding provisioning edits the wrangler config): the Node host has
+ * no remote bindings, so an explicit `--remote` is refused, and a remote default from LUNORA_REMOTE or the project config does
+ * not apply to it.
+ * @throws for an explicit `--remote` on the Node target.
+ */
+const nodeTargetRemote = (target: string, options: DevCommandOptions, logger: Logger): DevCommandOptions => {
+    if (!servesDevInProcess(target) || options.remote !== true) {
+        return options;
+    }
+
+    if (options.remoteFromDefault !== true) {
+        throw new Error("--remote proxies bindings to Cloudflare; the Node target has no remote bindings to proxy to");
+    }
+
+    logger.warn("dev: the remote default (LUNORA_REMOTE or lunora.config) does not apply to --target node, which has no remote bindings; running local");
+
+    return { ...options, remote: false };
+};
+
+/**
  * Routes the codegen watcher's settled runs to the Node host's reload. A run that settles before the host starts loading is
  * already in what it loads; an edit's run that settles while it loads may have rewritten `_generated/*` after the host read
  * it, so it reloads once the host is up. The startup run's codegen wrote before the worker was started, so it reloads only
  * when a `postcodegen` hook ran after that: without one, a reload would only drop the requests already in flight.
  */
 interface NodeReloadLatch {
-    onSettled: (run: { hookRan: boolean; startup: boolean }) => void;
-    started: (reload: () => void) => void;
+    onSettled: (run: { hookRan: boolean; sequence: number; startup: boolean }) => void;
+    started: (worker: Pick<NodeDevWorker, "loadedSequence" | "reload">) => void;
     starting: () => void;
 }
 
 const createNodeReloadLatch = (): NodeReloadLatch => {
     let reloadNodeWorker: (() => void) | undefined;
     let loading = false;
-    let settledWhileLoading = false;
+    // The latest run that settled while the host loaded, if any.
+    let settledWhileLoading: number | undefined;
 
     return {
-        onSettled: ({ hookRan, startup }) => {
+        onSettled: ({ hookRan, sequence, startup }) => {
             if (startup && !hookRan) {
                 return;
             }
@@ -522,14 +547,16 @@ const createNodeReloadLatch = (): NodeReloadLatch => {
             if (reloadNodeWorker !== undefined) {
                 reloadNodeWorker();
             } else if (loading) {
-                settledWhileLoading = true;
+                settledWhileLoading = Math.max(settledWhileLoading ?? sequence, sequence);
             }
         },
-        started: (reload) => {
-            reloadNodeWorker = reload;
+        // Only for a run the first load did not already read: that load waits out a busy run, so a run that settled before it
+        // read the generation is in what serves, and reloading would only drop the first connections.
+        started: (worker) => {
+            reloadNodeWorker = worker.reload;
 
-            if (settledWhileLoading) {
-                reload();
+            if (settledWhileLoading !== undefined && (worker.loadedSequence === undefined || settledWhileLoading > worker.loadedSequence)) {
+                worker.reload();
             }
         },
         starting: () => {
@@ -559,14 +586,16 @@ const startPlannedWorker = async (
             node.reload.starting();
 
             const worker = await (options.startNodeWorker ?? startNodeDevWorker)({
-                codegenWatch: plan.runsCodegenWatch,
+                // Whether the watcher really runs, not whether it was asked for: one that could not start (no schema
+                // directory) sends no settled run, so the worker must watch `lunora/` and the wrangler config itself.
+                codegenWatch: plan.runsCodegenWatch && codegen?.watchAvailable === true,
                 generation: codegen === undefined ? undefined : () => codegen.generation(),
                 logger,
                 port: plan.workerPort,
                 projectRoot: cwd,
             });
 
-            node.reload.started(worker.reload);
+            node.reload.started(worker);
 
             return worker;
         }
@@ -644,6 +673,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
     const { target } = resolvedTarget;
 
+    const planOptions = nodeTargetRemote(target, options, logger);
+
     const flavor = resolveTargetFlavor(target, detectedFlavor, logger);
 
     // Auto-provision the bindings the project's code implies, the same way
@@ -665,7 +696,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         await provisionBindings(cwd, logger, undefined, target, undefined, discoveryCache);
     }
 
-    const plan = await buildDevPlan({ ...options, flavor, target });
+    const plan = await buildDevPlan({ ...planOptions, flavor, target });
     // Torn down on every exit path, including a throw during startup (the
     // `finally`).
     const handles: Teardown = { remoteCleanup: plan.remote.cleanup, serviceConfigCleanup: plan.serviceConfigCleanup };
@@ -1008,6 +1039,8 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         logger,
         port: options.port,
         remote,
+        // Only a default: an explicit `--remote` is the flag's own request.
+        remoteFromDefault: remote && options.remote !== true ? true : undefined,
         target: options.target,
         tunnel,
         workerPort: options.workerPort,

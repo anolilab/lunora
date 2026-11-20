@@ -333,6 +333,31 @@ describe("lunora dev lifecycle", () => {
             expect(claimedAtSpawn).toBe("1");
         });
 
+        it("starts the daemon, not the Vite dev script, for a Vite project that targets node", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/vite": "1.0.0" }, name: "app" }), "utf8");
+
+            let args: ReadonlyArray<string> | undefined;
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: { target: "node" } as DevOptions,
+                remote: false,
+                run: (options) => {
+                    args = options.command.args;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            // `lunora dev` serves the Node target itself; the Vite dev script would serve the app on workerd.
+            expect(args).toContain("--target");
+            expect(args?.[(args.indexOf("--target") ?? 0) + 1]).toBe("node");
+        });
+
         it("forwards --target to the daemon", async () => {
             expect.assertions(2);
 
