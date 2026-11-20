@@ -130,6 +130,19 @@ interface ImportResult {
 }
 ```
 
+### `PreparedGlobalImportRow` (type)
+
+```ts
+type PreparedRow = ReadyRow | {
+    kind: "delete";
+    line: number;
+    row: ExportRow;
+} | {
+    kind: "settled";
+    outcome: RowOutcome;
+};
+```
+
 ### `QueryTimer` (type)
 
 ```ts
@@ -335,6 +348,12 @@ const listSqlGlobalTables: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDi
 const migrateSearchState: (exec: SqlCtxExec, dialect: SqlDialect) => Promise<void>;
 ```
 
+### `prepareGlobalImportRow` (const)
+
+```ts
+const prepareGlobalImportRow: (schema: SchemaLike, row: ExportRow, line: number) => PreparedRow;
+```
+
 ### `readSqlCdcChangedTables` (const)
 
 ```ts
@@ -447,3 +466,46 @@ Re-exported from `@lunora/sql-store` — signature tracked in that section.
 ### `SqlRunResult` (interface)
 
 Re-exported from `@lunora/sql-store` — signature tracked in that section.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ReadyRow` (type)
+
+```ts
+type ReadyRow = {
+    decoded: Record<string, unknown>;
+    explicitId: string | undefined;
+    kind: "ready";
+    line: number;
+    table: string;
+};
+```
+
+### `RowOutcome` (type)
+
+```ts
+type RowOutcome = {
+    committed: boolean;
+    error: ImportError;
+    kind: "error";
+} | {
+    inserted: string;
+    kind: "inserted";
+} | {
+    kind: "absent";
+} | {
+    kind: "checked";
+} | {
+    kind: "conflict";
+} | {
+    kind: "deleted";
+} | {
+    kind: "replaced";
+} | {
+    kind: "skip";
+};
+```

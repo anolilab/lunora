@@ -398,6 +398,27 @@ interface AuthConfigInfo {
 }
 ```
 
+### `AuthDataPortLike` (interface)
+
+```ts
+interface AuthDataPortLike {
+    exportRows: () => AsyncIterable<{
+        doc: Row;
+        table: string;
+    }>;
+    importRows: (rows: ReadonlyArray<{
+        doc: Row;
+        table: string;
+    }>) => Promise<AuthImportResult>;
+    replaceRows?: (rows: ReadonlyArray<{
+        doc: Row;
+        table: string;
+    }>, options?: {
+        dryRun?: boolean;
+    }) => Promise<AuthReplaceResult>;
+}
+```
+
 ### `AuthDoOptions` (interface)
 
 ```ts
@@ -411,6 +432,20 @@ interface AuthDoOptions {
 ```ts
 interface AuthDoState {
     storage: DoStorageLike;
+}
+```
+
+### `AuthImportResult` (interface)
+
+```ts
+interface AuthImportResult {
+    conflicts: number;
+    errors: {
+        index: number;
+        message: string;
+        table: string;
+    }[];
+    inserted: number;
 }
 ```
 
@@ -557,6 +592,20 @@ interface AuthQuery {
 }
 ```
 
+### `AuthReplaceResult` (interface)
+
+```ts
+interface AuthReplaceResult {
+    deleted: number;
+    errors: {
+        index: number;
+        message: string;
+        table: string;
+    }[];
+    inserted: number;
+}
+```
+
 ### `AuthRow` (type)
 
 ```ts
@@ -662,6 +711,7 @@ const DEFAULT_AUTH_BASE_PATH: string;
 interface DoAuthWiring {
     auditReader: AuthAuditReader;
     authHandler: (request: Request) => Promise<Response | undefined>;
+    dataPort?: AuthDataPortLike;
     discoveryHandler: (request: Request) => Promise<Response | undefined>;
     jurisdictionMove?: AuthJurisdictionMove;
     resolveIdentity: (request: Request) => Promise<SessionIdentity | null>;
@@ -975,6 +1025,18 @@ const authAuditBeforeHook: () => ReturnType<typeof createAuthMiddleware>;
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
 ```
 
+### `authCredentialColumns` (const)
+
+```ts
+const authCredentialColumns: (options: LunoraAuthOptions) => Record<string, string[]>;
+```
+
+### `authCredentialTableNames` (const)
+
+```ts
+const authCredentialTableNames: (options: LunoraAuthOptions) => string[];
+```
+
 ### `authDiscoveryPaths` (const)
 
 ```ts
@@ -999,6 +1061,12 @@ const authDoColumnAdditions: (options: LunoraAuthOptions, existingColumns: (tabl
 
 ```ts
 const authDoSchemaStatements: (options: LunoraAuthOptions) => string[];
+```
+
+### `authTableNames` (const)
+
+```ts
+const authTableNames: (options: LunoraAuthOptions) => string[];
 ```
 
 ### `authTables` (const)
@@ -1060,6 +1128,12 @@ const createSignUpInvitation: (auth: LunoraAuth, input: {
     expiresInSeconds?: number;
     invitedBy?: string;
 }) => Promise<IssuedSignUpInvitation>;
+```
+
+### `createSqlAuthDataPort` (const)
+
+```ts
+const createSqlAuthDataPort: (executor: SqlExecutor, tables: ReadonlyArray<string>, credentialTables?: ReadonlyArray<string>, credentialColumns?: CredentialColumns) => AuthDataPortLike;
 ```
 
 ### `createSqlAuthStore` (const)
@@ -1907,7 +1981,19 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/worker`
 
+### `authCredentialColumns` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `authCredentialTableNames` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
 ### `authDiscoveryPathsFor` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `authTableNames` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
@@ -1924,6 +2010,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `createDoAuthWiring` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createSqlAuthDataPort` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
@@ -2046,6 +2136,12 @@ interface BaseSSOUserResolutionInput {
 }
 ```
 
+### `CredentialColumns` (type)
+
+```ts
+type CredentialColumns = Readonly<Record<string, ReadonlyArray<string>>>;
+```
+
 ### `D1Like` (interface)
 
 ```ts
@@ -2143,6 +2239,12 @@ interface OIDCMapping {
 
 ```ts
 type ParsedCert = ReturnType<typeof parseCertificate>;
+```
+
+### `Row` (type)
+
+```ts
+type Row = Record<string, unknown>;
 ```
 
 ### `SAMLConfig` (interface)

@@ -286,7 +286,9 @@ interface RunShardFindRelatedArgs {
 interface RunShardImportArgs {
     deletes?: boolean;
     dryRun?: boolean;
+    keepIds?: ReadonlySet<string>;
     onConflict?: ImportConflictMode;
+    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }

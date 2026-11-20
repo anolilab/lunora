@@ -34,6 +34,16 @@ import { isPlaceholderValue } from "../scaffold-dev-variables";
 const MIN_SECRET_NAMED_VALUE_LENGTH = 8;
 
 /**
+ * A Cloudflare account id: 32 hex characters, the same shape as a hex secret. It is an identifier that
+ * appears in every dashboard and API URL, and Wrangler reads it from `CLOUDFLARE_ACCOUNT_ID`, so a var
+ * named for one with exactly that shape is config. Any other name keeps the hex heuristic.
+ */
+const ACCOUNT_ID_NAME = /(?:^|_)ACCOUNT_ID$/u;
+const ACCOUNT_ID_VALUE = /^[\da-f]{32}$/u;
+
+const isAccountId = (key: string, value: string): boolean => ACCOUNT_ID_NAME.test(key) && ACCOUNT_ID_VALUE.test(value);
+
+/**
  * Pure scan of a `vars` map for plaintext secrets — the FS-free core, exported for
  * unit tests. A variable is flagged when, for a **string** value that is neither a
  * placeholder nor a public/publishable key, EITHER the value matches a known
@@ -66,7 +76,7 @@ const scanWranglerVariablesForSecrets = (
         }
 
         // Public/publishable keys are meant to be shipped in cleartext.
-        if (isPublicKeyName(key)) {
+        if (isPublicKeyName(key) || isAccountId(key, rawValue)) {
             continue;
         }
 

@@ -13,6 +13,8 @@ import { LunoraError } from "@lunora/errors";
 
 import type { AuthAuditEntry, AuthAuditReader } from "./audit";
 import { INTERNAL_SECRET_HEADER, READ_AUDIT_PATH, RESOLVE_SESSION_PATH } from "./auth-do";
+import type { AuthDataPortLike } from "./data-port";
+import { createDoAuthDataPort } from "./data-port";
 import { isDiscoveryRequest, unlessNotFound } from "./discovery";
 import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
 import type { AuthJurisdictionMove } from "./jurisdiction-move";
@@ -133,6 +135,13 @@ export interface DoAuthWiring {
     authHandler: (request: Request) => Promise<Response | undefined>;
 
     /**
+     * Reads every table of the object out, and writes rows back, for the worker's
+     * admin export / import (`authData`). Present only with an internal secret and
+     * a bound namespace; reaches the pinned object when auth is pinned.
+     */
+    dataPort?: AuthDataPortLike;
+
+    /**
      * Forwards a `GET`/`HEAD` for one of {@link DoAuthWiringOptions.discoveryPaths}
      * to the object; `undefined` for anything else, and for the object's 404. The
      * worker calls it only after the app's own routes missed.
@@ -246,7 +255,21 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
               })
             : undefined;
 
+    const dataPort =
+        internalSecret && pinned
+            ? createDoAuthDataPort(async (body) =>
+                  pinned.get(pinned.idFromName(objectName)).fetch(
+                      new Request(new URL(MOVE_PATH, "https://auth-do.invalid"), {
+                          body: JSON.stringify(body),
+                          headers: { "content-type": "application/json", [INTERNAL_SECRET_HEADER]: internalSecret },
+                          method: "POST",
+                      }),
+                  ),
+              )
+            : undefined;
+
     return {
+        ...(dataPort === undefined ? {} : { dataPort }),
         ...(jurisdictionMove === undefined ? {} : { jurisdictionMove }),
         auditReader: {
             read: async (readOptions) => {

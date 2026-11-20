@@ -1,0 +1,300 @@
+import { describe, expect, expectTypeOf, it } from "vitest";
+
+import type { Doc } from "../lunora/_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "../lunora/_generated/server";
+import { cleanupExpiredPreviews, closePreview, planForScript, pruneSuperseded } from "../lunora/deployments";
+import { orgForScript } from "../lunora/logs";
+import type { DEPLOYMENT_STATUSES } from "../lunora/tables/shared";
+import { periodStartOf } from "../src/billing/spend";
+
+type Row = Record<string, unknown>;
+
+/** Fake mutation ctx: a `deployments.findMany` over in-memory rows + a recording `patch`. */
+const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch: Row }[] } => {
+    const patched: { id: string; patch: Row }[] = [];
+
+    const ctx = {
+        auth: { getIdentity: () => Promise.resolve(null), userId: null },
+        // Handlers read the clock through `ctx.now` (deterministic under OCC retry),
+        // so the double has to supply it — `Date.now()` is no longer reachable there.
+        now: Date.now(),
+        db: {
+            deployments: {
+                findMany: (args?: { where?: Row }) => {
+                    const where = args?.where ?? {};
+                    const page = rows.filter((row) => Object.entries(where).every(([key, value]) => row[key] === value));
+
+                    return Promise.resolve({ continueCursor: null, isDone: true, page });
+                },
+            },
+            get: () => Promise.resolve(null),
+            notificationChannels: { findMany: () => Promise.resolve({ page: [] }) },
+            patch: (_table: string, id: string, patch: Row) => {
+                patched.push({ id, patch });
+
+                return Promise.resolve();
+            },
+        },
+        log: {},
+        runMutation: () => Promise.resolve(undefined),
+        runQuery: () => Promise.resolve(undefined),
+        scheduler: {},
+        storage: {},
+        vectors: {},
+    } as unknown as MutationCtx;
+
+    return { ctx, patched };
+};
+
+describe("deployment status union", () => {
+    it("keeps DEPLOYMENT_STATUSES and the stored status column in step", () => {
+        // Type-level: the check fails `tsc` (lint:types) when the array and the validator drift.
+        expectTypeOf<(typeof DEPLOYMENT_STATUSES)[number]>().toEqualTypeOf<Doc<"deployments">["status"]>();
+    });
+});
+
+describe("deployments.closePreview", () => {
+    it("destroys the branch's not-yet-destroyed preview releases in every project the repository builds, and nothing else", async () => {
+        const { ctx, patched } = makeCtx([
+            { _id: "live", branch: "feat/x", kind: "preview", projectId: "proj_1", status: "live" },
+            { _id: "superseded", branch: "feat/x", kind: "preview", projectId: "proj_1", status: "superseded" },
+            { _id: "gone", branch: "feat/x", kind: "preview", projectId: "proj_1", status: "destroyed" },
+            { _id: "other_branch", branch: "feat/y", kind: "preview", projectId: "proj_1", status: "live" },
+            { _id: "sibling", branch: "feat/x", kind: "preview", projectId: "proj_2", status: "live" },
+            { _id: "squatter", branch: "feat/x", kind: "preview", projectId: "proj_3", status: "live" },
+            { _id: "unconnected", branch: "feat/x", kind: "preview", projectId: "proj_4", status: "live" },
+            { _id: "production", branch: "feat/x", kind: "production", projectId: "proj_1", status: "live" },
+        ]);
+        const projects = [
+            { _id: "proj_1", githubRepo: "acme/app", organizationId: "org_1" },
+            { _id: "proj_2", githubRepo: "acme/app", organizationId: "org_1" },
+            // Connected to the repository, but its organization never claimed the installation.
+            { _id: "proj_3", githubRepo: "acme/app", organizationId: "org_2" },
+            { _id: "proj_4", githubRepo: "acme/other", organizationId: "org_1" },
+        ];
+        const db = ctx.db as unknown as Record<string, unknown>;
+
+        db["projects"] = {
+            findMany: ({ where }: { where: Row }) =>
+                Promise.resolve({ continueCursor: null, isDone: true, page: projects.filter((row) => row.githubRepo === where["githubRepo"]) }),
+        };
+        db["githubInstallations"] = {
+            findMany: () => Promise.resolve({ continueCursor: null, isDone: true, page: [{ installationId: 7, organizationId: "org_1" }] }),
+        };
+
+        const result = await closePreview.handler(ctx, { branch: "feat/x", installationId: 7, repository: "Acme/App" });
+
+        expect(result).toStrictEqual({ destroyed: 3 });
+        expect(patched.map((entry) => [entry.id, entry.patch["status"]])).toStrictEqual([
+            ["live", "destroyed"],
+            ["superseded", "destroyed"],
+            ["sibling", "destroyed"],
+        ]);
+    });
+});
+
+describe("deployments.cleanupExpiredPreviews", () => {
+    it("destroys only expired, not-yet-destroyed previews", async () => {
+        const now = Date.now();
+        const { ctx, patched } = makeCtx([
+            { _id: "live_expired", expiresAt: now - 1000, kind: "preview", status: "live" },
+            { _id: "queued_expired", expiresAt: now - 1, kind: "preview", status: "queued" },
+            { _id: "not_expired", expiresAt: now + 100_000, kind: "preview", status: "live" },
+            { _id: "already_destroyed", expiresAt: now - 1000, kind: "preview", status: "destroyed" },
+            { _id: "no_expiry", kind: "preview", status: "live" },
+        ]);
+
+        const result = await cleanupExpiredPreviews.handler(ctx, {});
+
+        expect(result).toStrictEqual({ destroyed: 2 });
+        expect(patched.map((entry) => entry.id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["live_expired", "queued_expired"]);
+        expect(patched.every((entry) => entry.patch["status"] === "destroyed")).toBe(true);
+    });
+
+    it("is a no-op when nothing is expired", async () => {
+        const now = Date.now();
+        const { ctx, patched } = makeCtx([{ _id: "fresh", expiresAt: now + 100_000, kind: "preview", status: "live" }]);
+
+        const result = await cleanupExpiredPreviews.handler(ctx, {});
+
+        expect(result).toStrictEqual({ destroyed: 0 });
+        expect(patched).toHaveLength(0);
+    });
+
+    it("tears down an expired preview stuck in building, as it does one in queued", async () => {
+        const now = Date.now();
+        const { ctx, patched } = makeCtx([
+            { _id: "queued_expired", expiresAt: now - 1, kind: "preview", status: "queued" },
+            { _id: "building_expired", expiresAt: now - 1, kind: "preview", status: "building" },
+        ]);
+
+        const result = await cleanupExpiredPreviews.handler(ctx, {});
+
+        expect(result).toStrictEqual({ destroyed: 2 });
+        expect(patched.map((entry) => entry.id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["building_expired", "queued_expired"]);
+        expect(patched.every((entry) => entry.patch["status"] === "destroyed")).toBe(true);
+    });
+});
+
+describe("deployments.pruneSuperseded", () => {
+    it("destroys only the superseded releases beyond the retention window, and writes no other status", async () => {
+        const row = (id: string, createdAt: number, status: string): Row => {
+            return {
+                _id: id,
+                alias: "acme",
+                createdAt,
+                kind: "production",
+                scriptName: "acme",
+                status,
+            };
+        };
+        const { ctx, patched } = makeCtx([
+            row("newest", 4, "superseded"),
+            row("second", 3, "superseded"),
+            row("third", 2, "superseded"),
+            row("oldest", 1, "superseded"),
+            row("live", 5, "live"),
+        ]);
+
+        const result = await pruneSuperseded.handler(ctx, {});
+
+        expect(result).toStrictEqual({ pruned: 1 });
+        expect(patched.map((entry) => [entry.id, entry.patch["status"]])).toStrictEqual([["oldest", "destroyed"]]);
+    });
+});
+
+/**
+ * The dispatcher's admission check (plan 365 W3). The org row is read once and
+ * carries both the cron's suspension and the running accrual's breach bit.
+ */
+describe("deployments.planForScript", () => {
+    const period = periodStartOf(Date.now());
+    const live: Row = { _id: "d1", createdAt: 2, kind: "production", organizationId: "org_1", projectId: "p1", scriptName: "app", status: "live" };
+    const queryCtx = (organization: null | Row, world: { deployments?: Row[]; ledger?: Row[]; organizations?: Row[]; projects?: Row[] } = {}): QueryCtx => {
+        const rows = [...(world.organizations ?? (organization === null ? [] : [{ _id: "org_1", ...organization }])), ...(world.projects ?? [])];
+        const page = (all: Row[]) => Promise.resolve({ continueCursor: null, isDone: true, page: all });
+
+        return {
+            db: {
+                aliasOwnership: { findMany: () => page(world.ledger ?? []) },
+                deployments: { findMany: () => page(world.deployments ?? [live]) },
+                get: (_table: string, id: string) => Promise.resolve(rows.find((row) => row["_id"] === id) ?? null),
+                payment_subscriptions: { findMany: () => page([]) },
+            },
+            now: Date.now(),
+        } as unknown as QueryCtx;
+    };
+    const facts = async (organization: null | Row, world: Parameters<typeof queryCtx>[1] = {}) =>
+        planForScript.handler(queryCtx(organization, world), { scriptName: "app" });
+    const plan = async (organization: null | Row, world: Parameters<typeof queryCtx>[1] = {}): Promise<string> => {
+        const answer = await facts(organization, world);
+
+        return answer.plan;
+    };
+
+    /**
+     * Every release of an alias shares its script name, so the row the plan comes
+     * from must be the one the alias's verified owner serves — never whichever
+     * row a page happens to start with.
+     */
+    describe("which deployment a script serves for", () => {
+        const serving = { plan: "free" };
+        const suspended = { _id: "org_old", plan: "free", suspendedAt: 1 };
+
+        it("answers unknown for a script no standing release serves, instead of a default tier", async () => {
+            await expect(plan(serving, { deployments: [] })).resolves.toBe("unknown");
+            await expect(plan(serving, { deployments: [{ ...live, status: "destroyed" }] })).resolves.toBe("unknown");
+        });
+
+        it("reads the alias's ledger owner, not another organization's leftover row", async () => {
+            const leftover = { ...live, _id: "d0", createdAt: 1, organizationId: "org_old", status: "destroyed" };
+
+            await expect(
+                plan(null, {
+                    deployments: [leftover, live],
+                    ledger: [{ alias: "app", organizationId: "org_1" }],
+                    organizations: [{ _id: "org_1", plan: "free" }, suspended],
+                }),
+            ).resolves.toBe("free");
+        });
+
+        it("attributes tail logs to the alias's owner, not an earlier owner's leftover release", async () => {
+            const earlier = { ...live, _id: "d0", createdAt: 1, organizationId: "org_old", status: "destroyed" };
+            const current = { ...live, organizationId: "org_new" };
+            const owner = async (world: Parameters<typeof queryCtx>[1]) => orgForScript.handler(queryCtx(null, world), { scriptName: "app" });
+
+            await expect(owner({ deployments: [earlier, current], ledger: [{ alias: "app", organizationId: "org_new" }] })).resolves.toStrictEqual({
+                organizationId: "org_new",
+            });
+            await expect(owner({ deployments: [current, { ...live, _id: "d2", organizationId: "org_old", status: "superseded" }] })).resolves.toBeNull();
+        });
+
+        it("refuses when the ledger owner has no release here", async () => {
+            await expect(plan(serving, { ledger: [{ alias: "app", organizationId: "org_other" }] })).resolves.toBe("unknown");
+        });
+
+        it("refuses a script whose standing releases belong to two organizations", async () => {
+            await expect(
+                plan(null, {
+                    deployments: [live, { ...live, _id: "d2", organizationId: "org_old", status: "superseded" }],
+                    organizations: [{ _id: "org_1", plan: "free" }, suspended],
+                }),
+            ).resolves.toBe("unknown");
+        });
+
+        it("takes the live release's protection, not an older one's", async () => {
+            const preview = { ...live, _id: "d3", kind: "preview" };
+
+            await expect(
+                facts(serving, {
+                    deployments: [{ ...live, createdAt: 9, kind: "production", status: "superseded" }, preview],
+                    projects: [{ _id: "p1", previewPasswordHash: "h", previewPasswordSalt: "s" }],
+                }),
+            ).resolves.toStrictEqual({ plan: "free", protected: true, protectionScope: expect.stringMatching(/^[\da-f]{64}$/u) });
+        });
+
+        /** The dispatcher signs the scope into each preview cookie, so it must move whenever an issued cookie has to stop working. */
+        it("answers a protection scope that changes with the password and with the project", async () => {
+            const preview = { ...live, kind: "preview" };
+            const scopeOf = async (project: Record<string, unknown>, deployment: Record<string, unknown> = preview): Promise<unknown> => {
+                const answer = (await facts(serving, { deployments: [deployment], projects: [project] })) as { protectionScope?: string };
+
+                return answer.protectionScope;
+            };
+
+            const current = await scopeOf({ _id: "p1", previewPasswordHash: "h", previewPasswordSalt: "s1" });
+
+            await expect(scopeOf({ _id: "p1", previewPasswordHash: "h", previewPasswordSalt: "s1" })).resolves.toBe(current);
+            await expect(scopeOf({ _id: "p1", previewPasswordHash: "h2", previewPasswordSalt: "s2" })).resolves.not.toBe(current);
+            await expect(scopeOf({ _id: "p2", previewPasswordHash: "h", previewPasswordSalt: "s1" }, { ...preview, projectId: "p2" })).resolves.not.toBe(
+                current,
+            );
+        });
+    });
+
+    it("serves an org under its cap", async () => {
+        await expect(plan({ _id: "org_1", plan: "free", spendNanoCents: 1e9, spendPeriod: period })).resolves.toBe("free");
+    });
+
+    it("refuses an org the cron suspended", async () => {
+        await expect(plan({ _id: "org_1", plan: "free", suspendedAt: 1 })).resolves.toBe("suspended");
+    });
+
+    it("refuses an org whose running spend breaches its cap before the cron has run", async () => {
+        // free cap is 500 cents; 600 cents of accrual this period.
+        await expect(plan({ _id: "org_1", plan: "free", spendNanoCents: 600e9, spendPeriod: period })).resolves.toBe("suspended");
+    });
+
+    it("ignores last period's accrual", async () => {
+        await expect(plan({ _id: "org_1", plan: "free", spendNanoCents: 600e9, spendPeriod: period - 1 })).resolves.toBe("free");
+    });
+
+    it("honours a support-raised cap", async () => {
+        await expect(plan({ _id: "org_1", plan: "free", spendCapMinor: 0, spendNanoCents: 600e9, spendPeriod: period })).resolves.toBe("free");
+    });
+
+    /** Unknown state fails closed: a deployment whose org row is gone is not served. */
+    it("refuses a deployment whose organization row is missing", async () => {
+        await expect(plan(null)).resolves.toBe("suspended");
+    });
+});

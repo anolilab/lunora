@@ -63,6 +63,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Socket registry with attachments/tags persisted to SQLite, and createNodeSocketHost can rehydrate a row into a handle — but restoreSocket is not a SocketHost member and neither createNodePlatform nor createNodeShardRegistry surfaces it, so nothing composed here reassociates a reconnecting client; the conformance host is its only caller. Nothing is ever actually evicted from memory either, so this is durability without hibernation's memory saving and without its rehydration",
         },
+        dataExportSections: {
+            level: "emulated",
+            note: "`$auth` and `$storage` work as on Cloudflare (auth over the host's SQL, objects through createNodeR2Bucket), except that restoring an object over 32 MiB is unsupported: it needs a multipart upload, which createNodeR2Bucket does not implement, so the import reports it (STORAGE_IMPORT_FAILED) and the export still holds it. `$kv` exports nothing: KV here is the ShardKvStore table, not a Workers KV namespace binding, and the export enumerates only those. No Vectorize equivalent, so no index to export",
+        },
         typedWebSockets: {
             level: "emulated",
             note: "Rooms and defineWebSocket routes take real network clients: createNodeHttpServer completes the WebSocket handshake through the worker, and the embedder binds the shard with bindShardSockets so inbound frames and closes reach the shard. The socket registry is one process, so a route's broadcast does not fan out to another process, and nothing reassociates a reconnecting client, so a room's membership does not survive a restart",

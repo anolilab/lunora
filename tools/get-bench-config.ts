@@ -26,7 +26,7 @@ import { defineConfig } from "vitest/config";
  * variant) must pass the plugin from its own config, or every bench fails in
  * CodSpeed CI with "fn is not a function".
  */
-export const getBenchConfig = (options: ViteUserConfig = {}, codspeed: typeof codspeedPlugin = codspeedPlugin) =>
+export const getBenchConfig = (options: ViteUserConfig = {}, codspeed: () => unknown = codspeedPlugin) =>
     defineConfig({
         ...options,
         esbuild: {
@@ -34,7 +34,10 @@ export const getBenchConfig = (options: ViteUserConfig = {}, codspeed: typeof co
             jsxImportSource: "react",
             ...options.esbuild,
         },
-        plugins: [codspeed(), ...(options.plugins ?? [])],
+        // `unknown`, then cast: a caller's own plugin instance is typed against ITS
+        // vite (the reason it passes one), not this file's, and the two `Plugin`
+        // types differ only across vite majors, never at runtime.
+        plugins: [codspeed() as NonNullable<ViteUserConfig["plugins"]>[number], ...(options.plugins ?? [])],
         test: {
             environment: "node",
             // CodSpeed instruments benches under cachegrind (~50-100x slower than

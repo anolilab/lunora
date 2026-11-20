@@ -171,6 +171,41 @@ describe("the import batcher", () => {
         expect(Math.max(...bodies)).toBeLessThan(1_048_576);
     });
 
+    it("sends one import run on every POST of a pass, so a chunked value spanning POSTs is staged under it", async () => {
+        expect.assertions(3);
+
+        const rows = Array.from({ length: 10 }, (_, index) => {
+            return { _id: `d${String(index)}`, blob: "y".repeat(200 * 1024) };
+        });
+        const root = writeConvexExport({}, { docs: rows });
+        const worker = fakeWorker();
+        const runs: { dryRun: boolean; run: string | null }[] = [];
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: async (input, init) => {
+                const url = new URL(input);
+
+                if (url.pathname === "/_lunora/admin/import" && !isProbe(input, init)) {
+                    runs.push({ dryRun: url.searchParams.get("dryRun") === "true", run: url.searchParams.get("import") });
+                }
+
+                return worker.fetchImpl(input, init);
+            },
+            file: root,
+            logger: capturingLogger().logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        const written = new Set(runs.filter((post) => !post.dryRun).map((post) => post.run));
+
+        expect(runs.filter((post) => !post.dryRun).length).toBeGreaterThan(1);
+        expect([...written]).toStrictEqual([expect.stringMatching(/^[\w-]{1,64}$/u)]);
+        // The check pass is a run of its own.
+        expect(runs.filter((post) => post.dryRun).every((post) => post.run !== null && !written.has(post.run))).toBe(true);
+    });
+
     it("never POSTs a body past the byte ceiling, even by one row", async () => {
         expect.assertions(2);
 

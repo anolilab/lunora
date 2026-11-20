@@ -11,6 +11,7 @@ import { advisorCommand } from "./commands/advisor";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
+import { cloudCommand } from "./commands/cloud";
 import { cloudflareCommand } from "./commands/cloudflare";
 import { codegenCommand } from "./commands/codegen";
 import { deployCommand } from "./commands/deploy";
@@ -107,6 +108,7 @@ const CLI_COMMANDS = [
     previewCommand,
     linkCommand,
     cloudflareCommand,
+    cloudCommand,
     logsCommand,
     runCommand,
     insightsCommand,

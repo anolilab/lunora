@@ -450,7 +450,7 @@ describe("lunora data-transfer", () => {
             expect(result.code).toBe(0);
             expect(result.inserted).toBe(3);
             expect(calls).toHaveLength(2);
-            expect(calls[0]!.url).toBe("http://localhost:8787/_lunora/admin/import");
+            expect(calls[0]!.url).toMatch(/^http:\/\/localhost:8787\/_lunora\/admin\/import\?import=[\w-]+$/u);
         });
 
         it("wraps bare docs with `--table` into `{table,doc}` envelopes", async () => {

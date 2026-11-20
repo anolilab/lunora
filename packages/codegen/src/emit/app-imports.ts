@@ -37,7 +37,7 @@ const buildGlobalImports = (hasGlobal: boolean): string[] =>
     hasGlobal
         ? [
               `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-              `import { applyCdcChanges, applySqlMigrationFiles, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
+              `import { abortStagedGlobalRows, applyCdcChanges, applySqlMigrationFiles, commitStagedGlobalRows, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, stageGlobalRows } from "@lunora/d1";`,
           ]
         : [];
 
@@ -161,7 +161,7 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
         `import { LUNORA_FUNCTIONS } from "./functions.js";`,
         ...(hasQueue
             ? [
-                  `import { createQueueCaptureSink, dispatchQueueBatch, shouldCaptureQueue } from "@lunora/queue";`,
+                  `import { createQueueCaptureSink, dispatchForwardedQueueBatch, dispatchQueueBatch, shouldCaptureQueue } from "@lunora/queue";`,
                   // Lazy: the consumer `import()`s the registry on its first batch (`app-worker-options.ts`).
                   ...(options.lazyFunctions === true ? [] : [`import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`]),
               ]

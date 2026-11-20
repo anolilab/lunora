@@ -378,7 +378,7 @@ class AppBuilder<Env extends object> {
         // Captured before the branch so the narrowing survives — reading
         // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
-        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
+        const { authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -413,6 +413,9 @@ class AppBuilder<Env extends object> {
             // Set only once auth is pinned to a jurisdiction: copies the users left in the
             // un-pinned object across (`__lunora_admin__:copyAuthToJurisdiction`).
             options.authJurisdictionMove = authWiring.jurisdictionMove;
+            // Every table of the object, for the admin export / import (`$auth`), so a
+            // backup, restore or eject carries users and sessions with the app's data.
+            options.authData = authWiring.dataPort;
             // `authAdmin` stays D1-only: its ~30 methods read the auth tables directly
             // from the worker, which DO storage does not allow. The studio's auth pages
             // therefore report "not configured" in this mode rather than silently
@@ -449,6 +452,16 @@ class AppBuilder<Env extends object> {
                 options.authAdmin = createAuthAdmin(authInstance);
             }
             options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
+            // better-auth's tables for the admin export / import (`$auth`). A table the
+            // schema declares (`authTables(...)`) already travels as a `.global()` row.
+            options.authData = authInstance
+                ? createSqlAuthDataPort(
+                      d1Executor(authD1(env) as never),
+                      authTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
+                      authCredentialTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
+                      authCredentialColumns(authInstance.options),
+                  )
+                : undefined;
         }
 
         // Both modes pay a session lookup per request (the auth object hop, or a D1

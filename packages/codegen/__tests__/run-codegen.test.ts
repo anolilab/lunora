@@ -2286,7 +2286,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
         });
 
         it("emits app.ts with the .auth() method when @lunora/auth is a declared dependency", () => {
-            expect.assertions(6);
+            expect.assertions(7);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -2301,6 +2301,8 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             // loaded module imports from `@lunora/auth/worker`, so the barrel stays out of the `import()`.
             expect(result.generated.app).toContain('import type * as LunoraAuthModule from "./authModule.js";');
             expect(result.generated.authModule).toContain('lunoraD1Adapter, resolveSessionIdentity } from "@lunora/auth/worker";');
+            // The `$auth` export section's data port loads with the rest of auth.
+            expect(result.generated.authModule).toContain("createSqlAuthDataPort");
             expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));");
             // The OAuth discovery documents (plan 461 B): served by the auth instance
             // as the worker's last matcher, after the app's own routes.

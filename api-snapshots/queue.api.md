@@ -31,6 +31,28 @@ interface CapturedQueueMessage {
 }
 ```
 
+### `ForwardedQueueBatch` (interface)
+
+```ts
+interface ForwardedQueueBatch {
+    messages: ReadonlyArray<{
+        attempts?: number;
+        body: unknown;
+        id: string;
+    }>;
+    queue: string;
+}
+```
+
+### `ForwardedQueueResult` (interface)
+
+```ts
+interface ForwardedQueueResult {
+    retry: string[];
+    retryDelays?: Record<string, number>;
+}
+```
+
 ### `FunctionReference` (interface)
 
 ```ts
@@ -351,6 +373,12 @@ const defineSubscription: <Payload>(topic: TopicDefinition<Payload>, config: Sub
 
 ```ts
 const defineTopic: <Payload = unknown>() => TopicDefinition<Payload>;
+```
+
+### `dispatchForwardedQueueBatch` (const)
+
+```ts
+const dispatchForwardedQueueBatch: (forwarded: ForwardedQueueBatch, registry: QueueRegistry, options: DispatchOptions) => Promise<ForwardedQueueResult>;
 ```
 
 ### `dispatchQueueBatch` (const)

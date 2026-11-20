@@ -18,6 +18,9 @@ targets the same files (see `sdks/README.md`).
     - HTTP-SSE stream framing: `packages/client/src/http-stream.ts`
     - Ephemeral WS admin token (plan 095): `shared/ws-admin-token.ts`
 
+The protocol between `lunora-hostd` on a customer's server and Lunora Cloud is a
+separate contract with its own fixtures: [`hostd/README.md`](./hostd/README.md).
+
 ## 1. Transport overview
 
 A deployment exposes one Worker origin (e.g. `https://app.example.com`).

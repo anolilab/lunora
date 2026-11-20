@@ -1,0 +1,118 @@
+import { describe, expect, it } from "vitest";
+
+import { isSensitiveKey, REDACTED, redactRecord, redactText } from "../src/telemetry/redact";
+
+describe(isSensitiveKey, () => {
+    it("flags credential-ish keys, case-insensitively", () => {
+        for (const key of [
+            "authorization",
+            "Authorization",
+            "cookie",
+            "set-cookie",
+            "password",
+            "api_key",
+            "apiKey",
+            "x-api-key",
+            "access_token",
+            "refresh-token",
+            "sessionId",
+            "credential",
+            "private_key",
+            // Previously LEAKED (bounded \btoken\b / camelCase) — must now be caught.
+            "auth_token",
+            "id_token",
+            "authToken",
+            "apiToken",
+            "idToken",
+            "bearerToken",
+            "jwtToken",
+            "accessKey",
+            "clientSecret",
+            "encryption_key",
+        ]) {
+            expect(isSensitiveKey(key)).toBe(true);
+        }
+    });
+
+    it("leaves ordinary keys alone (incl. non-credential *_key names)", () => {
+        for (const key of ["shard_key", "idempotency_key", "user_id", "function_path", "status", "durationMs", "region"]) {
+            expect(isSensitiveKey(key)).toBe(false);
+        }
+    });
+});
+
+describe(redactRecord, () => {
+    it("scrubs sensitive values but keeps ordinary ones", () => {
+        expect(redactRecord({ authorization: "Bearer sk-secret", region: "eu", user_id: "u_1" })).toStrictEqual({
+            authorization: REDACTED,
+            region: "eu",
+            user_id: "u_1",
+        });
+    });
+
+    it("scrubs a secret-shaped substring from an ordinary key's string value", () => {
+        expect(redactRecord({ "http.url": `https://api.example/?access_token=${"a".repeat(12)}`, status: 200 })).toStrictEqual({
+            "http.url": `https://api.example/?access_token=${REDACTED}`,
+            status: 200,
+        });
+    });
+
+    it("returns the same reference when nothing is sensitive (no needless copy)", () => {
+        const record = { region: "eu", shard_key: "room-9" };
+
+        expect(redactRecord(record)).toBe(record);
+    });
+
+    it("passes undefined through", () => {
+        expect(redactRecord(undefined)).toBeUndefined();
+    });
+});
+
+describe(redactText, () => {
+    it("scrubs secret-shaped substrings from free text", () => {
+        // eslint-disable-next-line no-secrets/no-secrets -- a fabricated key shape; scrubbing it is the assertion
+        expect(redactText("call with Authorization: Bearer sk_live_abcdefgh12345678")).toContain("Bearer [redacted]"); // gitleaks:allow -- fabricated secret-shaped literal; scrubbing it is the assertion
+        // eslint-disable-next-line no-secrets/no-secrets -- likewise fabricated; the redactor is what is under test
+        expect(redactText("here is my key sk-ABCDEFGHIJKLMNOP1234")).toContain(REDACTED);
+        expect(redactText("token=supersecretvalue123 in the log")).toBe(`token=${REDACTED} in the log`);
+    });
+
+    it("scrubs Lunora deploy keys, keeping the scope that names them", () => {
+        // Built from parts so no literal in the source looks like a live key.
+        const secret = "9f".repeat(32);
+
+        for (const scope of ["production:org_1", "preview:org_1:prj_2", "dev:org_1"]) {
+            expect(redactText(`deploy failed for ${scope}|${secret} at step 2`)).toBe(`deploy failed for ${scope}|${REDACTED} at step 2`);
+        }
+    });
+
+    it.each(["ghp_", "gho_", "ghu_", "ghs_", "ghr_"])("scrubs a GitHub %s token", (prefix) => {
+        expect(redactText(`clone with ${prefix}${"a1".repeat(18)} failed`)).toBe(`clone with ${REDACTED} failed`);
+    });
+
+    it("scrubs a GitHub fine-grained personal access token", () => {
+        const token = ["github", "pat", `${"A1".repeat(11)}_${"b2".repeat(29)}c`].join("_");
+
+        expect(redactText(`push rejected for ${token}`)).toBe(`push rejected for ${REDACTED}`);
+    });
+
+    it("leaves text that only resembles those shapes alone", () => {
+        const lines = [
+            "promoted to production:org_1 at 12:00",
+            "preview:org_1|not-a-key",
+            "the ghp_ prefix marks a classic token",
+            `commit ${"ab".repeat(20)} deployed`,
+        ];
+
+        for (const line of lines) {
+            expect(redactText(line)).toBe(line);
+        }
+    });
+
+    it("leaves ordinary prose untouched and passes undefined through", () => {
+        const prose = "The user asked about the weather in Berlin.";
+
+        expect(redactText(prose)).toBe(prose);
+        expect(redactText(undefined)).toBeUndefined();
+    });
+});

@@ -221,7 +221,7 @@ export default defineSchema({
         expect(result.code).toBe(0);
         expect(result.data?.generated).toBe(4);
         expect(result.data?.inserted).toBe(4);
-        expect(calls[0]!.url).toBe("http://localhost:8787/_lunora/admin/import");
+        expect(calls[0]!.url).toMatch(/^http:\/\/localhost:8787\/_lunora\/admin\/import\?import=[\w-]+$/u);
     });
 
     it("surfaces skipped rows as conflicts and warns about determinism", async () => {

@@ -128,6 +128,12 @@
               "run": |
                   pnpm exec vis run build --no-cache --query "tag=type:package"
 
+            # Benchmarks in apps/cloud import lunora/_generated/internal, which codegen writes
+            # and git ignores, so the app's codegen has to run before its benches load.
+            - "name": "Generate workspace code"
+              "run": |
+                  pnpm --filter "./apps/cloud" run --if-present codegen
+
             # PRs run only the affected benches; pushes run all of them to keep the
             # baseline complete. `--no-cache` forces real execution — a vis cache hit
             # would short-circuit the run and starve CodSpeed of measurements.

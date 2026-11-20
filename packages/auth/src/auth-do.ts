@@ -35,6 +35,8 @@ import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
 import { AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable } from "./audit";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
+import type { CredentialColumns } from "./data-port";
+import { authCredentialColumns, authCredentialTableNames, parentsFirst } from "./data-port";
 import { handleAuthDiscoveryRequest } from "./discovery";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
@@ -166,6 +168,12 @@ class LunoraAuthDO {
     /** Physical table names that decide the jurisdiction copy's order, known once `#ensureReady` has run. */
     #moveOrder: MoveOrder = { first: ["user"], last: [] };
 
+    /** The provider-token columns by physical names, renamed models and fields included, known once `#ensureReady` has run. */
+    #credentialColumns: CredentialColumns = {};
+
+    /** Physical names of the live-credential tables, renamed models included, known once `#ensureReady` has run. */
+    #credentialTables: string[] = [];
+
     /**
      * @param state The Durable Object state — its `storage` becomes better-auth's database.
      * @param optionsFactory Builds the better-auth options. Called once, lazily, on the first request.
@@ -200,11 +208,24 @@ class LunoraAuthDO {
 
         const { tables } = getAuthTablesWithResolvedIndexes(resolved);
 
-        // The copy into a pinned object goes `user`, `account`, `session` first, and the
-        // unbounded audit and rate-limit tables last.
+        this.#credentialTables = authCredentialTableNames(resolved);
+        this.#credentialColumns = authCredentialColumns(resolved);
+
+        // The copy into a pinned object (and the data port's export) goes parents
+        // first — every table after the tables it references — and the unbounded
+        // audit and rate-limit tables last.
+        const rateLimit = tables["rateLimit"]?.modelName ?? "rateLimit";
+        const leading = [tables["user"]?.modelName ?? "user", tables["account"]?.modelName ?? "account", tables["session"]?.modelName ?? "session"];
+
         this.#moveOrder = {
-            first: [tables["user"]?.modelName ?? "user", tables["account"]?.modelName ?? "account", tables["session"]?.modelName ?? "session"],
-            last: [AUTH_AUDIT_TABLE, tables["rateLimit"]?.modelName ?? "rateLimit"],
+            // `user`, `account`, `session` lead (each references only `user`); the rest follow parents first.
+            first: [
+                ...leading,
+                ...parentsFirst(tables)
+                    .map(([, physical]) => physical)
+                    .filter((physical) => physical !== rateLimit && !leading.includes(physical)),
+            ],
+            last: [AUTH_AUDIT_TABLE, rateLimit],
         };
 
         if (!this.#schemaApplied) {
@@ -368,6 +389,8 @@ class LunoraAuthDO {
         try {
             const body: Record<string, unknown> = await request.json();
             const result = await handleMoveRequest(this.#storage, body, {
+                credentialColumns: () => this.#credentialColumns,
+                credentialTables: () => this.#credentialTables,
                 // The tables are gone: materialise them again on the next request rather
                 // than serve it from a schema this instance still believes is applied.
                 onPurge: () => {

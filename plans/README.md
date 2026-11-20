@@ -19,16 +19,18 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## In progress
 
-| Plan                                             | Title                                                               | Remaining                                                                                                                                                  |
-| ------------------------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [527](./527-ratelimit-memory-store-retention.md) | Evict rate-limit memory-store entries past their horizon            | PR #1223 open; debt (negative) entries deliberately kept                                                                                                   |
-| [528](./528-durable-ratelimit-row-retention.md)  | Expire durable rate-limit rows (`createDbStore` / `createSqlStore`) | PR #1225 open, stacked on #1223; bounded sweep on write; tests tightened in a stacked follow-up                                                            |
-| [460](./460-cloudflare-artifacts.md)             | Cloudflare Artifacts as an action-only `ctx.artifacts`              | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                                                                                |
-| [463](./463-experimental-graduation.md)          | Graduate the experimental tier to stable                            | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                                                                      |
-| [166](./166-enterprise-auth-saml-scim.md)        | Enterprise auth: SAML SSO + SCIM                                    | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                                                                              |
-| [464](./464-replay-conflict-resolution.md)       | Replayed offline writes that conflict                               | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express                                                       |
-| [468](./468-gdpr-package.md)                     | `@lunora/privacy`: data-subject rights (export, erasure, holds)     | Built end to end; example covers download, retention and expiry; open: legal and tax review (§10)                                                          |
-| [364](./364-studio-conversational-assistant.md)  | Conversational assistant for the Studio                             | W1–W9 shipped (assistant reachable studio-wide, server-side data-sharing ladder, hardened markdown); W5 (streaming) blocked — needs its own transport plan |
+| Plan                                                        | Title                                                               | Remaining                                                                                                                                                  |
+| ----------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [527](./527-ratelimit-memory-store-retention.md)            | Evict rate-limit memory-store entries past their horizon            | PR #1223 open; debt (negative) entries deliberately kept                                                                                                   |
+| [528](./528-durable-ratelimit-row-retention.md)             | Expire durable rate-limit rows (`createDbStore` / `createSqlStore`) | PR #1225 open, stacked on #1223; bounded sweep on write; tests tightened in a stacked follow-up                                                            |
+| [460](./460-cloudflare-artifacts.md)                        | Cloudflare Artifacts as an action-only `ctx.artifacts`              | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                                                                                |
+| [463](./463-experimental-graduation.md)                     | Graduate the experimental tier to stable                            | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                                                                      |
+| [166](./166-enterprise-auth-saml-scim.md)                   | Enterprise auth: SAML SSO + SCIM                                    | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                                                                              |
+| [464](./464-replay-conflict-resolution.md)                  | Replayed offline writes that conflict                               | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express                                                       |
+| [468](./468-gdpr-package.md)                                | `@lunora/privacy`: data-subject rights (export, erasure, holds)     | Built end to end; example covers download, retention and expiry; open: legal and tax review (§10)                                                          |
+| [364](./364-studio-conversational-assistant.md)             | Conversational assistant for the Studio                             | W1–W9 shipped (assistant reachable studio-wide, server-side data-sharing ladder, hardened markdown); W5 (streaming) blocked — needs its own transport plan |
+| [458](./458-cloud-celld-vps-target.md)                      | Lunora Cloud manages a customer VPS (`celld-vps` target)            | Control plane, hostd and install path landed on PR #85; live-box gates open                                                                                |
+| [365](./365-cloud-spend-guardrails-and-anomaly-research.md) | Cloud spend guardrails, anomaly alerting, recursion protection      | W0–W8 shipped (code); live checks in §4b open                                                                                                              |
 
 ## Open (TODO)
 
@@ -273,3 +275,20 @@ follow-on ships or is rejected.
 | [334](./334-mutation-determinism.md)                | Determinism: ctx.random, ctx.fetch refusal shipped; research open       |
 | [386](./386-queue-workpool-observability-design.md) | Observability for the Queues-backed workpool                            |
 | [395](./395-sdk-stream-forms-design.md)             | Stream subscription forms for the non-Dart SDKs                         |
+
+## Lunora Cloud hardening wave (baseline `origin/feat/cloud-platform-dx` @ `1d8f444fe`, 2026-10-11)
+
+Findings from a read-only review of `apps/cloud` against the tenant-facing runtime surface. Each plan states its
+own evidence and gate. Open questions are decided in each plan's §9.
+
+| Plan | Title                                                                                                  | Status                                                                                                                             |
+| ---- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 475  | [Dispatcher fails closed without a control plane](475-dispatcher-fail-closed-without-control-plane.md) | TODO — first to ship (H)                                                                                                           |
+| 476  | [Plan survives a control-plane outage](476-dispatcher-plan-survives-control-plane-outage.md)           | TODO — 48 h staleness bound decided (H)                                                                                            |
+| 477  | [Per-project egress allowlist](477-tenant-egress-allowlist.md)                                         | BLOCKED — Workers for Platforms not enabled on the Lunora account; probe cannot run (M–L)                                          |
+| 478  | [Cookie scope and platform response headers](478-platform-hostname-cookie-and-response-headers.md)     | PHASE 0 DONE — `__Host-` config verified on better-auth 1.7.7; ready to implement (M)                                              |
+| 479  | [Rollback boundary and release invariants](479-rollback-boundary-and-release-invariants.md)            | TODO — policy stays out of releases; pin with tests (S–M)                                                                          |
+| 480  | [Service bindings and org connectors on WfP](480-cloud-service-bindings-and-org-connectors.md)         | PARTIAL — BYO service binding verified; WfP blocked on account access (L)                                                          |
+| 481  | [Tenant Workflows on every target](481-tenant-workflows-on-every-target.md)                            | PARTIAL — BYO workflows verified; BYO refusal is stale, workstream A unblocked; WfP blocked (M / L)                                |
+| 457  | [Services: typed service bindings to sibling Workers](457-service-bindings.md)                         | SHIPPED except §12 — restored; declaration snapshot landed in #1024; Studio card, celld fleet deploy and neore-v2 migration remain |
+| 482  | [Production app access gate (decision)](482-production-app-access-gate-decision.md)                    | DECIDED — option A now; SSO and groups with plan 166                                                                               |

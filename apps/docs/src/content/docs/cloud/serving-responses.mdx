@@ -1,0 +1,15 @@
+---
+title: Serving your app's responses
+description: The headers Lunora Cloud adds to an app's responses, what a browser does with them, and which deployments get them.
+---
+
+Apps served on a `*.lunora.app` address or a custom domain get
+`X-Content-Type-Options: nosniff` on every response, so a browser never guesses a
+type. Apps deployed to your own Cloudflare account are plain Workers and do not go
+through Lunora Cloud, so they do not get these headers.
+
+A script or stylesheet served with the wrong `Content-Type` is blocked, not run.
+Check that your app sends `text/javascript` for JavaScript and `text/css` for CSS.
+
+The platform's `Referrer-Policy` default, `strict-origin-when-cross-origin`, applies
+unless your app sets its own.

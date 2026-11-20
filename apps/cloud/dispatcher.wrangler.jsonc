@@ -1,0 +1,95 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // The dispatcher Worker — a SEPARATE deployable from the
+    // control plane (wrangler.jsonc). Deploy with:
+    //   wrangler deploy -c dispatcher.wrangler.jsonc --env production
+    "name": "lunora-dispatcher",
+    "main": "src/dispatcher/worker.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    // The top level is for `wrangler dev` only. It binds a namespace that does not
+    // exist, so a bare `wrangler deploy` fails instead of serving tenants as
+    // `development`. Deploy with `--env staging` or `--env production`.
+    // (Each environment binds its own namespace; Workers-for-Platforms add-on required.)
+    // `outbound` routes every tenant `fetch()` through the Outbound Worker
+    // (outbound.wrangler.jsonc, plan 365 W5), which stamps the signed lineage the
+    // recursion protection verifies; `lineage` is the per-invocation parameter the
+    // dispatcher passes. It also disables `connect()` for tenant Workers.
+    "dispatch_namespaces": [
+        {
+            "binding": "DISPATCHER",
+            "namespace": "lunora-local-dev-unbound",
+            "outbound": { "service": "lunora-outbound", "parameters": ["lineage", "egress"] },
+        },
+    ],
+    // Per-request metering source (§4): the dispatcher writes one data point per
+    // tenant request; the control-plane rollup reads it back via the AE SQL API.
+    //
+    // `PLATFORM_METRICS` is the platform's own latency/outcome stream (GAPS.md
+    // E1) — the same dataset the control plane binds, never the billing meter.
+    "analytics_engine_datasets": [
+        { "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage" },
+        { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics" },
+    ],
+    // Top level is `wrangler dev` only (CI always deploys with `--env`), so it is the one
+    // place `development` may appear: it serves the free tier without a control plane.
+    "vars": {
+        "LUNORA_APP_DOMAIN": "lunora.run",
+        "LUNORA_ENVIRONMENT": "development",
+        // Control-plane base URL is set per deployed environment below. Unset here on purpose:
+        // the dispatcher refuses all traffic outside `development` when it is missing (plan 475).
+        // Set CONTROL_PLANE_TOKEN as a secret: `wrangler secret put CONTROL_PLANE_TOKEN -c dispatcher.wrangler.jsonc --env <name>`.
+        // Hours a control-plane outage may keep serving a persisted plan (plan 476). Suspensions ignore it.
+        "PLAN_MAX_STALE_HOURS": "48",
+        // LUNORA_LINEAGE_SECRET (recursion protection) is a secret too, the same value
+        // as on the Outbound Worker; outside `development` a lineage header is refused without it.
+    },
+    // Deployed environments — see the long note in `wrangler.jsonc`: a named
+    // environment inherits none of the bindings above, so each restates them.
+    // `.github/workflows/deploy-cloud.yml` always deploys with `--env`.
+    "env": {
+        "staging": {
+            // No `routes`: hostname routing is this worker's whole job, and it
+            // needs a staging zone to do it. Until one is attached, staging is
+            // reachable on workers.dev and routes no tenant hostnames.
+            "workers_dev": true,
+            "dispatch_namespaces": [
+                {
+                    "binding": "DISPATCHER",
+                    "namespace": "lunora-staging",
+                    "outbound": { "service": "lunora-outbound-staging", "parameters": ["lineage", "egress"] },
+                },
+            ],
+            "analytics_engine_datasets": [
+                { "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage_staging" },
+                { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics_staging" },
+            ],
+            "vars": {
+                "CONTROL_PLANE_URL": "https://staging.lunora.cloud",
+                "LUNORA_APP_DOMAIN": "staging.lunora.run",
+                "LUNORA_ENVIRONMENT": "staging",
+                "PLAN_MAX_STALE_HOURS": "48",
+            },
+        },
+        "production": {
+            "routes": [{ "pattern": "*/*", "zone_name": "lunora.run" }],
+            "dispatch_namespaces": [
+                {
+                    "binding": "DISPATCHER",
+                    "namespace": "lunora-production",
+                    "outbound": { "service": "lunora-outbound-production", "parameters": ["lineage", "egress"] },
+                },
+            ],
+            "analytics_engine_datasets": [
+                { "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage" },
+                { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics" },
+            ],
+            "vars": {
+                "CONTROL_PLANE_URL": "https://lunora.cloud",
+                "LUNORA_APP_DOMAIN": "lunora.run",
+                "LUNORA_ENVIRONMENT": "production",
+                "PLAN_MAX_STALE_HOURS": "48",
+            },
+        },
+    },
+}

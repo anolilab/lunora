@@ -1,0 +1,6 @@
+{
+    "$comment": "The Ed25519 public keys a lunora-hostd release manifest may be signed with (plan 458 W7), as { keyId: SPKI PEM }. Compiled into the Rust daemon (apps/hostd/build.rs) and pinned by the control plane (apps/cloud/src/hostd/trusted-release-keys.ts) from this one file. The private halves live only in the hostd-release GitHub Environment as HOSTD_RELEASE_SIGNING_KEY; apps/hostd/README.md (\"Releases & signing\") says how to add one. Rotation: add the new key beside the old one, release with it, remove the old one only once no supported box still pins it. No real key is committed yet: the entry below is a placeholder, which verification refuses, so nothing can be released or installed until a maintainer replaces it.",
+    "keys": {
+        "ed25519-placeholder": "PLACEHOLDER-NOT-A-KEY: replace with the output of hostd-release public-key"
+    }
+}

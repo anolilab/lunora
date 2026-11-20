@@ -1,0 +1,302 @@
+"use client";
+
+import type { ReactElement } from "react";
+import { useId, useState } from "react";
+
+import { isFlowEnabled } from "../core/flow-gate";
+import { firstLabel, ROLE_OPTIONS, rowActionLabel, slugify } from "../core/labels";
+import { createMembersController } from "../core/members";
+import { createOrganizationsController } from "../core/organization-list";
+import { createOrganizationSettingsController } from "../core/organization-settings";
+import { FormField } from "./form";
+import { onSubmit } from "./on-submit";
+import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
+import { useAuthUI } from "./provider";
+import { useController } from "./use-controller";
+
+const OrganizationsCard = (): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
+    // Resolved before the controller is built: a gated-off card must not fire
+    // the resource controller's auto-load on mount just to render nothing.
+    const enabled = isFlowEnabled(context, "organization", "OrganizationsCard");
+    const [state, actions] = useController((context_) => createOrganizationsController(context_, { autoLoad: enabled }), [enabled]);
+    const [name, setName] = useState("");
+    const [slug, setSlug] = useState("");
+
+    if (!enabled) {
+        return null;
+    }
+
+    /*
+     * The server enforces both of these and answers with an error; the point of
+     * checking here is that a user should not fill in a form to be told no.
+     * `limit` and `allowUserToCreate` come from `uiConfig()` — better-auth has
+     * no endpoint that reports them, so without discovery a UI can only find
+     * out by being refused.
+     */
+    const atLimit = context.organization.limit !== undefined && state.items.length >= context.organization.limit;
+    const cannotCreate = atLimit || !context.organization.allowUserToCreate;
+    const createBlockedReason = atLimit ? t.organizationLimitReached : t.organizationCreateDisallowed;
+
+    const create = (): void => {
+        if (name.trim() === "" || cannotCreate) {
+            return;
+        }
+
+        void actions.create(name.trim(), slug.trim() === "" ? slugify(name) : slug.trim());
+        setName("");
+        setSlug("");
+    };
+
+    const list = ((): ReactElement => {
+        if (state.loading) {
+            return (
+                <p className="lunora-auth-card__description" role="status">
+                    {t.loading}
+                </p>
+            );
+        }
+
+        if (state.items.length === 0) {
+            return <p className="lunora-auth-card__description">{t.noOrganizations}</p>;
+        }
+
+        return (
+            <ul className="lunora-auth-list">
+                {state.items.map((organization) => {
+                    // Bound once: TS can't narrow an optional property through a
+                    // closure, and a local beats an `as string` at each call site.
+                    const { id } = organization;
+
+                    return (
+                        <li className="lunora-auth-list__item" key={id ?? organization.slug ?? organization.name}>
+                            <span className="lunora-auth-list__label">{firstLabel(organization.name, organization.slug)}</span>
+                            <span className="lunora-auth-list__actions">
+                                {id === undefined ? null : (
+                                    <>
+                                        <button
+                                            aria-label={rowActionLabel(t.switchOrganization, firstLabel(organization.name, organization.slug))}
+                                            className="lunora-auth-link"
+                                            disabled={state.busy}
+                                            onClick={() => {
+                                                void actions.setActive(id);
+                                            }}
+                                            type="button"
+                                        >
+                                            {t.switchOrganization}
+                                        </button>
+                                        <button
+                                            aria-label={rowActionLabel(t.remove, firstLabel(organization.name, organization.slug))}
+                                            className="lunora-auth-link"
+                                            disabled={state.busy}
+                                            onClick={() => {
+                                                void actions.remove(id);
+                                            }}
+                                            type="button"
+                                        >
+                                            {t.remove}
+                                        </button>
+                                    </>
+                                )}
+                            </span>
+                        </li>
+                    );
+                })}
+            </ul>
+        );
+    })();
+
+    return (
+        <AuthCard headingLevel={2} title={t.organizations}>
+            <FormBanner error={state.error} />
+            {list}
+            {cannotCreate ? <p className="lunora-auth-note">{createBlockedReason}</p> : null}
+            <form className="lunora-auth-form" noValidate onSubmit={onSubmit(create)}>
+                <Field field={{ touched: false, value: name }} label={t.organizationName} name="organizationName" onBlur={() => undefined} onChange={setName} />
+                {/* Optional UI: apps that don't put the slug in a URL treat it
+                    as an implementation detail, and `create` derives one from
+                    the name when the field is absent or blank. */}
+                {context.organization.showSlug ? (
+                    <Field
+                        field={{ touched: false, value: slug }}
+                        label={t.organizationSlug}
+                        name="organizationSlug"
+                        onBlur={() => undefined}
+                        onChange={setSlug}
+                        placeholder={slugify(name)}
+                    />
+                ) : null}
+                <SubmitButton pending={state.busy || cannotCreate}>{t.createOrganization}</SubmitButton>
+            </form>
+        </AuthCard>
+    );
+};
+
+const MembersCard = (): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
+    const enabled = isFlowEnabled(context, "organization", "MembersCard");
+    const [state, actions] = useController((context_) => createMembersController(context_, { autoLoad: enabled }), [enabled]);
+    const [email, setEmail] = useState("");
+    const [role, setRole] = useState<string>("member");
+    // Generated, not hard-coded: two cards on one page must not collide.
+    const roleId = useId();
+
+    if (!enabled) {
+        return null;
+    }
+
+    const invite = (): void => {
+        if (email.trim() === "") {
+            return;
+        }
+
+        void actions.invite(email.trim(), role);
+        setEmail("");
+    };
+
+    return (
+        <AuthCard headingLevel={2} title={t.members}>
+            <FormBanner error={state.error} />
+
+            {state.loading ? (
+                <p className="lunora-auth-card__description" role="status">
+                    {t.loading}
+                </p>
+            ) : (
+                <ul className="lunora-auth-list">
+                    {state.members.map((member) => {
+                        // Bound once: TS can't narrow an optional through a closure.
+                        const memberId = member.id;
+
+                        return (
+                            <li className="lunora-auth-list__item" key={memberId ?? member.userId ?? member.user?.email}>
+                                <span className="lunora-auth-list__label">
+                                    {firstLabel(member.user?.email, member.user?.name, member.userId)} · {member.role}
+                                </span>
+                                {memberId === undefined ? null : (
+                                    <button
+                                        aria-label={rowActionLabel(t.remove, firstLabel(member.user?.email, member.user?.name, member.userId))}
+                                        className="lunora-auth-link"
+                                        disabled={state.busy}
+                                        onClick={() => {
+                                            void actions.removeMember(memberId);
+                                        }}
+                                        type="button"
+                                    >
+                                        {t.remove}
+                                    </button>
+                                )}
+                            </li>
+                        );
+                    })}
+                </ul>
+            )}
+
+            {state.invitations.length === 0 ? null : (
+                <>
+                    <p className="lunora-auth-card__description">{t.invitations}</p>
+                    <ul className="lunora-auth-list">
+                        {state.invitations.map((invitation) => {
+                            const invitationId = invitation.id;
+
+                            return (
+                                <li className="lunora-auth-list__item" key={invitationId ?? invitation.email}>
+                                    <span className="lunora-auth-list__label">
+                                        {invitation.email} · {invitation.role}
+                                    </span>
+                                    {invitationId === undefined ? null : (
+                                        <button
+                                            aria-label={rowActionLabel(t.cancel, invitation.email)}
+                                            className="lunora-auth-link"
+                                            disabled={state.busy}
+                                            onClick={() => {
+                                                void actions.cancelInvitation(invitationId);
+                                            }}
+                                            type="button"
+                                        >
+                                            {t.cancel}
+                                        </button>
+                                    )}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </>
+            )}
+
+            <form className="lunora-auth-form" noValidate onSubmit={onSubmit(invite)}>
+                <Field
+                    field={{ touched: false, value: email }}
+                    label={t.inviteEmailLabel}
+                    name="inviteEmail"
+                    onBlur={() => undefined}
+                    onChange={setEmail}
+                    type="email"
+                />
+                <div className="lunora-auth-field">
+                    <label className="lunora-auth-field__label" htmlFor={roleId}>
+                        {t.roleLabel}
+                    </label>
+                    <select
+                        className="lunora-auth-field__input"
+                        id={roleId}
+                        onChange={(event) => {
+                            setRole(event.target.value);
+                        }}
+                        value={role}
+                    >
+                        {ROLE_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                                {option}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                <SubmitButton pending={state.busy}>{t.inviteMember}</SubmitButton>
+            </form>
+        </AuthCard>
+    );
+};
+
+interface OrganizationSettingsCardProps {
+    /** Defaults to the user's active organization. */
+    organizationId?: string;
+}
+
+/** Rename the active organization and edit its slug and logo. */
+const OrganizationSettingsCard = ({ organizationId }: OrganizationSettingsCardProps = {}): ReactElement | null => {
+    const context = useAuthUI();
+    const { localization: t } = context;
+    const enabled = isFlowEnabled(context, "organization", "OrganizationSettingsCard");
+    const [state, actions] = useController(
+        (context_) => createOrganizationSettingsController(context_, { autoLoad: enabled, organizationId }),
+        [enabled, organizationId],
+    );
+
+    if (!enabled) {
+        return null;
+    }
+
+    return (
+        <AuthCard headingLevel={2} title={t.organizationSettings}>
+            {state.loading ? (
+                <p className="lunora-auth-card__description" role="status">
+                    {t.loading}
+                </p>
+            ) : (
+                <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
+                    <FormBanner error={state.formError} success={state.successMessage} />
+                    <FormField actions={actions} field="name" label={t.organizationName} name="organizationName" state={state} />
+                    <FormField actions={actions} field="slug" label={t.organizationSlug} name="organizationSlug" state={state} />
+                    <FormField actions={actions} field="logo" label={t.organizationLogo} name="organizationLogo" state={state} />
+                    <SubmitButton pending={state.status === "submitting"}>{t.saveChanges}</SubmitButton>
+                </form>
+            )}
+        </AuthCard>
+    );
+};
+
+export type { OrganizationSettingsCardProps };
+export { MembersCard, OrganizationsCard, OrganizationSettingsCard };

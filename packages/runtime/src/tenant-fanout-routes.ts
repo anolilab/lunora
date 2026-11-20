@@ -22,6 +22,7 @@
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { readLooseJsonBody } from "./body-readers";
 import type { QueueForwardHandler, ScheduledControllerLike } from "./create-worker";
+import { PAUSED_QUEUE_RETRY_SECONDS } from "./deployment-pause";
 import { LunoraError } from "./errors";
 
 // Admin-gated HTTP entrypoint that runs a cron expression's jobs exactly as the
@@ -40,10 +41,12 @@ const QUEUE_DISPATCH_PATH = "/_lunora/queue";
  * value PUT declares `KV_VALUE_MAX_BODY_BYTES`. Derived from what Cloudflare
  * Queues can hand a consumer: `max_batch_size` tops out at 100 messages and a
  * message may carry 128 KiB, so a full batch is 12.5 MiB of message bodies
- * before the forwarding envelope (`queue`, per-message `id`) and JSON string
- * escaping. 16 MiB covers that with the same ~1.3× headroom the KV cap allows
- * its 25 MiB value, and stays under the 32 MiB the KV and storage routes already
- * buffer, so it is not a new memory ceiling for the isolate.
+ * before the forwarding envelope (`queue`, per-message `id`). 16 MiB covers that
+ * with the same ~1.3× headroom the KV cap allows its 25 MiB value, and stays
+ * under the 32 MiB the KV and storage routes already buffer, so it is not a new
+ * memory ceiling for the isolate. JSON escaping can still grow a full batch past
+ * it (up to sixfold), so a forwarder splits a batch to fit rather than this
+ * route buffering the worst case.
  */
 const QUEUE_DISPATCH_MAX_BODY_BYTES: number = 16 * 1_048_576;
 
@@ -59,18 +62,21 @@ interface TenantFanoutRouteDeps {
      */
     dispatchScheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
 
-    /** Whether the deployment is paused; a paused tenant hands every forwarded message back for retry. */
+    /** Whether the deployment is paused; a paused tenant holds every forwarded message. */
     isPaused: () => Promise<boolean>;
 
     /** The app's forwarded-batch handler, off `WorkerOptions`. Absent when the app declares no queues. */
     queueHandler?: QueueForwardHandler;
+
+    /** Whether `queueHandler` holds a batch it is handed `hold` for, rather than running it. */
+    queueHandlerHolds: boolean;
 }
 
 /** Build the reserved fan-out route map merged into the worker's internal route table. */
 const buildTenantFanoutRoutes = (
     deps: TenantFanoutRouteDeps,
 ): Record<string, (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>> => {
-    const { assertAdmin, dispatchScheduled, isPaused, queueHandler } = deps;
+    const { assertAdmin, dispatchScheduled, isPaused, queueHandler, queueHandlerHolds } = deps;
 
     /**
      * `POST /_lunora/scheduled` — run a cron expression's jobs over HTTP, the
@@ -107,8 +113,9 @@ const buildTenantFanoutRoutes = (
     /**
      * `POST /_lunora/queue` — process a forwarded queue batch (the WfP workaround
      * for queue consumers). Admin-gated; the body is
-     * `{ "queue": "name", "messages": [{ "id": "...", "body": ... }] }`. Returns
-     * `{ "retry": [ids] }` so the platform consumer can retry only the failures.
+     * `{ "queue": "name", "messages": [{ "id": "...", "body": ..., "attempts": 1 }] }`. Returns
+     * `{ "retry": [ids], "retryDelays": { id: seconds } }` so the platform consumer
+     * can retry only the failures, each after the delay it asked for.
      */
     const handleQueueDispatch = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
         assertAdmin(request);
@@ -137,20 +144,37 @@ const buildTenantFanoutRoutes = (
         const queue = typeof body.queue === "string" ? body.queue : "";
         const messages = body.messages
             .filter(
-                (message): message is { body: unknown; id: string } =>
+                (message): message is { attempts?: unknown; body?: unknown; id: string } =>
                     typeof message === "object" && message !== null && typeof (message as { id?: unknown }).id === "string",
             )
             .map((message) => {
-                return { body: (message as { body?: unknown }).body, id: (message as { id: string }).id };
+                return {
+                    ...(typeof message.attempts === "number" && Number.isInteger(message.attempts) && message.attempts > 0
+                        ? { attempts: message.attempts }
+                        : {}),
+                    body: message.body,
+                    id: message.id,
+                };
             });
 
-        if (await isPaused()) {
-            return Response.json({ retry: messages.map((message) => message.id) });
+        const paused = await isPaused();
+
+        // A handler that does not declare it holds would run, and ack, the batch:
+        // answered as a delayed retry, the work waits out the pause at the cost of
+        // one platform delivery attempt per hold.
+        if (paused && !queueHandlerHolds) {
+            return Response.json({
+                retry: messages.map((message) => message.id),
+                retryDelays: Object.fromEntries(messages.map((message) => [message.id, PAUSED_QUEUE_RETRY_SECONDS])),
+            });
         }
 
-        const result = await queueHandler({ messages, queue }, env, context);
+        // Paused, a holding handler holds the batch as a native consumer does: a
+        // fresh delayed copy per message, the original acked, so a pause past
+        // `max_retries` does not dead-letter work that never ran.
+        const result = await queueHandler({ messages, queue }, env, context, paused ? { holdSeconds: PAUSED_QUEUE_RETRY_SECONDS } : undefined);
 
-        return Response.json({ retry: result?.retry ?? [] });
+        return Response.json({ retry: result?.retry ?? [], ...(result?.retryDelays === undefined ? {} : { retryDelays: result.retryDelays }) });
     };
 
     return {

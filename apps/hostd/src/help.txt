@@ -1,0 +1,40 @@
+lunora-hostd — runs Lunora Cloud fleets on your own server.
+
+Usage:
+  lunora-hostd enrol --bucket <name> [options]
+      Bind this machine to your organization with the one-time token the
+      studio shows, read from LUNORA_HOSTD_ENROL_TOKEN (install.sh asks for
+      it and passes it on so). Options:
+        --control-plane <origin>   Lunora Cloud's origin
+        --bucket <name|s3://name>  the bucket your fleets' data lives in
+        --endpoint <url>           S3-compatible endpoint (R2, Tigris, MinIO…)
+        --region <region>          bucket region
+        --ipv4 <address>           public address (detected when omitted)
+        --ipv6 <address>
+        --single-trust             run fleets without the isolation self-check
+        --data-dir <path>          default /var/lib/lunora-hostd
+        --install-dir <path>       where install.sh put the releases,
+                                   default /opt/lunora-hostd
+        --force                    enrol again as a new box
+        --skip-bucket-check        do not probe the bucket with celld first
+      The bucket credentials come from AWS_ACCESS_KEY_ID /
+      AWS_SECRET_ACCESS_KEY (/ AWS_SESSION_TOKEN) in the environment; they are
+      written to a file only this box can read and never sent to Lunora
+      Cloud. No secret is ever taken from the command line.
+  lunora-hostd run         Run the daemon in the foreground (systemd runs this)
+  lunora-hostd status      Show this box's enrolment and fleets
+  lunora-hostd install-release <manifest.json> --from <directory>
+               [--install-dir <path>] [--platform <p>] [--allow-downgrade]
+      Install the release a manifest describes from the files downloaded
+      into <directory> (lunora-hostd, celld, caddy, as published), exactly
+      as an upgrade does: verify the manifest against the release keys
+      compiled into this binary, check each file against the size and
+      SHA-256 it pins for this platform (linux-x64 or linux-arm64), run it
+      once, then install it beside the running release and switch current
+      to it. A release older than the installed one is refused without
+      --allow-downgrade. Prints the release id. install.sh runs it.
+  lunora-hostd --version   Print the version
+  lunora-hostd --help      Print this help
+
+Every command takes --config <path> (default /etc/lunora-hostd/config.json,
+or LUNORA_HOSTD_CONFIG).

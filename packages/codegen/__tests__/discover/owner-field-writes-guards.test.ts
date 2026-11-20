@@ -49,6 +49,51 @@ ${DECLARED_GUARD}`,
         expect(rowAt(found, 3)).toMatchObject({ guarded: true });
     });
 
+    // Handed the whole ctx, a declared guard can read the caller from it: `assertMember(ctx, args.organizationId)`.
+    it("marks a write guarded by a declared guard given the argument and the whole ctx", () => {
+        expect.assertions(2);
+
+        const direct = discover(
+            `${handler(`  await assertOwnOrganizationId(ctx, args.organizationId);
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`)}
+${ASYNC_GUARD}`,
+        );
+        const returned = discover(
+            `${handler(`  const { organizationId } = await assertOwnOrganizationId(ctx, args.organizationId);
+  await ctx.db.insert("prompts", { organizationId });`)}
+${ASYNC_GUARD}`,
+        );
+
+        expect(rowAt(direct, 3)).toMatchObject({ guarded: true });
+        expect(rowAt(returned, 3)).toMatchObject({ guarded: true });
+    });
+
+    it("marks a write guarded through a renamed args binding", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `export const createPost = mutation.mutation(async ({ ctx: context, args: arguments_ }) => {
+  const member = await assertOwnOrganizationId(context, arguments_.organizationId);
+  await context.db.insert("prompts", { organizationId: member.organizationId });
+});
+${ASYNC_GUARD}`,
+        );
+
+        expect(rowAt(found, 3)).toMatchObject({ guarded: true });
+    });
+
+    it("does not mark a write guarded by a declared guard given a ctx surface that is not the caller", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `${handler(`  await assertOwnOrganizationId(ctx.db, args.organizationId);
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`)}
+${ASYNC_GUARD}`,
+        );
+
+        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
+    });
+
     it("marks a write guarded by an async declared guard that is awaited", () => {
         expect.assertions(1);
 

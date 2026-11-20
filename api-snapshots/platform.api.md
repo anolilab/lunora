@@ -302,6 +302,7 @@ interface PlatformCapabilities {
         cronTriggers?: Capability;
         cronWorkflowTriggers?: Capability;
         crossShardFanout?: Capability;
+        dataExportSections?: Capability;
         deliveryAuthorization?: Capability;
         deploymentPause?: Capability;
         durableStreams?: Capability;

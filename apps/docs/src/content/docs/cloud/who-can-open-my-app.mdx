@@ -1,0 +1,36 @@
+---
+title: Who can open my app?
+description: Production apps on Lunora Cloud are open to anyone with the link. Your app controls sign-in; the preview password gate applies only to previews.
+---
+
+On Lunora Cloud, a production app is reachable by anyone who has its URL. The
+platform does not put a sign-in screen in front of it. Who can use the app is
+decided by the app's own code, through its own authentication.
+
+| Surface    | Who can open it                                                | What decides it                            |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------ |
+| Production | Anyone with the link                                           | Your app's authentication and access rules |
+| Preview    | Anyone with the link and, if you set one, the preview password | The preview password gate                  |
+
+The preview password gate protects previews only. Setting a password on a
+preview does not restrict production, and a production app with no sign-in
+configured is open to everyone who finds it.
+
+## Make a production app sign-in only
+
+Add authentication to the app with the CLI:
+
+```bash
+lunora add auth
+```
+
+It asks which provider to use. The app then gates its own functions and pages on
+`ctx.auth`. See [Authentication](/docs/concepts/authentication) for how the
+signed-in user reaches your queries, mutations, and actions, and the
+`lunora-setup-auth` skill for an assisted setup.
+
+Enterprise sign-in for a whole organisation, with group rules in front of an
+app, is not available yet.
+
+Which response headers an app gets, and what the browser does with them, is on
+[Serving your app's responses](/docs/cloud/serving-responses).

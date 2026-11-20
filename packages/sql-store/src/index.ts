@@ -11,8 +11,8 @@
  * This package is internal: consumers depend on `@lunora/d1` or
  * `@lunora/hyperdrive`, which assemble the concrete dialect and wrap the core.
  */
-export type { ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult } from "./admin-export-import";
-export { exportSqlGlobalRows, importSqlGlobalRows, selectGlobalTables } from "./admin-export-import";
+export type { ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult, PreparedGlobalImportRow } from "./admin-export-import";
+export { exportSqlGlobalRows, importSqlGlobalRows, prepareGlobalImportRow, selectGlobalTables } from "./admin-export-import";
 export { globalColumnBackfill } from "./column-provisioning";
 export type { SqlCtxDbOptions, SqlCtxExec } from "./ctx-db";
 export {

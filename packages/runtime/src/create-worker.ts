@@ -1,5 +1,5 @@
 import { isLunoraError, toErrorBody } from "@lunora/errors";
-import type { HttpCacheLike } from "@lunora/platform";
+import type { HttpCacheLike, R2MultipartUploadLike } from "@lunora/platform";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "@lunora/wire";
 
 import { ADMIN_SIGNAL_HEADER, ADMIN_SIGNAL_MIN_TTL_MS, mintAdminSignal, parseAdminTokenHeader } from "../../../shared/admin-token";
@@ -70,12 +70,17 @@ import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import { createDeploymentPause, PAUSE_PATH, PAUSED_QUEUE_RETRY_SECONDS } from "./deployment-pause";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
+import type { AuthDataPort } from "./export-sections";
+import { exportSectionRows } from "./export-sections";
 import { prepareExportRows } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import type { HealthProbe } from "./health-routes";
 import { buildHealthRoutes, d1Probe, durableObjectProbe, presenceProbe } from "./health-routes";
 import type { IdentityContractLike, ResolvedIdentity } from "./identity-resolvers";
 import { wrapResolverWithContract } from "./identity-resolvers";
+import type { ImportSessionContext } from "./import-session";
+import { abortImport, commitImport, replaceImport, stageImport } from "./import-session";
+import type { RecordImportAudit } from "./import-stream";
 import { streamingImport } from "./import-stream";
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
 import type { KvIntrospector } from "./kv-admin-routes";
@@ -349,6 +354,32 @@ type GlobalImportFunction = (request: {
     replaced?: number;
 }>;
 
+/**
+ * The `.global()` half of a staged replace import (`/_lunora/admin/import?mode=replace`),
+ * over `@lunora/d1`'s `stageGlobalRows` / `commitStagedGlobalRows` /
+ * `abortStagedGlobalRows`. A failure that carries a string `code`
+ * (`IMPORT_SESSION_EXPIRED`, `IMPORT_SESSION_STALE`, …) is answered with it.
+ * Every call names the session's `generation`; rows of another are refused.
+ */
+interface GlobalImportStaging {
+    /** Forget a session's staged rows (of that generation only). */
+    abort: (request: { generation: string; session: string }) => Promise<void>;
+    /** Swap the staged rows in for `tables` (writes, then prune); `staged` says whether the session staged any row here. */
+    commit: (request: { generation: string; session: string; staged: boolean; tables: ReadonlyArray<string> }) => Promise<{
+        conflicts: number;
+        deleted?: Record<string, number>;
+        errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
+        inserted: Record<string, number>;
+    }>;
+    /** Validate and stage one request's rows; any refused row stages none. */
+    stage: (request: {
+        generation: string;
+        rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+        session: string;
+        tables: ReadonlyArray<string>;
+    }) => Promise<{ errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>; staged: Record<string, number> }>;
+}
+
 /** One R2 object as the storage browser surfaces it. Mirrors `@lunora/storage`'s `R2ObjectLike`. */
 interface StorageObject {
     customMetadata?: Record<string, string>;
@@ -494,7 +525,7 @@ type X402ChargeGate = (
 type StorageListFunction = (
     prefix?: string,
     options?: { bucket?: string; cursor?: string; limit?: number },
-) => Promise<{ cursor?: string; objects: StorageObject[] }>;
+) => Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }>;
 
 /**
  * Deletes one object from a storage bucket for the admin file browser.
@@ -513,8 +544,18 @@ type StorageDeleteFunction = (key: string, options?: { bucket?: string }) => Pro
 type StorageUploadFunction = (
     key: string,
     body: ArrayBuffer,
-    options?: { bucket?: string; contentType?: string; sha256?: string },
+    options?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string>; sha256?: string },
 ) => Promise<{ etag?: string; key: string }> | { etag?: string; key: string };
+
+/**
+ * Begins a multipart upload of one object. Structurally `@lunora/storage`'s
+ * `Storage["createMultipartUpload"]` with the target `bucket` added; the
+ * import assembles a restored object over 32 MiB through it.
+ */
+type StorageMultipartUploadFunction = (
+    key: string,
+    options?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string> },
+) => Promise<R2MultipartUploadLike>;
 
 /**
  * Reads one object's bytes back out of a storage bucket. Structurally the part
@@ -656,6 +697,8 @@ type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: 
 
 /** One forwarded queue message: the platform's opaque `body` plus its id. */
 interface QueueForwardMessage {
+    /** The platform's delivery attempt of the message, which a retry policy needs to see a last delivery. */
+    attempts?: number;
     body: unknown;
     id: string;
 }
@@ -669,6 +712,8 @@ interface QueueForwardBatch {
 /** Outcome of a forwarded batch: the ids to retry (everything else is acked). */
 interface QueueForwardResult {
     retry?: ReadonlyArray<string>;
+    /** The delay, in seconds, each retried id asked for; one absent here is retried at once. */
+    retryDelays?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -676,11 +721,19 @@ interface QueueForwardResult {
  * Workers can't be queue consumers, so a platform-owned consumer fans batches in
  * here; return the ids to retry. Env-driven side effects
  * (sending mail, etc.) belong in the app's handler.
+ *
+ * `hold.holdSeconds` is set while the deployment is paused, and only for a
+ * handler whose `WorkerOptions.queueHandlerHolds` is `true`, as
+ * {@link TriggerTrace.holdSeconds} is for the native `queue()` entry: the handler
+ * holds each message back that long instead of running it — a fresh delayed copy
+ * sent through its own producer binding, then acked, so a long pause spends none
+ * of the platform's delivery attempts.
  */
 type QueueForwardHandler = (
     batch: QueueForwardBatch,
     env: unknown,
     context: ExecutionContextLike,
+    hold?: { holdSeconds: number },
 ) => Promise<QueueForwardResult | undefined> | QueueForwardResult | undefined;
 
 /**
@@ -1148,6 +1201,18 @@ interface WorkerOptions {
     authBasePath?: string;
 
     /**
+     * The auth tables that live outside the schema (better-auth's tables in the auth
+     * D1 database, or the DO-backed auth object's), read and written by the admin
+     * export / import as the `$auth` section — so a backup, restore and eject carry
+     * users and accounts with the app's own tables. Never signed-in sessions,
+     * one-time tokens or the auth audit log: users sign in again after a restore,
+     * and a replace clears the sessions and tokens. Codegen wires it for
+     * both auth modes. Omit it and the export has no auth section, and an import's
+     * `$auth` rows are reported as `AUTH_NOT_CONFIGURED`.
+     */
+    authData?: AuthDataPort;
+
+    /**
      * Optional prebound `@lunora/auth` handler for the OAuth discovery documents
      * that live OUTSIDE the auth base path — the RFC 9728 protected-resource
      * metadata of an `mcp({ resource })` and the RFC 8414 authorization-server
@@ -1406,6 +1471,12 @@ interface WorkerOptions {
     importGlobals?: GlobalImportFunction;
 
     /**
+     * Stage and commit `.global()` rows for a replace import. When omitted, a
+     * replace import whose scope holds a `.global()` table is refused.
+     */
+    importGlobalsStaging?: GlobalImportStaging;
+
+    /**
      * Set when `importGlobals` honours a row's `op: "delete"`. An import that
      * carries global delete rows is refused unless this is set: an importer that
      * ignores the op would read the row as an insert, report its `_id` as a
@@ -1604,6 +1675,15 @@ interface WorkerOptions {
      * message ids to retry; the rest are acked. Omit if the app has no queues.
      */
     queueHandler?: QueueForwardHandler;
+
+    /**
+     * Whether {@link WorkerOptions.queueHandler} honours its `hold` argument. Set,
+     * a paused deployment calls the handler with `hold` and it holds the batch
+     * itself. Unset, a paused deployment never calls the handler and answers every
+     * message as a delayed retry instead: a handler that ignored `hold` would run
+     * and ack work the pause was meant to stop. Codegen's handler sets it.
+     */
+    queueHandlerHolds?: boolean;
 
     /**
      * Serve one-shot **queries** from a read replica placed in the caller's
@@ -1823,6 +1903,17 @@ interface WorkerOptions {
      * responds `STORAGE_NOT_CONFIGURED`.
      */
     storageList?: StorageListFunction;
+
+    /**
+     * Begins a multipart upload, which the admin import uses to assemble a
+     * restored storage object over 32 MiB from its staged chunks (in parts of
+     * at least 5 MiB, one held at a time). The generated app worker emits
+     * `(key, opts) => pick(opts?.bucket).createMultipartUpload(key, opts)`.
+     * Omit it, or run on a bucket without multipart uploads, and such an
+     * object is reported (`STORAGE_OBJECT_TOO_LARGE` / `STORAGE_IMPORT_FAILED`)
+     * instead of restored; smaller ones are unaffected.
+     */
+    storageMultipartUpload?: StorageMultipartUploadFunction;
 
     /**
      * Mints a (signed or public) URL for one object, backing the admin-gated
@@ -2220,6 +2311,13 @@ const DEFAULT_AUTH_BASE_PATH = "/api/auth";
  * like the other admin-op sets, to avoid importing `@lunora/do`.
  */
 const RECORD_AUTH_EVENT_OP = "__lunora_admin__:recordAuthEvent";
+
+/**
+ * Reserved admin RPC the worker sends to the default shard to audit the halves
+ * of an admin import no shard sees — the `.global()` rows and the format-2
+ * sections — so they land in the same audit log the Studio Audit tab reads.
+ */
+const RECORD_IMPORT_AUDIT_OP = "__lunora_admin__:recordImportAudit";
 
 /**
  * Reserved admin RPC the worker (NOT the DO) serves to list the app's registered
@@ -4490,6 +4588,28 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // import) live in a sibling module; the export/import row producers are
     // injected because they close over the worker options and are shared with
     // the scheduled R2 backup (mirroring the other extracted clusters).
+    /** Audit an import half no shard records itself, on the default shard, under the importer's own headers. */
+    const recordImportAudit =
+        (headers: Record<string, string>): RecordImportAudit =>
+        async (args) => {
+            const response = await forwardToShard(shardDO, defaultShard, shardRpcRequest(RECORD_IMPORT_AUDIT_OP, args, headers));
+
+            if (!response.ok) {
+                throw new LunoraError(`the default shard answered HTTP ${String(response.status)}`, { code: "INTERNAL", status: 500 });
+            }
+        };
+
+    /** A staged import's context: the effective admin token seals its staged chunks, and its global / section halves are audited. */
+    const importSessionContext = (headers: Record<string, string>): ImportSessionContext => {
+        return {
+            coordinator: queryCoordinator,
+            headers,
+            namespace: shardDO,
+            options: { ...options, adminToken: effectiveAdminToken() },
+            recordAudit: recordImportAudit(headers),
+        };
+    };
+
     const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
         applyGlobals: options.applyGlobals,
         assertAdmin: assertAdminAuthorized,
@@ -4505,9 +4625,27 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         queryCoordinator,
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
+        exportSectionRows: (sections) => exportSectionRows(options, sections),
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
-        streamingImport: (request, resolveHeaders, dryRun, onConflict) =>
-            streamingImport(request, options, queryCoordinator, resolveHeaders, shardDO, dryRun, onConflict),
+        importSession: {
+            abort: async (headers, session) => abortImport(importSessionContext(headers), session),
+            commit: async (headers, session) => commitImport(importSessionContext(headers), session),
+            replace: async (request, headers, tables) => replaceImport(request, importSessionContext(headers), tables),
+            stage: async (request, headers, session, tables) => stageImport(request, importSessionContext(headers), session, tables),
+        },
+        streamingImport: async (request, resolveHeaders, dryRun, onConflict) =>
+            // The effective admin token (option or env): restore staging seals its chunks under it. Headers resolve late, at the
+            // shard fan-out and again per audit entry, so a slow upload cannot outlive a named token's short-lived shard signal.
+            streamingImport(
+                request,
+                { ...options, adminToken: effectiveAdminToken() },
+                queryCoordinator,
+                resolveHeaders,
+                shardDO,
+                dryRun,
+                onConflict,
+                async (args) => recordImportAudit(await resolveHeaders())(args),
+            ),
         syncGlobals: options.syncGlobals,
     });
 
@@ -6476,6 +6614,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         dispatchScheduled: handleScheduled,
         isPaused,
         queueHandler: options.queueHandler,
+        queueHandlerHolds: options.queueHandlerHolds === true,
     });
 
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
@@ -7362,6 +7501,7 @@ export type {
     GlobalFacetResult,
     GlobalFilterClause,
     GlobalImportFunction as GlobalImportFn,
+    GlobalImportStaging,
     GlobalIntrospector,
     GlobalTableInfo,
     GlobalTablePage,
@@ -7386,6 +7526,7 @@ export type {
     StorageDeleteFunction as StorageDeleteFn,
     StorageDownloadFunction as StorageDownloadFn,
     StorageListFunction as StorageListFn,
+    StorageMultipartUploadFunction as StorageMultipartUploadFn,
     StorageObject,
     StorageSignedUrlFunction as StorageSignedUrlFn,
     StorageUploadFunction as StorageUploadFn,

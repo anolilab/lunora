@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { applyCdcChanges, applySqlMigrationFiles, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
+import { abortStagedGlobalRows, applyCdcChanges, applySqlMigrationFiles, commitStagedGlobalRows, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, stageGlobalRows } from "@lunora/d1";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, SecurityOptions, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "@lunora/runtime";
@@ -408,11 +408,12 @@ class AppBuilder<Env extends object> {
             storageDelete: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).delete(key),
             storageDownload: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).download(key),
             storageList: (prefix?: string, opts?: { bucket?: string; cursor?: string; limit?: number }) => pick(opts?.bucket).list(prefix, opts),
+            storageMultipartUpload: (key: string, opts?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string> }) => pick(opts?.bucket).createMultipartUpload(key, opts),
             ...(hasSigning ? {
                 storageSignedUrl: (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT"; origin?: string }) =>
                     pick(opts?.bucket, opts?.origin).getSignedUrl(key, opts),
             } : {}),
-            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
+            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string>; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
         };
     }
 
@@ -467,6 +468,7 @@ class AppBuilder<Env extends object> {
                 // plane: the rows `resolveTableSharding` classifies as `.global()`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
+                options.importGlobalsStaging = buildGlobalImportStaging(database, this.cdcEnabled);
                 // The importer above skips the write for a dry run, overwrites an
                 // existing `_id` under `onConflict: "replace"`, and removes the row
                 // an `op: "delete"` row names.
@@ -713,6 +715,32 @@ const buildGlobalImporter =
             ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
         });
     };
+
+/**
+ * `importGlobalsStaging` for a staged replace import: the `.global()` rows wait
+ * in D1's staging table until the commit writes them through the same writer
+ * `importGlobals` uses (changelog included), then prunes. See `@lunora/d1`'s
+ * `import-staging` for what the commit guarantees without a transaction.
+ */
+const buildGlobalImportStaging = (database: D1DatabaseLike, cdc: boolean) => {
+    const globalSchema = schema as unknown as D1CtxDbOptions["schema"];
+
+    return {
+        abort: (request: { generation: string; session: string }) => abortStagedGlobalRows(buildExec(database), request.session, request.generation),
+        commit: (request: { generation: string; session: string; staged: boolean; tables: ReadonlyArray<string> }) => {
+            const exec = buildExec(database);
+
+            return commitStagedGlobalRows(createD1CtxDb({ cdc, exec, schema: globalSchema }), exec, globalSchema, request);
+        },
+        stage: (request: {
+            generation: string;
+            rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+            session: string;
+            tables: ReadonlyArray<string>;
+        }) =>
+            stageGlobalRows(buildExec(database), globalSchema, request),
+    };
+};
 
 /**
  * `exportGlobals` for the admin export endpoint (and the scheduled R2 backup,

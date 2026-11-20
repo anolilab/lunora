@@ -1,0 +1,177 @@
+/**
+ * The periodic metric-alert sweep (§ Observability). Runs from the control
+ * plane's every-minute `scheduled()` tick alongside the uptime sweep: re-evaluate
+ * every enabled metric-window rule (`error_rate` / `latency_p95` / `llm_cost`)
+ * over its rolling window and fire/clear as its firing state crosses.
+ *
+ * Metric rules also evaluate inline on telemetry ingest (fast feedback), but a
+ * window that goes quiet — the error rate falling to 0 because no new spans
+ * arrive — is never re-examined by ingest, so a firing rule would never clear and
+ * a breach that developed without a fresh ingest would never fire. This sweep
+ * closes that gap: it drives the SAME level-triggered `fireMetricRules` the ingest
+ * uses, over the SAME `alertRuleState` latch, so the two paths can't drift and a
+ * breach alerts exactly once regardless of which path first sees it.
+ *
+ * Expressed as a pure function over the injected {@link ControlPlaneDatabase} ports,
+ * like `runUptimeSweep`, so the evaluate→fire/clear logic is testable against a
+ * fake store. The edge (`src/server.ts`) supplies the real D1 and delivers the
+ * returned alerts.
+ */
+import type { ControlPlaneDatabase } from "../store";
+import { drainTable } from "../store";
+import type { AlertChannel, AlertDelivery, MetricObservation, MetricRule, MetricTarget } from "./alerts";
+import { fireMetricRules, METRIC_TARGETS, partitionByCoverage, readMetricWindow } from "./alerts";
+
+/** An `alertRules` row as the control-plane store returns it. */
+interface AlertRuleRow {
+    _id: string;
+    baselineWindows?: number;
+    channel: AlertChannel;
+    comparator?: "gt" | "lt";
+    destination: string;
+    enabled: boolean;
+    functionPath?: string;
+    mode?: "deviation" | "threshold";
+    name: string;
+    organizationId: string;
+    target: string;
+    threshold: number;
+    windowMinutes?: number;
+}
+
+/** A span observation row scanned for a rule's window. */
+interface ObservationRow extends MetricObservation {
+    organizationId: string;
+}
+
+/** A metric rule's persisted firing latch (`alertRuleState`). */
+interface AlertRuleStateRow {
+    _id: string;
+    firing: boolean;
+    ruleId: string;
+}
+
+export interface AlertSweepResult {
+    /** Rules whose window fell back under threshold this sweep (latch cleared). */
+    cleared: number;
+    /** Alerts fired this sweep, for the edge to deliver + mark delivered. */
+    deliveries: AlertDelivery[];
+    /** Orgs whose recent observations were scanned (had ≥1 enabled metric rule). */
+    evaluatedOrgs: number;
+    /** Rules left undecided because the bounded read ended inside their windows. */
+    incomplete: { organizationId: string; ruleId: string }[];
+}
+
+/** Options for {@link runAlertSweep}. */
+export interface AlertSweepOptions {
+    now: number;
+    /** Max observations read per org; a rule whose lookback reaches past them is reported incomplete. */
+    scanLimit?: number;
+}
+
+/** The metric-window rule targets this sweep evaluates. */
+
+/** Twenty pages: an org busy enough to pass this inside a rule's lookback has the rule reported, not guessed. */
+const DEFAULT_SCAN_LIMIT = 20_000;
+
+/** Map an `alertRules` row to the shared {@link MetricRule} the firing loop reads. */
+const toMetricRule = (row: AlertRuleRow): MetricRule => {
+    return {
+        baselineWindows: row.baselineWindows,
+        channel: row.channel,
+        comparator: row.comparator ?? "gt",
+        destination: row.destination,
+        functionPath: row.functionPath,
+        mode: row.mode,
+        name: row.name,
+        ruleId: row._id,
+        target: row.target as MetricTarget,
+        threshold: row.threshold,
+        windowMinutes: row.windowMinutes ?? 60,
+    };
+};
+
+/**
+ * Re-evaluate every enabled metric rule over its window and fire/clear as its
+ * latch crosses. Reads all rules once, groups the metric ones by org, and — only
+ * for orgs that actually have such a rule — scans that org's recent observations
+ * and drives {@link fireMetricRules} against the persisted `alertRuleState`.
+ * Returns the fired alerts for the edge to deliver.
+ */
+export const runAlertSweep = async (database: ControlPlaneDatabase, options: AlertSweepOptions): Promise<AlertSweepResult> => {
+    const scanLimit = options.scanLimit ?? DEFAULT_SCAN_LIMIT;
+
+    // Drained: a rule past the page boundary was never evaluated, so its alert
+    // never fired and never cleared — invisibly, since the sweep still succeeded.
+    const ruleRows = await drainTable<AlertRuleRow>(database, "alertRules");
+    const rulesByOrg = new Map<string, MetricRule[]>();
+
+    for (const row of ruleRows) {
+        if (row.enabled && METRIC_TARGETS.has(row.target as MetricTarget)) {
+            const list = rulesByOrg.get(row.organizationId) ?? [];
+
+            list.push(toMetricRule(row));
+            rulesByOrg.set(row.organizationId, list);
+        }
+    }
+
+    if (rulesByOrg.size === 0) {
+        return { cleared: 0, deliveries: [], evaluatedOrgs: 0, incomplete: [] };
+    }
+
+    // Prior firing latches, read once and keyed by ruleId (across all orgs). Drained:
+    // anomaly and usage rules latch in the same table, so a metric rule's state past
+    // the first page read as "never fired" and re-fired every minute.
+    const states = await drainTable<AlertRuleStateRow>(database, "alertRuleState");
+    const stateByRule = new Map(states.map((row) => [row.ruleId, row]));
+
+    const deliveries: AlertDelivery[] = [];
+    const incomplete: AlertSweepResult["incomplete"] = [];
+    let cleared = 0;
+
+    for (const [organizationId, rules] of rulesByOrg) {
+        // eslint-disable-next-line no-await-in-loop -- one bounded read per org with a metric rule; serialized like the uptime sweep
+        const { observations, truncated } = await readMetricWindow<ObservationRow>(rules, options.now, scanLimit, async ({ cursor, limit, since }) => {
+            const result = await database.findMany("observations", {
+                cursor,
+                limit,
+                orderBy: [{ startedAt: "desc" }],
+                where: { organizationId, startedAt: { gt: since } },
+            });
+
+            return { ...result, page: result.page as ObservationRow[] };
+        });
+        // A busy org can pass the bound before reaching back across a long or deviation
+        // rule's windows; evaluating it then would fire or clear on a partial count.
+        const { covered, uncovered } = partitionByCoverage(rules, observations, truncated, options.now);
+
+        for (const rule of uncovered) {
+            incomplete.push({ organizationId, ruleId: rule.ruleId });
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- serialized D1 writes, one org at a time
+        const outcome = await fireMetricRules<string>(
+            covered,
+            observations,
+            organizationId,
+            {
+                insertAlert: (row) => database.insert("alerts", row) as Promise<string>,
+                wasFiring: (ruleId) => stateByRule.get(ruleId)?.firing ?? false,
+                writeState: async (ruleId, firing, value) => {
+                    const existing = stateByRule.get(ruleId);
+                    const patch = { firing, lastEvaluatedAt: options.now, lastValue: value, updatedAt: options.now };
+
+                    await (existing
+                        ? database.patch("alertRuleState", existing._id, patch)
+                        : database.insert("alertRuleState", { createdAt: options.now, organizationId, ruleId, ...patch }));
+                },
+            },
+            options.now,
+        );
+
+        deliveries.push(...outcome.deliveries);
+        cleared += outcome.cleared;
+    }
+
+    return { cleared, deliveries, evaluatedOrgs: rulesByOrg.size, incomplete };
+};

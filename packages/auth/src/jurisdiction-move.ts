@@ -52,6 +52,8 @@ import { decodeWire, encodeWire } from "@lunora/wire";
 
 import { contentDigest } from "../../../shared/content-digest";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
+import type { CredentialColumns } from "./data-port";
+import { insertAuthRows, isUnmovableAuthTable, redactCredentials, replaceAuthRows } from "./data-port";
 import type { DoStorageLike } from "./do-store";
 
 /** The internal route both halves of the move are served on. Not part of `/api/auth/*`. */
@@ -152,6 +154,20 @@ interface MoveOrder {
 }
 
 interface MoveContext {
+    /**
+     * The provider-token columns by physical names (`authCredentialColumns`): the
+     * export's `exportPage` nulls them and import and replace drop them, while the
+     * move's own `page` copies them — the move keeps the same deployment's users
+     * signed in to their providers, a backup must not. Known once `prepare` has run.
+     */
+    credentialColumns: () => CredentialColumns;
+
+    /**
+     * The live-credential tables by their physical names, renamed models included
+     * (`authCredentialTableNames`). The export, import and replace ops leave them
+     * out; the move itself still copies them. Known once `prepare` has run.
+     */
+    credentialTables: () => string[];
     /** Called after a purge, so the object materialises its schema again on its next request. */
     onPurge: () => void;
     order: () => MoveOrder;
@@ -658,7 +674,7 @@ const assertNotPurged = (storage: DoStorageLike): void => {
 };
 
 /** The ops served by the un-pinned object. */
-const SOURCE_OPS = new Set(["fingerprints", "manifest", "page", "pending", "purge"]);
+const SOURCE_OPS = new Set(["exportPage", "fingerprints", "manifest", "page", "pending", "purge", "tables"]);
 
 /**
  * Target: markers and the copy order, plus — only when asked, since it reads every
@@ -713,6 +729,23 @@ const safeCause = (error: unknown): string => {
     return error instanceof Error ? error.name : "unknown";
 };
 
+/** `user`, `account`, `session` first; the unbounded audit and rate-limit tables last; the rest by name. */
+const sortTables = (tables: MovableTable[], order: MoveOrder): MovableTable[] => {
+    const rank = (name: string): number => {
+        const first = order.first.indexOf(name);
+
+        if (first !== -1) {
+            return first;
+        }
+
+        const last = order.last.indexOf(name);
+
+        return last === -1 ? order.first.length : order.first.length + 1 + last;
+    };
+
+    return tables.toSorted((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+};
+
 const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext): Promise<unknown> => {
     if (SOURCE_OPS.has(String(body["op"]))) {
         assertNotPurged(storage);
@@ -724,8 +757,35 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
 
             return beginMove(storage, body["tables"] as MovableTable[], { force: body["force"] === true, userTable: context.userTable() });
         }
+        // The admin export / import of the auth tables (`./data-port`): a page with the
+        // provider tokens nulled, the table list in copy order, and an append-only write.
+        case "exportPage": {
+            context.prepare();
+
+            const table = assertKnownTable(storage, body["table"]);
+            const page = readPage(storage, table, Number(body["after"] ?? 0));
+            const columns = context.credentialColumns();
+
+            return { last: page.last, rows: encodeWire(page.rows.map((row) => redactCredentials(row, table, columns))) };
+        }
         case "fingerprints": {
             return { fingerprints: Object.fromEntries(tableNames(storage).map((table) => [table, sourceFingerprint(storage, table)])) };
+        }
+        case "import": {
+            context.prepare();
+
+            // An allow-list of this object's own tables, matched exactly as `sqlite_master`
+            // spells them: SQLite resolves names case-insensitively, so a deny-list
+            // (`!isReservedTable`) let `"SESSION"` or `"_LUNORA_MOVE"` through to the real table.
+            const credentials = new Set(context.credentialTables());
+            const importable = new Set(tableNames(storage).filter((name) => !isUnmovableAuthTable(name) && !credentials.has(name)));
+
+            return insertAuthRows(
+                { all: (query, parameters) => Promise.resolve(all(storage, query, ...parameters)) },
+                (body["rows"] ?? []) as { doc: Row; table: string }[],
+                (table) => importable.has(table),
+                context.credentialColumns(),
+            );
         }
         case "manifest": {
             return { tables: listMovableTables(storage) };
@@ -745,11 +805,48 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
 
             return result;
         }
+        // The replace of a staged import's commit: every auth table (sessions and
+        // one-time tokens included) emptied and refilled in one storage transaction.
+        case "replace": {
+            context.prepare();
+
+            const credentials = context.credentialTables();
+            const tables = sortTables(listMovableTables(storage), context.order())
+                .map((table) => table.name)
+                .filter((name) => !credentials.includes(name));
+            const reader = { all: (query: string, parameters: ReadonlyArray<unknown>) => Promise.resolve(all(storage, query, ...parameters)) };
+
+            return replaceAuthRows(
+                reader,
+                async (statements) =>
+                    storage.transaction(() => {
+                        for (const statement of statements) {
+                            run(storage, statement.sql, ...statement.params);
+                        }
+
+                        return Promise.resolve();
+                    }),
+                (body["rows"] ?? []) as { doc: Row; table: string }[],
+                tables,
+                { clearTables: credentials, credentialColumns: context.credentialColumns(), dryRun: body["dryRun"] === true },
+            );
+        }
         case "rescan": {
             return rescan(storage, (body["tables"] ?? []) as string[]);
         }
         case "status": {
             return status(storage, context, body["fingerprints"] === true);
+        }
+        case "tables": {
+            context.prepare();
+
+            const credentials = context.credentialTables();
+
+            return {
+                tables: sortTables(listMovableTables(storage), context.order())
+                    .map((table) => table.name)
+                    .filter((name) => !credentials.includes(name)),
+            };
         }
         case "write": {
             return writePage(storage, assertKnownTable(storage, body["table"]), {
@@ -795,23 +892,6 @@ const handleMoveRequest = async (storage: DoStorageLike, body: Row, context: Mov
 type MoveSide = "source" | "target";
 
 type StatusReply = ReturnType<typeof status>;
-
-/** `user`, `account`, `session` first; the unbounded audit and rate-limit tables last; the rest by name. */
-const sortTables = (tables: MovableTable[], order: MoveOrder): MovableTable[] => {
-    const rank = (name: string): number => {
-        const first = order.first.indexOf(name);
-
-        if (first !== -1) {
-            return first;
-        }
-
-        const last = order.last.indexOf(name);
-
-        return last === -1 ? order.first.length : order.first.length + 1 + last;
-    };
-
-    return tables.toSorted((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
-};
 
 const emptyReport = (table: MovableTable, targetRows: number): AuthMoveTableReport => {
     return { conflicts: 0, copied: 0, deleted: 0, sourceRows: table.rows, table: table.name, targetRows, unchanged: 0, updated: 0 };

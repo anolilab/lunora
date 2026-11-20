@@ -382,6 +382,7 @@ import {
     parseRankPageArgs,
     parseRecordAuthEventArgs,
     parseRecordContainerEventArgs,
+    parseRecordImportAuditArgs,
     parseRecordMailArgs,
     parseRecordQueueMessageArgs,
     parseReleaseShardRegistrationArgs,
@@ -420,6 +421,7 @@ import { CdcRetentionRunner } from "./cdc-retention";
 import { deliveryAccessDenied, isDeliveryAccessDenied } from "./delivery-access-denied";
 import type { DeliveryAuthorization, DeliveryAuthorizationRequest, DeliveryPermit } from "./delivery-authorization";
 import { DeliveryFence, validDeliveryPermit } from "./delivery-authorization";
+import { handleImportSessionRpc } from "./import-session-rpc";
 import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
@@ -2246,6 +2248,15 @@ const assertLiveTopicPublishable = (topic: string): void => {
         throw new LunoraError("BAD_REQUEST", `topic may be at most ${String(MAX_LIVE_CONTROL_KEY_LENGTH)} characters`, { status: 400 });
     }
 };
+
+/** The staged-import session RPCs, served by {@link handleImportSessionRpc}. */
+const IMPORT_SESSION_FUNCTIONS: ReadonlySet<string> = new Set([
+    ADMIN_FUNCTIONS.importAbort,
+    ADMIN_FUNCTIONS.importCommit,
+    ADMIN_FUNCTIONS.importManifest,
+    ADMIN_FUNCTIONS.importStage,
+    ADMIN_FUNCTIONS.importStagedRows,
+]);
 
 /**
  * Base class for shard Durable Objects.
@@ -11477,6 +11488,36 @@ abstract class ShardDO {
      * The `importShard` admin op: a dry run is answered without touching storage,
      * a real import flushes live subscribers and is audited.
      */
+    /** The import RPCs — the append `importShard` and the staged-session ones — or `undefined` for any other admin call. */
+    private importAdminRpc(functionPath: string, args: Record<string, unknown>): Promise<Response> | undefined {
+        if (functionPath === ADMIN_FUNCTIONS.importShard) {
+            return this.importAdminShard(args);
+        }
+
+        return IMPORT_SESSION_FUNCTIONS.has(functionPath) ? this.importSessionAdmin(functionPath, args) : undefined;
+    }
+
+    /** Serve one staged-import session RPC (`importStage` / `importCommit` / …), see `./import-session-rpc`. */
+    private async importSessionAdmin(functionPath: string, args: Record<string, unknown>): Promise<Response> {
+        const result = await handleImportSessionRpc(
+            {
+                recordAudit: (op, fields) => {
+                    this.recordAudit(args, op, fields);
+                },
+                runInTransaction: async (handler) => this.runInTransaction(handler),
+                runShardImport: async (importArgs) => this.runShardImport(importArgs),
+                sql: this.shardHost.sql,
+            },
+            functionPath,
+            args,
+        );
+
+        // A commit swaps rows through the writer; flush so live subscribers re-run.
+        await this.flushChangedTables();
+
+        return adminResponse(result);
+    }
+
     private async importAdminShard(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseImportShardArgs(args);
         const result = await this.runShardImport({
@@ -11497,12 +11538,14 @@ abstract class ShardDO {
         // flush so live subscribers re-run.
         await this.flushChangedTables();
 
+        // `mode: "append"` tells this apart from a staged replace, audited as `importStage` / `importCommit` with `mode: "replace"`.
         this.recordAudit(args, "importShard", {
             detail: {
                 conflicts: result.conflicts,
                 deleted: result.deleted,
                 errors: result.errors.length,
                 inserted: result.inserted,
+                mode: "append",
                 replaced: result.replaced,
             },
         });
@@ -11587,9 +11630,11 @@ abstract class ShardDO {
                 return adminResponse({ rows });
             }
 
-            if (functionPath === ADMIN_FUNCTIONS.importShard) {
+            const importing = this.importAdminRpc(functionPath, args);
+
+            if (importing !== undefined) {
                 // Awaited so a rejected import reaches the catch below and answers with the structured error envelope.
-                return await this.importAdminShard(args);
+                return await importing;
             }
 
             if (functionPath === ADMIN_FUNCTIONS.writeRow) {
@@ -11909,6 +11954,21 @@ abstract class ShardDO {
         } catch {
             // Best-effort: a metrics write must never fail the call.
         }
+
+        return adminResponse({ recorded: true });
+    }
+
+    /**
+     * Audit the halves of an admin import that never reach a shard — the
+     * `.global()` rows and the `$auth`/`$kv`/`$storage` sections — into this
+     * shard's log. The worker sends them to the default shard under the
+     * importer's own headers, so the entry sits beside that shard's
+     * `importShard` entry, attributed to the same user, in the Studio Audit tab.
+     */
+    private handleRecordImportAudit(args: Record<string, unknown>): Response {
+        const parsed = parseRecordImportAuditArgs(args);
+
+        this.recordAudit(args, parsed.op, { detail: parsed.detail });
 
         return adminResponse({ recorded: true });
     }
@@ -12861,6 +12921,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.rebuildCompanions]: (args) => this.handleRebuildCompanions(args),
             [ADMIN_FUNCTIONS.recordAuthEvent]: (args) => this.handleRecordAuthEvent(args),
             [ADMIN_FUNCTIONS.recordContainerEvent]: (args) => this.handleRecordContainerEvent(args),
+            [ADMIN_FUNCTIONS.recordImportAudit]: (args) => this.handleRecordImportAudit(args),
             [ADMIN_FUNCTIONS.recordMail]: (args) => this.handleRecordMail(args),
             [ADMIN_FUNCTIONS.recordQueueMessage]: (args) => this.handleRecordQueueMessage(args),
             [ADMIN_FUNCTIONS.releaseShardRegistration]: (args) => this.handleReleaseShardRegistration(args),

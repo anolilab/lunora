@@ -1,0 +1,239 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { ControlPlaneDatabase } from "../src/store";
+import type { MetricObservation } from "../src/telemetry/alerts";
+import { runAlertSweep } from "../src/telemetry/sweep";
+import { fakeControlPlaneDb } from "./_helpers/fake-control-plane-db";
+
+const now = 10 * 60_000; // 10 minutes in
+
+/** N observations, `errors` of which are error-level, in the current 5-min window. */
+const window = (total: number, errors: number): MetricObservation[] =>
+    Array.from({ length: total }, (_, index) => {
+        return {
+            durationMs: 10,
+            kind: "worker" as const,
+            level: index < errors ? ("error" as const) : ("info" as const),
+            // Scoped to the org whose rule is under test. Without it the sweep's
+            // `where: { organizationId }` matches nothing — which the old fake hid
+            // by returning every row for every query.
+            organizationId: "org1",
+            startedAt: now - 60_000,
+        };
+    });
+
+/** One enabled `error_rate > 50` rule over a 5-minute window, delivered by webhook. */
+const errorRateRule = {
+    _id: "rule1",
+    channel: "webhook",
+    comparator: "gt",
+    destination: "https://hook.example",
+    enabled: true,
+    name: "High error rate",
+    organizationId: "org1",
+    target: "error_rate",
+    threshold: 50,
+    windowMinutes: 5,
+};
+
+describe(runAlertSweep, () => {
+    it("re-fires a quiet error_rate window that the ingest path missed (no latch yet)", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [], // never latched → wasFiring is false
+                alertRules: [errorRateRule],
+                observations: window(2, 2), // 100% error in the current window
+            },
+            { insert },
+        );
+
+        const result = await runAlertSweep(database, { now });
+
+        expect(result.evaluatedOrgs).toBe(1);
+        expect(result.deliveries).toHaveLength(1);
+        expect(result.deliveries[0]?.subject).toContain("Error rate above threshold");
+        // Fires an alert row AND latches the rule so it won't re-fire next tick.
+        expect(insert).toHaveBeenCalledWith("alerts", expect.objectContaining({ ruleId: "rule1", status: "firing", target: "error_rate" }));
+        expect(insert).toHaveBeenCalledWith("alertRuleState", expect.objectContaining({ firing: true, ruleId: "rule1" }));
+    });
+
+    it("clears a firing rule when its window falls back under threshold — no alert, latch reset", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
+                alertRules: [errorRateRule],
+                observations: window(4, 0), // recovered: 0% error
+            },
+            { insert, patch },
+        );
+
+        const result = await runAlertSweep(database, { now });
+
+        expect(result.cleared).toBe(1);
+        expect(result.deliveries).toStrictEqual([]);
+        // Latch reset via patch on the existing state row; no alert row written.
+        expect(patch).toHaveBeenCalledWith("alertRuleState", "state1", expect.objectContaining({ firing: false }));
+        expect(insert).not.toHaveBeenCalledWith("alerts", expect.anything());
+    });
+
+    it("finds the latch past the first page of states, which other rules' latches fill", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const others = Array.from({ length: 5 }, (_, index) => {
+            return { _id: `state_other_${String(index)}`, firedPeriod: 0, firing: true, ruleId: `rule_usage_${String(index)}` };
+        });
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [...others, { _id: "state1", firing: true, ruleId: "rule1" }],
+                alertRules: [errorRateRule],
+                observations: window(2, 2), // still 100% error
+            },
+            { insert },
+            { pageSize: 2 },
+        );
+
+        const result = await runAlertSweep(database, { now });
+
+        expect(result.deliveries).toStrictEqual([]);
+        expect(insert).not.toHaveBeenCalled();
+    });
+
+    it("does not re-fire while the rule stays firing (latched, still breaching)", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
+                alertRules: [errorRateRule],
+                observations: window(2, 2), // still 100% error
+            },
+            { insert, patch },
+        );
+
+        const result = await runAlertSweep(database, { now });
+
+        expect(result.deliveries).toStrictEqual([]);
+        expect(result.cleared).toBe(0);
+        expect(insert).not.toHaveBeenCalled();
+        expect(patch).not.toHaveBeenCalled(); // no state change → no write
+    });
+
+    it("leaves a rule undecided when the capped read ends inside its windows", async () => {
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        // The newest rows are healthy, but the errors just behind them still put the
+        // whole window at 10/13 = 77% — judging the 3-row page alone would clear it.
+        const healthy = window(3, 0).map((row) => {
+            return { ...row, startedAt: now - 10_000 };
+        });
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
+                alertRules: [errorRateRule],
+                observations: [
+                    ...healthy,
+                    ...window(10, 10).map((row) => {
+                        return { ...row, startedAt: now - 4 * 60_000 };
+                    }),
+                ],
+            },
+            { patch },
+        );
+
+        const result = await runAlertSweep(database, { now, scanLimit: 3 });
+
+        expect(result.cleared).toBe(0);
+        expect(patch).not.toHaveBeenCalled();
+        expect(result.incomplete).toStrictEqual([{ organizationId: "org1", ruleId: "rule1" }]);
+    });
+
+    it("still evaluates a rule when the capped read reaches past its windows", async () => {
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
+                alertRules: [errorRateRule],
+                // The third row predates the 10-minute lookback (current + prior window).
+                observations: [
+                    ...window(2, 0),
+                    { ...window(1, 0)[0], startedAt: now - 11 * 60_000 },
+                    ...window(5, 5).map((row) => {
+                        return { ...row, startedAt: 0 };
+                    }),
+                ],
+            },
+            { patch },
+        );
+
+        const result = await runAlertSweep(database, { now, scanLimit: 3 });
+
+        expect(result.incomplete).toStrictEqual([]);
+        expect(result.cleared).toBe(1);
+        expect(patch).toHaveBeenCalledWith("alertRuleState", "state1", expect.objectContaining({ firing: false }));
+    });
+
+    it("evaluates a busy org's rule past the store's 1000-row page", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [],
+                alertRules: [errorRateRule],
+                // 1500 spans in the current window, older than the lookback ones ignored.
+                observations: [
+                    ...window(1500, 1500),
+                    ...window(3000, 0).map((row) => {
+                        return { ...row, startedAt: now - 20 * 60_000 };
+                    }),
+                ],
+            },
+            { insert },
+        );
+
+        const result = await runAlertSweep(database, { now });
+
+        expect(result.incomplete).toStrictEqual([]);
+        expect(result.deliveries).toHaveLength(1);
+        expect(insert).toHaveBeenCalledWith("alertRuleState", expect.objectContaining({ firing: true, ruleId: "rule1" }));
+    });
+
+    it("reports the rule incomplete when the read hits its bound across pages", async () => {
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
+                alertRules: [errorRateRule],
+                observations: window(2500, 0),
+            },
+            { patch },
+        );
+
+        const result = await runAlertSweep(database, { now, scanLimit: 2000 });
+
+        expect(result.incomplete).toStrictEqual([{ organizationId: "org1", ruleId: "rule1" }]);
+        expect(patch).not.toHaveBeenCalled();
+    });
+
+    it("ignores disabled rules and non-metric targets (never scans observations)", async () => {
+        const findMany = vi.fn<ControlPlaneDatabase["findMany"]>((table: string) =>
+            Promise.resolve({
+                page:
+                    table === "alertRules"
+                        ? [
+                              { ...errorRateRule, enabled: false },
+                              { ...errorRateRule, _id: "u", target: "uptime" },
+                          ]
+                        : [],
+            }),
+        );
+        const database = fakeControlPlaneDb({}, { findMany });
+
+        const result = await runAlertSweep(database, { now });
+
+        expect(result.evaluatedOrgs).toBe(0);
+        expect(result.deliveries).toStrictEqual([]);
+        // No metric rule ⇒ never reads observations or state.
+        expect(findMany).not.toHaveBeenCalledWith("observations", expect.anything());
+        expect(findMany).not.toHaveBeenCalledWith("alertRuleState", expect.anything());
+    });
+});

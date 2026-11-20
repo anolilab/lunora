@@ -859,5 +859,13 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
     return { conflicts, deleted, errors, inserted, replaced };
 };
 
-export { exportSqlGlobalRows, importSqlGlobalRows, selectGlobalTables };
-export type { ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult };
+/**
+ * The shape check an import runs on one `.global()` row before any query — routing, `doc` envelope, wire decode,
+ * unset optionals, validation — exposed for a staged replace (`@lunora/d1`'s `import-staging.ts`), so a row it
+ * stages is refused exactly when an ordinary import would refuse it. `ready` carries the decoded document; a row
+ * of a shard-local table settles as `skip`, and a malformed one as an `error` outcome.
+ */
+const prepareGlobalImportRow = (schema: SchemaLike, row: ExportRow, line: number): PreparedRow => prepareRow(schema, false, row, line);
+
+export { exportSqlGlobalRows, importSqlGlobalRows, prepareGlobalImportRow, selectGlobalTables };
+export type { ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult, PreparedRow as PreparedGlobalImportRow };

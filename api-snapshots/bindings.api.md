@@ -1401,6 +1401,7 @@ interface KvIntrospectorLike {
         namespace: string;
     }) => Promise<void>;
     getValue: (options: {
+        encoding?: "base64";
         key: string;
         namespace: string;
     }) => Promise<KvValueResultLike>;
@@ -1412,6 +1413,7 @@ interface KvIntrospectorLike {
     }) => Promise<KvKeyListResultLike>;
     listNamespaces: () => Promise<KvNamespaceSummaryLike[]>;
     putValue: (options: {
+        encoding?: "base64";
         expiration?: number;
         expirationTtl?: number;
         key: string;

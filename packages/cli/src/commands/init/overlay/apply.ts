@@ -230,7 +230,16 @@ const WRANGLER = `{
         { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
         { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
     ],
+    // Blast-radius cap. Alerting is lagging by definition — by the time a
+    // threshold trips, the runaway handler has already run — so a CPU ceiling is
+    // one of the few controls that bounds the damage rather than reporting it.
+    // Raise it if a legitimate handler needs longer.
+    "limits": { "cpu_ms": 30000 },
     "observability": ${OBSERVABILITY_JSONC},
+    // Deploy attribution: the runtime reads this binding and stamps
+    // \`deploymentId\` / \`versionTag\` onto every request-log row and Workers-Logs
+    // event, so a spike resolves to a deploy by group-by, not by eyeballing graphs.
+    "version_metadata": { "binding": "CF_VERSION_METADATA" },
 }
 `;
 

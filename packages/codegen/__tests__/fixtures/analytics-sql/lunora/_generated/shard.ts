@@ -888,7 +888,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             // `importShardRows` inserts with `allowExplicitId`, so a source
             // database's `_id`s carry across verbatim and every foreign key
-            // referencing them stays valid without a second remapping pass.
+            // referencing them stays valid without a second remapping pass. A
+            // staged replace's commit (`replaceTables` / `keepIds`) arrives inside
+            // the base class's transaction.
             return importShardRows(writer, schema as unknown as SchemaLike, args);
         }
 

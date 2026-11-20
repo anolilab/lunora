@@ -39,3 +39,25 @@ describe("generated worker options — queue consumer ctx.live", () => {
         expect(emitted).not.toContain("live: queueLive");
     });
 });
+
+describe("generated worker options — forwarded queue batches", () => {
+    it("wires a queueHandler that runs a forwarded batch over the queue registry", () => {
+        expect.assertions(2);
+
+        const emitted = emit(false);
+
+        expect(emitted).toContain("queueHandler: (forwarded: Parameters<typeof dispatchForwardedQueueBatch>[0], queueEnv: unknown");
+        expect(emitted).toContain("dispatchForwardedQueueBatch(forwarded, LUNORA_QUEUE_REGISTRY, {");
+    });
+
+    it("hands a paused deployment's hold to the forwarded batch, as to the native consumer", () => {
+        expect.assertions(3);
+
+        const emitted = emit(false);
+
+        expect(emitted).toContain("_context: ExecutionContextLike, hold?: { holdSeconds: number }): ReturnType<typeof dispatchForwardedQueueBatch> =>");
+        expect(emitted).toContain("holdSeconds: hold?.holdSeconds,");
+        // The runtime hands `hold` only to a handler that declares it holds.
+        expect(emitted).toContain("            queueHandlerHolds: true,");
+    });
+});

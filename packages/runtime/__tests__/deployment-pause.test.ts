@@ -648,37 +648,74 @@ describe("createWorker — deployment pause", () => {
         expect(queue.mock.calls[1]?.[3].holdSeconds).toBeUndefined();
     });
 
-    it("hands a forwarded tenant queue batch back for retry while paused", async () => {
+    const forwardBatch = (): Request =>
+        new Request("https://app.example/_lunora/queue", {
+            body: JSON.stringify({
+                messages: [
+                    { body: 1, id: "m1" },
+                    { body: 2, id: "m2" },
+                ],
+                queue: "jobs",
+            }),
+            headers: admin,
+            method: "POST",
+        });
+
+    it("hands a paused tenant's batch to a forwarded queue handler that declares it holds", async () => {
         expect.hasAssertions();
 
-        const queueHandler = vi.fn<() => Promise<{ retry: string[] }>>(async () => {
-            return { retry: [] };
+        // What a hold answers when one copy could not be sent: only that message is retried.
+        const queueHandler = vi.fn<NonNullable<Parameters<typeof createWorker>[0]["queueHandler"]>>(async () => {
+            return { retry: ["m2"], retryDelays: { m2: PAUSED_QUEUE_RETRY_SECONDS } };
         });
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, queueHandler, schedulerDO: pausableScheduler().namespace, shardDO: countingShard().namespace });
-        const forward = (): Request =>
-            new Request("https://app.example/_lunora/queue", {
-                body: JSON.stringify({
-                    messages: [
-                        { body: 1, id: "m1" },
-                        { body: 2, id: "m2" },
-                    ],
-                    queue: "jobs",
-                }),
-                headers: admin,
-                method: "POST",
-            });
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queueHandler,
+            queueHandlerHolds: true,
+            schedulerDO: pausableScheduler().namespace,
+            shardDO: countingShard().namespace,
+        });
 
         await worker.fetch(setPaused(true), {}, fakeContext);
 
-        const held = await worker.fetch(forward(), {}, fakeContext);
+        const held = await worker.fetch(forwardBatch(), {}, fakeContext);
 
-        await expect(held.json()).resolves.toStrictEqual({ retry: ["m1", "m2"] });
+        // Not every id handed back as a retry: each of those spends a platform delivery attempt.
+        await expect(held.json()).resolves.toStrictEqual({ retry: ["m2"], retryDelays: { m2: PAUSED_QUEUE_RETRY_SECONDS } });
+        expect(queueHandler).toHaveBeenCalledTimes(1);
+        expect(queueHandler.mock.calls[0]?.[3]).toStrictEqual({ holdSeconds: PAUSED_QUEUE_RETRY_SECONDS });
+
+        await worker.fetch(setPaused(false), {}, fakeContext);
+        await worker.fetch(forwardBatch(), {}, fakeContext);
+
+        expect(queueHandler).toHaveBeenCalledTimes(2);
+        expect(queueHandler.mock.calls[1]?.[3]).toBeUndefined();
+    });
+
+    it("never calls a forwarded queue handler that does not declare it holds while paused", async () => {
+        expect.hasAssertions();
+
+        // A hand-written handler ignores `hold`: called, it would run and ack the batch.
+        const queueHandler = vi.fn<NonNullable<Parameters<typeof createWorker>[0]["queueHandler"]>>(async () => {
+            return { retry: [] };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, queueHandler, schedulerDO: pausableScheduler().namespace, shardDO: countingShard().namespace });
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+
+        const held = await worker.fetch(forwardBatch(), {}, fakeContext);
+
+        await expect(held.json()).resolves.toStrictEqual({
+            retry: ["m1", "m2"],
+            retryDelays: { m1: PAUSED_QUEUE_RETRY_SECONDS, m2: PAUSED_QUEUE_RETRY_SECONDS },
+        });
         expect(queueHandler).not.toHaveBeenCalled();
 
         await worker.fetch(setPaused(false), {}, fakeContext);
-        await worker.fetch(forward(), {}, fakeContext);
+        await worker.fetch(forwardBatch(), {}, fakeContext);
 
         expect(queueHandler).toHaveBeenCalledTimes(1);
+        expect(queueHandler.mock.calls[0]?.[3]).toBeUndefined();
     });
 
     it("skips a raw crons handler while paused", async () => {
