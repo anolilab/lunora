@@ -61,6 +61,9 @@ const PRUNE_BATCH = 1000;
 /** Batch cap per ingest call — the tail worker flushes well below this. */
 const MAX_BATCH = 500;
 
+/** Scripts one {@link ingestGroups} call may name — each costs an ownership lookup before any line is written. */
+const MAX_GROUPS = 20;
+
 /** Message length cap; longer messages are truncated, never rejected (mid-incident logs must land). */
 const MAX_MESSAGE_LENGTH = 4096;
 
@@ -202,6 +205,10 @@ export const ingestGroups = mutation
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, groups, organizationId } }): Promise<{ ingested: number }> => {
+        if (groups.length > MAX_GROUPS) {
+            throw new LunoraError("BAD_REQUEST", `too many scripts in one batch (max ${String(MAX_GROUPS)})`);
+        }
+
         const total = groups.reduce((sum, group) => sum + group.lines.length, 0);
 
         if (total > MAX_BATCH) {

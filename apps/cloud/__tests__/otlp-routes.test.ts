@@ -165,6 +165,39 @@ describe("oTLP ingest routes", () => {
         expect(calls.map((call) => call.groups.map((group) => group.scriptName))).toStrictEqual([["web-a", "web-b"]]);
     });
 
+    it("stores at most 20 services of one log batch and reports the rest's records rejected", async () => {
+        const calls: { groups: { lines: unknown[]; scriptName: string }[] }[] = [];
+        const recording = {
+            ...context,
+            runMutation: async (_reference: unknown, args: { groups: { lines: unknown[]; scriptName: string }[] }): Promise<unknown> => {
+                calls.push(args);
+
+                return { ingested: 0 };
+            },
+        };
+        const record = { body: { stringValue: "hello" }, severityNumber: 9, timeUnixNano: "1700000000000000000" };
+        const resourceLogs = Array.from({ length: 25 }, (_unused, index) => {
+            return {
+                resource: { attributes: [{ key: "service.name", value: { stringValue: `svc-${String(index)}` } }] },
+                scopeLogs: [{ logRecords: [record, record] }],
+            };
+        });
+        const response = await createDeployRouter().fetch(
+            new Request("https://cloud.test/v1/logs", {
+                body: JSON.stringify({ resourceLogs }),
+                headers: { authorization: "Bearer valid", "content-type": "application/json" },
+                method: "POST",
+            }),
+            { __lunoraCtx: recording },
+        );
+        const body = await readJson<{ partialSuccess: { rejectedLogRecords: number } }>(response);
+
+        expect(response.status).toBe(200);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.groups.map((group) => group.scriptName)).toStrictEqual(Array.from({ length: 20 }, (_unused, index) => `svc-${String(index)}`));
+        expect(body.partialSuccess.rejectedLogRecords).toBe(10);
+    });
+
     it("accepts a valid metrics batch", async () => {
         const response = await jsonPost("/v1/metrics", { resourceMetrics: [] }, { authorization: "Bearer valid" });
 

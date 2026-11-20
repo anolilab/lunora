@@ -81,6 +81,17 @@ describe("telemetry ingest with a project-scoped key", () => {
         expect(ops.filter((op) => op.kind === "insert" && op.table === "tenantLogs")).toStrictEqual([]);
     });
 
+    it("refuses a log batch naming more than 20 scripts", async () => {
+        expect.assertions(1);
+
+        const { ctx } = await store();
+        const groups = Array.from({ length: 21 }, (_unused, index) => {
+            return { lines: [line], scriptName: `svc-${String(index)}` };
+        });
+
+        await expect(ingestLogGroups.handler(ctx, { deployKey: KEY, groups, organizationId: "org_1" } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
     it("lets an organization-wide key reach every project", async () => {
         expect.assertions(1);
 

@@ -140,6 +140,13 @@ const MAX_OTLP_OBSERVATIONS = 1000;
 /** `telemetry.ingest` refuses a call carrying more error events than this, losing the whole batch. */
 const MAX_OTLP_ERROR_EVENTS = 500;
 const MAX_OTLP_LOG_RECORDS = 500;
+
+/**
+ * Distinct `service.name`s one logs batch stores; records of the rest are rejected.
+ * Each one costs `logs.ingestGroups` an ownership lookup, and an exporter ships
+ * one service's logs (a Collector a handful), never hundreds.
+ */
+const MAX_OTLP_LOG_SERVICES = 20;
 const MAX_OTLP_METRIC_POINTS = 500;
 
 /**
@@ -247,14 +254,18 @@ export const handleOtlpLogsRoute = (request: Request, environment: RouterEnv): P
         // script, so group the batch by service and ingest one call per script.
         const byScript = new Map<string, OtlpLogEntry[]>();
 
+        let overServiceCap = 0;
+
         for (const entry of kept) {
             const script = entry.serviceName ?? "unknown";
             const group = byScript.get(script);
 
             if (group) {
                 group.push(entry);
-            } else {
+            } else if (byScript.size < MAX_OTLP_LOG_SERVICES) {
                 byScript.set(script, [entry]);
+            } else {
+                overServiceCap += 1;
             }
         }
 
@@ -266,7 +277,7 @@ export const handleOtlpLogsRoute = (request: Request, environment: RouterEnv): P
             organizationId: auth.organizationId,
         });
 
-        return decoded.length - kept.length;
+        return decoded.length - kept.length + overServiceCap;
     });
 
 /**
