@@ -562,8 +562,14 @@ abstract class ShardDO {
     protected holdShardWhileLoading(load: () => Promise<unknown>): Promise<void>;
     protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;
-    protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number): Response | undefined;
-    protected respondFromIdempotencyCache(functionPath: string, dispatchStartedAt: number, mutatorClass: ClientMutationClass | undefined, cachedValue: unknown): Response;
+    protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number, dispatchCollectors: {
+        indexHits: Set<string>;
+        scannedTables: Set<string>;
+    }): Response | undefined;
+    protected respondFromIdempotencyCache(functionPath: string, dispatchStartedAt: number, mutatorClass: ClientMutationClass | undefined, cachedValue: unknown, dispatchCollectors: {
+        indexHits: Set<string>;
+        scannedTables: Set<string>;
+    }): Response;
     protected mutationCommitCursor(): number | undefined;
     protected buildDispatchResponse(mutatorClass: ClientMutationClass | undefined, result: unknown): Response;
     protected commitMutationBookkeeping(result: unknown): void;
