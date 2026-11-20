@@ -1,11 +1,11 @@
-import type { Signal } from "@angular/core";
+import type { Injector, Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { resolveLunoraClient } from "./client";
-import { runOutsideAngular, shouldOpenSubscription } from "./platform";
+import { attachReactiveArgs, outsideAngularRunner, shouldOpenSubscription } from "./platform";
 
 /**
  * `HeartbeatReference` is part of the experimental `@lunora/angular` API and may change without a major version bump.
@@ -37,6 +37,13 @@ export interface PresenceOptions<H extends HeartbeatReference, L extends ListPre
 
     /** The `api.*` reference for the presence heartbeat mutation. */
     heartbeat: H;
+
+    /**
+     * `Injector` to create the reactive-room `effect()` from. Only needed when `roomId`
+     * is a function/`Signal` AND `presence` is called outside an injection context (an
+     * explicit `destroyRef` is also being passed). Defaults to the ambient injection context.
+     */
+    injector?: Injector;
 
     /** Heartbeat cadence in ms. Defaults to 10s (10000). */
     intervalMs?: number;
@@ -84,7 +91,8 @@ export interface PresenceResult<L extends ListPresentReference> {
  * `@lunora/server` `definePresence` preset.
  *
  * Drives the heartbeat mutation (on mount, interval, and tab re-focus) and
- * subscribes to the live `listPresent` query for the given room.
+ * subscribes to the live `listPresent` query for the given room. `roomId` may
+ * be a function or `Signal`; a change leaves the old room and joins the new one.
  *
  * Call from an injection context (component/service field or constructor):
  * ```ts
@@ -95,7 +103,10 @@ export interface PresenceResult<L extends ListPresentReference> {
  * ```
  * @experimental
  */
-export const presence = <H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: PresenceOptions<H, L>): PresenceResult<L> => {
+export const presence = <H extends HeartbeatReference, L extends ListPresentReference>(
+    roomId: string | (() => string),
+    options: PresenceOptions<H, L>,
+): PresenceResult<L> => {
     const client = resolveLunoraClient(options.client);
     const fromInjectionContext = options.destroyRef === undefined;
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
@@ -113,9 +124,14 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     let latestData: Record<string, unknown> | undefined = options.data;
     // True only inside the subscription gate; `setData` must not heartbeat on the server.
     let mounted = false;
+    // The room the armed wiring belongs to; only read while `mounted`.
+    let currentRoom = "";
+
+    // Resolved here, in the injection context: the arm below can run later from an effect.
+    const runInZone = outsideAngularRunner(fromInjectionContext);
 
     const sendHeartbeat = (): void => {
-        const args: ArgsOf<H> = { roomId, sessionId } as ArgsOf<H>;
+        const args: ArgsOf<H> = { roomId: currentRoom, sessionId } as ArgsOf<H>;
 
         if (latestData !== undefined) {
             (args as Record<string, unknown>).data = latestData;
@@ -138,65 +154,89 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     // would open a real connection during the server render. `present` stays
     // `undefined`; the browser render re-runs this and connects.
     if (shouldOpenSubscription(fromInjectionContext)) {
-        mounted = true;
+        // Everything tied to one room. A room change disposes it and arms the next, so the old
+        // room's interval, listener, connection context and subscription never outlive it.
+        const arm = (room: string): (() => void) => {
+            currentRoom = room;
+            mounted = true;
 
-        // Register this room/session as the socket's connection context BEFORE the
-        // first heartbeat so the server's presence `onDisconnect` hook can delete
-        // the row instantly on socket drop.
-        const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
+            // Guards a value or error the client delivers after this room was torn down.
+            let live = true;
 
-        // Heartbeat immediately on mount.
-        sendHeartbeat();
+            // Register this room/session as the socket's connection context BEFORE the
+            // first heartbeat so the server's presence `onDisconnect` hook can delete
+            // the row instantly on socket drop.
+            const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
 
-        const onVisible = (): void => {
-            if (typeof document !== "undefined" && document.visibilityState === "visible") {
-                sendHeartbeat();
-            }
+            // Heartbeat immediately on mount, and at once for a new room.
+            sendHeartbeat();
+
+            const onVisible = (): void => {
+                if (typeof document !== "undefined" && document.visibilityState === "visible") {
+                    sendHeartbeat();
+                }
+            };
+
+            // Register the interval + visibilitychange listener OUTSIDE Angular's zone:
+            // a heartbeat tick is a pure network side effect that writes no signal, so
+            // it must not schedule an app-wide change-detection pass every `intervalMs`
+            // (nor on every tab re-focus).
+            const intervalHandle = runInZone(() => {
+                if (typeof document !== "undefined") {
+                    document.addEventListener("visibilitychange", onVisible);
+                }
+
+                return setInterval(sendHeartbeat, intervalMs);
+            });
+
+            // Subscribe to the live present-list for the room.
+            const listArgs: ArgsOf<L> = { roomId: room } as ArgsOf<L>;
+
+            const unsubscribe = client.subscribe(
+                listPresent,
+                listArgs,
+                (value) => {
+                    if (live) {
+                        present.set(value);
+                        error.set(undefined);
+                    }
+                },
+                {
+                    onError: (subscriptionError) => {
+                        if (live) {
+                            error.set(subscriptionError);
+                            options.onError?.(subscriptionError);
+                        }
+                    },
+                    shardKey,
+                },
+            );
+
+            // Teardown: clear interval, remove listener, release connection context, unsubscribe.
+            return () => {
+                live = false;
+                mounted = false;
+                clearInterval(intervalHandle);
+
+                if (typeof document !== "undefined") {
+                    document.removeEventListener("visibilitychange", onVisible);
+                }
+
+                releaseConnectionContext();
+                unsubscribe();
+            };
         };
 
-        // Register the interval + visibilitychange listener OUTSIDE Angular's zone:
-        // a heartbeat tick is a pure network side effect that writes no signal, so
-        // it must not schedule an app-wide change-detection pass every `intervalMs`
-        // (nor on every tab re-focus).
-        const intervalHandle = runOutsideAngular(fromInjectionContext, () => {
-            if (typeof document !== "undefined") {
-                document.addEventListener("visibilitychange", onVisible);
-            }
-
-            return setInterval(sendHeartbeat, intervalMs);
-        });
-
-        // Subscribe to the live present-list for the room.
-        const listArgs: ArgsOf<L> = { roomId } as ArgsOf<L>;
-
-        const unsubscribe = client.subscribe(
-            listPresent,
-            listArgs,
-            (value) => {
-                present.set(value);
+        if (typeof roomId === "function") {
+            attachReactiveArgs(roomId, { destroyRef, injector: options.injector }, (room, onCleanup) => {
+                // A room change must not show the previous room's members or error under the new one.
+                present.set(undefined);
                 error.set(undefined);
-            },
-            {
-                onError: (subscriptionError) => {
-                    error.set(subscriptionError);
-                    options.onError?.(subscriptionError);
-                },
-                shardKey,
-            },
-        );
-
-        // Teardown: clear interval, remove listener, release connection context, unsubscribe.
-        destroyRef.onDestroy(() => {
-            mounted = false;
-            clearInterval(intervalHandle);
-
-            if (typeof document !== "undefined") {
-                document.removeEventListener("visibilitychange", onVisible);
-            }
-
-            releaseConnectionContext();
-            unsubscribe();
-        });
+                onCleanup(arm(room));
+            });
+        } else {
+            destroyRef.onDestroy(arm(roomId));
+        }
     }
 
     return { error: error.asReadonly(), present: present.asReadonly(), sessionId, setData };
