@@ -237,6 +237,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "issues:list": lunora_issues_21.list as unknown as RegisteredLunoraFunction,
     "issues:setStatus": lunora_issues_21.setStatus as unknown as RegisteredLunoraFunction,
     "logs:ingest": lunora_logs_22.ingest as unknown as RegisteredLunoraFunction,
+    "logs:ingestGroups": lunora_logs_22.ingestGroups as unknown as RegisteredLunoraFunction,
     "logs:ingestInternal": lunora_logs_22.ingestInternal as unknown as RegisteredLunoraFunction,
     "logs:list": lunora_logs_22.list as unknown as RegisteredLunoraFunction,
     "logs:orgForScript": lunora_logs_22.orgForScript as unknown as RegisteredLunoraFunction,
@@ -1441,6 +1442,7 @@ export interface Caller {
     };
     logs: {
         ingest: (args: { deployKey: unknown; lines: Array<{ createdAt?: number; fields?: Record<string, unknown>; functionPath?: string; level: "trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }>; organizationId: Id<"organizations">; scriptName: unknown }) => Promise<{ ingested: number; }>;
+        ingestGroups: (args: { deployKey: unknown; groups: Array<{ lines: Array<{ createdAt?: number; fields?: Record<string, unknown>; functionPath?: string; level: "trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }>; scriptName: unknown }>; organizationId: Id<"organizations"> }) => Promise<{ ingested: number; }>;
         ingestInternal: (args: { lines: Array<{ createdAt?: number; fields?: Record<string, unknown>; functionPath?: string; level: "trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }>; organizationId: Id<"organizations">; scriptName: unknown }) => Promise<{ ingested: number; }>;
         list: (args: { afterCreatedAt?: number; from?: number; functionPath?: unknown; levels?: Array<"trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal">; limit?: number; organizationId: Id<"organizations">; scriptName: unknown; search?: unknown; to?: number; traceId?: unknown }) => Promise<{ createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "log" | "trace" | "info" | "error" | "debug" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
         orgForScript: (args: { scriptName: unknown }) => Promise<{ organizationId: Id<"organizations">; } | null>;
@@ -1777,6 +1779,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     logs: {
         ingest: (args) => callRegistered(context, "logs:ingest", args),
+        ingestGroups: (args) => callRegistered(context, "logs:ingestGroups", args),
         ingestInternal: (args) => callRegistered(context, "logs:ingestInternal", args),
         list: (args) => callRegistered(context, "logs:list", args),
         orgForScript: (args) => callRegistered(context, "logs:orgForScript", args),

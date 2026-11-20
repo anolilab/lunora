@@ -136,6 +136,35 @@ describe("oTLP ingest routes", () => {
         expect(response.status).toBe(200);
     });
 
+    it("ingests every service of a log batch in one mutation, so a refused group stores none of the others", async () => {
+        const calls: { groups: { scriptName: string }[] }[] = [];
+        const recording = {
+            ...context,
+            runMutation: async (_reference: unknown, args: { groups: { scriptName: string }[] }): Promise<unknown> => {
+                calls.push(args);
+
+                return { ingested: 2 };
+            },
+        };
+        const resourceLogs = ["web-a", "web-b"].map((service) => {
+            return {
+                resource: { attributes: [{ key: "service.name", value: { stringValue: service } }] },
+                scopeLogs: [{ logRecords: [{ body: { stringValue: "hello" }, severityNumber: 9, timeUnixNano: "1700000000000000000" }] }],
+            };
+        });
+        const response = await createDeployRouter().fetch(
+            new Request("https://cloud.test/v1/logs", {
+                body: JSON.stringify({ resourceLogs }),
+                headers: { authorization: "Bearer valid", "content-type": "application/json" },
+                method: "POST",
+            }),
+            { __lunoraCtx: recording },
+        );
+
+        expect(response.status).toBe(200);
+        expect(calls.map((call) => call.groups.map((group) => group.scriptName))).toStrictEqual([["web-a", "web-b"]]);
+    });
+
     it("accepts a valid metrics batch", async () => {
         const response = await jsonPost("/v1/metrics", { resourceMetrics: [] }, { authorization: "Bearer valid" });
 

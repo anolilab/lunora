@@ -122,6 +122,7 @@ export interface ApiTypes {
     };
     logs: {
         ingest: FunctionReference<"mutation", { deployKey: unknown; lines: Array<{ createdAt?: number; fields?: Record<string, unknown>; functionPath?: string; level: "trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }>; organizationId: Id<"organizations">; scriptName: unknown }, { ingested: number; }>;
+        ingestGroups: FunctionReference<"mutation", { deployKey: unknown; groups: Array<{ lines: Array<{ createdAt?: number; fields?: Record<string, unknown>; functionPath?: string; level: "trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }>; scriptName: unknown }>; organizationId: Id<"organizations"> }, { ingested: number; }>;
         list: FunctionReference<"query", { afterCreatedAt?: number; from?: number; functionPath?: unknown; levels?: Array<"trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal">; limit?: number; organizationId: Id<"organizations">; scriptName: unknown; search?: unknown; to?: number; traceId?: unknown }, { createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "log" | "trace" | "info" | "error" | "debug" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
     };
     members: {
@@ -324,6 +325,7 @@ export const api: ApiTypes = {
     },
     logs: {
         ingest: { __lunoraRef: "logs:ingest" },
+        ingestGroups: { __lunoraRef: "logs:ingestGroups" },
         list: { __lunoraRef: "logs:list" },
     },
     members: {

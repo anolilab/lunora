@@ -374,7 +374,7 @@ export interface OtlpLogEntry {
     functionPath?: string;
     level: OtlpLogLevel;
     message: string;
-    /** `service.name` — the tenant script the line belongs to; grouped into `logs.ingest` calls. */
+    /** `service.name` — the tenant script the line belongs to; one `logs.ingestGroups` group per script. */
     serviceName?: string;
     spanId?: string;
     traceId?: string;

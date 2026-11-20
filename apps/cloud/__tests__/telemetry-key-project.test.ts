@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ingest as ingestLogs } from "../lunora/logs";
+import { ingest as ingestLogs, ingestGroups as ingestLogGroups } from "../lunora/logs";
 import { ingest as ingestMetrics } from "../lunora/metrics";
 import { ingest as ingestTelemetry } from "../lunora/telemetry";
 import { hashDeployKey } from "../src/deploy/keys";
@@ -66,6 +66,19 @@ describe("telemetry ingest with a project-scoped key", () => {
         await expect(ingestLogs.handler(ctx, { deployKey: KEY, lines: [line], organizationId: "org_1", scriptName: "web-a" } as never)).resolves.toStrictEqual({
             ingested: 1,
         });
+    });
+
+    it("writes no group of a log batch when one group names another project's script", async () => {
+        expect.assertions(2);
+
+        const { ctx, ops } = await store();
+        const groups = [
+            { lines: [line], scriptName: "web-a" },
+            { lines: [line], scriptName: "web-b" },
+        ];
+
+        await expect(ingestLogGroups.handler(ctx, { deployKey: KEY, groups, organizationId: "org_1" } as never)).rejects.toMatchObject({ code: "FORBIDDEN" });
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "tenantLogs")).toStrictEqual([]);
     });
 
     it("lets an organization-wide key reach every project", async () => {

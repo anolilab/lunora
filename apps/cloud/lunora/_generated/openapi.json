@@ -5739,6 +5739,155 @@
         "x-lunora-function-kind": "mutation"
       }
     },
+    "/_lunora/rpc#logs:ingestGroups": {
+      "post": {
+        "description": "Invoke the `mutation` `logs:ingestGroups` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "logs:ingestGroups",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "deployKey": {},
+                      "groups": {
+                        "items": {
+                          "properties": {
+                            "lines": {
+                              "items": {
+                                "properties": {
+                                  "createdAt": {
+                                    "type": "number"
+                                  },
+                                  "fields": {
+                                    "additionalProperties": {},
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "functionPath": {
+                                    "type": "string"
+                                  },
+                                  "level": {
+                                    "anyOf": [
+                                      {
+                                        "const": "trace",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "const": "debug",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "const": "info",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "const": "log",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "const": "warn",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "const": "error",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "const": "fatal",
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "message": {
+                                    "type": "string"
+                                  },
+                                  "shardKey": {
+                                    "type": "string"
+                                  },
+                                  "spanId": {
+                                    "type": "string"
+                                  },
+                                  "traceId": {
+                                    "type": "string"
+                                  },
+                                  "userId": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "level",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "scriptName": {}
+                          },
+                          "required": [
+                            "lines"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "groups",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "logs:ingestGroups",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: logs:ingestGroups",
+        "tags": [
+          "logs"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
     "/_lunora/rpc#logs:list": {
       "post": {
         "description": "Invoke the `query` `logs:list` over the Lunora RPC envelope (POST /_lunora/rpc).",

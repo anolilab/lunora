@@ -258,15 +258,13 @@ export const handleOtlpLogsRoute = (request: Request, environment: RouterEnv): P
             }
         }
 
-        for (const [scriptName, entries] of byScript) {
-            // eslint-disable-next-line no-await-in-loop -- one call per script; a batch spans few
-            await context.runMutation(api.logs.ingest, {
-                deployKey: auth.key,
-                lines: entries.map((entry) => toLogLine(entry)),
-                organizationId: auth.organizationId,
-                scriptName,
-            });
-        }
+        await context.runMutation(api.logs.ingestGroups, {
+            deployKey: auth.key,
+            groups: [...byScript].map(([scriptName, entries]) => {
+                return { lines: entries.map((entry) => toLogLine(entry)), scriptName };
+            }),
+            organizationId: auth.organizationId,
+        });
 
         return decoded.length - kept.length;
     });

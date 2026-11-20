@@ -189,6 +189,41 @@ export const ingest = mutation
     });
 
 /**
+ * {@link ingest} for several scripts at once — the OTLP `/v1/logs` route, whose
+ * batch spans one group per `service.name`. One mutation, so every group is
+ * authorized before any line is written: a batch refused for one group's script
+ * stores nothing, and the exporter's retry cannot duplicate the groups before it.
+ */
+export const ingestGroups = mutation
+    .use(rateLimit("ingest"))
+    .input({
+        deployKey: boundedString(LIMITS.token),
+        groups: v.array(v.object({ lines: v.array(logEntry), scriptName: boundedString(LIMITS.name) })),
+        organizationId: v.id("organizations"),
+    })
+    .mutation(async ({ ctx: context, args: { deployKey, groups, organizationId } }): Promise<{ ingested: number }> => {
+        const total = groups.reduce((sum, group) => sum + group.lines.length, 0);
+
+        if (total > MAX_BATCH) {
+            throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_BATCH)} lines)`);
+        }
+
+        const key = await authorizeTelemetryKey(context, organizationId, deployKey);
+
+        for (const { scriptName } of groups) {
+            // eslint-disable-next-line no-await-in-loop -- every group is checked before the first insert below
+            await assertTelemetryInKeyProject(context, key, { scriptName });
+        }
+
+        for (const { lines, scriptName } of groups) {
+            // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
+            await insertLines(context, organizationId, scriptName, lines);
+        }
+
+        return { ingested: total };
+    });
+
+/**
  * Resolve a dispatch-namespace script id → its owning org. Used by the platform
  * tail route to attribute a batch of tail-captured lines (which carry only a
  * `scriptName`) to an org without holding that org's deploy key. A script name
