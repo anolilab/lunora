@@ -6,15 +6,16 @@ import { branch, createWorkflowContext, defineWorkflow } from "@lunora/workflow"
 import type { WorkflowStore } from "@visulima/workflow";
 import { MemoryStore } from "@visulima/workflow";
 import Database from "better-sqlite3";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { createNodeWorkflowHost } from "../src/node-workflow-host";
 import { createNodeWorkflowStore } from "../src/node-workflow-store";
 
-const sleep = (ms: number): Promise<void> =>
-    new Promise((resolve) => {
-        setTimeout(resolve, ms);
-    });
+/** Moves `Date.now()` forward so a suspended sleep or wait timeout is due, without waiting for it. */
+const elapse = (ms: number): void => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.advanceTimersByTime(ms);
+};
 
 const temporaryDirectories: string[] = [];
 
@@ -42,6 +43,10 @@ const STORES: { make: () => WorkflowStore; name: string }[] = [
 ];
 
 describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore }) => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     afterAll(() => {
         for (const directory of temporaryDirectories) {
             rmSync(directory, { force: true, recursive: true });
@@ -95,7 +100,7 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         expect(status1.status).toBe("waiting");
         expect(loadCount).toBe(1);
 
-        await sleep(15);
+        elapse(15);
         await instance.resume();
 
         const status2 = await instance.status();
@@ -147,7 +152,7 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
 
         expect(status1.status).toBe("waiting");
 
-        await sleep(15);
+        elapse(15);
         await instance.resume();
 
         const status2 = await instance.status();
@@ -819,7 +824,7 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         expect(suspended.status).toBe("waiting");
         expect(unwound).toStrictEqual([]);
 
-        await sleep(15);
+        elapse(15);
         await instance.resume();
 
         // The failure happens in a second activation, after the engine replayed
@@ -880,17 +885,23 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         // order reversed.
         const raced = defineWorkflow<Record<string, never>, string>({
             handler: async (ctx) => {
+                const fastFinished = Promise.withResolvers<undefined>();
+
+                // "slow" only completes once "fast" has fully completed, so completion order is fixed.
                 await Promise.all([
                     ctx.step.do(
                         "slow",
                         async () => {
-                            await sleep(20);
+                            await fastFinished.promise;
 
                             return "slow-1";
                         },
                         record("slow"),
                     ),
-                    ctx.step.do("fast", async () => "fast-1", record("fast")),
+                    (async (): Promise<void> => {
+                        await ctx.step.do("fast", async () => "fast-1", record("fast"));
+                        fastFinished.resolve(undefined);
+                    })(),
                 ]);
 
                 return ctx.step.do(

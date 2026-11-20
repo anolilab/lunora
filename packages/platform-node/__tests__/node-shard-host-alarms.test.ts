@@ -19,16 +19,13 @@ import { createNodeShardHost } from "../src/node-shard-host";
  * transaction, leaving an alarm that fires once in this process and never again.
  */
 describe("createNodeShardHost alarms", () => {
-    const sleep = (ms: number): Promise<void> =>
-        new Promise((resolve) => {
-            setTimeout(resolve, ms);
-        });
-
     const alarmRowCount = (database: Database.Database): number =>
         database.prepare<[], { n: number }>("SELECT count(*) AS n FROM _lunora_alarm").get()?.n ?? -1;
 
     it("re-delivers an alarm whose handler threw, and stops once it succeeds", async () => {
         expect.assertions(3);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 
         let attempts = 0;
         const { database, dispose, host } = createNodeShardHost({
@@ -43,7 +40,8 @@ describe("createNodeShardHost alarms", () => {
 
         try {
             await host.alarms.set(Date.now() + 5);
-            await sleep(200);
+            // Far past the first retry (100 ms) and every later backoff step.
+            await vi.advanceTimersByTimeAsync(60_000);
 
             // Retried exactly once: the second delivery succeeded, so nothing
             // re-armed after it. A host that kept retrying a handler that
@@ -52,12 +50,15 @@ describe("createNodeShardHost alarms", () => {
             expect(host.alarms.get()).toBeNull();
             expect(alarmRowCount(database)).toBe(0);
         } finally {
+            vi.useRealTimers();
             dispose();
         }
     });
 
     it("keeps the durable row armed between redeliveries, so a restart still owes the wakeup", async () => {
         expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 
         let attempts = 0;
         const { database, dispose, host } = createNodeShardHost({
@@ -70,7 +71,8 @@ describe("createNodeShardHost alarms", () => {
 
         try {
             await host.alarms.set(Date.now() + 5);
-            await sleep(60);
+            // Past the first delivery, short of its 100 ms redelivery.
+            await vi.advanceTimersByTimeAsync(60);
 
             expect(attempts).toBe(1);
 
@@ -78,12 +80,15 @@ describe("createNodeShardHost alarms", () => {
             // back. Without it a restart between attempts loses the alarm.
             expect(alarmRowCount(database)).toBe(1);
         } finally {
+            vi.useRealTimers();
             dispose();
         }
     });
 
     it("drops an alarm set inside a transaction that rolled back", async () => {
         expect.assertions(5);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 
         let fired = 0;
         const { database, dispose, host } = createNodeShardHost({
@@ -107,16 +112,19 @@ describe("createNodeShardHost alarms", () => {
             expect(host.alarms.get()).toBeNull();
             expect(alarmRowCount(database)).toBe(0);
 
-            await sleep(60);
+            await vi.advanceTimersByTimeAsync(60);
 
             expect(fired).toBe(0);
         } finally {
+            vi.useRealTimers();
             dispose();
         }
     });
 
     it("arms an alarm set inside a transaction that committed", async () => {
         expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 
         let fired = 0;
         const { dispose, host } = createNodeShardHost({
@@ -132,10 +140,11 @@ describe("createNodeShardHost alarms", () => {
 
             expect(host.alarms.get()).not.toBeNull();
 
-            await sleep(60);
+            await vi.advanceTimersByTimeAsync(60);
 
             expect(fired).toBe(1);
         } finally {
+            vi.useRealTimers();
             dispose();
         }
     });

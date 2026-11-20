@@ -19,9 +19,24 @@ import { createNodeShardHost } from "../src/node-shard-host";
  * than a suite that never finishes.
  */
 describe("createNodeShardHost transaction concurrency", () => {
-    const sleep = (ms: number): Promise<void> =>
+    const createGate = (): { open: () => void; wait: Promise<void> } => {
+        let open = (): void => {};
+        const wait = new Promise<void>((resolve) => {
+            open = resolve;
+        });
+
+        return { open, wait };
+    };
+
+    /**
+     * Let every microtask chain already in flight run to quiescence. The host is
+     * synchronous SQLite behind promise lanes, so one macrotask turn is enough to
+     * know whether a started `transaction()` has opened its `BEGIN` or is queued
+     * behind a lane; it waits on no duration.
+     */
+    const settle = (): Promise<void> =>
         new Promise((resolve) => {
-            setTimeout(resolve, ms);
+            setImmediate(resolve);
         });
 
     /**
@@ -79,10 +94,11 @@ describe("createNodeShardHost transaction concurrency", () => {
         try {
             host.sql.exec("CREATE TABLE rows_ (id TEXT PRIMARY KEY)");
 
+            const gate = createGate();
             const first = host.transaction(async () => {
                 host.sql.exec("INSERT INTO rows_ (id) VALUES ('A')");
 
-                await sleep(20);
+                await gate.wait;
 
                 host.sql.exec("INSERT INTO rows_ (id) VALUES ('B')");
             });
@@ -92,6 +108,8 @@ describe("createNodeShardHost transaction concurrency", () => {
             const second = host.transaction(async () => {
                 host.sql.exec("INSERT INTO rows_ (id) VALUES ('C')");
             });
+
+            gate.open();
 
             await Promise.all([first, second]);
 
@@ -145,10 +163,13 @@ describe("createNodeShardHost transaction concurrency", () => {
             // other lane, so `assertOwnTurn` refuses it and the whole boundary
             // rejects — with the FIRST write already committed. A caller that
             // retries the rejection then re-applies it.
+            const resume = createGate();
+            const entered = createGate();
             const serialized = host.runSerialized(async () => {
                 host.sql.exec("INSERT INTO rows_ (id) VALUES ('first')");
+                entered.open();
 
-                await sleep(30);
+                await resume.wait;
 
                 host.sql.exec("INSERT INTO rows_ (id) VALUES ('second')");
 
@@ -158,13 +179,20 @@ describe("createNodeShardHost transaction concurrency", () => {
             // Started WITHOUT awaiting the boundary, and holding its `BEGIN`
             // open PAST the point where the boundary resumes — the overlap the
             // second lane permitted.
-            await sleep(5);
+            await entered.wait;
 
+            const hold = createGate();
             const committed = host.transaction(async () => {
                 host.sql.exec("INSERT INTO rows_ (id) VALUES ('txn')");
 
-                await sleep(40);
+                await hold.wait;
             });
+
+            // The transaction has either opened its BEGIN already or is queued behind the boundary.
+            await settle();
+            resume.open();
+            await settle();
+            hold.open();
 
             await expect(serialized).resolves.toBe("whole");
 
@@ -218,7 +246,8 @@ describe("createNodeShardHost transaction concurrency", () => {
                 host.sql.exec("INSERT INTO rows_ (id) VALUES ('B')");
             });
 
-            await sleep(20);
+            // The boundary is queued (or, on a two-lane host, already refused) before the transaction ends.
+            await settle();
 
             release();
 
@@ -323,11 +352,12 @@ describe("createNodeShardHost transaction concurrency", () => {
             // transaction", and on the branch where it does not, the first
             // call's `COMMIT` publishes the second's rows. A store scoped to a
             // single call's own await chain is what tells the two cases apart.
-            await Promise.all([
+            const gate = createGate();
+            const overlapping = Promise.all([
                 host.transaction(async () => {
                     host.sql.exec("INSERT INTO rows_ (id) VALUES ('A')");
 
-                    await sleep(15);
+                    await gate.wait;
 
                     host.sql.exec("INSERT INTO rows_ (id) VALUES ('B')");
                 }),
@@ -338,6 +368,9 @@ describe("createNodeShardHost transaction concurrency", () => {
                     host.sql.exec("INSERT INTO rows_ (id) VALUES ('D')");
                 }),
             ]);
+
+            gate.open();
+            await overlapping;
 
             expect(nestsBegin(keywords)).toBe(false);
             expect(

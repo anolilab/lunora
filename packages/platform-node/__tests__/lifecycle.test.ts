@@ -191,6 +191,8 @@ describe("lifecycle disposers", () => {
             await first.host.alarms.set(Date.now() - 1000);
             first.dispose();
 
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
             let delivered = 0;
             const second = createNodeShardHost({
                 onAlarm: () => {
@@ -199,9 +201,9 @@ describe("lifecycle disposers", () => {
                 path,
             });
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
+            // Far past the delivery timer, so a second (duplicate) delivery would show up in the count.
+            await vi.advanceTimersByTimeAsync(10_000);
+            vi.useRealTimers();
 
             expect(delivered).toBe(1);
 
