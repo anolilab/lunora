@@ -16,7 +16,7 @@
 import { fetchBillableUsage } from "../../cloudflare/billable-usage";
 import type { CloudflareAccountAccess } from "../../cloudflare/fetch";
 import { cloudflareFetch, CloudflareTokenError } from "../../cloudflare/fetch";
-import { cloudflareGraphql, graphqlTime } from "../../cloudflare/graphql";
+import { cloudflareGraphql, CloudflareGraphqlQueryError, graphqlTime } from "../../cloudflare/graphql";
 import type { CloudflarePermission } from "../../provision-contract";
 import { CLOUDFLARE_TOKEN_PERMISSIONS } from "../../provision-contract";
 
@@ -188,14 +188,23 @@ const PROBES: Record<CloudflarePermission, (access: CloudflareAccountAccess) => 
     workersScripts: async (access) => call(access, `/accounts/${access.accountId}/workers/scripts`),
 };
 
-/** Probe one permission: `true` when its read answers, `false` when Cloudflare refuses the token for it. */
+/**
+ * Probe one permission: `true` when its read answers, `false` when Cloudflare refuses the token
+ * for it. A required permission's probe that fails any other way (a network error, a 5xx)
+ * throws instead: read as a refusal, an outage told the customer their valid token was wrong.
+ * An optional one still reads as not granted, since it only drops that capability.
+ */
 const probe = async (access: CloudflareAccountAccess, permission: CloudflarePermission): Promise<boolean> => {
     try {
         await PROBES[permission](access);
 
         return true;
-    } catch {
-        return false;
+    } catch (error) {
+        if (error instanceof CloudflareTokenError || error instanceof CloudflareGraphqlQueryError || !CLOUDFLARE_TOKEN_PERMISSIONS[permission].required) {
+            return false;
+        }
+
+        throw error;
     }
 };
 

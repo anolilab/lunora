@@ -103,6 +103,18 @@ describe("the cloudflare-workers account API", () => {
         await expect(inspectAccount({ accountId: "acme", apiToken: TOKEN, fetch: healthyAccount() })).rejects.toBeInstanceOf(CloudflareTokenError);
     });
 
+    it("reports a required probe that fails for an outage as unreachable, not as a refused token", async () => {
+        const outage = { body: { errors: [{ code: 10_013, message: "internal error" }], success: false }, status: 503 };
+        const failure = await inspectAccount({
+            accountId: ACCOUNT,
+            apiToken: TOKEN,
+            fetch: healthyAccount({ [`/accounts/${ACCOUNT}/workers/scripts`]: outage }),
+        }).catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).not.toBeInstanceOf(CloudflareTokenError);
+    });
+
     it("never puts the token in an error", async () => {
         const fetch = fakeCloudflare({ "/user/tokens/verify": { body: { errors: [{ message: "boom" }], success: false }, status: 500 } });
         const error = await verifyToken({ accountId: ACCOUNT, apiToken: TOKEN, fetch }).catch((error_: unknown) => error_);
