@@ -225,9 +225,11 @@ interface DevCommandOptions {
     port?: number;
     probeReady?: ReadinessProbe;
     remote?: boolean;
+    remoteFromDefault?: boolean;
     startCelldSession?: typeof startCelldDevSession;
     startCodegen?: typeof startCodegenWatch;
     startHyperdrive?: typeof startLocalHyperdrive;
+    startNodeWorker?: (inputs: NodeDevWorkerInputs) => Promise<NodeDevWorker>;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
@@ -248,6 +250,7 @@ interface DevCommandPlan {
     flavor: DevFlavor;
     frameworkHint?: string;
     ipv4LoopbackForced: boolean;
+    nodeHost?: true;
     remote: RemotePlan;
     runsCodegenWatch: boolean;
     serviceConfigCleanup?: () => void;
@@ -1022,11 +1025,23 @@ interface CodegenCommandResult extends CodegenCommandData {
 }
 ```
 
+### `CodegenGeneration` (interface)
+
+```ts
+interface CodegenGeneration {
+    busy: boolean;
+    idle: Promise<void>;
+    sequence: number;
+    usable: boolean;
+}
+```
+
 ### `CodegenWatcherHandle` (interface)
 
 ```ts
 interface CodegenWatcherHandle {
     close: () => Promise<void>;
+    generation: () => CodegenGeneration;
     ready: Promise<void>;
     watchAvailable: boolean;
 }
@@ -1042,6 +1057,11 @@ interface CodegenWatcherOptions {
     lazyFunctions?: CodegenOptions["lazyFunctions"];
     logger: Logger;
     lunoraDirectory?: string;
+    onSettled?: (run: {
+        hookRan: boolean;
+        sequence: number;
+        startup: boolean;
+    }) => void;
     projectRoot: string;
     spawner?: Spawner;
     target?: string;
@@ -1287,6 +1307,37 @@ interface LongLivedDescriptor {
 type LongLivedSpawner = (descriptor: LongLivedDescriptor, onLine: (line: string, kind: "stderr" | "stdout") => void, onError?: (error: Error) => void) => WorkerProcess;
 ```
 
+### `NodeAppHost` (interface)
+
+```ts
+interface NodeAppHost {
+    close: (options?: {
+        timeoutMs?: number;
+    }) => Promise<{
+        pending: string[];
+        timedOut: boolean;
+    }>;
+    fetch: (request: Request) => Promise<Response>;
+    rearmPersistedAlarms: () => string[];
+}
+```
+
+### `NodeAppHostCandidate` (interface)
+
+```ts
+interface NodeAppHostCandidate {
+    crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
+    dataDirectory?: string;
+    durableObjects: ReadonlyArray<{
+        className: string;
+        name: string;
+    }>;
+    env?: Record<string, unknown>;
+    shardBinding?: string;
+    worker: Record<string, unknown>;
+}
+```
+
 ### `NodeContainerOutput` (interface)
 
 ```ts
@@ -1294,6 +1345,42 @@ interface NodeContainerOutput {
     directory: string;
     files: ReadonlyArray<string>;
     image?: string;
+}
+```
+
+### `NodeDevHttpServer` (interface)
+
+```ts
+interface NodeDevHttpServer {
+    close: () => Promise<void>;
+    drain: (options?: {
+        timeoutMs?: number;
+    }) => Promise<{
+        pending: string[];
+        timedOut: boolean;
+    }>;
+}
+```
+
+### `NodeDevWorker` (interface)
+
+```ts
+interface NodeDevWorker extends WorkerProcess {
+    loadedSequence?: number;
+    reload: () => void;
+}
+```
+
+### `NodeDevWorkerInputs` (interface)
+
+```ts
+interface NodeDevWorkerInputs {
+    codegenWatch: boolean;
+    generation?: () => CodegenGeneration;
+    logger: Logger;
+    platform?: PlatformNode;
+    port: number;
+    projectRoot: string;
 }
 ```
 
@@ -1357,6 +1444,21 @@ interface PailLogger {
     info: (message: string) => void;
     success: (message: string) => void;
     warn: (message: string) => void;
+}
+```
+
+### `PlatformNode` (interface)
+
+```ts
+interface PlatformNode {
+    checkNodeAppHost: (options: NodeAppHostCandidate) => void;
+    createNodeAppHost: (options: NodeAppHostCandidate) => NodeAppHost;
+    createNodeHttpServer: (options: {
+        fetch: (request: Request) => Promise<Response>;
+        port?: number;
+    }) => Promise<NodeDevHttpServer>;
+    createNodeHyperdrive: (url?: string) => unknown;
+    createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, unknown>;
 }
 ```
 

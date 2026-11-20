@@ -4,15 +4,14 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resolveDeployTargetOrError, resolveRunnableTargetOrError, resolveTargetOrError } from "../../src/util/deploy-target-resolve";
+import { resolveDeployTargetOrError, resolveDevTargetOrError, resolveRunnableTargetOrError, resolveTargetOrError } from "../../src/util/deploy-target-resolve";
 
 /**
  * `target: "node"` is a registered deploy target with NO `DriverToolchain`:
- * there is no control plane to deploy to and no local runtime the CLI can spawn.
- * It was still selectable end to end — `deploy` threw only at the wrangler step,
- * after codegen had rewritten `_generated/*` for `NODE_CAPABILITIES`, and `dev`
- * did not check at all (`toolchain?.dev(...)` fell through to `wrangler dev`,
- * serving a Node-target app on Cloudflare's runtime).
+ * there is no control plane to deploy to. It was still selectable end to end —
+ * `deploy` threw only at the wrangler step, after codegen had rewritten
+ * `_generated/*` for `NODE_CAPABILITIES`. `lunora dev` serves it on the CLI's
+ * own Node host, so only the deploy path refuses it.
  */
 describe("resolveRunnableTargetOrError", () => {
     let workdir: string;
@@ -47,9 +46,9 @@ describe("resolveRunnableTargetOrError", () => {
 
         expect(resolved.target).toBeUndefined();
         expect(resolved.error).toMatch(/no command-line toolchain/);
-        // The message has to be actionable, not just a refusal: codegen for this
-        // target still works, and the deployable ids are what the caller needs.
-        expect(resolved.error).toMatch(/cloudflare/);
+        // The message has to be actionable, not just a refusal: dev and codegen for
+        // this target still work, and the deployable ids are what the caller needs.
+        expect(resolved.error).toMatch(/lunora dev --target node.*cloudflare/);
     });
 
     it("still resolves the same target for the codegen-only path", () => {
@@ -99,11 +98,12 @@ describe("resolveDeployTargetOrError", () => {
         expect(resolveDeployTargetOrError(workdir, "node")).toStrictEqual({ target: "node" });
     });
 
-    it("keeps the toolchain refusal for every other command, naming the container deploy", () => {
-        expect.assertions(1);
+    it("keeps the toolchain refusal for every other command, naming the dev server and the container deploy", () => {
+        expect.assertions(2);
 
-        // `lunora dev` and `lunora build` resolve through the toolchain form, which must not start accepting node.
+        // `lunora build` and `lunora prepare` resolve through the toolchain form, which must not start accepting node.
         expect(resolveRunnableTargetOrError(workdir, "node").error).toMatch(/lunora deploy --target node.*container/u);
+        expect(resolveRunnableTargetOrError(workdir, "node").error).toMatch(/lunora dev --target node` serves it locally/u);
     });
 
     it("still resolves a toolchain target and passes an unknown target's error through", () => {
@@ -111,5 +111,34 @@ describe("resolveDeployTargetOrError", () => {
 
         expect(resolveDeployTargetOrError(workdir, "cloudflare")).toStrictEqual({ target: "cloudflare" });
         expect(resolveDeployTargetOrError(workdir, "aws").error).toMatch(/unknown deploy target "aws"/u);
+    });
+});
+
+describe("resolveDevTargetOrError", () => {
+    let workdir: string;
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-dev-target-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("accepts node for lunora dev, which the toolchain resolver still refuses", () => {
+        expect.assertions(3);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default ${JSON.stringify({ target: "node" })};\n`, "utf8");
+
+        expect(resolveDevTargetOrError(workdir)).toStrictEqual({ target: "node" });
+        expect(resolveDevTargetOrError(workdir, "node")).toStrictEqual({ target: "node" });
+        expect(resolveRunnableTargetOrError(workdir).error).toMatch(/cannot run it/u);
+    });
+
+    it("still resolves a toolchain target and passes an unknown target's error through", () => {
+        expect.assertions(2);
+
+        expect(resolveDevTargetOrError(workdir, "cloudflare")).toStrictEqual({ target: "cloudflare" });
+        expect(resolveDevTargetOrError(workdir, "aws").error).toMatch(/unknown deploy target "aws"/u);
     });
 });

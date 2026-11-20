@@ -3495,6 +3495,9 @@ importers:
       '@lunora/platform-node':
         specifier: workspace:*
         version: link:../platform-node
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@lunora/server':
         specifier: workspace:*
         version: link:../server

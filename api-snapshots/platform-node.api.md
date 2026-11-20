@@ -64,6 +64,38 @@ type MailParkReason = "evidence_expired" | "idempotency_key_conflict" | "outcome
 const NODE_SCHEDULER_DISPATCH_PATH: "/_lunora/scheduler/dispatch";
 ```
 
+### `NodeAppDurableObjectBinding` (interface)
+
+```ts
+interface NodeAppDurableObjectBinding {
+    className: string;
+    name: string;
+}
+```
+
+### `NodeAppHost` (interface)
+
+```ts
+interface NodeAppHost {
+    close: (options?: DrainOptions) => Promise<DrainResult>;
+    fetch: (request: Request) => Promise<Response>;
+    rearmPersistedAlarms: () => string[];
+}
+```
+
+### `NodeAppHostOptions` (interface)
+
+```ts
+interface NodeAppHostOptions {
+    crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
+    dataDirectory?: string;
+    durableObjects: ReadonlyArray<NodeAppDurableObjectBinding>;
+    env?: Record<string, unknown>;
+    shardBinding?: string;
+    worker: Record<string, unknown>;
+}
+```
+
 ### `NodeCronJob` (interface)
 
 ```ts
@@ -112,6 +144,23 @@ interface NodeDispatchRouteOptions {
     invoke: (call: NodeDispatchInvocation) => Promise<Response>;
     now?: () => number;
     schedulerSecret?: string;
+}
+```
+
+### `NodeDurableObjectClass` (type)
+
+```ts
+type NodeDurableObjectClass = new (state: never, env: Record<string, unknown>) => NodeDurableObjectInstance;
+```
+
+### `NodeDurableObjectInstance` (interface)
+
+```ts
+interface NodeDurableObjectInstance {
+    alarm?: () => Promise<void> | void;
+    fetch: (request: Request) => Promise<Response> | Response;
+    webSocketClose?: (socket: unknown, code: number, reason: string, wasClean: boolean) => Promise<void> | void;
+    webSocketMessage?: (socket: unknown, data: ArrayBuffer | string) => Promise<void> | void;
 }
 ```
 
@@ -221,7 +270,7 @@ interface NodePlatform<Queues extends Record<string, {
     close: (options?: {
         force?: boolean;
     }) => void;
-    directory: ShardDirectory;
+    directory: DirectShardDirectory;
     dispatch: (request: Request) => Promise<Response>;
     drain: (options?: DrainOptions) => Promise<DrainResult>;
     globalTables?: NodeGlobalStore;
@@ -510,10 +559,28 @@ interface ShardSocketHooks {
 const bindShardSockets: (shard: ShardSocketHooks, inbound: Pick<NodeShard["inbound"], "onClose" | "onMessage">) => void;
 ```
 
+### `checkNodeAppHost` (const)
+
+```ts
+const checkNodeAppHost: (options: NodeAppHostOptions) => void;
+```
+
+### `createNodeAppHost` (const)
+
+```ts
+const createNodeAppHost: (options: NodeAppHostOptions) => NodeAppHost;
+```
+
 ### `createNodeDispatchRoute` (const)
 
 ```ts
 const createNodeDispatchRoute: (options: NodeDispatchRouteOptions) => ((request: Request) => Promise<Response>);
+```
+
+### `createNodeDurableObjectFactory` (const)
+
+```ts
+const createNodeDurableObjectFactory: (DurableObject: NodeDurableObjectClass, env: Record<string, unknown>) => ((shard: NodeShard) => Promise<NodeDurableObjectInstance>);
 ```
 
 ### `createNodeGlobalStore` (const)
@@ -585,17 +652,7 @@ const createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly
 ### `createNodeShardHost` (const)
 
 ```ts
-const createNodeShardHost: (options?: NodeShardHostOptions) => {
-    alarmsSettled: () => Promise<unknown> | undefined;
-    database: Database.Database;
-    dispose: () => void;
-    drain: () => Promise<void>;
-    host: ShardHost;
-    pendingAlarms: () => number;
-    pendingBackground: () => number;
-    suspendAlarms: () => void;
-    takeFailures: () => string[];
-};
+const createNodeShardHost: (options?: NodeShardHostOptions) => NodeShardHostParts;
 ```
 
 ### `createNodeShardKvStore` (const)
@@ -619,7 +676,7 @@ const createNodeShardRegistry: (options?: NodeShardRegistryOptions) => NodeShard
 ### `createNodeShardState` (const)
 
 ```ts
-const createNodeShardState: (shard: NodeShard) => NodeShardState;
+const createNodeShardState: (shard: NodeShard, onBlockConcurrency?: (work: Promise<unknown>) => void) => NodeShardState;
 ```
 
 ### `createNodeSocketHost` (const)
@@ -674,5 +731,21 @@ public API and is gated as one. Listed once per package, sorted by name.
 interface NodeServerEnd {
     close: (code?: number, reason?: string) => void;
     send: (data: string | ArrayBuffer) => void;
+}
+```
+
+### `NodeShardHostParts` (interface)
+
+```ts
+interface NodeShardHostParts {
+    alarmsSettled: () => Promise<unknown> | undefined;
+    database: Database.Database;
+    dispose: () => void;
+    drain: () => Promise<void>;
+    host: ShardHost;
+    pendingAlarms: () => number;
+    pendingBackground: () => number;
+    suspendAlarms: () => void;
+    takeFailures: () => string[];
 }
 ```

@@ -12,8 +12,14 @@ import { startCelldWorker } from "../../src/commands/dev/own-dev-server";
 import { planDevCommand, resolveInspectorPort, resolveWorkerPort } from "../../src/commands/dev/plan";
 import { defaultWorkerSpawner } from "../../src/commands/dev/supervise";
 import type { DevCommandOptions } from "../../src/commands/dev/types";
+import type { CodegenGeneration } from "../../src/util/codegen-watch";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+
+/** What a fake codegen watcher reports: nothing running, nothing failed. */
+const idleGeneration = (): CodegenGeneration => {
+    return { busy: false, idle: Promise.resolve(), sequence: 0, usable: true };
+};
 
 const silentLogger = (): Logger => {
     return {
@@ -807,6 +813,7 @@ describe("lunora dev", () => {
                             codegenClosed = true;
                         },
                         ready: Promise.resolve(),
+                        generation: idleGeneration,
                         watchAvailable: true,
                     };
                 },
@@ -839,7 +846,7 @@ describe("lunora dev", () => {
                 startCodegen: (options) => {
                     expect(options.lazyFunctions).toBe(true);
 
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async (options) => {
                     expect(options.lazyFunctions).toBe(true);
@@ -915,7 +922,7 @@ describe("lunora dev", () => {
                     startCodegen: () => {
                         claimedAt.codegen = process.env[CLOUDFLARE_CLI_CONFIG_WARNING_ENV];
 
-                        return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                        return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                     },
                     startStudio: async () => {
                         return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -1129,7 +1136,7 @@ describe("lunora dev", () => {
                 findFreePort: async () => 8787,
                 logger: silentLogger(),
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -1182,7 +1189,7 @@ describe("lunora dev", () => {
                 findFreePort: async () => 8787,
                 logger: silentLogger(),
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -1246,7 +1253,7 @@ describe("lunora dev", () => {
                 },
                 remote: true,
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -1279,7 +1286,7 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: { ...silentLogger(), warn: (message) => warnings.push(message) },
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -1365,7 +1372,7 @@ describe("lunora dev", () => {
                 },
                 logger: silentLogger(),
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startWorker: () => {
                     return { exited: Promise.resolve(0), kill: () => {} };
@@ -1392,7 +1399,7 @@ describe("lunora dev", () => {
                 },
                 logger: silentLogger(),
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -1430,7 +1437,7 @@ describe("lunora dev", () => {
                 },
                 remote: true,
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -1454,7 +1461,7 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: silentLogger(),
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startHyperdrive: async ({ projectRoot }) => {
                     events.push(`start ${projectRoot}`);
@@ -1496,7 +1503,7 @@ describe("lunora dev", () => {
                 },
                 remote: true,
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startHyperdrive: start,
                 startStudio: async () => {
@@ -1595,7 +1602,7 @@ describe("lunora dev", () => {
                 findFreePort: async () => 8787,
                 logger: silentLogger(),
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -1750,7 +1757,7 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startWorker: () => {
                     return { exited: Promise.resolve(0), kill: () => {} };
@@ -1785,7 +1792,7 @@ describe("lunora dev", () => {
                 },
                 logger,
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -1820,7 +1827,7 @@ describe("lunora dev", () => {
                 logger: silentLogger(),
                 probeReady: async () => true,
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startWorker: () => {
                     return { exited: Promise.resolve(0), kill: () => {} };
@@ -1878,7 +1885,7 @@ describe("lunora dev", () => {
                 flavor: "vite",
                 logger: silentLogger(),
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startWorker: () => {
                     return { exited: Promise.resolve(0), kill: () => {} };
@@ -1960,7 +1967,7 @@ describe("lunora dev", () => {
                 logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
                 probeReady: async () => true,
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startWorker: () => {
                     return { exited: Promise.resolve(0), kill: () => {} };
@@ -1993,7 +2000,7 @@ describe("lunora dev", () => {
                 logger: { ...silentLogger(), info: (message: string) => withConfig.push(message) },
                 probeReady: async () => true,
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startWorker: () => {
                     return { exited: Promise.resolve(0), kill: () => {} };
@@ -2014,7 +2021,7 @@ describe("lunora dev", () => {
                 logger: { ...silentLogger(), info: (message: string) => withoutConfig.push(message) },
                 probeReady: async () => true,
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startWorker: () => {
                     return { exited: Promise.resolve(0), kill: () => {} };
@@ -2053,7 +2060,7 @@ describe("lunora dev", () => {
                 logger: { ...silentLogger(), info: (message: string) => infos.push(message) },
                 probeReady: async () => true,
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -2163,7 +2170,7 @@ export const env = Object.defineProperty((value: unknown) => value, Symbol.for("
                     return true;
                 },
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startWorker: () => {
                     return { exited: Promise.resolve(0), kill: () => {} };
@@ -2203,7 +2210,7 @@ export const env = Object.defineProperty((value: unknown) => value, Symbol.for("
                     return true;
                 },
                 startCodegen: () => {
-                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), generation: idleGeneration, watchAvailable: true };
                 },
                 startWorker: () => {
                     order.push("spawn");

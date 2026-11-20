@@ -333,6 +333,60 @@ describe("lunora dev lifecycle", () => {
             expect(claimedAtSpawn).toBe("1");
         });
 
+        it("forwards --remote to the daemon only when the flag asked for it, so a default stays a default", async () => {
+            expect.assertions(2);
+
+            const seen: ReadonlyArray<string>[] = [];
+            const start = async (options: DevOptions): Promise<void> => {
+                await startBackground({
+                    cwd: workdir,
+                    jsonLogs: false,
+                    logger: recordingLogger().logger,
+                    options,
+                    // Resolved remote in both cases: from LUNORA_REMOTE or the config in the first, from --remote in the second.
+                    remote: true,
+                    run: (runOptions) => {
+                        seen.push(runOptions.command.args);
+
+                        return Promise.resolve({ code: 0 });
+                    },
+                });
+                clearDevServerState(workdir, process.pid);
+            };
+
+            await start({ target: "node" } as DevOptions);
+            await start({ remote: true, target: "node" } as DevOptions);
+
+            // The daemon re-reads the default itself; forwarded as --remote, --target node would refuse it as explicit.
+            expect(seen[0]).not.toContain("--remote");
+            expect(seen[1]).toContain("--remote");
+        });
+
+        it("starts the daemon, not the Vite dev script, for a Vite project that targets node", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/vite": "1.0.0" }, name: "app" }), "utf8");
+
+            let args: ReadonlyArray<string> | undefined;
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: { target: "node" } as DevOptions,
+                remote: false,
+                run: (options) => {
+                    args = options.command.args;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            // `lunora dev` serves the Node target itself; the Vite dev script would serve the app on workerd.
+            expect(args).toContain("--target");
+            expect(args?.[(args.indexOf("--target") ?? 0) + 1]).toBe("node");
+        });
+
         it("forwards --target to the daemon", async () => {
             expect.assertions(2);
 

@@ -1006,6 +1006,30 @@ type LintIgnoreStatus = "created" | "failed" | "manual" | "unchanged" | "updated
 type LintTool = "biome" | "eslint" | "oxlint" | "prettier";
 ```
 
+### `LocalWorkerEnv` (interface)
+
+```ts
+interface LocalWorkerEnv {
+    env: Record<string, unknown>;
+    sources: string[];
+}
+```
+
+### `LocalWorkerEnvOptions` (interface)
+
+```ts
+interface LocalWorkerEnvOptions {
+    config: (WorkerEnvScope & {
+        env?: Record<string, WorkerEnvScope | null | undefined> | null;
+    }) | undefined;
+    configPath: string | undefined;
+    environment?: string;
+    processEnv?: Record<string, string | undefined>;
+    projectRoot: string;
+    vars?: Readonly<Record<string, string>>;
+}
+```
+
 ### `LunoraFormattedLine` (interface)
 
 ```ts
@@ -1919,6 +1943,12 @@ const resolveDeployDriver: (target?: string) => DeployDriver;
 
 ```ts
 const resolveLazyFunctions: (flag?: boolean) => boolean;
+```
+
+### `resolveLocalWorkerEnv` (const)
+
+```ts
+const resolveLocalWorkerEnv: (options: LocalWorkerEnvOptions) => LocalWorkerEnv;
 ```
 
 ### `resolveProjectTarget` (const)
@@ -3906,6 +3936,17 @@ interface VectorMetadataDeclaration {
     index: string;
     kind: string | undefined;
     property: string;
+}
+```
+
+### `WorkerEnvScope` (interface)
+
+```ts
+interface WorkerEnvScope {
+    secrets?: {
+        required?: unknown;
+    } | null;
+    vars?: Record<string, unknown> | null;
 }
 ```
 

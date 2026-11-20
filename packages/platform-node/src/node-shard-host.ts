@@ -812,9 +812,8 @@ interface NodeShardHostOptions {
  * rather than closing `database` directly, so the alarm timer and the
  * connection are always retired together.
  */
-const createNodeShardHost = (
-    options: NodeShardHostOptions = {},
-): {
+/** What {@link createNodeShardHost} returns. */
+interface NodeShardHostParts {
     /** Settles once every alarm delivery running now (its handler and any retry write) has; `undefined` when none is. */
     alarmsSettled: () => Promise<unknown> | undefined;
     database: Database.Database;
@@ -827,9 +826,10 @@ const createNodeShardHost = (
     suspendAlarms: () => void;
     /** The failures recorded since the last call, which a drain reports in its result; each is also logged when it happens. */
     takeFailures: () => string[];
-} => {
-    const database = new Database(options.path ?? ":memory:");
+}
 
+/** Everything {@link createNodeShardHost} builds over an open `database`. It may throw partway; the caller then closes it. */
+const composeNodeShardHost = (database: Database.Database, options: NodeShardHostOptions): NodeShardHostParts => {
     database.pragma("journal_mode = WAL");
 
     /**
@@ -1073,6 +1073,20 @@ const createNodeShardHost = (
         suspendAlarms,
         takeFailures: () => failures.splice(0),
     };
+};
+
+const createNodeShardHost = (options: NodeShardHostOptions = {}): NodeShardHostParts => {
+    const database = new Database(options.path ?? ":memory:");
+
+    // Write-mode setup (the WAL switch, the schema) can fail on a database that opened fine, such as a read-only file. The
+    // handle is released then, so a shard that cannot be opened leaves nothing behind for its caller to leak.
+    try {
+        return composeNodeShardHost(database, options);
+    } catch (error: unknown) {
+        database.close();
+
+        throw error;
+    }
 };
 
 export type { NodeShardHostOptions };

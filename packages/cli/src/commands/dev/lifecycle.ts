@@ -42,6 +42,7 @@ import {
 } from "@lunora/config";
 import { warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
+import { servesDevInProcess } from "../../util/deploy-target-resolve";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
@@ -558,7 +559,9 @@ const startBackground = async (context: {
     // foreground path turns that into the standalone flavor (`resolveTargetFlavor`),
     // so the background start must too, or it spawns `vite dev` and serves the
     // worker on workerd after all.
-    const flavor = detected === "vite" && targetRunsOwnDevServer(options.target ?? resolveProjectTarget(cwd)) ? "wrangler" : detected;
+    const target = options.target ?? resolveProjectTarget(cwd);
+    // The Node target is served by `lunora dev` itself, so it takes the same standalone path.
+    const flavor = detected === "vite" && (targetRunsOwnDevServer(target) || servesDevInProcess(target)) ? "wrangler" : detected;
     // Pre-listen default URL — cosmetic (shown only if a concurrent starter
     // loses to this claim); the child's superseding record carries the real one.
     // For `vite`/`framework-worker` the front door is the framework's own dev
@@ -607,7 +610,7 @@ const startBackground = async (context: {
 
         // Re-invoke this same CLI entry as the detached daemon.
         return await run({
-            command: { args: [process.argv[1] ?? "lunora", ...daemonArguments(options, remote)], command: process.execPath },
+            command: { args: [process.argv[1] ?? "lunora", ...daemonArguments(options)], command: process.execPath },
             cwd,
             env: handoff,
             json: jsonLogs,

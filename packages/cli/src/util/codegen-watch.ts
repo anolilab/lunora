@@ -209,14 +209,20 @@ const createReusableProject = (projectRoot: string, absoluteLunoraDirectory: str
  *
  * A run that throws drops the reused Project: it may be left half-mutated, so
  * the next run starts clean.
+ *
+ * `runCodegen` writes `_generated/*` only once it has generated all of it, so a
+ * failure inside it leaves the previous output; one in a step after it (the
+ * Studio assets, the diagnostics report) leaves new output whose run never
+ * reaches `postcodegen`, which `"failed-after-write"` reports.
  */
 const runOnce = (
     options: Pick<CodegenWatcherOptions, "apiSpec" | "lazyFunctions" | "logger" | "projectRoot" | "target">,
     lunoraDirectory: string,
     reason: string,
     project: ReusableProject,
-): boolean => {
+): "failed" | "failed-after-write" | "ok" => {
     const { apiSpec, lazyFunctions, logger, projectRoot, target } = options;
+    let wrote = false;
 
     try {
         // Codegen takes a built Project, so a missing schema is reported here, before one is constructed and seeded.
@@ -236,6 +242,7 @@ const runOnce = (
             ...wranglerCodegenInputs(projectRoot, target),
         });
 
+        wrote = true;
         reconcileStudioAssets(projectRoot, target, logger);
 
         logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
@@ -247,10 +254,10 @@ const runOnce = (
         project.drop();
         logger.error(renderCodegenFailure(error, reason));
 
-        return false;
+        return wrote ? "failed-after-write" : "failed";
     }
 
-    return true;
+    return "ok";
 };
 
 /**
@@ -358,7 +365,21 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     // Codegen also reads the app's wrangler config (cron triggers, the companion Worker's name and observability), at the project root.
     const configPaths = [...projectConfigCandidatePaths(watchDirectory), ...WRANGLER_FILES.map((name) => join(options.projectRoot, name))];
     let idle: Promise<void> = Promise.resolve();
+    // Runs started so far, and whether the last one that finished left `_generated/*` usable: output that was written but never
+    // finished, by a step after codegen or by the `postcodegen` hook failing, is not. A codegen run that fails before writing
+    // leaves the previous output, and this as it was.
+    let sequence = 0;
+    let usable = true;
     const project = createReusableProject(options.projectRoot, watchDirectory);
+    // A run that wrote and then failed leaves output nothing finished; one that failed before writing leaves the last good one.
+    const recordFailedRun = (outcome: "failed" | "failed-after-write"): void => {
+        if (outcome === "failed-after-write") {
+            usable = false;
+        }
+    };
+    const generation = (): CodegenGeneration => {
+        return { busy: running || pending !== undefined, idle, sequence, usable };
+    };
 
     // Resolves when the STARTUP run — codegen plus the project's `postcodegen` —
     // has finished, so a caller can hold off work that reads generated output.
@@ -391,6 +412,9 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     const next = pending;
 
                     pending = undefined;
+                    sequence += 1;
+
+                    const runSequence = sequence;
 
                     // No hook on a failed run: `postcodegen` exists to finish
                     // generated output, and running it over a tree codegen did
@@ -398,7 +422,11 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     if (next.codegen) {
                         codegenDigest = configDigest(configPaths);
                     }
-                    if (next.codegen && !runOnce(options, lunoraDirectory, next.reason, project)) {
+                    const outcome = next.codegen ? runOnce(options, lunoraDirectory, next.reason, project) : "ok";
+
+                    if (outcome !== "ok") {
+                        recordFailedRun(outcome);
+
                         continue;
                     }
 
@@ -412,6 +440,9 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     // case, not the exotic one. The window still covers the
                     // writes that land as the hook exits.
                     hookRunning = true;
+
+                    let hookFailed = false;
+                    let hookRan = false;
 
                     try {
                         // `stdoutToStderr` for the same reason `deploy` passes
@@ -438,8 +469,20 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                         if (hook.ran) {
                             settledAt = Date.now();
                         }
+
+                        hookFailed = hook.error !== undefined;
+                        hookRan = hook.ran;
                     } finally {
                         hookRunning = false;
+                    }
+
+                    // After the hook, so a listener that reads generated output reads the finished copy. A failed
+                    // codegen run `continue`s past this: nothing it would read has changed. A failed hook skips it too:
+                    // the output it left may be half-written, and the running app keeps serving until the next edit.
+                    usable = !hookFailed;
+
+                    if (!hookFailed) {
+                        options.onSettled?.({ hookRan, sequence: runSequence, startup: next.reason === "startup" });
                     }
                 }
             } catch (error: unknown) {
@@ -467,6 +510,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
                 return idle;
             },
+            generation,
             ready,
             watchAvailable: false,
         };
@@ -671,6 +715,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             // mid-write, on an inherited stdout.
             return idle;
         },
+        generation,
         ready,
         watchAvailable: true,
     };
@@ -694,12 +739,36 @@ export interface CodegenWatcherOptions {
     logger: Logger;
     /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
     lunoraDirectory?: string;
+
+    /**
+     * Called after each run whose codegen and `postcodegen` both succeeded. `startup` marks the run the watcher starts with (an
+     * edit queued behind it folds into it and clears the flag); its codegen writes before `startCodegenWatch` returns, so only a
+     * `postcodegen` hook (`hookRan`) can change `_generated/*` after that. A dev server that loads `_generated/*` itself reloads
+     * here rather than on the raw file event, which fires mid-write.
+     */
+    onSettled?: (run: { hookRan: boolean; sequence: number; startup: boolean }) => void;
     /** Project root containing the `lunora/` directory. */
     projectRoot: string;
     /** Process spawner for the `postcodegen` hook. Injectable so tests need no real subprocess. */
     spawner?: Spawner;
     /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`. */
     target?: string;
+}
+
+/** A snapshot of the watcher's runs; see {@link CodegenWatcherHandle.generation}. */
+export interface CodegenGeneration {
+    /** A run is in progress or queued. */
+    busy: boolean;
+    /** Settles when the runs in progress when this was read, and any queued behind them, have finished. */
+    idle: Promise<void>;
+    /** How many runs have started. */
+    sequence: number;
+
+    /**
+     * `false` after a run that wrote output and then failed (a step after codegen, or its `postcodegen` hook), until a later run
+     * succeeds: that output may be unfinished.
+     */
+    usable: boolean;
 }
 
 export interface CodegenWatcherHandle {
@@ -712,6 +781,12 @@ export interface CodegenWatcherHandle {
      * watcher detached can ignore it.
      */
     close: () => Promise<void>;
+
+    /**
+     * Where generation stands now, for a reader of `_generated/*` that must not read a run mid-write: await `idle` while
+     * `busy`, then compare `sequence` after reading to see whether a run started meanwhile.
+     */
+    generation: () => CodegenGeneration;
 
     /**
      * Resolves once the startup regeneration — codegen AND the project's

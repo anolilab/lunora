@@ -1,6 +1,6 @@
 ---
 title: "@lunora/platform-node"
-description: "The Node host for the @lunora/platform contracts — experimental, no lunora dev --target node yet, and no SemVer promise until it graduates."
+description: "The Node host for the @lunora/platform contracts — experimental, served by lunora dev --target node, not deployable yet, and no SemVer promise until it graduates."
 ---
 
 `@lunora/platform-node` is the Node **host**: the `@lunora/platform` contracts
@@ -32,12 +32,13 @@ const full = createNodePlatform({
 
 ## Status
 
-**Experimental, and not a shipping target.** There is no `lunora dev --target
-node`; this package ships no dev server. A `@lunora/config` deploy driver
-(`node`) does exist, but `provision` is a reporting step, not a writing one: it
-tells you, once, which declared features this target cannot serve, and it has
-no toolchain to shell out to (no `wrangler`-equivalent), because there is
-nothing remote to deploy to, tail logs from, or store secrets in.
+**Experimental, and not a shipping target.** `lunora dev --target node` runs
+the app on this host (see [Running it with `lunora dev`](#running-it-with-lunora-dev)).
+A `@lunora/config` deploy driver
+(`node`) exists so the target resolves and codegen gates against
+`NODE_CAPABILITIES`, but it has no toolchain to shell out to (no
+`wrangler`-equivalent), because there is nothing remote to deploy to, tail logs
+from, or store secrets in.
 
 `lunora deploy --target node` deploys to a container build context instead:
 a bundled `server.mjs` whose generated entry composes this package around the
@@ -147,11 +148,64 @@ Dev and test. It exists to run the same conformance suite
 (`@lunora/platform/conformance`, `@lunora/shard-engine/conformance`) against a
 second host so portability is a construction check rather than a claim, and it
 is a useful in-process double for exercising app code without Cloudflare
-credentials. It is not wired into `lunora dev`, deploys only as the container
-`lunora deploy --target node` writes (one process, which you host), and the
-capabilities above (one process, no distributed placement or failover, no
+credentials. `lunora dev --target node` serves an app on it, it deploys only as
+the container `lunora deploy --target node` writes (one process, which you
+host), and the capabilities above (one process, no distributed placement or failover, no
 Cloudflare product bindings) mean it is not a substitute for the Cloudflare
 host in anything that needs them.
+
+## Running it with `lunora dev`
+
+Install this package as a dev dependency, set `"target": "node"` in
+`lunora.config.*` (or pass `--target node`), and run `lunora dev`. The CLI
+resolves `@lunora/platform-node` from the project and serves the worker entry
+`wrangler.jsonc` names in `main` on the usual worker port (`--worker-port`,
+`dev.port`, else 8787):
+
+- Codegen runs on every change under `lunora/`, as on Cloudflare. The app
+  reloads after each finished codegen run (not after a failed `postcodegen`),
+  when a file the entry loaded from outside `lunora/` changes, and when
+  `wrangler.jsonc`, `.dev.vars`, `.dev.vars.<env>` or the `.env` files change;
+  with `--no-codegen` it watches the files it loaded under `lunora/` too. Each
+  reload re-reads the wrangler config, so an edited `main` takes effect. A
+  reload restarts the listener, so open sockets and streams reconnect. The
+  previous version gets 5 s to finish its in-flight requests and work and is
+  then closed
+  anyway, with a warning naming what was cut off. A reload that fails to load
+  keeps the previous version serving, as does one refused by
+  `checkNodeAppHost`: the new host is only built once the previous one has
+  drained, so two schedulers never run over the same database. A reload waits
+  out a running codegen run, is refused while the last `postcodegen` hook has
+  failed, and is redone once a codegen run that started during its load has
+  finished. One that cannot bind the port logs it,
+  and nothing serves until a later reload succeeds, since the previous version
+  held the same port and databases.
+- `CLOUDFLARE_ENV` selects a wrangler environment, as for `wrangler dev`: its
+  `main`, bindings and `vars`, and `.dev.vars.<env>` before `.dev.vars`.
+- Mail is captured to the Studio inbox while `WORKER_ENV` is `development`. No
+  `createNodeMailHost` runs in dev, so with `LUNORA_MAIL_CAPTURE=0` a send to
+  the `lunora-mail` queue is not delivered; a startup warning says so when the
+  app produces to that queue.
+- Each `durable_objects` binding is composed over this host with the class the
+  entry exports (`createNodeAppHost`). Shard data persists in `.lunora/node/`.
+- `env` carries the wrangler `vars`, `.dev.vars` (or `.env`) and
+  `WORKER_ENV=development`, assembled the way `wrangler dev` does it.
+- Declared crons (`_generated/crons.ts`) are armed on the `SHARD` binding's
+  scheduler and delivered to its default shard, as `createNodePlatform`'s
+  `crons` are. A schedule edit applies on the reload codegen triggers.
+- Each `secrets_store_secrets` binding is bound through
+  `createNodeSecretBindings`, reading `.dev.vars` (or `.env`) and then the
+  shell. Each `hyperdrive` binding is built from `DATABASE_URL` by
+  `createNodeHyperdrive`; without one it stays unbound and a startup warning
+  says so.
+- Studio runs against the Node worker: the data browser, logs and live
+  subscriptions work through its proxy.
+
+Any other declared binding (D1, queues, R2, workflows and the Cloudflare
+product bindings) is named in a startup warning and is absent from `env`. `--remote`
+is refused and `--inspector-port` is ignored, since there is no `wrangler dev`.
+The Vite and framework flavors are not used: the worker always runs in the
+CLI's own process.
 
 ## On-demand profiling
 
@@ -315,6 +369,54 @@ and the work that `failed` while the drain waited (an alarm retry that could not
 be written), one readable label each. Each failure is also logged with its cause
 when it happens, and drains wait with settled semantics, so one failure never
 stops them waiting for the rest.
+
+### `checkNodeAppHost`
+
+**Type:** `(options: NodeAppHostOptions) => void`
+
+Throws what `createNodeAppHost` would refuse for the same options (no default
+`fetch` handler, a binding whose export is missing or cannot be constructed with
+`new` or is only inherited, a binding name that is not an identifier, that
+repeats another or differs from it only in case (one directory on a
+case-insensitive volume), or whose shard directory or platform database links
+out of `dataDirectory` or to nothing, crons with no shard
+binding or a workflow target) without opening a
+database or arming a timer. `createNodeAppHost` runs it before building
+anything, so a refused composition leaves stored state, cron rows included, as
+it was. A caller replacing a running host runs it first and keeps the running
+host when it throws; `lunora dev --target node` does.
+
+### `createNodeAppHost`
+
+**Type:** `(options: NodeAppHostOptions) => NodeAppHost`
+
+Composes a worker module (the one `wrangler.jsonc`'s `main` names) over one
+`createNodePlatform` per Durable Object binding, with one instance of the
+exported class per shard for the life of the host. `crons` (the generated
+`LUNORA_CRONS` map) is armed on the `shardBinding` platform (default `SHARD`)
+and delivered to its default shard. The map is the whole declared set: an
+omitted one declares none, and the jobs an earlier host declared are deleted. A
+host that declares crons without that binding throws. `fetch` is the worker's own, bound to that `env`. `close(options?)`
+drains under one deadline (`DrainOptions`, 30 s by default) the requests `fetch`
+is still answering, the worker's `waitUntil` work and every platform (shard requests, alarms, cron deliveries and
+each shard's own `waitUntil` work), then force-closes every platform, cron timers
+included, whether or not the drain finished; it resolves with the `DrainResult`.
+`rearmPersistedAlarms()` opens every stored shard with a persisted alarm, so it
+fires without a request; call it once the host serves. A Durable Object that
+defines only one of `webSocketMessage` / `webSocketClose` gets that one.
+`lunora dev --target node` serves apps through it.
+
+### `createNodeDurableObjectFactory`
+
+**Type:** `(DurableObject: NodeDurableObjectClass, env: Record<string, unknown>) => (shard: NodeShard) => Promise<NodeDurableObjectInstance>`
+
+The instance of a Durable Object class for a shard: one per shard for the life of
+the factory, constructed on first use. As on workerd, work the constructor gates
+behind `blockConcurrencyWhile` finishes before the instance takes its first
+event. If that work fails, the instance is broken: each event waiting on it fails
+with the error, the instance is dropped, and the next event constructs a fresh
+one. The rejection is never left unhandled. `createNodeAppHost` and the server
+`lunora deploy --target node` generates both build their instances with it.
 
 ### `createNodeHttpServer`
 

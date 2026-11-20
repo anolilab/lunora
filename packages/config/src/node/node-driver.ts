@@ -12,10 +12,13 @@
  * already models this ("or `undefined` for a host that has none"), and claiming
  * a toolchain here would mean inventing commands that cannot run.
  *
- * **What that costs the target, stated plainly.** `lunora dev` refuses it at
- * selection (`resolveRunnableTargetOrError` in `@lunora/cli`) rather than after
- * codegen has already rewritten `_generated/*` for it. `lunora deploy` does
- * not need a toolchain for it: it writes a container build context (a bundled
+ * **What that costs the target, stated plainly.** Neither `lunora dev` nor
+ * `lunora deploy` spawns a toolchain for it, and every other command that
+ * needs one refuses it at selection (`resolveRunnableTargetOrError` in
+ * `@lunora/cli`) rather than after codegen has already rewritten
+ * `_generated/*` for it. `lunora dev` serves the app on
+ * `@lunora/platform-node` in the CLI's own process (`resolveDevTargetOrError`).
+ * `lunora deploy` writes a container build context (a bundled
  * `@lunora/platform-node` server, a Dockerfile, the env it reads) and builds
  * the image only when asked (`resolveDeployTargetOrError`). Running and
  * hosting that container is the operator's.

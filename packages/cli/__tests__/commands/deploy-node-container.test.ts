@@ -1143,7 +1143,7 @@ describe("lunora deploy --target node", () => {
             expect(deployed).toMatchObject({ code: 0 });
             // esbuild renames a clashing `join` (join4) and prints 1000 as 1e3.
             expect(bundle).toMatch(/mail: \{ env, path: join\d*\(dataDirectory, "mail\.sqlite3"\) \}/u);
-            expect(bundle).toMatch(/for \(const (\w+) of CONFIG\.mailQueues\) \{\s*env\[\1\] = platform\.mail\.queue;/u);
+            expect(bundle).toMatch(/for \(const (\w+) of CONFIG\.mailQueues\) \{\s*setEnv\(\1, platform\.mail\.queue\);/u);
             expect(bundle).toMatch(/setInterval\(pollMail, 1e3\)/u);
             expect(bundle).toMatch(/"requiredEnv": \[[^\]]*"MAIL_FROM",\s*"RESEND_API_KEY"/u);
             expect(readme).toContain("queue producer is bound to a durable mail queue in `mail.sqlite3`");
@@ -1516,10 +1516,10 @@ globalThis.fetch = async (input, init) => {
             expect(result.error).not.toContain("predates");
         });
 
-        it("refuses a project whose @lunora/platform-node predates deadline-bounded drains", async () => {
-            expect.assertions(1);
+        it("refuses a project whose @lunora/platform-node predates the exports the server needs, naming them", async () => {
+            expect.assertions(2);
 
-            // A stand-in for an older release: the same exports, minus the bounded-drain one this deploy needs.
+            // A stand-in for an older release: the same exports, minus the bounded-drain and Durable Object ones this deploy needs.
             const oldPlatform = join(workdir, "old-platform-node");
 
             mkdirSync(oldPlatform);
@@ -1551,10 +1551,10 @@ globalThis.fetch = async (input, init) => {
             );
             writeFixture(workdir, { extraModules: { "@lunora/platform-node": oldPlatform } });
 
-            await expect(deploy(workdir)).resolves.toMatchObject({
-                code: 1,
-                error: expect.stringContaining("this project installs 1.0.0-alpha.200, which predates them, so every container shutdown would fail"),
-            });
+            const deployed = await deploy(workdir);
+
+            expect(deployed).toMatchObject({ code: 1, error: expect.stringContaining("this project installs 1.0.0-alpha.200, which predates them") });
+            expect(deployed.error).toMatch(/exports [^(]*createNodeDurableObjectFactory/u);
         });
 
         it("refuses a name that is both a secrets.required entry and a secrets_store binding, which would replace the plain secret", async () => {
@@ -1574,6 +1574,15 @@ globalThis.fetch = async (input, init) => {
                 ),
             });
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+        });
+
+        it("deploys a var whose value is null, embedding it as data, as wrangler takes JSON values", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { vars: { LIMIT: 3, NOTHING: null } } });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+            expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).toMatch(/"NOTHING": null/u);
         });
 
         it("refuses a var that shares a binding's name, naming both sources", async () => {
@@ -1829,13 +1838,56 @@ globalThis.fetch = async (input, init) => {
             await expect(deploy(workdir)).resolves.toMatchObject({ code: 2, error: expect.stringContaining("uses __proto__ as a key at vars.__proto__") });
         });
 
-        it("refuses constructor as a var name", async () => {
-            expect.assertions(1);
+        it(
+            "hands vars named constructor and prototype to the worker as strings, and checks an inherited secret name as set or not",
+            async () => {
+                expect.assertions(3);
 
-            writeFixture(workdir, { wrangler: { vars: { constructor: "c", LIMIT: 3 } } });
+                writeFixture(workdir, {
+                    // `hasOwnProperty` is inherited too, and a secret rather than a var, so the two never collide.
+                    wrangler: { secrets: { required: ["SESSION_SECRET", "hasOwnProperty"] }, vars: { constructor: "c", LIMIT: 3, prototype: "p" } },
+                });
 
-            await expect(deploy(workdir)).resolves.toMatchObject({ code: 2, error: expect.stringContaining('vars in wrangler.jsonc has "constructor"') });
-        });
+                const worker = join(workdir, "src", "worker.ts");
+
+                writeFileSync(
+                    worker,
+                    readFileSync(worker, "utf8").replace(
+                        'case "/__fixture/env":',
+                        'case "/__fixture/reserved":\n                return Response.json({ constructor: Object.hasOwn(env, "constructor") ? env.constructor : null, prototype: Object.hasOwn(env, "prototype") ? env.prototype : null });\n            case "/__fixture/env":',
+                    ),
+                    "utf8",
+                );
+
+                await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+                const artifact = join(workdir, NODE_DEPLOY_DIRECTORY);
+
+                mkdirSync(join(artifact, "node_modules"));
+                symlinkSync(BETTER_SQLITE3, join(artifact, "node_modules", "better-sqlite3"), "dir");
+
+                // Unset, a secret named hasOwnProperty must read as missing, not as the function Object.prototype carries.
+                const refused = startServer(artifact, join(workdir, "data-unset"));
+
+                await refused.exited;
+
+                expect(refused.stderr()).toContain("these required environment variables are not set: hasOwnProperty");
+
+                const run = startServer(artifact, join(workdir, "data"), { ...RUN_ENV, constructor: "from-the-environment", hasOwnProperty: "set" });
+
+                try {
+                    const origin = await run.listening;
+                    const response = await fetch(`${origin}/__fixture/reserved`);
+
+                    // A var set in the environment overrides the bundled value, so constructor is the environment's.
+                    await expect(response.json()).resolves.toStrictEqual({ constructor: "from-the-environment", prototype: "p" });
+                } finally {
+                    run.child.kill("SIGTERM");
+                    await run.exited;
+                }
+            },
+            SERVER_TEST_TIMEOUT,
+        );
 
         it("turns a docker build that cannot start into a failed deploy result", async () => {
             expect.assertions(1);
@@ -1895,6 +1947,23 @@ globalThis.fetch = async (input, init) => {
             writeFixture(workdir, { wrangler: { secrets_store_secrets: [{ binding: "LUNORA_SIGNING_KEY", secret_name: "s", store_id: "x" }] } });
 
             await expect(deploy(workdir)).resolves.toMatchObject({ code: 2, error: expect.stringContaining("LUNORA_SIGNING_KEY") });
+        });
+
+        it("names a typed exports entry as unbound, and leaves an entrypoint's cache settings alone", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir, {
+                wrangler: { exports: { default: { type: "worker" }, Nightly: { name: "nightly", type: "workflow" }, Reports: { cache: { enabled: true } } } },
+            });
+
+            const { logger, warnings } = recordingLogger();
+            const deployed = await runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" });
+
+            expect(deployed.code).toBe(0);
+            // The container composes no workflow, so the declared one is named rather than silently missing.
+            expect(warnings.join("\n")).toMatch(/not bound.*exports\.Nightly \(workflow\)/u);
+            // The served worker (`default`, type worker) is what runs, not something missing.
+            expect(warnings.join("\n")).not.toMatch(/exports\.(?:Reports|default)/u);
         });
 
         it("names every declared binding the server leaves unbound, including an external Durable Object", async () => {

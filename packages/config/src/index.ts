@@ -113,6 +113,8 @@ export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";
 export { applyLintIgnores, detectLintTools, LUNORA_IGNORED_PATHS } from "./lint-ignores";
+export type { LocalWorkerEnv, LocalWorkerEnvOptions } from "./local-worker-env";
+export { resolveLocalWorkerEnv } from "./local-worker-env";
 export type { FindingLogger } from "./log-badge";
 export { blockingFindingsMessage, reportCodegenFindings } from "./log-badge";
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
