@@ -629,17 +629,7 @@ const createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly
 ### `createNodeShardHost` (const)
 
 ```ts
-const createNodeShardHost: (options?: NodeShardHostOptions) => {
-    alarmsSettled: () => Promise<unknown> | undefined;
-    database: Database.Database;
-    dispose: () => void;
-    drain: () => Promise<void>;
-    host: ShardHost;
-    pendingAlarms: () => number;
-    pendingBackground: () => number;
-    suspendAlarms: () => void;
-    takeFailures: () => string[];
-};
+const createNodeShardHost: (options?: NodeShardHostOptions) => NodeShardHostParts;
 ```
 
 ### `createNodeShardKvStore` (const)
@@ -718,5 +708,21 @@ public API and is gated as one. Listed once per package, sorted by name.
 interface NodeServerEnd {
     close: (code?: number, reason?: string) => void;
     send: (data: string | ArrayBuffer) => void;
+}
+```
+
+### `NodeShardHostParts` (interface)
+
+```ts
+interface NodeShardHostParts {
+    alarmsSettled: () => Promise<unknown> | undefined;
+    database: Database.Database;
+    dispose: () => void;
+    drain: () => Promise<void>;
+    host: ShardHost;
+    pendingAlarms: () => number;
+    pendingBackground: () => number;
+    suspendAlarms: () => void;
+    takeFailures: () => string[];
 }
 ```
