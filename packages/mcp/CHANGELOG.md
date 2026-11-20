@@ -1,3 +1,7 @@
+## @lunora/mcp [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.292...@lunora/mcp@1.0.0-alpha.293) (2026-11-20)
+
+- fix(docs): harden waitlist sign-ups and remove netlify leftovers (#1633)
+
 ## @lunora/mcp [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.291...@lunora/mcp@1.0.0-alpha.292) (2026-11-14)
 
 - feat(advisor): suppress one finding at one site with an inline directive (#1587)
