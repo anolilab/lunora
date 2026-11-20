@@ -51,6 +51,7 @@
         "lint:generated": "node scripts/check-generated-files.mjs",
         "lint:peer-catalog-refs": "node scripts/check-peer-catalog-refs.js",
         "lint:eslint": "vis run lint:eslint",
+        "lint:eslint-disable": "node scripts/check-file-level-eslint-disable.js",
         "lint:eslint:fix": "vis run lint:eslint:fix",
         "lint:node-capabilities-docs": "node --experimental-strip-types scripts/check-node-capabilities-docs.js",
         "lint:package-json": "./scripts/sort-package-json-all.sh --check",
