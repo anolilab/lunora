@@ -1710,6 +1710,14 @@ const pathAwareInList = (engine: "mysql" | "postgres") => {
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const { crossShardCounter, crossShardReader, maxRelationKeys, schema } = options;
     const exec = withQueryTimeout(options.exec, options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS, options.queryTimer);
+    // The row a write is about to change is read from the primary: `exec` is a D1 session that may
+    // be served by a replica that has not seen a recent insert, and a write seeded from it treats a
+    // live row as absent (delete becomes a no-op, patch reports "not found") or CAS-checks a stale
+    // version. Without a primary, every read already hits the authoritative store.
+    const writeSnapshotExec =
+        options.exec.primary === undefined
+            ? exec
+            : withQueryTimeout(options.exec.primary, options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS, options.queryTimer);
 
     // The engine dialect for this ctx-db. Destructured into the names the body
     // already uses so the (large) closure body is unchanged — these block-scoped
@@ -3050,7 +3058,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * row is gone.
      */
     const rawRow = async (tableName: string, id: string): Promise<Record<string, unknown> | undefined> => {
-        const rows = await queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} = ${id}`);
+        const rows = await queryAll(writeSnapshotExec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} = ${id}`);
 
         return rows[0];
     };
@@ -3751,7 +3759,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
                         // A hard delete must see soft-deleted holders to remove them; a
                         // soft delete skips already-deleted holders.
-                        const holders = await writer.findMany(holderTable, { ...page, includeDeleted: hard, where: { [field]: value } });
+                        const holders = await writer.findMany(holderTable, {
+                            ...page,
+                            consistency: "primary",
+                            includeDeleted: hard,
+                            where: { [field]: value },
+                        });
 
                         return holders.page;
                     },
@@ -4272,7 +4285,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             for (let attempt = 0; attempt < OCC_RETRY_ATTEMPTS; attempt += 1) {
                 // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row a lost race moved
                 const [read] = await queryAll(
-                    exec,
+                    writeSnapshotExec,
                     dialect,
                     sql`SELECT *, CASE WHEN (${condition}) THEN 1 ELSE 0 END AS ${sql.identifier(PATCH_IF_MATCH_COLUMN)} FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} = ${id}`,
                 );
