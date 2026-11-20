@@ -497,6 +497,13 @@ const FALSE_PREDICATE: WhereInput = deny();
 const RLS_UNWRAP_SYMBOL = Symbol.for("lunora.ctxdb.rls-unwrap");
 
 /**
+ * The guard's table gate, read off the guarded writer through the same kind of
+ * `Symbol.for` key: it throws `RlsRequiredError` for a protected table and is
+ * absent on a writer that is not guarded.
+ */
+const RLS_RELATION_GATE_SYMBOL = Symbol.for("lunora.ctxdb.rls-relation-gate");
+
+/**
  * Key a wrapped writer carries its own accumulated policy chain under, so a
  * SECOND `.use(rls(...))` step composes with the first instead of replacing it.
  *
@@ -1004,6 +1011,8 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      */
     const route = (tableName: string): RlsDatabase => (readBase(tableName).restricts ? raw : base);
 
+    const relationGate = (base as unknown as Record<PropertyKey, unknown>)[RLS_RELATION_GATE_SYMBOL] as ((tableName: string) => void) | undefined;
+
     /**
      * The read filter for a TARGET table, attached to every read so `@lunora/do`'s
      * `resolveWith` can enforce a child table's read policy when it's loaded as a
@@ -1012,8 +1021,23 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * closing the RLS bypass where `findMany({ with: { child: true } })` would
      * otherwise return the child's rows unfiltered. `undefined` for tables with
      * no restricting policy.
+     *
+     * A child no step has a read policy for goes through the guard's gate, as a
+     * direct read of it would: the parent may have routed to `raw`, and the
+     * engine loads children from there, so `undefined` would read as "every
+     * row". It throws rather than filtering to nothing because the engine only
+     * asks for relations the caller named, and an empty child set would make a
+     * relation predicate such as `every` vacuously true.
      */
-    const relationReadFilter = (table: string): undefined | WhereInput => readBase(table).baseWhere;
+    const relationReadFilter = (table: string): undefined | WhereInput => {
+        const { baseWhere, restricts } = readBase(table);
+
+        if (!restricts) {
+            relationGate?.(table);
+        }
+
+        return baseWhere;
+    };
 
     /**
      * Resolve the raw row for `table`'s `id` and whether that table is policy-gated. The owner is the named table,
