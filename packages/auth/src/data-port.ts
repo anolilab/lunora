@@ -267,6 +267,31 @@ const safeCause = (error: unknown): string => {
 };
 
 /**
+ * One import row decoded from its wire form, without its credential columns — or why it could not
+ * be: `decodeWire` throws on a malformed tagged frame or past its nesting limit, and one bad row
+ * must land in the per-row report rather than reject the whole request.
+ */
+const decodeRow = (document_: unknown, table: string, credentialColumns: CredentialColumns): { message: string } | { row: Row } => {
+    try {
+        return { row: withoutCredentials(decodeWire(document_) as Row, table, credentialColumns) };
+    } catch (error) {
+        // The codec's own messages name the frame, never a row value; anything else is not echoed.
+        const cause = error instanceof Error && error.message.startsWith("wire-codec:") ? error.message : "the row is not valid wire data";
+
+        return { message: `"${table}": ${cause}` };
+    }
+};
+
+/** Why rows of `table` are never imported, or `undefined` when they may be. */
+const importRefusalOf = (table: string, isAuthTable: (table: string) => boolean): string | undefined => {
+    if (isUnmovableAuthTable(table)) {
+        return `"${table}" is never imported (credentials and the audit log stay with their deployment)`;
+    }
+
+    return isAuthTable(table) ? undefined : `"${table}" is not an auth table`;
+};
+
+/**
  * Insert wire-encoded rows, skipping any that collide with an existing key or
  * unique value. Only columns the table has are written, so a row from a newer
  * plugin set still lands, minus what this schema cannot hold — and never a
@@ -282,13 +307,10 @@ const insertAuthRows = async (
     const columns = new Map<string, string[]>();
 
     for (const [index, { doc, table }] of rows.entries()) {
-        if (isUnmovableAuthTable(table)) {
-            result.errors.push({ index, message: `"${table}" is never imported (credentials and the audit log stay with their deployment)`, table });
-            continue;
-        }
+        const refusal = importRefusalOf(table, isAuthTable);
 
-        if (!isAuthTable(table)) {
-            result.errors.push({ index, message: `"${table}" is not an auth table`, table });
+        if (refusal !== undefined) {
+            result.errors.push({ index, message: refusal, table });
             continue;
         }
 
@@ -300,7 +322,14 @@ const insertAuthRows = async (
             columns.set(table, known);
         }
 
-        const row = withoutCredentials(decodeWire(doc) as Row, table, credentialColumns);
+        const decodedRow = decodeRow(doc, table, credentialColumns);
+
+        if ("message" in decodedRow) {
+            result.errors.push({ index, message: decodedRow.message, table });
+            continue;
+        }
+
+        const { row } = decodedRow;
         const names = Object.keys(row).filter((name) => known.includes(name));
 
         if (names.length === 0) {
@@ -389,9 +418,14 @@ const planAuthReplace = async (
             continue;
         }
 
-        const row = Object.fromEntries(
-            Object.entries(withoutCredentials(decodeWire(doc) as Row, table, credentialColumns)).filter(([name]) => known.includes(name)),
-        );
+        const decodedRow = decodeRow(doc, table, credentialColumns);
+
+        if ("message" in decodedRow) {
+            errors.push({ index, message: decodedRow.message, table });
+            continue;
+        }
+
+        const row = Object.fromEntries(Object.entries(decodedRow.row).filter(([name]) => known.includes(name)));
 
         // Refused here rather than at the commit: `INSERT INTO t () VALUES ()` is a syntax error, and the dry run that
         // vets a staged restore before its shards are swapped has to see it, or the restore fails half-written.

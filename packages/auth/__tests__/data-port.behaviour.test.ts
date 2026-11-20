@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { WIRE_TAG } from "@lunora/wire";
 import { organization } from "better-auth/plugins";
 import { describe, expect, it } from "vitest";
 
@@ -187,6 +188,26 @@ describe("auth data port", () => {
             { index: 4, message: never("SESSION"), table: "SESSION" },
             { index: 5, message: never(AUTH_AUDIT_TABLE.toUpperCase()), table: AUTH_AUDIT_TABLE.toUpperCase() },
         ]);
+    });
+
+    it("reports a row it cannot decode in the per-row errors, and still imports the rest", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+
+        createTables(database);
+
+        const port = createSqlAuthDataPort(batchingExecutorOver(database), ["user", "account"]);
+        const malformed = { doc: { email: "bad@example.test", id: "u-bad", avatar: [WIRE_TAG, "date", "not-an-epoch"] }, table: "user" };
+        const good = { doc: { email: "good@example.test", id: "u-good" }, table: "user" };
+        const appended = await port.importRows([malformed, good]);
+
+        expect(appended.inserted).toBe(1);
+        expect(appended.errors).toStrictEqual([{ index: 0, message: `"user": wire-codec: malformed date — epoch must be a number`, table: "user" }]);
+
+        const replaced = await port.replaceRows?.([malformed, good], { dryRun: true });
+
+        expect(replaced?.errors).toStrictEqual([{ index: 0, message: `"user": wire-codec: malformed date — epoch must be a number`, table: "user" }]);
     });
 
     it("round-trips the DO-backed auth object through its move route", async () => {
