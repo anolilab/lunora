@@ -107,4 +107,19 @@ describe("metrics.series", () => {
 
         expect({ first: read.series[0]?.points[0]?.t, pages, truncated: read.truncated }).toStrictEqual({ first: firstKept, pages: 10, truncated: true });
     });
+
+    it("keeps the one bucket a burst denser than the page budget fills, rather than charting nothing", async () => {
+        expect.assertions(1);
+
+        // 12 000 points inside a single fifteen-minute bucket: the budget runs out inside it.
+        const burst = Array.from({ length: 12_000 }, (_, index) => point(index * 10, 1));
+        const to = 15 * 60 * 1000 - 1;
+        const { ctx } = makeCtx({ members: [owner("org_1")] }, { now: to + 10_000 });
+
+        (ctx.db as unknown as Record<string, unknown>)["metricPoints"] = d1MetricPoints(burst);
+
+        const read = (await series.handler(ctx, { from: 0, organizationId: "org_1", to } as never)) as SeriesRead;
+
+        expect({ buckets: read.series[0]?.points.length, truncated: read.truncated }).toStrictEqual({ buckets: 1, truncated: true });
+    });
 });

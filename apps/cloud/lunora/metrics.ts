@@ -208,13 +208,18 @@ export const series = query
         let points = rows.map((row) => absentForNull(row));
 
         // The oldest bucket a cut-short read reached holds only some of its points; its average
-        // would be wrong, so drop it and keep every bucket shown exact.
+        // would be wrong, so drop it and keep every bucket shown exact — unless it is the only
+        // bucket read (a burst denser than the page budget), where an approximate point under
+        // the `truncated` flag beats an empty chart.
         const oldest = points.at(-1);
 
         if (truncated && oldest !== undefined) {
             const partialBucket = Math.floor(oldest.at / DEFAULT_METRICS_BUCKET_MS) * DEFAULT_METRICS_BUCKET_MS;
+            const complete = points.filter((point) => point.at >= partialBucket + DEFAULT_METRICS_BUCKET_MS);
 
-            points = points.filter((point) => point.at >= partialBucket + DEFAULT_METRICS_BUCKET_MS);
+            if (complete.length > 0) {
+                points = complete;
+            }
         }
 
         return { series: foldMetricSeries(points).map((point) => toView(point)), truncated };
