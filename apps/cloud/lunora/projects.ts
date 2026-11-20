@@ -396,9 +396,10 @@ export const updateBuildSettings = mutation
  * three, which is a resource leak with a monthly bill attached. `aliasOwnership`
  * is absent too: an alias stays claimed until its tenant is gone
  * (`releaseIdleAliases`). `halts` goes: a halt left behind would hold whichever
- * project claims the alias next.
+ * project claims the alias next. `buildLogs` carry no `projectId`, only their
+ * `buildId`, so they are erased per build before the builds go.
  */
-const PROJECT_SCOPED_TABLES = ["buildLogs", "builds", "catalogInstalls", "domains", "halts", "secrets"] as const;
+const PROJECT_SCOPED_TABLES = ["builds", "catalogInstalls", "domains", "halts", "secrets"] as const;
 
 /**
  * Delete a project and everything scoped to it (owners/admins).
@@ -428,6 +429,15 @@ export const remove = mutation
 
         // Before the domain rows go: they are what names each certificate to release.
         await queueCertificateReleases(context, { projectId: id });
+
+        // Before the build rows go: they are the only link from a log line to this project.
+        const builds = await collectAll<Document_<"builds">>((cursor) => context.db.builds.findMany({ cursor, where: { projectId: id } }));
+
+        for (const build of builds) {
+            // eslint-disable-next-line no-await-in-loop -- one build's logs at a time keeps the writer simple
+            await purgeScopedRows(context, ["buildLogs"], { buildId: build._id });
+        }
+
         await purgeScopedRows(context, PROJECT_SCOPED_TABLES, { projectId: id });
         await releaseIdleAliases(context, { projectId: id });
 

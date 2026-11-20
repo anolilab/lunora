@@ -90,6 +90,28 @@ describe("projects.remove", () => {
         expect(deleted).toContain(PROJECT);
     });
 
+    it("deletes the build logs of the project's builds, which carry only a buildId", async () => {
+        const { ctx, deleted } = makeCtx({
+            buildLogs: [
+                { _id: "log_1", buildId: "bld_1", organizationId: ORG },
+                { _id: "log_2", buildId: "bld_1", organizationId: ORG },
+                { _id: "log_other", buildId: "bld_other", organizationId: ORG },
+            ],
+            builds: [
+                { _id: "bld_1", organizationId: ORG, projectId: PROJECT },
+                { _id: "bld_other", organizationId: ORG, projectId: "prj_other" },
+            ],
+            deployments: [],
+            members,
+        });
+
+        await remove.handler(ctx, { id: PROJECT as never, organizationId: ORG as never });
+
+        expect(deleted).toStrictEqual(expect.arrayContaining(["log_1", "log_2", "bld_1"]));
+        expect(deleted).not.toContain("log_other");
+        expect(deleted).not.toContain("bld_other");
+    });
+
     it("m2: deletes the project's emergency stops, so none holds whoever claims its aliases next", async () => {
         const { ctx, deleted } = makeCtx({ deployments: [], halts: [{ _id: "halt_1", alias: "shop", projectId: PROJECT }], members });
 
