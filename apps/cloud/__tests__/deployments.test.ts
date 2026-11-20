@@ -24,7 +24,7 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
                     const where = args?.where ?? {};
                     const page = rows.filter((row) => Object.entries(where).every(([key, value]) => row[key] === value));
 
-                    return Promise.resolve({ page });
+                    return Promise.resolve({ continueCursor: null, isDone: true, page });
                 },
             },
             get: () => Promise.resolve(null),
@@ -75,9 +75,12 @@ describe("deployments.closePreview", () => {
         const db = ctx.db as unknown as Record<string, unknown>;
 
         db["projects"] = {
-            findMany: ({ where }: { where: Row }) => Promise.resolve({ page: projects.filter((row) => row.githubRepo === where["githubRepo"]) }),
+            findMany: ({ where }: { where: Row }) =>
+                Promise.resolve({ continueCursor: null, isDone: true, page: projects.filter((row) => row.githubRepo === where["githubRepo"]) }),
         };
-        db["githubInstallations"] = { findMany: () => Promise.resolve({ page: [{ installationId: 7, organizationId: "org_1" }] }) };
+        db["githubInstallations"] = {
+            findMany: () => Promise.resolve({ continueCursor: null, isDone: true, page: [{ installationId: 7, organizationId: "org_1" }] }),
+        };
 
         const result = await closePreview.handler(ctx, { branch: "feat/x", installationId: 7, repository: "Acme/App" });
 

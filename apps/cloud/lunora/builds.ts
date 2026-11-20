@@ -15,6 +15,7 @@ import { absentForNull } from "./absent";
 import { fireDeployAlerts } from "./alerts";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
+import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -304,12 +305,13 @@ const recordProjectPush = async (
  * project in another org is never reached.
  */
 export const installedProjects = async (context: MutationContext, repository: string, installationId: number): Promise<Document_<"projects">[]> => {
-    const [{ page }, { page: installationPage }] = await Promise.all([
-        context.db.projects.findMany({ where: { githubRepo: githubRepoKey(repository) } }),
-        context.db.githubInstallations.findMany({ where: { installationId } }),
+    const [projects, installations] = await Promise.all([
+        collectAll<Document_<"projects">>((cursor) => context.db.projects.findMany({ cursor, where: { githubRepo: githubRepoKey(repository) } })),
+        collectAll<Document_<"githubInstallations">>((cursor) => context.db.githubInstallations.findMany({ cursor, where: { installationId } })),
     ]);
+    const claimedBy = new Set(installations.map((installation) => installation.organizationId));
 
-    return page.filter((project) => installationPage.some((installation) => installation.organizationId === project.organizationId));
+    return projects.filter((project) => claimedBy.has(project.organizationId));
 };
 
 /**

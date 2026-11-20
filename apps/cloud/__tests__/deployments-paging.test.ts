@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { installedProjects } from "../lunora/builds";
 import { activate, create } from "../lunora/deployments";
 import { remove } from "../lunora/projects";
 import type { Row } from "./_helpers/fake-ctx";
@@ -117,5 +118,29 @@ describe("deployment bookkeeping past the first page", () => {
         expect(ops).toContainEqual({ id: "dep_live", kind: "patch", patch: expect.objectContaining({ status: "destroyed" }) });
         // The live release is not torn down yet, so its alias stays claimed until the sweep has.
         expect(ops).not.toContainEqual({ id: "own_web", kind: "delete" });
+    });
+});
+
+describe("pull request bookkeeping past the first page", () => {
+    it("finds a connected project and its installation claim past the first page of each", async () => {
+        expect.assertions(1);
+
+        const { ctx } = storeWith([]);
+        const database = ctx.db as unknown as Record<string, Record<string, unknown>>;
+        // Squatted siblings in other organizations fill the repository's first page of projects …
+        const squatters = Array.from({ length: PAGE }, (_, index) => {
+            return { _id: `proj_squat_${String(index)}`, githubRepo: "acme/app", organizationId: `org_squat_${String(index)}` };
+        });
+        // … and of the installation's claims.
+        const claims = Array.from({ length: PAGE }, (_, index) => {
+            return { _id: `claim_${String(index)}`, installationId: 7, organizationId: `org_other_${String(index)}` };
+        });
+
+        database["projects"] = { findMany: pagedFindMany([...squatters, { _id: PROJECT, githubRepo: "acme/app", organizationId: ORG }]) };
+        database["githubInstallations"] = { findMany: pagedFindMany([...claims, { _id: "claim_org_1", installationId: 7, organizationId: ORG }]) };
+
+        const projects = await installedProjects(ctx, "Acme/App", 7);
+
+        expect(projects.map((project) => project._id)).toStrictEqual([PROJECT]);
     });
 });
