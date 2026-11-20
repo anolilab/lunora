@@ -63,7 +63,10 @@ export const sessionBoxOf = (box: null | StoredBox): null | SessionBox => (box =
  *
  * `current` is asked after the read: a Durable Object takes other events while
  * D1 answers, so a newer session may have superseded this one and recorded its
- * own `hello`, which this one's would otherwise overwrite.
+ * own `hello`, which this one's would otherwise overwrite. It cannot see a newer
+ * session that turns ready while this write is in flight, so the write itself
+ * also refuses a row whose `lastSeenAt` is past `now`: only this box's session
+ * writes that column, from one clock, and a later session's `hello` stamps a later time.
  */
 export const recordHello = async (
     database: ControlPlaneStore,
@@ -78,14 +81,21 @@ export const recordHello = async (
         return;
     }
 
-    await database.patch("boxes", boxId, {
-        ...(hello.fleets === undefined ? {} : { fleets: normaliseFleets(hello.fleets) }),
-        lastSeenAt: now,
-        resources: hello.resources,
-        status: "online",
-        versions: hello.versions,
+    const { applied } = await database.patchIf("boxes", boxId, {
+        patch: {
+            ...(hello.fleets === undefined ? {} : { fleets: normaliseFleets(hello.fleets) }),
+            lastSeenAt: now,
+            resources: hello.resources,
+            status: "online",
+            versions: hello.versions,
+        },
+        // A box never seen stores SQL NULL, which only a null filter matches.
+        where: { OR: [{ lastSeenAt: null }, { lastSeenAt: { lte: now } }] },
     });
-    await keepRevoked(database, boxId);
+
+    if (applied) {
+        await keepRevoked(database, boxId);
+    }
 };
 
 /**

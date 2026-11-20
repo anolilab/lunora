@@ -80,3 +80,31 @@ describe("box going offline against a concurrent reconnect", () => {
         expect(box?.status).toBe("online");
     });
 });
+
+describe("box hello against a newer session's hello", () => {
+    it("keeps the newer session's report when an older session's write lands after it", async () => {
+        const store = memoryStore({ boxes: [{ _id: "box_1", organizationId: "org_1", publicKey: "pk", slug: "bslug000001", status: "offline" }] });
+        const { patchIf } = store;
+        const newer = { resources: { diskFreeMb: 1024, memMb: 512 }, versions: { caddy: "v2.11.6", celld: "v0.7.0", hostd: "1.1.0" } };
+        let overtaken = false;
+
+        // The older session's write is in flight when the newer one records its hello, and lands last.
+        store.patchIf = async (table, id, args) => {
+            if (!overtaken) {
+                overtaken = true;
+                await recordHello(store, "box_1", newer, NOW + 1000);
+            }
+
+            return patchIf(table, id, args);
+        };
+
+        await recordHello(store, "box_1", HELLO, NOW);
+
+        const box = (await loadBox(store, "box_1")) as Record<string, unknown> | null;
+
+        expect(overtaken).toBe(true);
+        expect(box?.["lastSeenAt"]).toBe(NOW + 1000);
+        expect(box?.["versions"]).toStrictEqual(newer.versions);
+        expect(box?.["resources"]).toStrictEqual(newer.resources);
+    });
+});
