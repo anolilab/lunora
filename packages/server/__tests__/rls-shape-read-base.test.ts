@@ -270,12 +270,9 @@ describe("composeShapeReadWhere", () => {
 /**
  * A shape's read policies are the ones IT declares, not the project's.
  *
- * The registry ORs its groups and treats an unrestricted group as unrestricting
- * the whole table, so a registry folded from every registered function collapsed
- * a tenant shape's filter to nothing the moment ANY procedure named the table
- * with an allow-all read policy — typically an admin listing whose real gate is
- * a `requireAdmin` middleware a shape cannot run. Every row then replicated to
- * every socket.
+ * The registry intersects its groups, so a registry folded from every registered
+ * function would make a shape's filter depend on procedures that never run
+ * alongside it — an unrelated listing's restriction would narrow the shape.
  */
 describe("defineShape — RLS scope is the shape's own use() guards", () => {
     const tenantDocs = definePolicy({
@@ -285,12 +282,18 @@ describe("defineShape — RLS scope is the shape's own use() guards", () => {
             return { ownerId: auth.userId };
         },
     });
-    const anyDoc = definePolicy({ on: "read", table: "docs", when: () => true });
-
     const request = { ctx: {}, identity: null, rlsRequired: false, shapeWhere: {}, table: "docs", tablePublic: false, userId: "u1" } as const;
 
-    it("keeps a shape's tenant filter when an unrelated procedure declares an allow-all read policy", () => {
+    it("keeps a shape's filter to its own guards when an unrelated procedure declares another read policy", () => {
         expect.assertions(2);
+
+        const unarchived = definePolicy({
+            on: "read",
+            table: "docs",
+            when: () => {
+                return { archived: false };
+            },
+        });
 
         const tenantGuard = rls(definePolicies([tenantDocs]));
         const shape = defineShape({
@@ -301,11 +304,11 @@ describe("defineShape — RLS scope is the shape's own use() guards", () => {
             },
         });
 
-        // The project ALSO registers an admin-only listing with an allow-all
-        // policy. Folding both into one registry is what used to happen.
-        const projectWide = buildRlsReadRegistry([guardedQuery(definePolicies([tenantDocs])), guardedQuery(definePolicies([anyDoc]))]);
+        // The project ALSO registers a listing with its own restriction. Folding
+        // both into one registry would impose it on the shape.
+        const projectWide = buildRlsReadRegistry([guardedQuery(definePolicies([tenantDocs])), guardedQuery(definePolicies([unarchived]))]);
 
-        expect(composeShapeReadWhere(projectWide, request)).toStrictEqual({});
+        expect(composeShapeReadWhere(projectWide, request)).toStrictEqual({ AND: [{ ownerId: "u1" }, { archived: false }] });
 
         expect(composeShapeReadWhere(shape.rlsRegistry, request)).toStrictEqual({ ownerId: "u1" });
     });
@@ -338,6 +341,71 @@ describe("defineShape — RLS scope is the shape's own use() guards", () => {
         });
 
         expect(composeShapeReadWhere(shape.rlsRegistry, { ...request, rlsRequired: true })).toStrictEqual({ OR: [] });
+    });
+});
+
+/**
+ * Several guards on one shape intersect, exactly like `.use(rls(...))` steps on
+ * a query: the shape must never replicate a row the equivalent query hides.
+ */
+describe("defineShape — several use() guards intersect", () => {
+    const tenantDocs = definePolicy({
+        on: "read",
+        table: "docs",
+        when: ({ auth }) => {
+            return { tenantId: (auth.identity as null | { tenantId?: string })?.tenantId };
+        },
+    });
+    const ownDocs = definePolicy({
+        on: "read",
+        table: "docs",
+        when: ({ auth }) => {
+            return { ownerId: auth.userId };
+        },
+    });
+    const anyDoc = definePolicy({ on: "read", table: "docs", when: () => true });
+    const abstain = definePolicy({ on: "read", table: "docs", when: () => undefined });
+
+    const request = { ctx: {}, identity: { tenantId: "t1" }, rlsRequired: false, shapeWhere: {}, table: "docs", tablePublic: false, userId: "u1" } as const;
+    const shapeOf = (...policies: ReadonlyArray<typeof anyDoc>) =>
+        defineShape({
+            table: "docs",
+            use: policies.map((policy) => rls(definePolicies([policy]))),
+            where: () => {
+                return {};
+            },
+        });
+
+    it("keeps a restricting guard's filter when a sibling guard allows everything", () => {
+        expect.assertions(1);
+
+        expect(composeShapeReadWhere(shapeOf(anyDoc, tenantDocs).rlsRegistry, request)).toStrictEqual({ tenantId: "t1" });
+    });
+
+    it("intersects two restricting guards", () => {
+        expect.assertions(1);
+
+        expect(composeShapeReadWhere(shapeOf(tenantDocs, ownDocs).rlsRegistry, request)).toStrictEqual({
+            AND: [{ tenantId: "t1" }, { ownerId: "u1" }],
+        });
+    });
+
+    it("replicates nothing when one guard denies, whatever the other grants", () => {
+        expect.assertions(1);
+
+        expect(composeShapeReadWhere(shapeOf(abstain, anyDoc).rlsRegistry, request)).toStrictEqual({ OR: [] });
+    });
+
+    it("stays unrestricted when every guard allows everything", () => {
+        expect.assertions(1);
+
+        expect(composeShapeReadWhere(shapeOf(anyDoc, definePolicy({ on: "read", table: "docs", when: () => true })).rlsRegistry, request)).toStrictEqual({});
+    });
+
+    it("leaves a single guard's predicate unchanged", () => {
+        expect.assertions(1);
+
+        expect(composeShapeReadWhere(shapeOf(tenantDocs).rlsRegistry, request)).toStrictEqual({ tenantId: "t1" });
     });
 });
 
