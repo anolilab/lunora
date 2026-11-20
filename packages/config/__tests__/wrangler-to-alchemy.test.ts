@@ -269,6 +269,26 @@ describe("wranglerToAlchemy", () => {
         expect(source).toContain("const binding_my_bucket =");
     });
 
+    it("gives bindings that sanitise to the same identifier distinct consts", () => {
+        expect.assertions(5);
+
+        const { source } = wranglerToAlchemy({
+            ...BASE,
+            d1_databases: [{ binding: "worker", database_name: "w" }],
+            kv_namespaces: [{ binding: "binding_foo_bar" }],
+            queues: { consumers: [{ queue: "inbound" }], producers: [{ binding: "queue_inbound", queue: "other" }] },
+            r2_buckets: [{ binding: "foo-bar", bucket_name: "b" }],
+        });
+
+        expect(source).toContain(`const worker_2 = yield* Cloudflare.D1.Database("worker", { name: "w" });`);
+        expect(source).toContain(`const binding_foo_bar = yield* Cloudflare.R2.Bucket("foo-bar", { name: "b" });`);
+        expect(source).toContain("const binding_foo_bar_2 =");
+        expect(source).toContain(`Cloudflare.Queues.Consumer("inbound-consumer", { queueId: queue_inbound_2.queueId, scriptName: worker.workerName });`);
+        expect(source).toContain(
+            `env: {\n                worker: worker_2,\n                "foo-bar": binding_foo_bar,\n                binding_foo_bar: binding_foo_bar_2,`,
+        );
+    });
+
     it("omits an empty env block rather than emitting an empty object", () => {
         expect.assertions(1);
 

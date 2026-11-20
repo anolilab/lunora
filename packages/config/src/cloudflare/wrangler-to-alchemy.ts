@@ -124,8 +124,11 @@ const SAFE_IDENTIFIER = /^[A-Z_a-z][\w$]*$/u;
 
 const isSafeIdentifier = (name: string): boolean => SAFE_IDENTIFIER.test(name);
 
-/** The local const an emitted resource binds to, unique per binding name. */
+/** The local const an emitted resource would bind to; distinct names can map to the same one (see `Emission.claim`). */
 const localName = (binding: string): string => (isSafeIdentifier(binding) ? binding : `binding_${binding.replaceAll(/\W/gu, "_")}`);
+
+/** Names the emitted program declares itself, which a resource const must not shadow or redeclare. */
+const PROGRAM_NAMES = ["AdoptPolicy", "Cloudflare", "Effect", "Stack", "localState", "worker"];
 
 /**
  * One entry of the worker's `env` object.
@@ -134,7 +137,7 @@ const localName = (binding: string): string => (isSafeIdentifier(binding) ? bind
  * the generated file gets read by humans debugging a deploy, and `DB: DB` is
  * noise.
  */
-const envEntry = (binding: string, value: string = localName(binding)): string => {
+const envEntry = (binding: string, value: string): string => {
     const safe = isSafeIdentifier(binding);
 
     if (safe && value === binding) {
@@ -203,6 +206,12 @@ const UNSUPPORTED_REASONS: Readonly<Record<string, string>> = {
  * `env` entries, and whatever gets reported.
  */
 interface Emission {
+    /**
+     * Reserve a local const named `base`, or `base_2`, `base_3`, … when that is
+     * taken: `foo-bar` and `binding_foo_bar` both sanitise to
+     * `binding_foo_bar`, and a duplicate `const` does not compile.
+     */
+    claim: (base: string) => string;
     env: string[];
     /** Statements after the worker (queue consumers need its script name). */
     post: string[];
@@ -213,17 +222,21 @@ interface Emission {
 /** D1, R2, KV, Queue producers and Vectorize: declared by physical name so `read` adopts an existing one. */
 const emitProvisioned = (config: WranglerConfigShape, out: Emission): Map<string, string> => {
     const queueConsts = new Map<string, string>();
-    const declare = (binding: string | undefined, construct: string, props: string, comment?: string): void => {
+    const declare = (binding: string | undefined, construct: string, props: string, comment?: string): string | undefined => {
         if (binding === undefined) {
-            return;
+            return undefined;
         }
 
         if (comment !== undefined) {
             out.resources.push(`// ${comment}`);
         }
 
-        out.resources.push(`const ${localName(binding)} = yield* Cloudflare.${construct}(${literal(binding)}, ${props});`);
-        out.env.push(envEntry(binding));
+        const name = out.claim(localName(binding));
+
+        out.resources.push(`const ${name} = yield* Cloudflare.${construct}(${literal(binding)}, ${props});`);
+        out.env.push(envEntry(binding, name));
+
+        return name;
     };
 
     for (const d1 of config.d1_databases ?? []) {
@@ -244,11 +257,11 @@ const emitProvisioned = (config: WranglerConfigShape, out: Emission): Map<string
     }
 
     for (const producer of config.queues?.producers ?? []) {
-        if (producer.binding !== undefined && producer.queue !== undefined) {
-            queueConsts.set(producer.queue, localName(producer.binding));
-        }
+        const name = declare(producer.binding, "Queues.Queue", `{ name: ${literal(producer.queue ?? producer.binding)} }`);
 
-        declare(producer.binding, "Queues.Queue", `{ name: ${literal(producer.queue ?? producer.binding)} }`);
+        if (name !== undefined && producer.queue !== undefined) {
+            queueConsts.set(producer.queue, name);
+        }
     }
 
     for (const index of config.vectorize ?? []) {
@@ -356,7 +369,7 @@ const emitConsumers = (config: WranglerConfigShape, queueConsts: Map<string, str
         let queueConst = queueConsts.get(consumer.queue);
 
         if (queueConst === undefined) {
-            queueConst = `queue_${consumer.queue.replaceAll(/\W/gu, "_")}`;
+            queueConst = out.claim(`queue_${consumer.queue.replaceAll(/\W/gu, "_")}`);
             queueConsts.set(consumer.queue, queueConst);
             out.resources.push(`const ${queueConst} = yield* Cloudflare.Queues.Queue(${literal(consumer.queue)}, { name: ${literal(consumer.queue)} });`);
         }
@@ -504,7 +517,26 @@ const workerProps = (config: WranglerConfigShape, workerName: string, env: Reado
  */
 const wranglerToAlchemy = (config: WranglerConfigShape): AlchemyTranslation => {
     const workerName = config.name ?? "worker";
-    const out: Emission = { env: [], post: [], resources: [], unsupported: [] };
+    const claimed = new Set(PROGRAM_NAMES);
+    const out: Emission = {
+        claim: (base) => {
+            let name = base;
+            let suffix = 1;
+
+            while (claimed.has(name)) {
+                suffix += 1;
+                name = `${base}_${String(suffix)}`;
+            }
+
+            claimed.add(name);
+
+            return name;
+        },
+        env: [],
+        post: [],
+        resources: [],
+        unsupported: [],
+    };
 
     const queueConsts = emitProvisioned(config, out);
 
