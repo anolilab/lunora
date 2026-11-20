@@ -25,7 +25,9 @@
  * Alarms are retried when an invocation fails or is cut off
  * (https://developers.cloudflare.com/durable-objects/api/alarms/). A half is
  * marked started before it runs, so a retry that finds it started fails the
- * build (`interrupted`) instead of running a release twice.
+ * build (`interrupted`) instead of running a release twice — unless the cut-off
+ * half was the build and its execution was already stored, which the release
+ * half then takes (`build-interrupted`).
  */
 import { DurableObject } from "cloudflare:workers";
 
@@ -42,7 +44,7 @@ const BUILD_RUN_URL = "https://control-plane.internal/v1/builds/run";
 interface RunnerState {
     job: BuildJob;
     /** The half the next alarm runs. */
-    stage: Exclude<BuildStage, "interrupted">;
+    stage: Exclude<BuildStage, "build-interrupted" | "interrupted">;
     /** Set while that half runs: an alarm that finds it set was cut off. */
     started?: boolean;
 }
@@ -68,7 +70,8 @@ export class BuildRunnerDO extends DurableObject<ControlPlaneEnv> {
             return;
         }
 
-        const stage: BuildStage = state.started === true ? "interrupted" : state.stage;
+        const interrupted: BuildStage = state.stage === "build" ? "build-interrupted" : "interrupted";
+        const stage: BuildStage = state.started === true ? interrupted : state.stage;
 
         await this.ctx.storage.put(STATE_KEY, { ...state, started: true } satisfies RunnerState);
 

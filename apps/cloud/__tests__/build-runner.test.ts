@@ -99,7 +99,40 @@ describe(BuildRunnerDO, () => {
         // The runtime retries the alarm; the half it finds started is not run again.
         await runner.alarm();
 
-        expect(runner.ran).toStrictEqual(["build", "interrupted"]);
+        expect(runner.ran).toStrictEqual(["build", "build-interrupted"]);
+        expect(state.values.has("run")).toBe(false);
+    });
+
+    it("never runs a cut-off release half again", async () => {
+        const state = fakeState();
+        const runner = new TestRunner(state, [
+            () => Promise.resolve({ next: "release" }),
+            () => Promise.reject(new Error("alarm exceeded its wall time")),
+            () => Promise.resolve({ next: null }),
+        ]);
+
+        await runner.start(job);
+        await runner.alarm();
+        await runner.alarm().catch(() => undefined);
+        await runner.alarm();
+
+        expect(runner.ran).toStrictEqual(["build", "release", "interrupted"]);
+    });
+
+    it("goes on to the release when a cut-off build half answers that its execution was stored", async () => {
+        const state = fakeState();
+        const runner = new TestRunner(state, [
+            () => Promise.reject(new Error("alarm exceeded its wall time")),
+            () => Promise.resolve({ next: "release" }),
+            () => Promise.resolve({ next: null }),
+        ]);
+
+        await runner.start(job);
+        await runner.alarm().catch(() => undefined);
+        await runner.alarm();
+        await runner.alarm();
+
+        expect(runner.ran).toStrictEqual(["build", "build-interrupted", "release"]);
         expect(state.values.has("run")).toBe(false);
     });
 
@@ -162,6 +195,31 @@ describe(runBuildStage, () => {
             manifest: { bindings: [] },
         });
         expect(mutations.map((args) => args["line"])).toContain("abc is already built: re-releasing deployment dep_old's stored release");
+    });
+
+    it("releases a build half cut off after it stored its execution, and fails one that stored nothing", async () => {
+        const { input, mutations } = wiring();
+        const objects = new Map<string, string>([
+            ["build-executions/bld_1.json", JSON.stringify({ bundle: "QUJD", bundleHash: "h1", manifest: { bindings: [] } })],
+        ]);
+        const bucket = {
+            delete: () => Promise.resolve(),
+            get: (key: string) => {
+                const value = objects.get(key);
+
+                return Promise.resolve(value === undefined ? null : { text: () => Promise.resolve(value) });
+            },
+            put: () => Promise.resolve(),
+        };
+        const environment = { RELEASES: bucket };
+
+        await expect(runBuildStage({ ...input, environment }, job, "build-interrupted")).resolves.toStrictEqual({ next: "release" });
+        expect(mutations.some((args) => "error" in args)).toBe(false);
+
+        objects.clear();
+
+        await expect(runBuildStage({ ...input, environment }, job, "build-interrupted")).resolves.toStrictEqual({ next: null });
+        expect(mutations.at(-1)).toMatchObject({ buildId: "bld_1", error: expect.stringContaining("cut off mid-run") as string });
     });
 
     it("fails a release whose execution was not kept", async () => {

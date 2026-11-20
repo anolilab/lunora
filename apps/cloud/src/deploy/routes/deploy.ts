@@ -343,7 +343,7 @@ export const createDeployRoutes = (
         handleBuildRunRoute: async (request, environment) => {
             const body = (await request.json().catch(() => null)) as null | { job?: BuildJob; stage?: BuildStage };
 
-            if (!body?.job || (body.stage !== "build" && body.stage !== "release" && body.stage !== "interrupted")) {
+            if (!body?.job || (body.stage !== "build" && body.stage !== "build-interrupted" && body.stage !== "release" && body.stage !== "interrupted")) {
                 return jsonError(400, "job and stage are required");
             }
 

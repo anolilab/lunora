@@ -240,13 +240,22 @@ export type BuildStageResult = { next: "release" } | { next: null };
  * - `release` releases the stored execution and completes the build.
  * - `interrupted` fails a build whose half was cut off mid-run, rather than run
  *   that half — a release, say — twice.
+ * - `build-interrupted` is a build half cut off after it stored its execution,
+ *   before the runner recorded the release half next: that execution is
+ *   complete, so the release half runs next; without one it fails like `interrupted`.
  */
 export const runBuildStage = async (input: BuildWiring, job: BuildJob, stage: BuildStage): Promise<BuildStageResult> => {
     const ports = runnerPortsFor(input, job.runnerId);
     const { build } = job;
     const executions = input.environment.RELEASES ? createBuildExecutionStore(input.environment.RELEASES) : undefined;
 
-    if (stage === "interrupted") {
+    if (stage === "build-interrupted" && (await executions?.get(build.buildId)) != null) {
+        await ports.appendLog(build.buildId, "info", "the build finished before its runner was cut off; releasing it").catch(() => {});
+
+        return { next: "release" };
+    }
+
+    if (stage === "interrupted" || stage === "build-interrupted") {
         const message = "this build's runner was cut off mid-run (a Durable Object alarm runs for at most 15 minutes); push again to rebuild";
 
         await ports.appendLog(build.buildId, "error", message).catch(() => {});
