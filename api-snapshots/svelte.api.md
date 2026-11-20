@@ -764,9 +764,9 @@ function paginatedQuery<F extends FunctionReference>(client: LunoraClient, funct
 ### `presence` (function)
 
 ```ts
-function presence<H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: PresenceOptions<H, L>): PresenceHandle<L>;
+function presence<H extends HeartbeatReference, L extends ListPresentReference>(roomId: Readable<string> | string, options: PresenceOptions<H, L>): PresenceHandle<L>;
 
-function presence<H extends HeartbeatReference, L extends ListPresentReference>(client: LunoraClient, roomId: string, options: PresenceOptions<H, L>): PresenceHandle<L>;
+function presence<H extends HeartbeatReference, L extends ListPresentReference>(client: LunoraClient, roomId: Readable<string> | string, options: PresenceOptions<H, L>): PresenceHandle<L>;
 ```
 
 ### `query` (function)
