@@ -62,16 +62,54 @@ class TestRunner extends BuildRunnerDO {
 }
 
 describe(BuildRunnerDO, () => {
-    it("takes a claimed build and runs it from the next alarm; a second start of the same build is ignored", async () => {
+    it("takes a claimed build and runs it from the next alarm; a repeat hand-off of the same lease is ignored", async () => {
         const state = fakeState();
-        const runner = new TestRunner(state, []);
+        const runner = new TestRunner(state, [() => Promise.resolve({ next: "release" })]);
 
         await runner.start(job);
+        await runner.alarm();
         state.alarmAt = null;
-        await runner.start({ ...job, runnerId: "edge-2" });
+        await runner.start(job);
 
-        expect(state.values.get("run")).toStrictEqual({ job, stage: "build" });
+        expect(state.values.get("run")).toStrictEqual({ job, stage: "release" });
         expect(state.alarmAt).toBeNull();
+    });
+
+    it("restarts a build re-claimed under a new lease, replacing what the stale lease left", async () => {
+        const state = fakeState();
+        const reclaimed: BuildJob = { ...job, runnerId: "edge-2" }; // secret-scanner:allow -- domain field name
+        const runner = new TestRunner(state, [() => Promise.reject(new Error("alarm exceeded its wall time"))]);
+
+        await runner.start(job);
+        // The stale lease's half started and its alarm was never run again.
+        await runner.alarm().catch(() => undefined);
+        state.alarmAt = null;
+        await runner.start(reclaimed);
+
+        expect(state.values.get("run")).toStrictEqual({ job: reclaimed, stage: "build" });
+        expect(state.alarmAt).not.toBeNull();
+    });
+
+    it("leaves a new lease's state alone when the stale lease's half finishes after the hand-off", async () => {
+        const state = fakeState();
+        const reclaimed: BuildJob = { ...job, runnerId: "edge-2" }; // secret-scanner:allow -- domain field name
+        let finish: (result: BuildStageResult) => void = () => {};
+        const runner = new TestRunner(state, [
+            () =>
+                new Promise<BuildStageResult>((resolve) => {
+                    finish = resolve;
+                }),
+        ]);
+
+        await runner.start(job);
+
+        const stale = runner.alarm();
+
+        await runner.start(reclaimed);
+        finish({ next: null });
+        await stale;
+
+        expect(state.values.get("run")).toStrictEqual({ job: reclaimed, stage: "build" });
     });
 
     it("builds in one alarm and releases in the next, then forgets the build", async () => {

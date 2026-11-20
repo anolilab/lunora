@@ -52,9 +52,15 @@ interface RunnerState {
 const STATE_KEY = "run";
 
 export class BuildRunnerDO extends DurableObject<ControlPlaneEnv> {
-    /** Take a claimed build and run it, starting now. Idempotent for the same build: a second start is ignored. */
+    /** Take a claimed build and run it under its lease, starting now. */
     public async start(job: BuildJob): Promise<void> {
-        if ((await this.ctx.storage.get<RunnerState>(STATE_KEY)) !== undefined) {
+        // A repeat hand-off of the same lease is ignored, so it never restarts a
+        // half already running. State left by another lease is replaced: that
+        // lease went stale and `claimNext` re-claimed the build, so its runner
+        // id can no longer write the build and its alarms must not keep it.
+        const stored = await this.ctx.storage.get<RunnerState>(STATE_KEY);
+
+        if (stored?.job.runnerId === job.runnerId) {
             return;
         }
 
@@ -76,6 +82,14 @@ export class BuildRunnerDO extends DurableObject<ControlPlaneEnv> {
         await this.ctx.storage.put(STATE_KEY, { ...state, started: true } satisfies RunnerState);
 
         const result = await this.runStage(state.job, stage);
+
+        // `start` may have handed the build to a new lease while this half ran;
+        // its state and alarm are that lease's, not this one's to advance or forget.
+        const current = await this.ctx.storage.get<RunnerState>(STATE_KEY);
+
+        if (current?.job.runnerId !== state.job.runnerId) {
+            return;
+        }
 
         if (result.next === null) {
             await this.ctx.storage.delete(STATE_KEY);
