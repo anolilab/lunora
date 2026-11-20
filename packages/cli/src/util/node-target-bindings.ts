@@ -4,6 +4,9 @@
  * container refuse and report the same config the same way.
  */
 
+import type { Node as JsonNode } from "jsonc-parser";
+import { findNodeAtLocation, parseTree } from "jsonc-parser";
+
 /** What the host tells the app it runs as: `development` under `lunora dev`, `production` in the deployed container. */
 const WORKER_ENV = "WORKER_ENV";
 
@@ -195,14 +198,17 @@ const refuseEnvCollisions = (sources: ReadonlyArray<{ names: ReadonlyArray<strin
 /** An environment variable name as a container runtime sets one. */
 const ENV_NAME = /^[A-Z_a-z]\w*$/u;
 
-/** Names that act on an object's prototype rather than being an ordinary key; never valid as a var name. */
-const RESERVED_OBJECT_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+/**
+ * The one name that is not an ordinary key: in an object literal, or under a plain assignment, `__proto__` sets the prototype.
+ * `constructor` and `prototype` are ordinary own properties wherever env is built with own-property semantics, as it is.
+ */
+const RESERVED_OBJECT_KEYS: ReadonlySet<string> = new Set(["__proto__"]);
 
 /**
  * `vars`: an object of names and values. Its names follow one of two rules. The container (`"environment"`) lets the
  * environment variable of the same name override each var, so every name must be one a container runtime can set. The dev
  * host (`"binding"`) reads them only from the config and `.dev.vars`, so any wrangler var name is fine there (`API-URL`,
- * `app.mode`) except the ones that act on an object's prototype. Values must be what wrangler accepts: anything JSON but `null`.
+ * `app.mode`) except `__proto__`. Values must be what wrangler accepts: anything JSON but `null`.
  */
 const declaredVariables = (value: unknown, configName: string, names: "binding" | "environment"): Record<string, unknown> => {
     if (value === undefined || value === null) {
@@ -226,7 +232,7 @@ const declaredVariables = (value: unknown, configName: string, names: "binding" 
         }
 
         throw new Error(
-            `--target node puts each var on env under its name, and vars in ${configName} has ${list}, which ${one ? "names" : "name"} a property of every object rather than a var`,
+            `--target node puts each var on env under its name, and vars in ${configName} has ${list}, which ${one ? "sets" : "set"} an object's prototype rather than naming a var`,
         );
     }
 
@@ -274,7 +280,7 @@ const requiredSecretNames = (secrets: unknown, configName: string): string[] => 
     }
 
     // An environment variable name: anything else could never be set on a container, so the server could never start.
-    // Not a prototype name either: a secret named `__proto__` can never be read back out of `.dev.vars` or the environment.
+    // Not `__proto__` either: a secret of that name can never be read back out of `.dev.vars` or the environment.
     const invalid = required.filter((name) => typeof name !== "string" || !ENV_NAME.test(name) || RESERVED_OBJECT_KEYS.has(name));
 
     if (invalid.length > 0) {
@@ -284,6 +290,79 @@ const requiredSecretNames = (secrets: unknown, configName: string): string[] => 
     }
 
     return required as string[];
+};
+
+/**
+ * Every `__proto__` key under `vars` (the top level's, and the selected environment's), at any depth, read from the config's raw
+ * syntax: parsing applies such a key as a prototype instead of keeping it, so after parsing it cannot be seen and its value is
+ * silently lost.
+ */
+const prototypeKeysUnderVariables = (text: string, environment?: string): string[] => {
+    const root = parseTree(text);
+    const found: string[] = [];
+
+    const walk = (node: JsonNode, path: string): void => {
+        for (const child of node.children ?? []) {
+            if (child.type === "property") {
+                const [key, value] = child.children ?? [];
+                const name = String(key?.value);
+                const here = `${path}.${name}`;
+
+                if (name === "__proto__") {
+                    found.push(here);
+                }
+
+                if (value !== undefined) {
+                    walk(value, here);
+                }
+            } else {
+                walk(child, path);
+            }
+        }
+    };
+
+    const scopes: [string[], string][] = [
+        [["vars"], "vars"],
+        ...(environment === undefined ? [] : [[["env", environment, "vars"], `env.${environment}.vars`] as [string[], string]]),
+    ];
+
+    for (const [location, label] of scopes) {
+        const variables = root === undefined ? undefined : findNodeAtLocation(root, location);
+
+        if (variables !== undefined) {
+            walk(variables, label);
+        }
+    }
+
+    return found;
+};
+
+/** Refuse a `__proto__` key under `vars`, which parsing would turn into a prototype and lose (see {@link prototypeKeysUnderVariables}). */
+const refusePrototypeKeys = (text: string, configName: string, environment?: string): void => {
+    const prototypeKeys = prototypeKeysUnderVariables(text, environment);
+
+    if (prototypeKeys.length > 0) {
+        throw new Error(
+            `--target node passes vars to the worker as data, and ${configName} uses __proto__ as a key at ${prototypeKeys.join(", ")}: parsing applies it as a prototype instead of keeping it, so its value would silently be lost. Rename the key`,
+        );
+    }
+};
+
+/**
+ * The `hyperdrive` binding names, at most one: both Node hosts build the binding from the process's one `DATABASE_URL`, so a
+ * second binding would silently reach the same database as the first.
+ */
+const hyperdriveBindingNames = (value: unknown, configName: string): string[] => {
+    const names = bindingNames(value, "hyperdrive", configName);
+
+    // A second binding would need a naming scheme for its URL that nothing reads yet.
+    if (names.length > 1) {
+        throw new Error(
+            `--target node builds the Hyperdrive binding from DATABASE_URL, so it serves one binding, and ${configName} declares ${names.join(", ")}`,
+        );
+    }
+
+    return names;
 };
 
 /** Whether a declared section binds anything: an empty list or object is no binding. */
@@ -306,7 +385,18 @@ const isDeclared = (value: unknown): boolean => {
  */
 const unboundExports = (exportsMap: unknown): string[] =>
     isRecord(exportsMap)
-        ? Object.entries(exportsMap).flatMap(([name, entry]) => (isRecord(entry) && typeof entry.type === "string" ? [`exports.${name} (${entry.type})`] : []))
+        ? Object.entries(exportsMap).flatMap(([name, entry]) => {
+              if (!isRecord(entry) || typeof entry.type !== "string") {
+                  return [];
+              }
+
+              // The worker both hosts serve is the entry module's default export: declaring it is declaring what runs.
+              if (entry.type === "worker" && name === "default") {
+                  return [];
+              }
+
+              return [`exports.${name} (${entry.type})`];
+          })
         : [];
 
 /**
@@ -347,11 +437,13 @@ export {
     bindingNames,
     declaredVariables,
     durableObjectEntries,
+    hyperdriveBindingNames,
     isDeclared,
     MAIL_QUEUE_NAME,
     mailQueueBindings,
     queueEntries,
     refuseEnvCollisions,
+    refusePrototypeKeys,
     refuseWorkerEnvOverride,
     requiredSecretNames,
     unboundSections,

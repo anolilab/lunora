@@ -1163,7 +1163,8 @@ export default crons;
             writeFixture(workdir, {
                 assets: { binding: "ASSETS", directory: "./public" },
                 // Cache options for named entrypoints are configuration; a typed entry declares a workflow nothing here runs.
-                exports: { Nightly: { name: "nightly", type: "workflow" }, Reports: { cache: { enabled: true } } },
+                // The served worker itself (`default`, type worker) is neither.
+                exports: { default: { type: "worker" }, Nightly: { name: "nightly", type: "workflow" }, Reports: { cache: { enabled: true } } },
                 durable_objects: {
                     bindings: [
                         { class_name: "ShardDO", name: "SHARD" },
@@ -1177,7 +1178,7 @@ export default crons;
             try {
                 expect(dev.warnings.join("\n")).toMatch(/not bound[^\n]*assets/u);
                 expect(dev.warnings.join("\n")).toMatch(/durable_objects\.ROOMS/u);
-                expect(dev.warnings.join("\n")).not.toMatch(/exports\.Reports/u);
+                expect(dev.warnings.join("\n")).not.toMatch(/exports\.(?:Reports|default)/u);
                 expect(dev.warnings.join("\n")).toMatch(/not bound[^\n]*exports\.Nightly \(workflow\)/u);
             } finally {
                 await dev.stop();
@@ -1358,12 +1359,22 @@ export default crons;
             await expect(startOverConfig({ secrets: { required: ["__proto__"] } })).rejects.toThrow(/secrets\.required lists "__proto__"/u);
         });
 
-        it("accepts any wrangler var name but a prototype one, since dev reads vars only from the config", async () => {
-            expect.assertions(2);
+        it("refuses a __proto__ key under vars, which parsing would turn into a prototype and lose", async () => {
+            expect.assertions(1);
 
-            await expect(startOverConfig({ vars: { constructor: "x" } })).rejects.toThrow(/names a property of every object/u);
+            writeFixture(workdir, { vars: { LIMIT: "3" } });
+            // Written into the raw text: a JavaScript object literal cannot carry a __proto__ key into JSON.stringify.
+            editFile(join(workdir, "wrangler.jsonc"), /"vars":\{/u, `"vars":{"__proto__":"x",`);
 
-            writeFixture(workdir, { vars: { "API-URL": "https://api.local", "app.mode": "demo" } });
+            await expect(
+                startNodeDevWorker({ codegenWatch: false, logger: milestoneLogger().logger, port: await findAvailablePort(18_870), projectRoot: workdir }),
+            ).rejects.toThrow(/uses __proto__ as a key at vars\.__proto__/u);
+        });
+
+        it("hands any other wrangler var name to the worker as a string, constructor and prototype included", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { vars: { "API-URL": "https://api.local", "app.mode": "demo", constructor: "c", prototype: "p" } });
 
             let env: Record<string, unknown> | undefined;
             const platform: PlatformNode = {
@@ -1377,11 +1388,33 @@ export default crons;
             const dev = await startWorker({ platform });
 
             try {
-                // The container's environment-variable rule is for overrides from its environment; dev has none.
-                expect(env).toMatchObject({ "API-URL": "https://api.local", "app.mode": "demo" });
+                // Own string properties, not what Object.prototype carries under those names.
+                expect(
+                    Object.fromEntries(
+                        ["API-URL", "app.mode", "constructor", "prototype"].map((name) => [
+                            name,
+                            env !== undefined && Object.hasOwn(env, name) ? env[name] : null,
+                        ]),
+                    ),
+                ).toStrictEqual({ "API-URL": "https://api.local", "app.mode": "demo", constructor: "c", prototype: "p" });
             } finally {
                 await dev.stop();
             }
+        });
+
+        it("refuses a second Hyperdrive binding, which would reach the same DATABASE_URL as the first", async () => {
+            expect.assertions(1);
+
+            await expect(
+                startOverConfig({
+                    hyperdrive: [
+                        { binding: "PRIMARY_DB", id: "primary" },
+                        { binding: "REPORTING_DB", id: "reporting" },
+                    ],
+                }),
+            ).rejects.toThrow(
+                /builds the Hyperdrive binding from DATABASE_URL, so it serves one binding, and wrangler\.jsonc declares PRIMARY_DB, REPORTING_DB/u,
+            );
         });
 
         it("binds a Hyperdrive binding named __proto__ as an own env property", async () => {

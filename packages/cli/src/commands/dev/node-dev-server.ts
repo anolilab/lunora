@@ -40,9 +40,11 @@ import {
     bindingNames,
     declaredVariables,
     durableObjectEntries,
+    hyperdriveBindingNames,
     MAIL_QUEUE_NAME,
     mailQueueBindings,
     refuseEnvCollisions,
+    refusePrototypeKeys,
     refuseWorkerEnvOverride,
     requiredSecretNames,
     unboundSections,
@@ -146,6 +148,8 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
     }
 
     const configName = relative(projectRoot, configPath);
+
+    refusePrototypeKeys(readFileSync(configPath, "utf8"), configName, environment);
     const durableObjects: DurableObjectBinding[] = [];
     const external: string[] = [];
 
@@ -160,7 +164,7 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
         }
     }
 
-    const hyperdrive = bindingNames(view.hyperdrive, "hyperdrive", configName);
+    const hyperdrive = hyperdriveBindingNames(view.hyperdrive, configName);
     const secrets = bindingNames(view.secrets_store_secrets, "secrets_store_secrets", configName);
     const scope = view as { secrets?: unknown; vars?: unknown };
     // Read as the container reads them: an absent field is no filter, a malformed one is refused by name rather than taken

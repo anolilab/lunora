@@ -18,18 +18,18 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { COMPOSED_WORKER_ENTRY, DURABLE_OBJECT_BINDINGS, resolveSchemaDirectory } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
-import type { Node as JsonNode } from "jsonc-parser";
-import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
 import {
     bindingNames,
     declaredVariables,
     durableObjectEntries,
+    hyperdriveBindingNames,
     isDeclared,
     MAIL_QUEUE_NAME,
     mailQueueBindings,
     queueEntries,
     refuseEnvCollisions,
+    refusePrototypeKeys,
     refuseWorkerEnvOverride,
     requiredSecretNames,
     unboundSections,
@@ -182,42 +182,6 @@ const stringMap = (value: unknown, section: string, configName: string): Record<
     return value as Record<string, string>;
 };
 
-/**
- * Every `__proto__` key under `vars`, at any depth, read from the config's raw syntax: parsing applies such a key as a
- * prototype instead of keeping it, so after parsing it cannot be seen and its value is silently lost.
- */
-const prototypeKeysUnderVariables = (text: string): string[] => {
-    const root = parseTree(text);
-    const variables = root === undefined ? undefined : findNodeAtLocation(root, ["vars"]);
-    const found: string[] = [];
-
-    const walk = (node: JsonNode, path: string): void => {
-        for (const child of node.children ?? []) {
-            if (child.type === "property") {
-                const [key, value] = child.children ?? [];
-                const name = String(key?.value);
-                const here = `${path}.${name}`;
-
-                if (name === "__proto__") {
-                    found.push(here);
-                }
-
-                if (value !== undefined) {
-                    walk(value, here);
-                }
-            } else {
-                walk(child, path);
-            }
-        }
-    };
-
-    if (variables !== undefined) {
-        walk(variables, "vars");
-    }
-
-    return found;
-};
-
 /** `triggers.crons`: each a cron expression string. */
 const cronTriggerList = (value: unknown, configName: string): string[] => {
     const crons = isRecord(value) ? value.crons : undefined;
@@ -294,13 +258,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         throw new Error(`--target node bundles the worker entry \`main\` names, and ${configName} has no \`main\``);
     }
 
-    const prototypeKeys = prototypeKeysUnderVariables(readFileSync(configPath, "utf8"));
-
-    if (prototypeKeys.length > 0) {
-        throw new Error(
-            `--target node passes vars to the worker as data, and ${configName} uses __proto__ as a key at ${prototypeKeys.join(", ")}: parsing applies it as a prototype instead of keeping it, so its value would silently be lost. Rename the key`,
-        );
-    }
+    refusePrototypeKeys(readFileSync(configPath, "utf8"), configName);
 
     const refusal = frameworkRefusal(projectRoot, parsed.main, configName);
 
@@ -324,14 +282,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         throw new Error(`--target node serves the app's shard Durable Object, and ${configName} declares no durable_objects binding of its own`);
     }
 
-    const hyperdrive = bindingNames(parsed.hyperdrive, "hyperdrive", configName);
-
-    // One process has one DATABASE_URL; a second binding would need a naming scheme nothing reads yet.
-    if (hyperdrive.length > 1) {
-        throw new Error(
-            `--target node builds the Hyperdrive binding from DATABASE_URL, so it serves one binding, and the app declares ${hyperdrive.join(", ")}`,
-        );
-    }
+    const hyperdrive = hyperdriveBindingNames(parsed.hyperdrive, configName);
 
     const storeSecrets = bindingNames(parsed.secrets_store_secrets, "secrets_store_secrets", configName);
     const reserved = storeSecrets.filter((name) => name.startsWith(RUNTIME_ENV_PREFIX));
@@ -511,7 +462,14 @@ const logError = (message, error) => {
     console.error("lunora: %s", message, error);
 };
 
-const missing = CONFIG.requiredEnv.filter((name) => process.env[name] === undefined || process.env[name] === "");
+// Own entries only, read and written: process.env and a plain env both inherit names such as constructor from Object.prototype,
+// so a bare lookup would find a function for an unset variable, and a plain assignment of __proto__ would set a prototype.
+const readEnvironment = (name) => (Object.hasOwn(process.env, name) ? process.env[name] : undefined);
+const setEnv = (name, value) => {
+    Object.defineProperty(env, name, { configurable: true, enumerable: true, value, writable: true });
+};
+
+const missing = CONFIG.requiredEnv.filter((name) => readEnvironment(name) === undefined || readEnvironment(name) === "");
 
 if (missing.length > 0) {
     console.error("lunora: refusing to start, these required environment variables are not set: %s", missing.join(", "));
@@ -584,17 +542,19 @@ const declaredNames = new Set([
 ]);
 
 for (const name of declaredNames) {
-    const value = process.env[name];
+    const value = readEnvironment(name);
 
     if (value !== undefined) {
-        env[name] = value;
+        setEnv(name, value);
     }
 }
 
-Object.assign(env, createNodeSecretBindings(CONFIG.storeSecrets));
+for (const [name, binding] of Object.entries(createNodeSecretBindings(CONFIG.storeSecrets))) {
+    setEnv(name, binding);
+}
 
 if (CONFIG.hyperdrive !== undefined) {
-    env[CONFIG.hyperdrive] = createNodeHyperdrive(process.env.DATABASE_URL);
+    setEnv(CONFIG.hyperdrive, createNodeHyperdrive(process.env.DATABASE_URL));
 }
 
 const instanceFactory = (className) => {
@@ -658,17 +618,17 @@ for (const binding of CONFIG.durableObjects) {
             ...(CONFIG.mailQueues.length === 0 ? {} : { mail: { env, path: join(dataDirectory, "mail.sqlite3") } }),
             path: join(dataDirectory, "platform.sqlite3"),
         });
-        env[binding.name] = createNodeShardNamespace(platform.directory);
+        setEnv(binding.name, createNodeShardNamespace(platform.directory));
 
         // Every lunora-mail producer binding, as on Cloudflare: \`mailer.queue()\` writes to the platform's durable mail queue.
         for (const name of CONFIG.mailQueues) {
-            env[name] = platform.mail.queue;
+            setEnv(name, platform.mail.queue);
         }
     } else {
         const registry = createNodeShardRegistry(handlers);
 
         registries.push(registry);
-        env[binding.name] = createNodeShardNamespace(registry.directory);
+        setEnv(binding.name, createNodeShardNamespace(registry.directory));
     }
 }
 
