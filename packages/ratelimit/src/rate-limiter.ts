@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { ipRateLimitKey } from "../../../shared/ip-rate-limit-key";
-import { availableAt, evaluate, retentionMs } from "./algorithms";
+import { availableAt, enforcedCapacity, evaluate, retentionMs } from "./algorithms";
 import RateLimitError from "./error";
 import { createMemoryStore } from "./store";
 import type { RateLimitArgs, RateLimitConfig, RateLimitConfigMap, RateLimitStatus, RateLimitStore } from "./types";
@@ -164,8 +164,16 @@ class RateLimiter<Names extends string = string> {
                 throw new LunoraError("INTERNAL", `rate limit "${name}": rate must be a positive number`);
             }
 
-            if (config.capacity !== undefined && (!Number.isFinite(config.capacity) || config.capacity < 0)) {
-                throw new LunoraError("INTERNAL", `rate limit "${name}": capacity must be a non-negative number`);
+            // `count` is a positive integer, so a ceiling below 1 refuses every
+            // call as caller misuse (a 500 per request) instead of failing here.
+            if (config.capacity !== undefined && (!Number.isFinite(config.capacity) || config.capacity < 1)) {
+                throw new LunoraError("INTERNAL", `rate limit "${name}": capacity must be at least 1`);
+            }
+
+            // `rate` is the ceiling of a sliding window, and of a limit with no
+            // `capacity`; anywhere else a fractional rate is a slow refill.
+            if (enforcedCapacity(config) < 1) {
+                throw new LunoraError("INTERNAL", `rate limit "${name}": rate must be at least 1 for a sliding window or a limit without capacity`);
             }
         }
     }
