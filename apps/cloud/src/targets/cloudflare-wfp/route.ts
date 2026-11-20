@@ -2,6 +2,7 @@ import { BoundedCache } from "../../plans/bounded-cache";
 import type { PlanFacts } from "../../plans/plan-facts";
 import { normalizeFacts } from "../../plans/plan-facts";
 import type { PlanResolverOptions } from "../../plans/plan-resolver";
+import { LOOKUP_FAILURE_BACKOFF_MS, PLAN_LOOKUP_TIMEOUT_MS } from "../../plans/plan-resolver";
 import readJson from "../../read-json";
 
 /**
@@ -105,12 +106,19 @@ const toCustomDomainRoute = (data: unknown): CustomDomainRoute | null => {
  * blips resolve to `null` (→ 404 at the dispatcher): a hostname is never routed
  * on a guess. Keyed by the hostname it was resolved for; a hostname that moves
  * to another organization is re-resolved within the TTL.
+ *
+ * A lookup is bounded by {@link PLAN_LOOKUP_TIMEOUT_MS}, and one that times out or
+ * cannot connect stops lookups for {@link LOOKUP_FAILURE_BACKOFF_MS}, as the plan
+ * resolver does: a hung control plane is refused at once rather than holding every
+ * custom-domain request for the timeout.
  */
 export const createCustomDomainResolver = (options: PlanResolverOptions): ((hostname: string) => Promise<CustomDomainRoute | null>) => {
     const fetchImpl = options.fetch ?? fetch;
     const now = options.now ?? Date.now;
     const ttl = options.ttlMs ?? 60_000;
+    const timeoutMs = options.lookupTimeoutMs ?? PLAN_LOOKUP_TIMEOUT_MS;
     const cache = new BoundedCache<{ expires: number; route: CustomDomainRoute | null }>();
+    let lastFailureAt: number | undefined;
 
     return async (hostname: string): Promise<CustomDomainRoute | null> => {
         const cached = cache.get(hostname);
@@ -119,9 +127,18 @@ export const createCustomDomainResolver = (options: PlanResolverOptions): ((host
             return cached.route;
         }
 
+        if (lastFailureAt !== undefined && now() - lastFailureAt < LOOKUP_FAILURE_BACKOFF_MS) {
+            return null;
+        }
+
         try {
             const url = `${options.controlPlaneUrl}/v1/tenants/custom-domain?host=${encodeURIComponent(hostname)}`;
-            const response = await fetchImpl(url, { headers: { authorization: `Bearer ${options.controlPlaneToken}` } });
+            const response = await fetchImpl(url, {
+                headers: { authorization: `Bearer ${options.controlPlaneToken}` },
+                signal: AbortSignal.timeout(timeoutMs),
+            });
+
+            lastFailureAt = undefined;
 
             if (!response.ok) {
                 return null;
@@ -133,6 +150,8 @@ export const createCustomDomainResolver = (options: PlanResolverOptions): ((host
 
             return route;
         } catch {
+            lastFailureAt = now();
+
             return null;
         }
     };

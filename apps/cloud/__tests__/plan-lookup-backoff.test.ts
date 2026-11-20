@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createPlanResolver, LOOKUP_FAILURE_BACKOFF_MS, UNAVAILABLE_PLAN } from "../src/plans/plan-resolver";
+import { createCustomDomainResolver } from "../src/targets/cloudflare-wfp/route";
 import { answer, down, HOUR, spiedStore, T0 } from "./_helpers/plan-fixtures";
 
 describe("plan lookup failure backoff", () => {
@@ -127,5 +128,43 @@ describe("plan lookup failure backoff", () => {
         // Inside the window the lookup is skipped and the never-seen tenant refused; once it passes, asked again.
         expect(backedOff).toStrictEqual({ plan: UNAVAILABLE_PLAN });
         expect(fetch).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe("custom-domain lookup bound", () => {
+    /** Never answers on its own; rejects only when the signal aborts, so only a timeout signal settles it. */
+    const hung = vi.fn<typeof globalThis.fetch>(
+        (_url, init) =>
+            new Promise<Response>((_resolve, reject) => {
+                init?.signal?.addEventListener("abort", () => {
+                    reject(new Error("aborted by the lookup timeout"));
+                });
+            }),
+    );
+
+    it("aborts a hung lookup and refuses the hostname", async () => {
+        const resolve = createCustomDomainResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch: hung, lookupTimeoutMs: 10, now: () => T0 });
+
+        await expect(resolve("shop.example.com")).resolves.toBeNull();
+        expect(hung.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it("refuses without a lookup for the backoff window after one failed, then asks again", async () => {
+        const clock = { now: T0 };
+        const fetch = vi
+            .fn<typeof globalThis.fetch>()
+            .mockImplementationOnce(down)
+            .mockImplementation(() => answer({ scriptName: "shop" }));
+        const resolve = createCustomDomainResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch, now: () => clock.now });
+
+        await resolve("shop.example.com");
+        clock.now += LOOKUP_FAILURE_BACKOFF_MS - 1;
+        const backedOff = await resolve("other.example.com");
+
+        clock.now += 1;
+
+        expect(backedOff).toBeNull();
+        expect(fetch).toHaveBeenCalledTimes(1);
+        await expect(resolve("other.example.com")).resolves.toStrictEqual({ scriptName: "shop" });
     });
 });
