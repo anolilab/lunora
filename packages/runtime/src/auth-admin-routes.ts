@@ -242,6 +242,8 @@ const NAMED_TOKEN_AUTH_METHODS: ReadonlySet<keyof AuthAdmin> = new Set<keyof Aut
 
 /** HTTP status for a known client-input `authAdmin` error code; an unmapped code is a backend failure and reads 500. */
 const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
+    API_KEY_NOT_FOUND: 404,
+    API_KEY_STORAGE_UNSUPPORTED: 409,
     INVITER_REQUIRED: 400,
     LAST_ORGANIZATION_OWNER: 409,
     MEMBERSHIP_CHANGED: 409,
