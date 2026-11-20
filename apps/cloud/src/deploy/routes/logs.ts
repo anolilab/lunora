@@ -4,6 +4,12 @@ import { constantTimeEqual } from "../../security/constant-time-equal";
 import type { RouterEnv } from "./shared";
 import { jsonError, nonEmptyString, readJsonObject, rejected, requireContext } from "./shared";
 
+/**
+ * Largest log batch body. `logs.ingest` takes up to 500 lines of up to 4 KiB of message
+ * each, plus their fields, so a full batch is well past the default JSON cap.
+ */
+export const MAX_LOG_BATCH_BYTES = 4 * 1024 * 1024;
+
 /** One line in a {@link LogsBody} batch — the framework's `type:"log"` event minus the transport keys (`logs.ingest` validates it). */
 interface LogsLine {
     createdAt?: number;
@@ -26,7 +32,7 @@ interface LogsLine {
 export const handleLogsIngestRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    const body = await readJsonObject(request);
+    const body = await readJsonObject(request, MAX_LOG_BATCH_BYTES);
     const deployKey = nonEmptyString(body?.["deployKey"]);
     const organizationId = nonEmptyString(body?.["organizationId"]);
     const scriptName = nonEmptyString(body?.["scriptName"]);
@@ -79,7 +85,8 @@ export const handleLogsTailRoute = async (request: Request, environment: RouterE
         return jsonError(403, "invalid tail secret");
     }
 
-    const body = await readJsonObject(request);
+    // One tail invocation's events, grouped per script: several full batches at once.
+    const body = await readJsonObject(request, 4 * MAX_LOG_BATCH_BYTES);
     const batches: unknown = body?.["batches"];
 
     if (!Array.isArray(batches)) {

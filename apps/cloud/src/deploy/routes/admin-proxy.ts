@@ -5,11 +5,14 @@ import { resolveAdminToken } from "../admin-token";
 import type { RouterEnv } from "./shared";
 import { jsonError, readJsonObject, rejected, requireContext } from "./shared";
 
+/** The tenant runtime refuses a body over 1 MiB; this lets one through with its proxy envelope around it. */
+const MAX_ADMIN_BODY_BYTES = 2 * 1024 * 1024;
+
 /** `POST /v1/admin` — hosted-studio admin proxy to a tenant deployment (§3). */
 export const handleAdminRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    const adminBody = await readJsonObject(request);
+    const adminBody = await readJsonObject(request, MAX_ADMIN_BODY_BYTES);
     const organizationId = adminBody?.["organizationId"];
     const deploymentId = adminBody?.["deploymentId"];
     // The target is resolved for this verb and path: `adminTarget` decides the role from them.

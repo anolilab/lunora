@@ -13,6 +13,7 @@
  * exactly what a direct HTTP caller gets — the MCP layer grants no privilege.
  */
 import type { RegisteredRoute } from "../deploy/route-registry";
+import { MAX_LOG_BATCH_BYTES } from "../deploy/routes/logs";
 import { readJsonObject } from "../deploy/routes/shared";
 import type { McpTool } from "./tools";
 import { mcpToolRoutes } from "./tools";
@@ -58,7 +59,8 @@ export const createMcpRouteHandler = <Environment>(deps: McpHandlerDeps<Environm
             return deps.jsonError(403, "invalid or revoked deploy key");
         }
 
-        const rpc = (await readJsonObject(request)) as JsonRpcRequest | undefined;
+        // A tool call carries the body of the route it relays to, the largest of which is a log batch.
+        const rpc = (await readJsonObject(request, MAX_LOG_BATCH_BYTES)) as JsonRpcRequest | undefined;
 
         if (!rpc) {
             return deps.jsonError(400, "invalid JSON body");

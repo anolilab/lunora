@@ -48,3 +48,11 @@ export const declaresOver = (request: Request, maxBytes: number): boolean => {
 
     return Number.isFinite(declared) && declared > maxBytes;
 };
+
+/** A body past its cap. Thrown by `readJsonObject`; the route table's `withContext` answers it 413. */
+export class BodyTooLargeError extends Error {
+    public constructor(maxBytes: number) {
+        super(`request body exceeds ${String(maxBytes)} bytes`);
+        this.name = "BodyTooLargeError";
+    }
+}

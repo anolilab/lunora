@@ -18,6 +18,7 @@ import type { ExecutionContextLike } from "@lunora/runtime";
 
 import type { OffsiteEnvironment } from "../../backup/offsite";
 import type { TenantBackupBucket } from "../../backup/tenant-transport";
+import { BodyTooLargeError, declaresOver, readCappedBytes } from "../../lib/read-capped-bytes";
 import type { TargetEnvironment } from "../../targets/registry";
 import type { ReleaseBucket } from "../release-store";
 
@@ -79,14 +80,36 @@ export type RouterEnv = {
 export const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 
 /**
- * The request's JSON body when it is an object, else `undefined`.
+ * Largest JSON body a control-plane route reads unless it names its own cap. The
+ * routes on it carry ids, names and one sealed-at-the-edge value of at most
+ * `LIMITS.secret` (8 KiB), so this leaves wide headroom while one shared Worker
+ * never buffers a tenant's arbitrarily large body.
+ */
+export const MAX_JSON_BODY_BYTES = 64 * 1024;
+
+/**
+ * The request's JSON body when it is an object, else `undefined`. Throws
+ * {@link BodyTooLargeError} once the body passes `maxBytes`, which is held while
+ * the body streams in, so nothing past it is buffered.
  *
  * `request.json()` resolves `null`, an array or a scalar just as readily as an
  * object, and a handler that destructures or reads fields off one throws a
  * `TypeError` the router turns into a 500 instead of the caller's 400.
  */
-export const readJsonObject = async (request: Request): Promise<Record<string, unknown> | undefined> => {
-    const body: unknown = await request.json().catch(() => undefined);
+export const readJsonObject = async (request: Request, maxBytes: number = MAX_JSON_BODY_BYTES): Promise<Record<string, unknown> | undefined> => {
+    const bytes = declaresOver(request, maxBytes) ? undefined : await readCappedBytes(request.body, maxBytes);
+
+    if (bytes === undefined) {
+        throw new BodyTooLargeError(maxBytes);
+    }
+
+    let body: unknown;
+
+    try {
+        body = JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+        return undefined;
+    }
 
     return typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
 };
@@ -128,7 +151,7 @@ export const requireContext = (environment: RouterEnv): NonNullable<RouterEnv["_
 };
 
 /**
- * Wrap a handler so a missing context answers 500 instead of throwing.
+ * Wrap a handler so a missing context answers 500, and an oversized body 413, instead of throwing.
  *
  * Applied at the route table rather than inside each handler, which is what lets
  * every handler read the context as a plain non-null value.
@@ -141,6 +164,10 @@ export const withContext =
         } catch (error) {
             if (error instanceof MissingContextError) {
                 return jsonError(500, error.message);
+            }
+
+            if (error instanceof BodyTooLargeError) {
+                return jsonError(413, error.message);
             }
 
             throw error;
