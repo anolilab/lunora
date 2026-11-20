@@ -229,8 +229,9 @@ const withOtlpIngest = async (
 
     try {
         payload = await readOtlpBody(request, signal);
-    } catch {
-        return jsonError(400, "malformed or oversized OTLP body");
+    } catch (error) {
+        // 413 is what a collector reads as "split the batch", 400 as "drop it".
+        return error instanceof OtlpBodyTooLargeError ? jsonError(413, error.message) : jsonError(400, "malformed OTLP body");
     }
 
     try {

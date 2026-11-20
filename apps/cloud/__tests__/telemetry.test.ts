@@ -2,7 +2,7 @@ import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { describe, expect, it, vi } from "vitest";
 
-import { MAX_OTLP_BODY_BYTES } from "../src/deploy/routes/otlp";
+import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute, MAX_OTLP_BODY_BYTES } from "../src/deploy/routes/otlp";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import { handleTelemetryRoute } from "../src/deploy/routes/telemetry";
 import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetry/alerts";
@@ -631,6 +631,28 @@ describe(handleTelemetryRoute, () => {
         const response = await handleTelemetryRoute(request, environment(runMutation));
 
         expect(response.status).toBe(413);
+        expect(runMutation).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["traces", handleOtlpTracesRoute],
+        ["logs", handleOtlpLogsRoute],
+        ["metrics", handleOtlpMetricsRoute],
+    ])("answers 413 on the standard OTLP %s endpoint to a body past the cap, and 400 to a malformed one", async (signal, handle) => {
+        const runMutation = vi.fn<() => Promise<unknown>>();
+        const runQuery = vi.fn<() => Promise<unknown>>(() => Promise.resolve({ organizationId: "org_1" }));
+        const otlpEnvironment = {
+            __lunoraCtx: { runAction: vi.fn<() => Promise<unknown>>(), runMutation, runQuery },
+        } as unknown as RouterEnv;
+        const headers = { authorization: "Bearer key", "content-type": "application/json" };
+        // Node's fetch requires `duplex` for a stream body; workerd's `RequestInit` type does not declare it.
+        const init: RequestInit & { duplex: "half" } = { body: streamedBody(MAX_OTLP_BODY_BYTES + 1), duplex: "half", headers, method: "POST" };
+
+        const oversized = await handle(new Request(`https://control.lunora.app/v1/${signal}`, init), otlpEnvironment);
+        const malformed = await handle(new Request(`https://control.lunora.app/v1/${signal}`, { body: "{", headers, method: "POST" }), otlpEnvironment);
+
+        expect(oversized.status).toBe(413);
+        expect(malformed.status).toBe(400);
         expect(runMutation).not.toHaveBeenCalled();
     });
 
