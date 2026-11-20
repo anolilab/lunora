@@ -44,6 +44,14 @@ export const HELD_RETRY_DELAY_SECONDS = 43_200;
  */
 export const OWNERLESS_RETRY_DELAY_SECONDS = 300;
 
+/**
+ * How long a forward the tenant answered with something other than a queue reply waits before it
+ * is offered again. That reply comes from a route that is not the queue endpoint (a catch-all, or a
+ * runtime without `/_lunora/queue`), so no handler ran and a redeploy is what fixes it: retried at
+ * once, the messages would spend their `max_retries` before one could land.
+ */
+export const UNREADABLE_REPLY_RETRY_DELAY_SECONDS = OWNERLESS_RETRY_DELAY_SECONDS;
+
 /** A queue batch the platform consumer drains (Cloudflare `MessageBatch`, minimally typed). */
 export interface QueueBatchLike {
     messages: ReadonlyArray<{ ack: () => void; attempts?: number; body: unknown; id: string; retry: (options?: { delaySeconds?: number }) => void }>;
@@ -103,11 +111,24 @@ const retryDelayOf = (delays: unknown, id: string): number | undefined => {
     return typeof delay === "number" && Number.isFinite(delay) && delay > 0 ? Math.min(Math.ceil(delay), HELD_RETRY_DELAY_SECONDS) : undefined;
 };
 
+/** The tenant's queue reply, or `undefined` for a body the queue endpoint never sends. */
+const toQueueReply = (data: unknown): { retry: string[]; retryDelays?: unknown } | undefined => {
+    const body = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
+    const { retry, retryDelays } = body;
+
+    if (!Array.isArray(retry) || !retry.every((id): id is string => typeof id === "string")) {
+        return undefined;
+    }
+
+    return retryDelays === undefined || (typeof retryDelays === "object" && retryDelays !== null) ? { retry, retryDelays } : undefined;
+};
+
 /**
  * Forward a batch to its tenant's `/_lunora/queue` endpoint, gated by its admin
  * token, in as many requests as its size needs ({@link forwardBodies}). Returns
  * the message ids to retry, each with the delay it asked for: those the tenant
- * asked to retry, and every message of a request that failed (with none).
+ * asked to retry, every message of a request that failed (with none), and every
+ * message of a reply that is not a queue reply (with {@link UNREADABLE_REPLY_RETRY_DELAY_SECONDS}).
  *
  * The tenant knows its queues by declared name and binding, never by this
  * platform's per-project queue name, so the alias prefix is stripped and the
@@ -130,12 +151,22 @@ const dispatchQueueBatch = async (
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
-            const result = await readJson<{ retry?: unknown; retryDelays?: unknown }>(response);
+            const result = toQueueReply(await readJson<unknown>(response));
 
-            for (const id of Array.isArray(result.retry) ? result.retry : []) {
-                if (typeof id === "string") {
-                    retry.set(id, retryDelayOf(result.retryDelays, id));
+            if (result === undefined) {
+                // Read as "retry nothing", this would ack every message without any handler having run.
+                // eslint-disable-next-line no-console -- the one record that a tenant cannot take its queue messages
+                console.warn(`[queue] ${batch.queue}: the tenant's reply is not a queue reply; retrying ${String(ids.length)} message(s)`);
+
+                for (const id of ids) {
+                    retry.set(id, UNREADABLE_REPLY_RETRY_DELAY_SECONDS);
                 }
+
+                continue;
+            }
+
+            for (const id of result.retry) {
+                retry.set(id, retryDelayOf(result.retryDelays, id));
             }
         } catch {
             for (const id of ids) {

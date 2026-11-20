@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { deliverQueueBatch, OWNERLESS_RETRY_DELAY_SECONDS, QUEUE_FORWARD_MAX_BODY_BYTES } from "../src/fanout/platform-queue";
+import {
+    deliverQueueBatch,
+    OWNERLESS_RETRY_DELAY_SECONDS,
+    QUEUE_FORWARD_MAX_BODY_BYTES,
+    UNREADABLE_REPLY_RETRY_DELAY_SECONDS,
+} from "../src/fanout/platform-queue";
 import { routeQueue } from "../src/fanout/queue";
 import { tenantResourceName } from "../src/provision-contract";
 import type { TargetFleet } from "../src/targets/driver";
@@ -148,6 +153,47 @@ describe(deliverQueueBatch, () => {
             ["m3", { delaySeconds: 43_200 }],
         ]);
     });
+
+    it.each([[{}], [{ retry: "m1" }], [{ retry: [1] }], [{ retry: [], retryDelays: 30 }]])(
+        "retries, never acks, a batch whose tenant answered %j instead of a queue reply",
+        async (reply) => {
+            expect.assertions(2);
+
+            const acked: string[] = [];
+            const retried: [string, unknown][] = [];
+            const dispatch: NonNullable<TargetFleet["dispatch"]> = () => async () => Response.json(reply);
+            const message = (id: string) => {
+                return {
+                    ack: () => {
+                        acked.push(id);
+                    },
+                    body: id,
+                    id,
+                    retry: (options?: { delaySeconds?: number }) => {
+                        retried.push([id, options]);
+                    },
+                };
+            };
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            await deliverQueueBatch(
+                { messages: [message("m1"), message("m2")], queue: tenantResourceName("shop", { binding: "JOBS", type: "queue_producer" }) },
+                {
+                    dispatches: new Map([["cloudflare-wfp" as const, dispatch]]),
+                    live: [{ adminToken: "admin", alias: "shop", organizationId: "org_ok", projectId: "p_shop", scriptName: "shop", target: "cloudflare-wfp" }],
+                    now: Date.UTC(2026, 9, 9, 12),
+                    store: memoryStore({ organizations: [{ _id: "org_ok", plan: "pro" }] }),
+                },
+            );
+            warn.mockRestore();
+
+            expect(acked).toStrictEqual([]);
+            expect(retried).toStrictEqual([
+                ["m1", { delaySeconds: UNREADABLE_REPLY_RETRY_DELAY_SECONDS }],
+                ["m2", { delaySeconds: UNREADABLE_REPLY_RETRY_DELAY_SECONDS }],
+            ]);
+        },
+    );
 
     it("holds, never acks, a batch whose owner's sealed admin token has no key to open it", async () => {
         expect.assertions(1);
