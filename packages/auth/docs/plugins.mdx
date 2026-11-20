@@ -178,6 +178,8 @@ identity cache window (60 seconds by default, `LUNORA_IDENTITY_CACHE_MS`). The s
 deletes the row directly, which needs the default `storage: "database"`; with
 secondary storage, revoke through better-auth's own endpoint.
 
+**Bans.** A user banned through the `admin` plugin resolves to no identity for as long as the ban is in force, whether they present a cookie session or an API key. Their keys are kept, so lifting the ban restores them.
+
 **The studio** lists a user's keys in the user drawer, with name, the leading
 characters of the key, creation time and expiry, and a Revoke action per row. The
 hash is never returned by any endpoint.
