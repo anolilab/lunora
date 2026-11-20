@@ -5322,7 +5322,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // makes `next` qualify), so neither needs anything extra here; the
             // vector re-upsert rode `patch`'s `onWrite("update")`.
             if (wasDeleted) {
-                syncRanks(located.tableName, id, undefined, located.row);
+                // eslint-disable-next-line unicorn/no-null -- the restored image carries a SQL NULL marker
+                syncRanks(located.tableName, id, undefined, { ...located.row, [field]: null });
             }
         },
 
