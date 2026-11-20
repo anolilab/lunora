@@ -3709,6 +3709,9 @@ importers:
       '@lunora/platform-node':
         specifier: workspace:*
         version: link:../platform-node
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -28298,7 +28301,7 @@ snapshots:
   '@babel/traverse@8.0.7':
     dependencies:
       '@babel/code-frame': 8.0.6
-      '@babel/generator': 8.1.0
+      '@babel/generator': 8.0.6
       '@babel/helper-globals': 8.0.6
       '@babel/parser': 8.1.0
       '@babel/template': 8.0.0

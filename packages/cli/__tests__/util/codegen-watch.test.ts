@@ -639,6 +639,74 @@ describe("startCodegenWatch", () => {
             rmSync(workdir, { force: true, recursive: true });
         });
 
+        it("calls onSettled after a run whose hook succeeded, and not after one whose hook failed", async () => {
+            expect.assertions(2);
+
+            codegenSucceeds();
+
+            const workdir = projectWithPostCodegen();
+            const { logger } = silentLogger();
+            const settledAfterSuccess = vi.fn<(run: { hookRan: boolean; sequence: number; startup: boolean }) => void>();
+            const settledAfterFailure = vi.fn<(run: { hookRan: boolean; sequence: number; startup: boolean }) => void>();
+
+            await startCodegenWatch({
+                logger,
+                lunoraDirectory: ".",
+                onSettled: settledAfterSuccess,
+                projectRoot: workdir,
+                spawner: createRecordingSpawner().spawner,
+            }).close();
+            // A failed hook can leave generated output half-written; a dev server reloading on it would serve that.
+            await startCodegenWatch({
+                logger,
+                lunoraDirectory: ".",
+                onSettled: settledAfterFailure,
+                projectRoot: workdir,
+                spawner: createRecordingSpawner(1).spawner,
+            }).close();
+
+            // The startup run, whose hook ran after codegen wrote: a dev server that loaded before the hook finished must reload.
+            expect(settledAfterSuccess).toHaveBeenCalledExactlyOnceWith({ hookRan: true, sequence: 1, startup: true });
+            expect(settledAfterFailure).not.toHaveBeenCalled();
+
+            rmSync(workdir, { force: true, recursive: true });
+        });
+
+        it("reports the output unusable when a step after codegen fails, and usable when nothing was written", async () => {
+            expect.assertions(2);
+
+            const workdir = projectWithPostCodegen();
+            const { logger } = silentLogger();
+
+            // Codegen returned, so it wrote; reading its diagnostics then throws, so the run never reaches `postcodegen`.
+            vi.mocked(runCodegen).mockImplementation(
+                () =>
+                    ({
+                        get platformDiagnostics(): never {
+                            throw new Error("diagnostics unavailable");
+                        },
+                    }) as never,
+            );
+
+            const afterWrite = startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner: createRecordingSpawner().spawner });
+
+            await afterWrite.close();
+
+            vi.mocked(runCodegen).mockImplementation(() => {
+                throw new Error("schema.ts is not parseable");
+            });
+
+            const beforeWrite = startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner: createRecordingSpawner().spawner });
+
+            await beforeWrite.close();
+
+            expect(afterWrite.generation().usable).toBe(false);
+            // A codegen failure writes nothing, so the previous output stays usable.
+            expect(beforeWrite.generation().usable).toBe(true);
+
+            rmSync(workdir, { force: true, recursive: true });
+        });
+
         it("reports a failing hook and still regenerates on the next change", async () => {
             // `hasAssertions`, not a count: both assertions run inside
             // `vi.waitFor`, which retries them an indeterminate number of times.

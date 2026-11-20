@@ -14,7 +14,7 @@ import { normalizeAllowMail } from "./tunnel";
  * must reach the detached daemon has to be forwarded here explicitly, or a
  * background start will silently drop it.
  */
-const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
+const daemonArguments = (options: DevOptions): string[] => {
     const args = ["dev"];
 
     if (options.apiSpec !== undefined) {
@@ -77,7 +77,10 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
         }
     }
 
-    if (remote) {
+    // Only the flag itself: the daemon reads LUNORA_REMOTE and the project's `lunora.config` default again, so a default
+    // reaches it as a default. Forwarded as `--remote` it would become an explicit request, which the Node target refuses.
+    // (`--remote` with `--local` is refused before a daemon starts, so the flag always means remote here.)
+    if (options.remote === true) {
         args.push("--remote");
     }
 

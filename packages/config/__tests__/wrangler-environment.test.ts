@@ -10,6 +10,21 @@ import { mergeWranglerEnvironment, NON_INHERITABLE_KEYS } from "../src/cloudflar
  * that overrides one is a known rule, not an "unverified" key.
  */
 describe(mergeWranglerEnvironment, () => {
+    it("reports an environment as undeclared when env is null, instead of throwing", () => {
+        expect.assertions(1);
+
+        // A hand-written config can hold `"env": null`, which the type does not allow.
+        const wrangler = { env: null, main: "src/worker.ts" } as unknown as WranglerConfig;
+
+        expect(mergeWranglerEnvironment(wrangler, "staging").error).toMatch(/names no environment declared/u);
+    });
+
+    it("does not read an inherited Object property as a declared environment", () => {
+        expect.assertions(1);
+
+        expect(mergeWranglerEnvironment({ env: {}, main: "src/worker.ts" }, "constructor").error).toMatch(/names no environment declared/u);
+    });
+
     it("treats hyperdrive as non-inheritable, as wrangler does, so a top-level entry does not count for a named environment", () => {
         expect.assertions(2);
 

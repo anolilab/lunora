@@ -478,6 +478,75 @@ origin to 8787 — an `AUTH_URL`/`BETTER_AUTH_URL` (or any other loopback origin
 on that port) would be left pointing at nothing. Free 8787, or pass
 `--worker-port` and update the pinned values to match.
 
+#### The Node target: `--target node`
+
+With `"target": "node"` in `lunora.config.*` (or `--target node`), there is no
+`wrangler dev`: the CLI serves the worker entry `wrangler.jsonc` names in `main`
+on [`@lunora/platform-node`](/packages/platform-node/), in its own process, on
+the same worker port. Install `@lunora/platform-node` (1.0.0-alpha.222 or later)
+as a dev dependency first.
+
+```bash
+lunora dev --target node         # codegen watch + Studio + the app on the Node host
+```
+
+Codegen watches `lunora/` as usual, and the app reloads after each finished
+codegen run (not after a failed `postcodegen`), when a file the entry loaded
+from outside `lunora/` changes, and when `wrangler.jsonc`, `.dev.vars`,
+`.dev.vars.<env>` or the `.env` files change; with `--no-codegen` the files it
+loaded under `lunora/` are watched too. Every reload re-reads the wrangler
+config, so an edited `main` is the entry it loads. A reload restarts the
+listener, so open sockets and streams reconnect, and the previous version gets
+5 s to finish its in-flight requests and work before it is closed anyway; the
+new version is built only after that, so its crons and scheduled jobs never run
+beside the old one's. A reload waits out a running codegen run, is redone once a
+run that overlapped its load has finished, and is refused while the last
+`postcodegen` hook has failed, keeping the previous version serving; a start
+over such output is refused too. A reload
+that cannot bind the port is logged, and nothing serves until a later reload
+succeeds: the previous version held the same port and the same shard databases,
+so it cannot keep serving meanwhile.
+
+`CLOUDFLARE_ENV` selects a wrangler environment, as it does for `wrangler dev`:
+that environment's `main` (inherited when it sets none), its bindings and `vars`
+(never inherited), and `.dev.vars.<env>` before `.dev.vars`.
+
+Every declared binding the Node host does not compose (static `assets`, D1, KV,
+R2, queues, a Durable Object bound to another worker's class, and any other
+section) is named in one startup warning. A Secrets Store, Hyperdrive or Durable
+Object binding named `WORKER_ENV` is refused, since dev sets it to `development`
+itself, and so is a Durable Object binding name that is not an identifier,
+since it names a directory under `.lunora/node/`. As for the container, a
+malformed entry in a section the host composes, or one name declared by two
+sources (a var and a binding, say), is refused at startup rather than left for
+the first request to find. Unlike the container, which lets an environment
+variable override each var and so needs environment-variable names, dev accepts
+any wrangler var or `secrets.required` name (`API-URL`, `stripe.key`, even
+`constructor`) except `__proto__`. The shard binding is picked by its class
+(`ShardDO`, or `LunoraDO`), as the container picks it, so crons fire on it
+whatever it is named. As in the container, at most one Hyperdrive binding is accepted, since
+the binding is built from the one `DATABASE_URL`. An `exports` entry with a `type` (a workflow) is
+named in the warning; one that only sets cache options is not. A `main` outside the project
+(a worker shared between apps) is watched and reloaded like one inside it, and
+so is a sibling package of the monorepo the app sits in (one with a
+`pnpm-workspace.yaml` or a `workspaces` field above it); packages from the
+registry load once. Mail
+is captured to the Studio inbox while `WORKER_ENV` is `development`, as under
+`wrangler dev`; Node dev composes no mail host, so with
+`LUNORA_MAIL_CAPTURE=0` a send to the `lunora-mail` queue stays queued, and a
+startup warning says so whenever the app produces to that queue.
+
+Studio works against it (data browser, logs, live subscriptions). Durable Object
+bindings, vars, declared crons, Secrets Store secrets (read from `.dev.vars` or
+the shell) and Hyperdrive (built from `DATABASE_URL`) are bound; any other
+declared binding is named in a startup warning. `--remote` is refused before anything is provisioned, a remote default from
+`LUNORA_REMOTE` or `lunora.config` is ignored with a warning, `--inspector-port` is ignored, and a Vite or
+framework project still gets this standalone stack, so start its frontend dev
+server separately. Shard data persists in `.lunora/node/`.
+
+`lunora deploy --target node` writes a container build context instead; see
+"Deploying to Node" under `lunora deploy`.
+
 #### The two ports wrangler takes
 
 `wrangler dev` binds the worker **and** a devtools inspector, and both are

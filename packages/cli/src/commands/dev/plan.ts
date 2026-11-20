@@ -19,11 +19,13 @@ import {
 import type { RemotePlan, WithheldBinding } from "@lunora/config/cloudflare";
 import { findWranglerFile, materializeDevWranglerConfig, materializeServiceDevConfigs, readWranglerJsonc, toRemotePlan } from "@lunora/config/cloudflare";
 
+import { servesDevInProcess } from "../../util/deploy-target-resolve";
 import { detectPackageManager, execArgsFor, runScriptCommand, toolchainExecArgs } from "../../util/detect-package-manager";
 import { findAvailablePort } from "../../util/free-port";
 import { hasIpv6Loopback } from "../../util/loopback";
 import type { SpawnDescriptor } from "../../util/spawn";
 import { codegenRequested, detectDevFlavor, viteDevCommand, withViteChildEnv } from "./lifecycle";
+import { planNodeDevServer } from "./node-dev-server";
 import { planOwnDevServer } from "./own-dev-server";
 import type { DevCommandOptions, DevCommandPlan } from "./types";
 
@@ -482,6 +484,10 @@ const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan>
             studioPort: options.port ?? DEFAULT_STUDIO_PORT,
             workerPort: await resolveWorkerPort(options, cwd),
         });
+    }
+
+    if (options.target !== undefined && servesDevInProcess(options.target)) {
+        return planNodeDevServer({ cwd, options, studioPort: options.port ?? DEFAULT_STUDIO_PORT, workerPort: await resolveWorkerPort(options, cwd) });
     }
 
     const flavor = options.flavor ?? detectDevFlavor(cwd);

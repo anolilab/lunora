@@ -16,11 +16,26 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, wr
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-import { COMPOSED_WORKER_ENTRY, DURABLE_OBJECT_BINDINGS, resolveSchemaDirectory } from "@lunora/config";
+import { COMPOSED_WORKER_ENTRY, resolveSchemaDirectory } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
-import type { Node as JsonNode } from "jsonc-parser";
-import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
+import {
+    bindingNames,
+    declaredVariables,
+    durableObjectEntries,
+    hyperdriveBindingNames,
+    isDeclared,
+    MAIL_QUEUE_NAME,
+    mailQueueBindings,
+    queueEntries,
+    refuseEnvCollisions,
+    refusePrototypeKeys,
+    refuseWorkerEnvOverride,
+    requiredSecretNames,
+    shardBindingOf,
+    unboundSections,
+    WORKER_ENV,
+} from "../../util/node-target-bindings";
 import type { Spawner } from "../../util/spawn";
 
 /** Where the build context is written, relative to the project root. `.lunora/` is already the CLI's gitignored state directory. */
@@ -40,9 +55,6 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 8000;
 /** The variable that overrides {@link DEFAULT_SHUTDOWN_TIMEOUT_MS}. */
 const SHUTDOWN_TIMEOUT_VARIABLE = ["LUNORA", "SHUTDOWN", "TIMEOUT", "MS"].join("_");
 
-/** What the server tells the app it runs as; the dev server sets `development` instead. */
-const WORKER_ENV = "WORKER_ENV";
-
 /** The port the server listens on when `PORT` is unset or empty, matching `wrangler dev`'s default. */
 const DEFAULT_PORT = 8787;
 
@@ -52,77 +64,6 @@ const DEFAULT_PORT = 8787;
  * project does install one, it stays external and the image installs the same version, since a native addon cannot be bundled.
  */
 const OPTIONAL_NATIVE_MODULES = ["bufferutil", "utf-8-validate"] as const;
-
-/**
- * Top-level wrangler keys the generated entry composes, or that configure the Worker rather than bind something into `env`.
- * Every other declared key is reported at deploy time as unbound: an allowlist, so a binding section wrangler adds later is
- * named rather than silently missing from the container. `durable_objects` is checked per binding, since an external one is unbound.
- */
-const COMPOSED_OR_CONFIG_KEYS: ReadonlySet<string> = new Set([
-    "$schema",
-    "account_id",
-    "alias",
-    "base_dir",
-    "build",
-    "cache",
-    "compatibility_date",
-    "compatibility_flags",
-    "define",
-    "dev",
-    "durable_objects",
-    "env",
-    "find_additional_modules",
-    "first_party_worker",
-    "hyperdrive",
-    "jsx_factory",
-    "jsx_fragment",
-    "keep_names",
-    "keep_vars",
-    "legacy_env",
-    "limits",
-    "logpush",
-    "main",
-    "migrations",
-    "minify",
-    "name",
-    "no_bundle",
-    "node_compat",
-    "observability",
-    "placement",
-    "preserve_file_names",
-    "preview_urls",
-    "route",
-    "routes",
-    "rules",
-    "secrets",
-    "secrets_store_secrets",
-    "send_metrics",
-    "streaming_tail_consumers",
-    "tail_consumers",
-    "triggers",
-    "tsconfig",
-    "upload_source_maps",
-    "usage_model",
-    "vars",
-    "workers_dev",
-]);
-
-/** The classes `@lunora/config` binds as the app's shard (`DURABLE_OBJECT_BINDINGS`): the one that receives crons and jobs. */
-const SHARD_DURABLE_OBJECT_CLASSES: ReadonlySet<string> = new Set(
-    Object.keys(DURABLE_OBJECT_BINDINGS).filter((className) => DURABLE_OBJECT_BINDINGS[className as keyof typeof DURABLE_OBJECT_BINDINGS] === "SHARD"),
-);
-
-/** An environment variable name as a container runtime sets one. */
-const ENV_NAME = /^[A-Z_a-z]\w*$/u;
-
-/** Wrangler's rule for a binding name: a JavaScript identifier. A Durable Object binding's name is also a directory on the data volume. */
-const BINDING_NAME = /^[A-Za-z_$][\w$]*$/u;
-
-/**
- * The queue `@lunora/mail`'s producer writes to: the name the `mail` starter's wrangler config gives it, and the one
- * `@lunora/platform-node`'s mail host reserves. A producer bound to it is how the server knows the app queues mail.
- */
-const MAIL_QUEUE_NAME = "lunora-mail";
 
 /** What the mail host reads to deliver: the sender, and Resend's key, the only transport the container has. */
 const MAIL_ENV = ["MAIL_FROM", "RESEND_API_KEY"] as const;
@@ -194,19 +135,6 @@ interface NodeContainerArtifact {
     unbound: string[];
 }
 
-/** Whether a declared section binds anything: an empty list or object is no binding. */
-const isDeclared = (value: unknown): boolean => {
-    if (Array.isArray(value)) {
-        return value.length > 0;
-    }
-
-    if (typeof value === "object" && value !== null) {
-        return Object.keys(value).length > 0;
-    }
-
-    return value !== undefined && value !== null;
-};
-
 /**
  * Refuse a worker the Node deploy cannot bundle. A framework project's worker is produced by a Cloudflare-targeted framework
  * build — `@lunora/vite` composing `virtual:lunora/worker`, or an adapter's output wrapped by the composed `src/worker.ts` — and
@@ -235,97 +163,6 @@ const frameworkRefusal = (projectRoot: string, main: string, configName: string)
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-/**
- * A binding list the deploy reads (`hyperdrive`, `secrets_store_secrets`): every entry must name its binding. One that
- * does not used to be dropped, so the deploy succeeded and the worker read `undefined` where the app expected a binding.
- */
-const bindingNames = (value: unknown, section: string, configName: string): string[] => {
-    if (value === undefined || value === null) {
-        return [];
-    }
-
-    if (!Array.isArray(value)) {
-        throw new TypeError(`--target node reads ${section} in ${configName} as a list of bindings, and it is ${JSON.stringify(value)}`);
-    }
-
-    return value.map((entry: unknown, index) => {
-        const name = isRecord(entry) ? entry.binding : undefined;
-
-        if (typeof name !== "string" || !BINDING_NAME.test(name)) {
-            throw new Error(
-                `--target node binds each ${section} entry by its "binding" name, and ${section}[${String(index)}] in ${configName} has ${name === undefined ? "none" : `${JSON.stringify(name)}, which is not a valid binding name`}`,
-            );
-        }
-
-        return name;
-    });
-};
-
-/** `durable_objects.bindings`: each entry needs a string `name` and `class_name`, both identifiers. */
-const durableObjectEntries = (value: unknown, configName: string): { className: string; name: string; scriptName: unknown }[] => {
-    if (value === undefined || value === null) {
-        return [];
-    }
-
-    const bindings = isRecord(value) ? value.bindings : undefined;
-
-    if (bindings !== undefined && !Array.isArray(bindings)) {
-        throw new Error(`--target node reads durable_objects.bindings in ${configName} as a list of bindings, and it is ${JSON.stringify(bindings)}`);
-    }
-
-    if (!isRecord(value)) {
-        throw new Error(`--target node reads durable_objects in ${configName} as { "bindings": [...] }, and it is ${JSON.stringify(value)}`);
-    }
-
-    return (bindings ?? []).map((entry: unknown, index) => {
-        const where = `durable_objects.bindings[${String(index)}] in ${configName}`;
-
-        if (!isRecord(entry) || typeof entry.name !== "string" || typeof entry.class_name !== "string") {
-            throw new Error(`--target node constructs each Durable Object binding from its "name" and "class_name", and ${where} lacks one`);
-        }
-
-        // The name becomes a directory under LUNORA_DATA_DIR: anything but an identifier ("..", "a/b") could put shard files
-        // outside the data volume, where a replaced container loses them.
-        if (!BINDING_NAME.test(entry.name)) {
-            throw new Error(
-                `--target node stores each Durable Object binding's shards in a directory named after it, and the binding ${JSON.stringify(entry.name)} in ${configName} is not a valid binding name (a JavaScript identifier such as SHARD)`,
-            );
-        }
-
-        if (!BINDING_NAME.test(entry.class_name)) {
-            throw new Error(
-                `--target node imports each Durable Object class by name, and ${where} names ${JSON.stringify(entry.class_name)}, which is not a class name`,
-            );
-        }
-
-        return { className: entry.class_name, name: entry.name, scriptName: entry.script_name };
-    });
-};
-
-/**
- * Every name that lands on `env` comes from one place. Built in a fixed order (vars, then each secret, Hyperdrive and the
- * Durable Objects), a later source would silently replace an earlier one, and the code reading it gets the wrong kind of value.
- */
-const refuseEnvCollisions = (sources: ReadonlyArray<{ names: ReadonlyArray<string>; repeatable?: boolean; source: string }>, configName: string): void => {
-    const owners = new Map<string, string[]>();
-
-    for (const { names, repeatable, source } of sources) {
-        // A repeat within secrets.required asks for one variable twice, which is harmless; a repeat within a binding list
-        // declares two bindings under one name, and the later replaces the earlier.
-        for (const name of repeatable === true ? new Set(names) : names) {
-            owners.set(name, [...(owners.get(name) ?? []), source]);
-        }
-    }
-
-    const collisions = [...owners].filter(([, from]) => from.length > 1).map(([name, from]) => `${name} (${from.join(" and ")})`);
-
-    if (collisions.length > 0) {
-        throw new Error(
-            `--target node puts every var, secret and binding on env under its own name, and ${configName} declares ${collisions.join(", ")} more than once: one would silently replace the other. Rename one of them`,
-        );
-    }
-};
-
 /** `define` or `alias`: an object of string values, refused otherwise rather than passed to the bundler half-read. */
 const stringMap = (value: unknown, section: string, configName: string): Record<string, string> => {
     if (value === undefined || value === null) {
@@ -339,60 +176,6 @@ const stringMap = (value: unknown, section: string, configName: string): Record<
     }
 
     return value as Record<string, string>;
-};
-
-/** Names that act on an object's prototype rather than being an ordinary key; never valid as a var name. */
-const RESERVED_OBJECT_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
-
-/**
- * Every `__proto__` key under `vars`, at any depth, read from the config's raw syntax: parsing applies such a key as a
- * prototype instead of keeping it, so after parsing it cannot be seen and its value is silently lost.
- */
-const prototypeKeysUnderVariables = (text: string): string[] => {
-    const root = parseTree(text);
-    const variables = root === undefined ? undefined : findNodeAtLocation(root, ["vars"]);
-    const found: string[] = [];
-
-    const walk = (node: JsonNode, path: string): void => {
-        for (const child of node.children ?? []) {
-            if (child.type === "property") {
-                const [key, value] = child.children ?? [];
-                const name = String(key?.value);
-                const here = `${path}.${name}`;
-
-                if (name === "__proto__") {
-                    found.push(here);
-                }
-
-                if (value !== undefined) {
-                    walk(value, here);
-                }
-            } else {
-                walk(child, path);
-            }
-        }
-    };
-
-    if (variables !== undefined) {
-        walk(variables, "vars");
-    }
-
-    return found;
-};
-
-/**
- * The server sets `WORKER_ENV` to `production` itself. A var, secret or binding of that name would replace it, and a var or
- * secret can also be replaced from the container's environment: `development` there turns on development-only behaviour, such
- * as mail capture, in production.
- */
-const refuseWorkerEnvOverride = (sources: ReadonlyArray<{ names: ReadonlyArray<string>; source: string }>, configName: string): void => {
-    const setBy = sources.filter(({ names }) => names.includes(WORKER_ENV)).map(({ source }) => source);
-
-    if (setBy.length > 0) {
-        throw new Error(
-            `--target node sets ${WORKER_ENV} to production itself, and ${configName} also declares it in ${setBy.join(", ")}. Remove it: a ${WORKER_ENV} of development turns on development-only behaviour, such as mail capture, in production`,
-        );
-    }
 };
 
 /** `triggers.crons`: each a cron expression string. */
@@ -418,99 +201,12 @@ const deliveredCronSchedules = async (cronsModule: string): Promise<string[]> =>
     return Object.keys(crons.LUNORA_CRONS ?? {});
 };
 
-/** `vars`: an object of environment variable names, since an override comes from the variable of the same name. */
-const declaredVariables = (value: unknown, configName: string): Record<string, unknown> => {
-    if (value === undefined || value === null) {
-        return {};
-    }
-
-    if (!isRecord(value)) {
-        throw new Error(`--target node reads vars in ${configName} as an object of names and values, and it is ${JSON.stringify(value)}`);
-    }
-
-    const invalid = Object.keys(value).filter((name) => !ENV_NAME.test(name) || RESERVED_OBJECT_KEYS.has(name));
-
-    if (invalid.length > 0) {
-        throw new Error(
-            `--target node lets the environment variable of the same name override each var, and vars in ${configName} has ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
-        );
-    }
-
-    return { ...value };
-};
-
-/**
- * The `secrets.required` names, or a throw naming the field when it is not a list of names. Dropping a malformed value would
- * deploy a server that starts without the secrets the app needs, the failure this check exists to prevent.
- */
-const requiredSecretNames = (secrets: unknown, configName: string): string[] => {
-    if (secrets === undefined || secrets === null) {
-        return [];
-    }
-
-    const refuse = (problem: string): never => {
-        throw new Error(
-            `--target node checks every secrets.required name at startup, and ${problem} in ${configName}: secrets must be { "required": [...] }, an array of environment variable names such as ["API_KEY"]`,
-        );
-    };
-
-    if (typeof secrets !== "object" || Array.isArray(secrets)) {
-        return refuse(`secrets is ${JSON.stringify(secrets)}`);
-    }
-
-    // `required` is the object's only field: a misspelling ("require") would otherwise read as "no secrets" and skip the check.
-    const unknown = Object.keys(secrets).filter((key) => key !== "required");
-
-    if (unknown.length > 0) {
-        return refuse(`secrets has ${unknown.map((key) => JSON.stringify(key)).join(", ")} instead of "required"`);
-    }
-
-    const { required } = secrets as { required?: unknown };
-
-    if (!Array.isArray(required)) {
-        return refuse(`secrets.required is ${JSON.stringify(required)}`);
-    }
-
-    // An environment variable name: anything else could never be set on a container, so the server could never start.
-    const invalid = required.filter((name) => typeof name !== "string" || !ENV_NAME.test(name));
-
-    if (invalid.length > 0) {
-        return refuse(
-            `secrets.required lists ${invalid.map((name) => JSON.stringify(name)).join(", ")}, which ${invalid.length === 1 ? "is not" : "are not"} an environment variable name`,
-        );
-    }
-
-    return required as string[];
-};
-
 /**
  * Read what the server entry has to compose, or throw naming what is missing or unservable. Reads the wrangler config only, so the
  * deploy runs it before codegen writes anything.
  * @param projectRoot Directory containing the wrangler config.
  */
 /** `queues` entries of one kind (`producers`, `consumers`), as records; anything else in the list is dropped. */
-const queueEntries = (queues: unknown, kind: "consumers" | "producers"): Record<string, unknown>[] => {
-    const entries = isRecord(queues) ? queues[kind] : undefined;
-
-    return Array.isArray(entries) ? entries.filter((entry): entry is Record<string, unknown> => isRecord(entry)) : [];
-};
-
-/**
- * Every binding of an app {@link MAIL_QUEUE_NAME} producer: empty when the app queues no mail. Each is bound to the platform's
- * mail queue, so an app that names the queue under two bindings can use either.
- */
-const mailQueueBindings = (queues: unknown, configName: string): string[] =>
-    queueEntries(queues, "producers")
-        .filter((entry) => entry.queue === MAIL_QUEUE_NAME)
-        .map((producer) => {
-            if (typeof producer.binding !== "string" || !BINDING_NAME.test(producer.binding)) {
-                throw new Error(
-                    `--target node binds each ${MAIL_QUEUE_NAME} queue producer by its "binding" name, and one in ${configName} has ${producer.binding === undefined ? "none" : `${JSON.stringify(producer.binding)}, which is not a valid binding name`}`,
-                );
-            }
-
-            return producer.binding;
-        });
 
 /**
  * What of `queues` the server leaves unbound, given the mail producers it binds. A {@link MAIL_QUEUE_NAME} producer is
@@ -558,13 +254,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         throw new Error(`--target node bundles the worker entry \`main\` names, and ${configName} has no \`main\``);
     }
 
-    const prototypeKeys = prototypeKeysUnderVariables(readFileSync(configPath, "utf8"));
-
-    if (prototypeKeys.length > 0) {
-        throw new Error(
-            `--target node passes vars to the worker as data, and ${configName} uses __proto__ as a key at ${prototypeKeys.join(", ")}: parsing applies it as a prototype instead of keeping it, so its value would silently be lost. Rename the key`,
-        );
-    }
+    refusePrototypeKeys(readFileSync(configPath, "utf8"), configName);
 
     const refusal = frameworkRefusal(projectRoot, parsed.main, configName);
 
@@ -588,14 +278,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         throw new Error(`--target node serves the app's shard Durable Object, and ${configName} declares no durable_objects binding of its own`);
     }
 
-    const hyperdrive = bindingNames(parsed.hyperdrive, "hyperdrive", configName);
-
-    // One process has one DATABASE_URL; a second binding would need a naming scheme nothing reads yet.
-    if (hyperdrive.length > 1) {
-        throw new Error(
-            `--target node builds the Hyperdrive binding from DATABASE_URL, so it serves one binding, and the app declares ${hyperdrive.join(", ")}`,
-        );
-    }
+    const hyperdrive = hyperdriveBindingNames(parsed.hyperdrive, configName);
 
     const storeSecrets = bindingNames(parsed.secrets_store_secrets, "secrets_store_secrets", configName);
     const reserved = storeSecrets.filter((name) => name.startsWith(RUNTIME_ENV_PREFIX));
@@ -607,8 +290,8 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         );
     }
 
-    const workerSecrets = requiredSecretNames(parsed.secrets, configName);
-    const variables = declaredVariables(parsed.vars, configName);
+    const workerSecrets = requiredSecretNames(parsed.secrets, configName, "environment");
+    const variables = declaredVariables(parsed.vars, configName, "environment");
     const mailQueues = mailQueueBindings(parsed.queues, configName);
 
     const envSources = [
@@ -627,7 +310,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     ];
 
     refuseEnvCollisions(envSources, configName);
-    refuseWorkerEnvOverride(envSources, configName);
+    refuseWorkerEnvOverride(envSources, configName, "production");
 
     const declared = parsed as Record<string, unknown>;
 
@@ -645,11 +328,8 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         hyperdrive: hyperdrive[0],
         mailQueues,
         storeSecrets,
-        unbound: [
-            ...Object.keys(declared).filter((key) => key !== "queues" && !COMPOSED_OR_CONFIG_KEYS.has(key) && isDeclared(declared[key])),
-            ...unboundQueues(declared.queues, mailQueues),
-            ...external,
-        ],
+        // Every mail-queue producer is composed by the mail host; any other queue is unbound.
+        unbound: [...unboundSections({ ...declared, queues: undefined }), ...unboundQueues(declared.queues, mailQueues), ...external],
         vars: variables,
         workerSecrets,
     };
@@ -734,12 +414,8 @@ const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cron
         storeSecrets: project.storeSecrets,
         vars: project.vars,
     };
-    // The shard binding is the one whose class is the app's shard Durable Object (ShardDO, or LunoraDO when its roles are
-    // merged), as @lunora/config binds it, whatever the binding is named: crons and scheduled jobs are delivered there.
-    const primary =
-        project.durableObjects.find((binding) => SHARD_DURABLE_OBJECT_CLASSES.has(binding.className)) ??
-        project.durableObjects.find((binding) => binding.name === "SHARD") ??
-        project.durableObjects[0];
+    // Crons and scheduled jobs are delivered to the shard binding, chosen by class whatever it is named.
+    const primary = shardBindingOf(project.durableObjects);
     // Named, not a namespace import: esbuild then fails the bundle when the entry does not export one of them, so an entry that
     // is not a Lunora worker (a framework adapter exporting only \`fetch\`) is refused at deploy time instead of at startup.
     const classNames = [...new Set(project.durableObjects.map((binding) => binding.className))];
@@ -750,14 +426,13 @@ const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cron
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
-    bindShardSockets,
+    createNodeDurableObjectFactory,
     createNodeHttpServer,
     createNodeHyperdrive,
     createNodePlatform,
     createNodeSecretBindings,
     createNodeShardNamespace,
     createNodeShardRegistry,
-    createNodeShardState,
     DEFAULT_DRAIN_TIMEOUT_MS,
     drainTogether,
 } from "@lunora/platform-node";
@@ -778,7 +453,14 @@ const logError = (message, error) => {
     console.error("lunora: %s", message, error);
 };
 
-const missing = CONFIG.requiredEnv.filter((name) => process.env[name] === undefined || process.env[name] === "");
+// Own entries only, read and written: process.env and a plain env both inherit names such as constructor from Object.prototype,
+// so a bare lookup would find a function for an unset variable, and a plain assignment of __proto__ would set a prototype.
+const readEnvironment = (name) => (Object.hasOwn(process.env, name) ? process.env[name] : undefined);
+const setEnv = (name, value) => {
+    Object.defineProperty(env, name, { configurable: true, enumerable: true, value, writable: true });
+};
+
+const missing = CONFIG.requiredEnv.filter((name) => readEnvironment(name) === undefined || readEnvironment(name) === "");
 
 if (missing.length > 0) {
     console.error("lunora: refusing to start, these required environment variables are not set: %s", missing.join(", "));
@@ -851,17 +533,19 @@ const declaredNames = new Set([
 ]);
 
 for (const name of declaredNames) {
-    const value = process.env[name];
+    const value = readEnvironment(name);
 
     if (value !== undefined) {
-        env[name] = value;
+        setEnv(name, value);
     }
 }
 
-Object.assign(env, createNodeSecretBindings(CONFIG.storeSecrets));
+for (const [name, binding] of Object.entries(createNodeSecretBindings(CONFIG.storeSecrets))) {
+    setEnv(name, binding);
+}
 
 if (CONFIG.hyperdrive !== undefined) {
-    env[CONFIG.hyperdrive] = createNodeHyperdrive(process.env.DATABASE_URL);
+    setEnv(CONFIG.hyperdrive, createNodeHyperdrive(process.env.DATABASE_URL));
 }
 
 const instanceFactory = (className) => {
@@ -871,25 +555,9 @@ const instanceFactory = (className) => {
         throw new TypeError(\`lunora: the worker entry does not export Durable Object class \${className}\`);
     }
 
-    const instances = new WeakMap();
-
-    return (shard) => {
-        let instance = instances.get(shard);
-
-        if (instance === undefined) {
-            instance = new DurableObject(createNodeShardState(shard), env);
-            instances.set(shard, instance);
-
-            if (instance.webSocketClose !== undefined && instance.webSocketMessage !== undefined) {
-                bindShardSockets(
-                    { webSocketClose: instance.webSocketClose.bind(instance), webSocketMessage: instance.webSocketMessage.bind(instance) },
-                    shard.inbound,
-                );
-            }
-        }
-
-        return instance;
-    };
+    // The same instances createNodeAppHost keeps: one per shard, ready only once the constructor's blockConcurrencyWhile work
+    // has finished, and dropped (the event failing with its error) when that work fails.
+    return createNodeDurableObjectFactory(DurableObject, env);
 };
 
 let platform;
@@ -911,10 +579,10 @@ for (const binding of CONFIG.durableObjects) {
         // The platform's own host fires this with no shard; only registry shards carry a Durable Object.
         onAlarm: async (shard) => {
             if (shard !== undefined) {
-                await instanceFor(shard).alarm?.();
+                await (await instanceFor(shard)).alarm?.();
             }
         },
-        onFetch: async (request, shard) => instanceFor(shard).fetch(request),
+        onFetch: async (request, shard) => (await instanceFor(shard)).fetch(request),
     };
 
     if (binding.name === PRIMARY_BINDING) {
@@ -925,17 +593,17 @@ for (const binding of CONFIG.durableObjects) {
             ...(CONFIG.mailQueues.length === 0 ? {} : { mail: { env, path: join(dataDirectory, "mail.sqlite3") } }),
             path: join(dataDirectory, "platform.sqlite3"),
         });
-        env[binding.name] = createNodeShardNamespace(platform.directory);
+        setEnv(binding.name, createNodeShardNamespace(platform.directory));
 
         // Every lunora-mail producer binding, as on Cloudflare: \`mailer.queue()\` writes to the platform's durable mail queue.
         for (const name of CONFIG.mailQueues) {
-            env[name] = platform.mail.queue;
+            setEnv(name, platform.mail.queue);
         }
     } else {
         const registry = createNodeShardRegistry(handlers);
 
         registries.push(registry);
-        env[binding.name] = createNodeShardNamespace(registry.directory);
+        setEnv(binding.name, createNodeShardNamespace(registry.directory));
     }
 }
 
@@ -1356,11 +1024,13 @@ const missingExportRefusal = (error: unknown, project: NodeDeployProject, projec
     // A missing platform-node export means the project's copy is older than this deploy needs, not that the entry is wrong.
     // Matched by where the file really is, inside that package's directory, not by name: an app file named
     // src/platform-node-worker.ts gets the ordinary missing-export message.
-    if (unmatched.some((entry) => isInside(realPath(resolve(entry.file)), platformNodeDirectory))) {
+    const fromPlatform = unmatched.filter((entry) => isInside(realPath(resolve(entry.file)), platformNodeDirectory)).map((entry) => entry.name);
+
+    if (fromPlatform.length > 0) {
         const version = installedVersion(join(projectRoot, "package.json"), "@lunora/platform-node") ?? "unknown";
 
         return new Error(
-            `--target node needs an @lunora/platform-node with deadline-bounded drains, and this project installs ${version}, which predates them, so every container shutdown would fail. Upgrade @lunora/platform-node to the release this CLI came with.`,
+            `--target node needs an @lunora/platform-node that exports ${[...new Set(fromPlatform)].join(", ")} (deadline-bounded drains, and Durable Objects whose failed setup fails their events), and this project installs ${version}, which predates them. Upgrade @lunora/platform-node to the release this CLI came with.`,
             { cause: error },
         );
     }

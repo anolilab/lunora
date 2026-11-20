@@ -82,7 +82,12 @@ export interface NodeShardState {
  * one local `wrangler dev` takes — whereas supplying a stub that resolves would
  * report a point-in-time restore that never happened.
  */
-export const createNodeShardState = (shard: NodeShard): NodeShardState => {
+
+/**
+ * `onBlockConcurrency` sees each `blockConcurrencyWhile` promise as it starts, so a caller can tell when the work an object's
+ * constructor gated behind it has finished (see `createNodeDurableObjectFactory`).
+ */
+export const createNodeShardState = (shard: NodeShard, onBlockConcurrency?: (work: Promise<unknown>) => void): NodeShardState => {
     return {
         // The socket host adopts the transport AS its handle and stamps
         // `serializeAttachment`/`deserializeAttachment`/`close` onto it, so
@@ -97,7 +102,13 @@ export const createNodeShardState = (shard: NodeShard): NodeShardState => {
         acceptWebSocket: (socket, tags) => {
             shard.sockets.accept(socket, undefined, tags);
         },
-        blockConcurrencyWhile: (callback) => shard.shard.runSerialized(callback),
+        blockConcurrencyWhile: (callback) => {
+            const work = shard.shard.runSerialized(callback);
+
+            onBlockConcurrency?.(work);
+
+            return work;
+        },
         getWebSockets: (tag) => shard.sockets.getSockets(tag),
         // `ShardDO` reads `id.name` to detect the root shard (`__root__`), so
         // this has to carry the real key rather than an opaque id.

@@ -3,7 +3,7 @@ import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCel
 import type { materializeDevWranglerConfig, materializeServiceDevConfigs, RemotePlan, startLocalHyperdrive } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
-import type { startCodegenWatch } from "../../util/codegen-watch";
+import type { CodegenGeneration, startCodegenWatch } from "../../util/codegen-watch";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
@@ -15,6 +15,68 @@ interface WorkerProcess {
     /** Resolves with the worker's exit code (1 if it failed to start). */
     exited: Promise<number>;
     kill: (signal: NodeJS.Signals) => void;
+}
+
+/** A running Node dev worker (`--target node`): the {@link WorkerProcess} the supervisor stops, plus the reload the codegen watcher calls. */
+interface NodeDevWorker extends WorkerProcess {
+    /**
+     * The codegen run (`CodegenGeneration.sequence`) whose output the first load read, once the worker serves; `undefined`
+     * without a codegen watcher. A run up to it is already in what serves.
+     */
+    loadedSequence?: number;
+    /** Restart on the current sources. Calls made while one runs collapse into one more. */
+    reload: () => void;
+}
+
+/** A composed app on the project's `@lunora/platform-node` (`createNodeAppHost`). */
+interface NodeAppHost {
+    close: (options?: { timeoutMs?: number }) => Promise<{ pending: string[]; timedOut: boolean }>;
+    fetch: (request: Request) => Promise<Response>;
+    rearmPersistedAlarms: () => string[];
+}
+
+/** The listener `createNodeHttpServer` returns: `drain` waits for the responses in flight, `close` ends the rest. */
+interface NodeDevHttpServer {
+    close: () => Promise<void>;
+    drain: (options?: { timeoutMs?: number }) => Promise<{ pending: string[]; timedOut: boolean }>;
+}
+
+/** What `createNodeAppHost` composes: a loaded worker module and its bindings. */
+interface NodeAppHostCandidate {
+    crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
+    dataDirectory?: string;
+    durableObjects: ReadonlyArray<{ className: string; name: string }>;
+    env?: Record<string, unknown>;
+    /** The Durable Object binding whose shards run functions, which is where crons fire. */
+    shardBinding?: string;
+    worker: Record<string, unknown>;
+}
+
+/**
+ * The slice of the project's copy of `@lunora/platform-node` the Node dev worker calls, loaded through the same jiti instance
+ * as the app so both share one module graph. Declared rather than imported: the package is resolved from the project at run
+ * time, and importing its types would pull its whole dependency tree into this package's declarations.
+ */
+interface PlatformNode {
+    /** Throws what `createNodeAppHost` would refuse, without opening a database or arming a timer. */
+    checkNodeAppHost: (options: NodeAppHostCandidate) => void;
+    createNodeAppHost: (options: NodeAppHostCandidate) => NodeAppHost;
+    createNodeHttpServer: (options: { fetch: (request: Request) => Promise<Response>; port?: number }) => Promise<NodeDevHttpServer>;
+    createNodeHyperdrive: (url?: string) => unknown;
+    createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, unknown>;
+}
+
+/** What starts a {@link NodeDevWorker}. */
+interface NodeDevWorkerInputs {
+    /** Whether the codegen watcher runs and reloads the worker on a settled run; without it the worker watches `lunora/` itself. */
+    codegenWatch: boolean;
+    /** The codegen watcher's runs, when it runs: a load waits while one is busy and is discarded if one started during it. */
+    generation?: () => CodegenGeneration;
+    logger: Logger;
+    /** Injection seam for tests — defaults to the project's own `@lunora/platform-node`. */
+    platform?: PlatformNode;
+    port: number;
+    projectRoot: string;
 }
 
 /** Spawns the worker child. Injectable so tests drive the orchestration without a real process. */
@@ -99,12 +161,16 @@ interface DevCommandOptions {
     probeReady?: ReadinessProbe;
     /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`LUNORA_REMOTE=1` / `--remote`); DO shards stay local. */
     remote?: boolean;
+    /** `remote` came from LUNORA_REMOTE or the project's `lunora.config` default rather than an explicit `--remote`. */
+    remoteFromDefault?: boolean;
     /** Starts the celld dev session for the celld target; injected in tests. */
     startCelldSession?: typeof startCelldDevSession;
     /** Injection seam for tests — defaults to the real codegen watcher. */
     startCodegen?: typeof startCodegenWatch;
     /** Injection seam for tests — defaults to the embedded Postgres behind a Hyperdrive binding. */
     startHyperdrive?: typeof startLocalHyperdrive;
+    /** Starts the Node host for the node target; injected in tests. */
+    startNodeWorker?: (inputs: NodeDevWorkerInputs) => Promise<NodeDevWorker>;
     /** Injection seam for tests — defaults to the real studio server. */
     startStudio?: typeof startStudioServer;
     /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
@@ -164,6 +230,12 @@ interface DevCommandPlan {
      */
     ipv4LoopbackForced: boolean;
 
+    /**
+     * `true` when the worker is this process's `@lunora/platform-node` host (`--target node`) rather than
+     * {@link DevCommandPlan.wrangler}'s process, reloaded after each settled codegen run.
+     */
+    nodeHost?: true;
+
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
     remote: RemotePlan;
     runsCodegenWatch: boolean;
@@ -205,4 +277,18 @@ interface DevCommandPlan {
     wrangler: SpawnDescriptor & { tag: string };
 }
 
-export type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, LongLivedDescriptor, LongLivedSpawner, WorkerProcess, WorkerSpawner };
+export type {
+    DevCommandOptions,
+    DevCommandPlan,
+    DevTunnelRequest,
+    LongLivedDescriptor,
+    LongLivedSpawner,
+    NodeAppHost,
+    NodeAppHostCandidate,
+    NodeDevHttpServer,
+    NodeDevWorker,
+    NodeDevWorkerInputs,
+    PlatformNode,
+    WorkerProcess,
+    WorkerSpawner,
+};

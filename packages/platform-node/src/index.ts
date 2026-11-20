@@ -26,36 +26,40 @@
  * `objectStorageDirectory`) — a capability rated `emulated` with nothing bound
  * is the one combination that fails at runtime with no diagnostic before it.
  *
- * **Still missing:** a dev server. There is no `lunora dev --target node`, and
- * nothing here owns a timer, so queue delivery is driven by an explicit
- * `poll()`. What exists is the listener a dev server would sit on:
- * `createNodeHttpServer` serves an app worker's `fetch` over `node:http`,
- * streaming the response body, and `createNodeShardNamespace` presents the
- * registry as the `shardDO` namespace that worker routes to. Also absent are
- * the Cloudflare product bindings with no local
- * equivalent — Vectorize, Workers AI, Browser Rendering, Containers, Analytics
- * Engine, Pipelines. `ctx.secrets` reads environment variables through
- * `createNodeSecretBindings` (`./node-secrets`), the Hyperdrive binding is
- * built from `DATABASE_URL` by `createNodeHyperdrive` (`./node-hyperdrive`), and
- * `@lunora/mail` sends are queued and delivered by `createNodeMailHost`
- * (`./node-mail-host`) through Resend or a caller-supplied transport.
+ * **Serving an app.** `createNodeAppHost` composes a worker entry module over
+ * one shard registry per Durable Object binding, and `createNodeHttpServer`
+ * serves its `fetch` over `node:http`, streaming the response body. `lunora dev
+ * --target node` runs exactly that pair. Nothing here owns a timer, so queue
+ * delivery is driven by an explicit `poll()`. Absent are the Cloudflare product
+ * bindings with no local equivalent — Vectorize, Workers AI, Browser Rendering,
+ * Containers, Analytics Engine, Pipelines. `ctx.secrets` reads environment
+ * variables through `createNodeSecretBindings` (`./node-secrets`), and the
+ * Hyperdrive binding is built from `DATABASE_URL` by `createNodeHyperdrive`
+ * (`./node-hyperdrive`). Queued `@lunora/mail` sends are delivered by
+ * `createNodeMailHost` (`./node-mail-host`) through Resend or a caller-supplied
+ * transport, for a process that composes it and polls it, as the server
+ * `lunora deploy --target node` writes does. `lunora dev --target node` composes
+ * none: there mail is captured to the Studio inbox, and with capture turned off
+ * a queued send is not delivered.
  *
  * `lunora deploy --target node` bundles an app into a container build context
  * whose generated entry composes this package (crons, `ctx.secrets`,
  * Hyperdrive from `DATABASE_URL`) and serves it with `createNodeHttpServer`.
  *
  * `@lunora/config` ships a `node` **deploy** driver, so `--target node` resolves
- * for `provision` — which reports, once, which declared features this target
- * cannot serve, and writes nothing: there is no hosted control plane to deploy
- * to and no `wrangler`-equivalent to shell out to. A deploy driver is not a dev
- * server, which is why both statements above hold at once. See
- * `plans/234-node-host-findings.md`.
+ * and codegen gates against `NODE_CAPABILITIES`. There is no hosted control
+ * plane to deploy to and no `wrangler`-equivalent to shell out to, which is why
+ * the deploy stops at a build context. See `plans/234-node-host-findings.md`.
  */
 
 export type { Drainable, DrainOptions, DrainResult, DrainTimer } from "./drain-deadline";
 export { DEFAULT_DRAIN_TIMEOUT_MS, drainTogether } from "./drain-deadline";
+export type { NodeAppDurableObjectBinding, NodeAppHost, NodeAppHostOptions } from "./node-app-host";
+export { checkNodeAppHost, createNodeAppHost } from "./node-app-host";
 export type { NodeDispatchInvocation, NodeDispatchRouteOptions } from "./node-dispatch-route";
 export { createNodeDispatchRoute, NODE_SCHEDULER_DISPATCH_PATH } from "./node-dispatch-route";
+export type { NodeDurableObjectClass, NodeDurableObjectInstance } from "./node-durable-object";
+export { createNodeDurableObjectFactory } from "./node-durable-object";
 export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";
 export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
 export type { NodeHttpServer, NodeHttpServerOptions } from "./node-http-server";

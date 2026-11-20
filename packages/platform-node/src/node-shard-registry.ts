@@ -441,15 +441,24 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             shardKey: key,
         });
 
-        const socketHost = createNodeSocketHost(database);
+        let socketHost: ReturnType<typeof createNodeSocketHost>;
 
-        shard = {
-            inbound: socketHost,
-            kv: createNodeShardKvStore(database),
-            shard: host,
-            shardKey: key,
-            sockets: socketHost.socket,
-        };
+        // The host opened the database; a later step that fails must release it, or every retried open leaks a handle.
+        try {
+            socketHost = createNodeSocketHost(database);
+
+            shard = {
+                inbound: socketHost,
+                kv: createNodeShardKvStore(database),
+                shard: host,
+                shardKey: key,
+                sockets: socketHost.socket,
+            };
+        } catch (error: unknown) {
+            disposeHost();
+
+            throw error;
+        }
 
         live.set(key, {
             alarmsSettled,

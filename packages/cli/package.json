@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cli",
-    "version": "1.0.0-alpha.503",
+    "version": "1.0.0-alpha.504",
     "description": "The Lunora CLI: init, dev, deploy, codegen, migrate, seed, doctor, insights, logs, registry, and the rest of the project commands",
     "keywords": [
         "agent-skills",
@@ -72,7 +72,7 @@
         "@lunora/advisor": "^1.0.0-alpha.294",
         "@lunora/bindings": "^1.0.0-alpha.152",
         "@lunora/codegen": "^1.0.0-alpha.427",
-        "@lunora/config": "^1.0.0-alpha.467",
+        "@lunora/config": "^1.0.0-alpha.468",
         "@lunora/container": "1.0.0-alpha.108",
         "@lunora/d1": "^1.0.0-alpha.237",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
@@ -103,7 +103,8 @@
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/do": "^1.0.0-alpha.287",
         "@lunora/payment": "^1.0.0-alpha.274",
-        "@lunora/platform-node": "^1.0.0-alpha.221",
+        "@lunora/platform-node": "^1.0.0-alpha.222",
+        "@lunora/scheduler": "^1.0.0-alpha.170",
         "@lunora/server": "^1.0.0-alpha.276",
         "@lunora/testing": "^1.0.0-alpha.338",
         "@lunora/values": "^1.0.0-alpha.95",
@@ -119,7 +120,7 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@lunora/platform-node": ">=1.0.0-alpha.218 <2.0.0-0",
+        "@lunora/platform-node": ">=1.0.0-alpha.222 <2.0.0-0",
         "esbuild": ">=0.25.0",
         "mysql2": "*",
         "pg": "*"

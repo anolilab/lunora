@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.504](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.503...@lunora/cli@1.0.0-alpha.504) (2026-11-20)
+
+- feat(cli): run lunora dev on the Node target (#1551) (#1621)
+
 ## @lunora/cli [1.0.0-alpha.503](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.502...@lunora/cli@1.0.0-alpha.503) (2026-11-20)
 
 - feat(platform-node): deliver mail on the Node target (#1551) (#1624)
