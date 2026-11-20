@@ -31,7 +31,8 @@ export interface BackupBucket {
     delete: (keys: string[]) => Promise<void>;
     get: (key: string) => Promise<null | { body: ReadableStream<Uint8Array> }>;
     list: (options: { cursor?: string; prefix: string }) => Promise<BackupListing>;
-    put: (key: string, value: ReadableStream | null, options?: { httpMetadata?: { contentType?: string } }) => Promise<unknown>;
+    /** R2 answers the stored object, whose `size` is the bytes it actually holds. */
+    put: (key: string, value: ReadableStream, options?: { httpMetadata?: { contentType?: string } }) => Promise<unknown>;
 }
 
 export interface BackupListing {
@@ -120,11 +121,39 @@ const prune = async (bucket: Pick<BackupBucket, "delete" | "list">, cell: string
 };
 
 /**
+ * Write `dump` under `key`, refusing an empty or mis-sized one before the sweep
+ * prunes: a dump is never empty (it opens with `PRAGMA`), and an empty one
+ * written as the newest backup would let the prune age out the last good ones.
+ */
+const writeDump = async (bucket: Pick<BackupBucket, "delete" | "put">, key: string, dump: Response): Promise<void> => {
+    const declared = dump.headers.get("content-length");
+
+    if (dump.body === null || declared?.trim() === "0") {
+        throw new Error("control-plane backup download failed: the export answered an empty body");
+    }
+
+    // Streamed rather than buffered: the dump is the whole control plane, and a
+    // Worker that reads it into memory first is one growth spurt from OOM.
+    const stored = await bucket.put(key, dump.body, { httpMetadata: { contentType: SQL_CONTENT_TYPE } });
+
+    // A body without a declared length is only measured once written: refuse what R2 stored
+    // empty, or shorter or longer than declared.
+    const size = (stored as null | { size?: unknown } | undefined)?.size;
+
+    if (typeof size === "number" && (size === 0 || (declared !== null && size !== Number(declared)))) {
+        await bucket.delete([key]);
+
+        throw new Error(`control-plane backup download failed: ${String(size)} bytes written of ${declared ?? "a body of unknown length"}`);
+    }
+};
+
+/**
  * Take one control-plane backup and prune expired ones.
  *
- * A failed export or download throws before anything is pruned: while no new
- * dump is being written, the old ones are the only ones there are, and ageing
- * them out would leave nothing. The prune runs only after the write.
+ * A failed export or download, or an empty dump, throws before anything is
+ * pruned: while no new dump is being written, the old ones are the only ones
+ * there are, and ageing them out would leave nothing. The prune runs only
+ * after the write.
  *
  * A failed primary prune is reported in the result, not thrown: the dump is
  * already written, and the off-site copy of it matters more than the cleanup.
@@ -141,9 +170,7 @@ export const runBackupSweep = async (deps: BackupSweepDeps): Promise<BackupSweep
 
     const key = backupKey(cell, now);
 
-    // Streamed rather than buffered: the dump is the whole control plane, and a
-    // Worker that reads it into memory first is one growth spurt from OOM.
-    await bucket.put(key, dump.body, { httpMetadata: { contentType: SQL_CONTENT_TYPE } });
+    await writeDump(bucket, key, dump);
 
     let pruned = 0;
     let pruneError: string | undefined;

@@ -321,6 +321,49 @@ describe(runBackupSweep, () => {
         expect(put).toStrictEqual([]);
     });
 
+    describe("an empty dump", () => {
+        const expired = { key: "control-plane/eu-1/old.sql", uploaded: new Date(NOW - BACKUP_RETENTION_MS - DAY_MS) };
+        const sweep = (bucket: BackupBucket, response: Response) =>
+            runBackupSweep({
+                bucket,
+                cell: "eu-1",
+                fetch: async () => response,
+                now: NOW,
+                startExport: async () => {
+                    return { signedUrl: "https://d1.example.invalid/dump.sql" };
+                },
+            });
+
+        it("refuses a 2xx without a body, writing and pruning nothing", async () => {
+            const { bucket, deleted, put } = fakeBucket([expired]);
+
+            await expect(sweep(bucket, new Response(null, { status: 200 }))).rejects.toThrow("empty body");
+            expect(put).toStrictEqual([]);
+            expect(deleted).toStrictEqual([]);
+        });
+
+        it("refuses a body declared zero bytes long, writing and pruning nothing", async () => {
+            const { bucket, deleted, put } = fakeBucket([expired]);
+
+            await expect(sweep(bucket, new Response("", { headers: { "content-length": "0" }, status: 200 }))).rejects.toThrow("empty body");
+            expect(put).toStrictEqual([]);
+            expect(deleted).toStrictEqual([]);
+        });
+
+        it("removes a dump R2 stored empty, and prunes nothing", async () => {
+            const { bucket, deleted } = fakeBucket([expired]);
+            const key = backupKey("eu-1", NOW);
+
+            // A chunked body declares no length: only the stored object's size shows it was empty.
+            bucket.put = async () => {
+                return { size: 0 };
+            };
+
+            await expect(sweep(bucket, okResponse())).rejects.toThrow("0 bytes written");
+            expect(deleted).toStrictEqual([key]);
+        });
+    });
+
     it("does not prune when the export never starts", async () => {
         const { bucket, deleted } = fakeBucket([{ key: "control-plane/eu-1/old.sql", uploaded: new Date(NOW - BACKUP_RETENTION_MS - DAY_MS) }]);
         const startExport = vi.fn<() => Promise<{ signedUrl: string }>>(async () => {
