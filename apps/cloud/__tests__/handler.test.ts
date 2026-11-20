@@ -131,14 +131,36 @@ describe(handleDeployRequest, () => {
         });
 
         const response = await handleDeployRequest(
-            request("k", { bundle: BUNDLE, cronSpecs: ["0 */6 * * *", 3 as unknown as string], projectId: "proj_1", scriptName: "s" }),
+            request("k", { bundle: BUNDLE, cronSpecs: ["0 */6 * * *"], projectId: "proj_1", scriptName: "s" }),
             deps(backend, okProvisioner),
         );
 
         await response.text();
 
-        // Only valid string expressions survive.
         expect(received).toStrictEqual(["0 */6 * * *"]);
+    });
+
+    it.each([
+        ["a non-string expression", ["0 */6 * * *", 3]],
+        ["more than 50 expressions", Array.from({ length: 51 }, (_, minute) => `${String(minute)} * * * *`)],
+    ])("refuses cronSpecs with %s instead of deploying without some of them", async (_case, cronSpecs) => {
+        let created = false;
+        const backend = backendWith({
+            createDeployment: () => {
+                created = true;
+
+                return Promise.resolve({ deploymentId: "dep_1" });
+            },
+        });
+
+        const response = await handleDeployRequest(
+            request("k", { bundle: BUNDLE, cronSpecs: cronSpecs as string[], projectId: "proj_1", scriptName: "s" }),
+            deps(backend, okProvisioner),
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toStrictEqual({ error: "cronSpecs must be an array of at most 50 cron expression strings" });
+        expect(created).toBe(false);
     });
 
     it("streams accepted → queued → provisioning → live and records status transitions", async () => {

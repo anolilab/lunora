@@ -501,6 +501,12 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
         : { deploymentId, error: outcome.error, status: "failed", ...withUrl(url) };
 };
 
+/** Cron expressions one deployment may declare. */
+const MAX_CRON_SPECS = 50;
+
+const isCronSpecList = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.length <= MAX_CRON_SPECS && value.every((cron) => typeof cron === "string");
+
 /**
  * The project's placement and the driver for it, or why the release is
  * refused: a project placed on another cell (409), a target with no driver yet
@@ -567,8 +573,13 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
 
     const { assets, manifest } = payload.value;
     const { branch, kind, projectId, scriptName } = request;
-    // Tenant cron expressions to fan out (§2.4). Defensive: only strings, capped.
-    const cronSpecs = Array.isArray(request.cronSpecs) ? request.cronSpecs.filter((cron): cron is string => typeof cron === "string").slice(0, 50) : undefined;
+    // Tenant cron expressions to fan out (§2.4). Refused rather than trimmed: a dropped
+    // expression would deploy "successfully" with that job never scheduled.
+    const { cronSpecs } = request;
+
+    if (cronSpecs !== undefined && !isCronSpecList(cronSpecs)) {
+        return { error: `cronSpecs must be an array of at most ${String(MAX_CRON_SPECS)} cron expression strings`, status: 400 };
+    }
 
     // The platform-minted tenant admin token: recorded on the deployment (for the
     // admin proxy) and set as the worker's LUNORA_ADMIN_TOKEN secret.
