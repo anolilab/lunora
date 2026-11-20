@@ -7,13 +7,15 @@ import { isBrowser } from "../../../shared/is-browser";
 import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { getLunoraClient } from "./context";
+import { subscribeReactiveArgs } from "./subscribe-reactive-args";
 
 /**
  * `presence` — collaborative-awareness stores, the client half of the
  * `@lunora/server` `definePresence` preset.
  *
  * Drives the heartbeat mutation (on call, interval, and tab re-focus) and
- * subscribes to the live `listPresent` query for the given room.
+ * subscribes to the live `listPresent` query for the given room. `roomId` may
+ * be a `Readable<string>`; a change leaves the old room and joins the new one.
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client from the
  * Svelte context.
@@ -74,7 +76,7 @@ const DEFAULT_INTERVAL_MS = 10_000;
 
 const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresentReference>(
     client: LunoraClient,
-    roomId: string,
+    roomId: Readable<string> | string,
     options: PresenceOptions<H, L>,
 ): PresenceHandle<L> => {
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
@@ -86,10 +88,12 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     let latestData: Record<string, unknown> | undefined = options.data;
     // True only between the client-side mount and teardown; `setData` must not heartbeat before then.
     let mounted = false;
+    // The room the armed wiring belongs to; only read while `mounted`.
+    let currentRoom = "";
 
     const sendHeartbeat = (): void => {
         const args = {
-            roomId,
+            roomId: currentRoom,
             sessionId,
             ...(latestData === undefined ? {} : { data: latestData }),
         } as ArgsOf<H>;
@@ -111,8 +115,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         }
     };
 
-    let intervalHandle: ReturnType<typeof setInterval> | undefined;
-    let releaseConnectionContext: (() => void) | undefined;
+    let stopRoomWiring: (() => void) | undefined;
 
     // The heartbeat, interval, visibility listener, connection-context, and
     // live subscription below are all client-only side effects. During SSR
@@ -125,19 +128,36 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     // `@lunora/vue`'s `use-presence.ts` guard; the returned store stays inert
     // until the component hydrates.
     if (isBrowser()) {
-        mounted = true;
-        sendHeartbeat();
-        intervalHandle = setInterval(sendHeartbeat, intervalMs);
+        // A room change tears the previous room's interval and connection context down before the
+        // next room is armed, so neither outlives the room it belongs to.
+        stopRoomWiring = subscribeReactiveArgs(roomId, (room) => {
+            currentRoom = room;
+            mounted = true;
+            sendHeartbeat();
 
-        if (typeof document !== "undefined") {
-            document.addEventListener("visibilitychange", onVisible);
-        }
+            const intervalHandle = setInterval(sendHeartbeat, intervalMs);
 
-        // Register connection context so server can drop the row on socket disconnect.
-        // Use the refcounted acquire (not the last-writer-wins setter) so a second
-        // presence store on the same client/shard doesn't clobber this one's context
-        // when either tears down.
-        releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
+            if (typeof document !== "undefined") {
+                document.addEventListener("visibilitychange", onVisible);
+            }
+
+            // Register connection context so server can drop the row on socket disconnect.
+            // Use the refcounted acquire (not the last-writer-wins setter) so a second
+            // presence store on the same client/shard doesn't clobber this one's context
+            // when either tears down.
+            const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
+
+            return () => {
+                mounted = false;
+                clearInterval(intervalHandle);
+
+                if (typeof document !== "undefined") {
+                    document.removeEventListener("visibilitychange", onVisible);
+                }
+
+                releaseConnectionContext();
+            };
+        });
     }
 
     const errorStore = writable<SubscriptionError | undefined>();
@@ -152,21 +172,39 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
             return undefined;
         }
 
-        return client.subscribe(
-            listPresent,
-            { roomId } as ArgsOf<L>,
-            (value) => {
-                set(value);
-                errorStore.set(undefined);
-            },
-            {
-                onError: (subscriptionError) => {
-                    errorStore.set(subscriptionError);
-                    options.onError?.(subscriptionError);
+        return subscribeReactiveArgs(roomId, (room) => {
+            // A room change must not show the previous room's members or error under the new one.
+            set(undefined);
+            errorStore.set(undefined);
+
+            // Guards a value or error the client delivers after this room was torn down.
+            let live = true;
+
+            const unsubscribe = client.subscribe(
+                listPresent,
+                { roomId: room } as ArgsOf<L>,
+                (value) => {
+                    if (live) {
+                        set(value);
+                        errorStore.set(undefined);
+                    }
                 },
-                shardKey,
-            },
-        );
+                {
+                    onError: (subscriptionError) => {
+                        if (live) {
+                            errorStore.set(subscriptionError);
+                            options.onError?.(subscriptionError);
+                        }
+                    },
+                    shardKey,
+                },
+            );
+
+            return () => {
+                live = false;
+                unsubscribe();
+            };
+        });
     });
 
     let torndown = false;
@@ -181,16 +219,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
 
         torndown = true;
         mounted = false;
-
-        if (intervalHandle !== undefined) {
-            clearInterval(intervalHandle);
-        }
-
-        if (typeof document !== "undefined") {
-            document.removeEventListener("visibilitychange", onVisible);
-        }
-
-        releaseConnectionContext?.();
+        stopRoomWiring?.();
     };
 
     // Auto-teardown on component destruction so a consumer who forgets
@@ -220,20 +249,24 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
  * `handle.teardown()` yourself. `teardown()` is idempotent, so an explicit
  * `onDestroy(handle.teardown)` on top of the auto-wiring is safe.
  */
-export function presence<H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: PresenceOptions<H, L>): PresenceHandle<L>;
 export function presence<H extends HeartbeatReference, L extends ListPresentReference>(
-    client: LunoraClient,
-    roomId: string,
+    roomId: Readable<string> | string,
     options: PresenceOptions<H, L>,
 ): PresenceHandle<L>;
 export function presence<H extends HeartbeatReference, L extends ListPresentReference>(
-    clientOrRoomId: LunoraClient | string,
-    roomIdOrOptions: PresenceOptions<H, L> | string,
+    client: LunoraClient,
+    roomId: Readable<string> | string,
+    options: PresenceOptions<H, L>,
+): PresenceHandle<L>;
+export function presence<H extends HeartbeatReference, L extends ListPresentReference>(
+    clientOrRoomId: LunoraClient | Readable<string> | string,
+    roomIdOrOptions: PresenceOptions<H, L> | Readable<string> | string,
     maybeOptions?: PresenceOptions<H, L>,
 ): PresenceHandle<L> {
-    const hasExplicitClient = typeof clientOrRoomId !== "string";
-    const client = hasExplicitClient ? clientOrRoomId : getLunoraClient();
-    const roomId = (hasExplicitClient ? roomIdOrOptions : clientOrRoomId) as string;
+    // By arity, not by type: a `Readable` room and a `LunoraClient` both expose `subscribe`.
+    const hasExplicitClient = maybeOptions !== undefined;
+    const client = hasExplicitClient ? (clientOrRoomId as LunoraClient) : getLunoraClient();
+    const roomId = (hasExplicitClient ? roomIdOrOptions : clientOrRoomId) as Readable<string> | string;
     const options = (hasExplicitClient ? maybeOptions : roomIdOrOptions) as PresenceOptions<H, L>;
 
     return createPresenceHandle(client, roomId, options);
