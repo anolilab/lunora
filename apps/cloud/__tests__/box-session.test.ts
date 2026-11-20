@@ -678,6 +678,46 @@ describe("boxSessionDO", () => {
         expect(store.tables["boxes"]?.[0]).toMatchObject({ status: "pending" });
     });
 
+    it("keeps a socket refused while its auth frame read the box row refused", async () => {
+        const { key, session, state, store } = await setup();
+        const socket = fakeSocket(openSession("box_1", Date.now()));
+
+        // workerd keeps a socket the server closed listed until the close handshake ends.
+        state.getWebSockets = () => state.sockets;
+        state.acceptWebSocket(socket);
+        await session.webSocketMessage(socket, helloFrame("box_1"));
+
+        const challenge = socket.received()[0];
+        const { get } = store;
+        let reach = (): void => undefined;
+        let release = (): void => undefined;
+        const reached = new Promise<void>((resolve) => {
+            reach = resolve;
+        });
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        store.get = async (table, id) => {
+            reach();
+            await gate;
+
+            return get(table, id);
+        };
+
+        const auth = session.webSocketMessage(socket, await authFrame(key, "box_1", challenge?.type === "challenge" ? challenge.nonce : ""));
+
+        await reached;
+        store.get = get;
+        await session.close("BOX_REVOKED", "revoked");
+        release();
+        await auth;
+
+        expect(socket.attachment.closed).toBe(true);
+        expect(socket.received().some((frame) => frame.type === "routes")).toBe(false);
+        expect(store.tables["boxes"]?.[0]).toMatchObject({ status: "pending" });
+    });
+
     it("fails a dispatch fast when the box is not connected (BOX_OFFLINE)", async () => {
         const { session } = await setup();
 

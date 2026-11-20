@@ -223,6 +223,12 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
             loadBox: async (boxId) => sessionBoxOf(await loadBox(database, boxId)),
         });
 
+        // Refused (a revoke, the liveness tick) while the frame awaited D1: writing `next`
+        // would clear `closed` and make the socket ready again, so the frame is dropped.
+        if (attachmentOf(socket).closed === true) {
+            return;
+        }
+
         socket.serializeAttachment(next);
 
         for (const effect of effects) {
