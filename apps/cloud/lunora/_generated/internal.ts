@@ -138,6 +138,7 @@ export interface InternalApiTypes {
     telemetry: {
         orgForDeployKey: FunctionReference<"query", { deployKey: unknown }, { organizationId: Id<"organizations">; } | null>;
         pruneObservations: FunctionReference<"mutation", {}, { pruned: number; }>;
+        servicesOutsideKeyProject: FunctionReference<"query", { deployKey: unknown; organizationId: Id<"organizations">; serviceNames: Array<string> }, string[]>;
     };
     tenant_backups: {
         authorizeDownload: FunctionReference<"mutation", { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }, { alias: string; createdAt: number; key: string; }>;
@@ -291,6 +292,7 @@ export const internal: InternalApiTypes = {
     telemetry: {
         orgForDeployKey: { __lunoraRef: "telemetry:orgForDeployKey" },
         pruneObservations: { __lunoraRef: "telemetry:pruneObservations" },
+        servicesOutsideKeyProject: { __lunoraRef: "telemetry:servicesOutsideKeyProject" },
     },
     tenant_backups: {
         authorizeDownload: { __lunoraRef: "tenant_backups:authorizeDownload" },

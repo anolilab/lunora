@@ -188,6 +188,18 @@ export const authorizeTelemetryKey = defineIdentityGuard(
         resolveKeyRow(context, organizationId, key),
 );
 
+/** Whether `scriptName` is owned by a project other than a project-scoped key's. An unowned name names no sibling. */
+export const scriptOutsideKeyProject = async (context: QueryContext, key: Pick<DeployKeyRow, "projectId">, scriptName: string): Promise<boolean> => {
+    if (key.projectId == null) {
+        return false;
+    }
+
+    const { page } = await context.db.aliasOwnership.findMany({ where: { alias: scriptName } });
+    const owner = page.at(0)?.projectId;
+
+    return owner !== undefined && owner !== key.projectId;
+};
+
 /**
  * Refuse telemetry a project-scoped key would attribute to another project of its
  * organization: a deployment of that project, or a script name that project owns.
@@ -211,13 +223,42 @@ export const assertTelemetryInKeyProject = async (
         }
     }
 
-    if (target.scriptName !== undefined) {
-        const { page } = await context.db.aliasOwnership.findMany({ where: { alias: target.scriptName } });
-        const owner = page.at(0)?.projectId;
+    if (target.scriptName !== undefined && (await scriptOutsideKeyProject(context, key, target.scriptName))) {
+        throw new LunoraError("FORBIDDEN", "a project-scoped key may only send telemetry for a script of its own project");
+    }
+};
 
-        if (owner !== undefined && owner !== key.projectId) {
-            throw new LunoraError("FORBIDDEN", "a project-scoped key may only send telemetry for a script of its own project");
-        }
+/**
+ * Distinct `service.name`s one telemetry batch of a project-scoped key may carry.
+ * Each costs an ownership lookup, and an exporter ships one service (a Collector
+ * a handful), never hundreds.
+ */
+export const MAX_KEY_PROJECT_SERVICES = 20;
+
+/**
+ * Run {@link assertTelemetryInKeyProject} over the `service.name`s a span or
+ * metric batch names: an OTLP resource's service is the script it reports for, so a
+ * project-scoped key may not send one a sibling project owns.
+ * @throws {LunoraError} `BAD_REQUEST` past {@link MAX_KEY_PROJECT_SERVICES} services; `FORBIDDEN` for a sibling's script.
+ */
+export const assertServicesInKeyProject = async (
+    context: QueryContext,
+    key: Pick<DeployKeyRow, "projectId">,
+    serviceNames: Iterable<string | undefined>,
+): Promise<void> => {
+    if (key.projectId == null) {
+        return;
+    }
+
+    const distinct = new Set([...serviceNames].filter((name): name is string => name !== undefined));
+
+    if (distinct.size > MAX_KEY_PROJECT_SERVICES) {
+        throw new LunoraError("BAD_REQUEST", `a project-scoped key may send at most ${String(MAX_KEY_PROJECT_SERVICES)} services in one batch`);
+    }
+
+    for (const scriptName of distinct) {
+        // eslint-disable-next-line no-await-in-loop -- bounded by MAX_KEY_PROJECT_SERVICES above
+        await assertTelemetryInKeyProject(context, key, { scriptName });
     }
 };
 

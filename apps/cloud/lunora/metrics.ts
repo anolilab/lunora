@@ -6,7 +6,7 @@ import { createMetricsReader, DEFAULT_METRICS_BUCKET_MS, DEFAULT_METRICS_WINDOW_
 import type { Doc as Document_ } from "./_generated/dataModel";
 import { action, internalMutation, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
-import { assertMember, assertRowInOrg, assertTelemetryInKeyProject, authorizeTelemetryKey } from "./authz";
+import { assertMember, assertRowInOrg, assertServicesInKeyProject, assertTelemetryInKeyProject, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
@@ -143,6 +143,11 @@ export const ingest = mutation
         }
 
         await assertTelemetryInKeyProject(context, key, { deploymentId: args.deploymentId });
+        await assertServicesInKeyProject(
+            context,
+            key,
+            args.points.map((point) => point.serviceName),
+        );
 
         const { now } = context;
 

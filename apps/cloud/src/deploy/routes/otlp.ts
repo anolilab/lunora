@@ -151,16 +151,54 @@ const MAX_OTLP_METRIC_POINTS = 500;
 
 /**
  * OTLP success response. An empty body is full success; when the batch was capped
- * we return `partialSuccess` with the rejected count (per the OTLP spec), so an
+ * or lost a service outside the key's project, we return `partialSuccess` with the rejected count (per the OTLP spec), so an
  * exporter learns some points were dropped rather than seeing a silent success.
  */
 const otlpAccepted = (rejectedCount: number, rejectedField: "rejectedDataPoints" | "rejectedLogRecords" | "rejectedSpans"): Response => {
     const body =
         rejectedCount > 0
-            ? { partialSuccess: { errorMessage: `accepted with ${String(rejectedCount)} rejected (batch cap exceeded)`, [rejectedField]: rejectedCount } }
+            ? {
+                  partialSuccess: {
+                      errorMessage: `accepted with ${String(rejectedCount)} rejected (batch cap exceeded, or a service outside the key's project)`,
+                      [rejectedField]: rejectedCount,
+                  },
+              }
             : {};
 
     return Response.json(body, { headers: { "content-type": "application/json" }, status: 200 });
+};
+
+/**
+ * The resources of an OTLP batch an ingest key may send: a project-scoped key
+ * loses each whose `service.name` is a sibling project's script
+ * (`telemetry.servicesOutsideKeyProject`), so its spans and metrics cannot stand
+ * in for that project's. An organization-wide key keeps every resource.
+ */
+const resourcesInKeyProject = async <R extends { resource?: { attributes?: { key: string; value?: { stringValue?: string } }[] } }>(
+    resources: R[] | undefined,
+    auth: OtlpAuth,
+    context: LunoraActionContext,
+): Promise<R[]> => {
+    const serviceOf = (resource: R): string | undefined => resource.resource?.attributes?.find(({ key }) => key === "service.name")?.value?.stringValue;
+    const serviceNames = [...new Set((resources ?? []).map((resource) => serviceOf(resource)).filter((name) => name !== undefined))];
+
+    if (serviceNames.length === 0) {
+        return resources ?? [];
+    }
+
+    const barred = new Set(
+        await context.runQuery<string[]>(internal.telemetry.servicesOutsideKeyProject, {
+            deployKey: auth.key,
+            organizationId: auth.organizationId,
+            serviceNames,
+        }),
+    );
+
+    return (resources ?? []).filter((resource) => {
+        const service = serviceOf(resource);
+
+        return service === undefined || !barred.has(service);
+    });
 };
 
 /** Strip the routing-only `serviceName` off a decoded OTLP log entry, leaving the `logs.ingest` line shape. */
@@ -216,8 +254,10 @@ const withOtlpIngest = async (
  */
 export const handleOtlpTracesRoute = (request: Request, environment: RouterEnv): Promise<Response> =>
     withOtlpIngest(request, environment, "traces", "rejectedSpans", async (payload, auth, context) => {
-        const body = payload as OtlpTracePayload;
+        const sent = payload as OtlpTracePayload;
+        const body: OtlpTracePayload = { resourceSpans: await resourcesInKeyProject(sent.resourceSpans, auth, context) };
         const decoded = decodeObservations(body);
+        const outsideProject = decodeObservations(sent).length - decoded.length;
         const observations = decoded.slice(0, MAX_OTLP_OBSERVATIONS);
         const events = decodeTelemetryEvents(body);
         const keptEvents = events.slice(0, MAX_OTLP_ERROR_EVENTS);
@@ -238,7 +278,7 @@ export const handleOtlpTracesRoute = (request: Request, environment: RouterEnv):
 
         // An error span past the event cap still lands as an observation, so it is
         // rejected only in part; the larger of the two shortfalls is what the caller lost.
-        return Math.max(decoded.length - observations.length, events.length - keptEvents.length);
+        return outsideProject + Math.max(decoded.length - observations.length, events.length - keptEvents.length);
     });
 
 /**
@@ -288,7 +328,9 @@ export const handleOtlpLogsRoute = (request: Request, environment: RouterEnv): P
  */
 export const handleOtlpMetricsRoute = (request: Request, environment: RouterEnv): Promise<Response> =>
     withOtlpIngest(request, environment, "metrics", "rejectedDataPoints", async (payload, auth, context) => {
-        const decoded = decodeMetricPoints(payload as OtlpMetricsPayload);
+        const sent = payload as OtlpMetricsPayload;
+        const decoded = decodeMetricPoints({ resourceMetrics: await resourcesInKeyProject(sent.resourceMetrics, auth, context) });
+        const outsideProject = decodeMetricPoints(sent).length - decoded.length;
         const kept = decoded.slice(0, MAX_OTLP_METRIC_POINTS);
 
         // Exact tier: persist each point in D1 (deploy-key authorized inside the mutation).
@@ -314,5 +356,5 @@ export const handleOtlpMetricsRoute = (request: Request, environment: RouterEnv)
             // A throwing/absent dataset binding must not fail the ingest.
         }
 
-        return decoded.length - kept.length;
+        return outsideProject + decoded.length - kept.length;
     });

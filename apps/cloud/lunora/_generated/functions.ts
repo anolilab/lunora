@@ -292,6 +292,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "telemetry:ingest": lunora_telemetry_33.ingest as unknown as RegisteredLunoraFunction,
     "telemetry:orgForDeployKey": lunora_telemetry_33.orgForDeployKey as unknown as RegisteredLunoraFunction,
     "telemetry:pruneObservations": lunora_telemetry_33.pruneObservations as unknown as RegisteredLunoraFunction,
+    "telemetry:servicesOutsideKeyProject": lunora_telemetry_33.servicesOutsideKeyProject as unknown as RegisteredLunoraFunction,
     "tenant_backups:authorizeDownload": lunora_tenant_backups_34.authorizeDownload as unknown as RegisteredLunoraFunction,
     "tenant_backups:beginBackup": lunora_tenant_backups_34.beginBackup as unknown as RegisteredLunoraFunction,
     "tenant_backups:beginRestore": lunora_tenant_backups_34.beginRestore as unknown as RegisteredLunoraFunction,
@@ -1204,7 +1205,7 @@ return { "organizationId": source["organizationId"], "periodStart": source["peri
  * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor
  * was read at, which a claims fingerprint leaves out.
  */
-export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["alerts:anomalyBaselines", "alerts:list", "alerts:rules", "alerts:silences", "alerts:suggestUsageThreshold", "alerts:usageProgress", "audit_log:list", "billing:entitlements", "billing:subscription", "boxes:get", "boxes:list", "builds:advisories", "builds:listByProject", "builds:logs", "catalog:installs", "cloudflare_accounts:costTarget", "cloudflare_accounts:list", "cloudflare_alerts:assertAlertsManager", "dashboards:get", "dashboards:list", "deploy_keys:ingestKeyCipher", "deploy_keys:list", "deployments:adminTarget", "deployments:ejectTarget", "deployments:listByProject", "deployments:releaseTarget", "domains:get", "domains:list", "domains:removalTarget", "domains:verifyTarget", "edge:recursionPolicy", "edge:rules", "github_installations:list", "halts:status", "incidents:list", "invitations:list", "issues:list", "logs:list", "members:list", "metrics:series", "notifications:channels", "notifications:deliveries", "onboarding:checklist", "projects:listByOrg", "secrets:list", "secrets:listEncrypted", "sessions:get", "sessions:list", "tenant_backups:list", "traces:get", "traces:list", "traffic:live", "uptime:recent", "uptime:summary", "usage:billingSummary", "usage:meteringStatus", "usage:series", "usage:spendStatus", "usage:summary"]);
+export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["alerts:anomalyBaselines", "alerts:list", "alerts:rules", "alerts:silences", "alerts:suggestUsageThreshold", "alerts:usageProgress", "audit_log:list", "billing:entitlements", "billing:subscription", "boxes:get", "boxes:list", "builds:advisories", "builds:listByProject", "builds:logs", "catalog:installs", "cloudflare_accounts:costTarget", "cloudflare_accounts:list", "cloudflare_alerts:assertAlertsManager", "dashboards:get", "dashboards:list", "deploy_keys:ingestKeyCipher", "deploy_keys:list", "deployments:adminTarget", "deployments:ejectTarget", "deployments:listByProject", "deployments:releaseTarget", "domains:get", "domains:list", "domains:removalTarget", "domains:verifyTarget", "edge:recursionPolicy", "edge:rules", "github_installations:list", "halts:status", "incidents:list", "invitations:list", "issues:list", "logs:list", "members:list", "metrics:series", "notifications:channels", "notifications:deliveries", "onboarding:checklist", "projects:listByOrg", "secrets:list", "secrets:listEncrypted", "sessions:get", "sessions:list", "telemetry:servicesOutsideKeyProject", "tenant_backups:list", "traces:get", "traces:list", "traffic:live", "uptime:recent", "uptime:summary", "usage:billingSummary", "usage:meteringStatus", "usage:series", "usage:spendStatus", "usage:summary"]);
 
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
@@ -1521,6 +1522,7 @@ export interface Caller {
         ingest: (args: { deployKey: unknown; deploymentId?: Id<"deployments">; events: Array<{ code?: string; container?: string; functionPath: string; instance?: string; kind: "error" | "container"; message: string; traceId?: string; ts: number }>; observations?: Array<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: Array<{ label?: string; name: string; score: number }>; functionPath?: string; input?: string; kind: "container" | "generation" | "worker"; level: "error" | "info"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; serviceName?: string; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }>; organizationId: Id<"organizations"> }) => Promise<{ alerts: { body: string; channel: "email" | "pagerduty" | "slack" | "webhook"; destination: string; id: Id<"alerts">; subject: string; }[]; incidents: number; issues: number; }>;
         orgForDeployKey: (args: { deployKey: unknown }) => Promise<{ organizationId: Id<"organizations">; } | null>;
         pruneObservations: (args?: {}) => Promise<{ pruned: number; }>;
+        servicesOutsideKeyProject: (args: { deployKey: unknown; organizationId: Id<"organizations">; serviceNames: Array<string> }) => Promise<string[]>;
     };
     tenant_backups: {
         authorizeDownload: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ alias: string; createdAt: number; key: string; }>;
@@ -1860,6 +1862,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         ingest: (args) => callRegistered(context, "telemetry:ingest", args),
         orgForDeployKey: (args) => callRegistered(context, "telemetry:orgForDeployKey", args),
         pruneObservations: (args) => callRegistered(context, "telemetry:pruneObservations", args),
+        servicesOutsideKeyProject: (args) => callRegistered(context, "telemetry:servicesOutsideKeyProject", args),
     },
     tenant_backups: {
         authorizeDownload: (args) => callRegistered(context, "tenant_backups:authorizeDownload", args),

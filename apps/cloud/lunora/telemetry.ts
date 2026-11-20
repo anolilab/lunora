@@ -7,7 +7,15 @@ import type { Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server";
 import { absentForNull } from "./absent";
-import { assertRowInOrg, assertTelemetryInKeyProject, authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
+import {
+    assertRowInOrg,
+    assertServicesInKeyProject,
+    assertTelemetryInKeyProject,
+    authorizeTelemetryKey,
+    MAX_KEY_PROJECT_SERVICES,
+    resolveDeployKeyOrg,
+    scriptOutsideKeyProject,
+} from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
@@ -287,6 +295,10 @@ export const ingest = mutation
             }
 
             await assertTelemetryInKeyProject(context, key, { deploymentId: args.deploymentId });
+            await assertServicesInKeyProject(context, key, [
+                ...(args.observations ?? []).map((observation) => observation.serviceName),
+                ...args.events.map((event) => event.container),
+            ]);
 
             // Persist every span as an observation (Traces). Additive to the error
             // fold below — the same OTLP payload feeds both. Best-effort per row so
@@ -492,6 +504,36 @@ export const pruneObservations = internalMutation.mutation(async ({ ctx: context
  * `Authorization: Bearer &lt;key>` header, so the route resolves the org from the
  * key before delegating to the deploy-key-authorized ingest. SYSTEM only.
  */
+
+/**
+ * The `service.name`s of an OTLP batch an ingest key may not send (SYSTEM — the
+ * standard OTLP routes, which drop those resources and report them as a partial
+ * success, since `ingest` / `metrics.ingest` would refuse the whole batch). None
+ * for an organization-wide key; for a project-scoped one, each script a sibling
+ * project owns, and every name past {@link MAX_KEY_PROJECT_SERVICES}.
+ */
+export const servicesOutsideKeyProject = internalQuery
+    .input({ deployKey: boundedString(LIMITS.token), organizationId: v.id("organizations"), serviceNames: v.array(v.string()) })
+    .query(async ({ ctx: context, args }): Promise<string[]> => {
+        const key = await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
+
+        if (key.projectId == null) {
+            return [];
+        }
+
+        const distinct = [...new Set(args.serviceNames)];
+        const barred = distinct.slice(MAX_KEY_PROJECT_SERVICES);
+
+        for (const scriptName of distinct.slice(0, MAX_KEY_PROJECT_SERVICES)) {
+            // eslint-disable-next-line no-await-in-loop -- bounded by MAX_KEY_PROJECT_SERVICES
+            if (await scriptOutsideKeyProject(context, key, scriptName)) {
+                barred.push(scriptName);
+            }
+        }
+
+        return barred;
+    });
+
 export const orgForDeployKey = internalQuery
     .input({ deployKey: boundedString(LIMITS.token) })
     .query(async ({ ctx: context, args }): Promise<{ organizationId: Id<"organizations"> } | null> => {
