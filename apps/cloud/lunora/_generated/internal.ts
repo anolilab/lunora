@@ -131,6 +131,7 @@ export interface InternalApiTypes {
         prune: FunctionReference<"mutation", {}, { auditLog: number; deployments: number; events: number; financial: number; }>;
     };
     secrets: {
+        rollbackInstallWrite: FunctionReference<"mutation", { name: unknown; organizationId: Id<"organizations">; previous?: { ciphertext: unknown; iv: unknown }; projectId: Id<"projects">; written: { ciphertext: unknown; iv: unknown } }, { applied: boolean; }>;
         snapshotRows: FunctionReference<"query", { names: Array<unknown>; organizationId: Id<"organizations">; projectId: Id<"projects"> }, { ciphertext: string; cipherVersion?: null | number; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string; }[]>;
     };
     telemetry: {
@@ -282,6 +283,7 @@ export const internal: InternalApiTypes = {
         prune: { __lunoraRef: "retention:prune" },
     },
     secrets: {
+        rollbackInstallWrite: { __lunoraRef: "secrets:rollbackInstallWrite" },
         snapshotRows: { __lunoraRef: "secrets:snapshotRows" },
     },
     telemetry: {

@@ -1,6 +1,6 @@
 import { SECRET_CIPHER_VERSION, secretsForKind } from "../src/secrets/select";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
-import { internalQuery, mutation, query, v } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
@@ -168,6 +168,44 @@ export const snapshotRows = internalQuery
             });
         },
     );
+
+const sealedValue = v.object({ ciphertext: boundedString(LIMITS.secret), iv: boundedString(LIMITS.id) });
+
+/**
+ * Undo one production write of a failed catalog install: put `previous` back, or delete
+ * the row when there was none. Only while the row still holds the ciphertext the install
+ * wrote — an owner may have stored a newer value, or created the secret, while the
+ * install ran, and the rollback must not erase that. The read and the write are one
+ * mutation, so no write can land between the check and the undo. Internal: only the
+ * install route calls it, after it has checked the caller's role.
+ */
+export const rollbackInstallWrite = internalMutation
+    .input({
+        name: boundedString(LIMITS.name),
+        organizationId: v.id("organizations"),
+        previous: v.optional(sealedValue),
+        projectId: v.id("projects"),
+        written: sealedValue,
+    })
+    .mutation(async ({ ctx: context, args: { name, organizationId, previous, projectId, written } }): Promise<{ applied: boolean }> => {
+        const { page } = await context.db.secrets.findMany({ where: { environment: "production", name, organizationId, projectId } }); // secret-scanner:allow -- domain field name
+        const row = page.at(0);
+
+        if (row?.ciphertext !== written.ciphertext || row.iv !== written.iv) {
+            return { applied: false };
+        }
+
+        await (previous === undefined
+            ? context.db.delete("secrets", row._id)
+            : context.db.patch("secrets", row._id, {
+                  ciphertext: previous.ciphertext,
+                  cipherVersion: SECRET_CIPHER_VERSION,
+                  iv: previous.iv,
+                  updatedAt: context.now,
+              }));
+
+        return { applied: true };
+    });
 
 /** Delete a secret (owner/admin). */
 export const remove = mutation

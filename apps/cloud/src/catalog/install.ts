@@ -103,9 +103,9 @@ export interface InstallPorts {
     mintReleaseKey: (installId: string) => Promise<{ id: string; key: string }>;
     /** Run the deploy core with the key. The deploy core reverts a failed release only while `installId` still holds the claim. */
     release: (request: InstallRelease, key: string, installId: string) => Promise<ReleaseOutcome>;
-    /** Remove a secret the install created. */
+    /** Remove a secret the install created, unless its row no longer holds what the install stored. */
     removeSecret: (name: string) => Promise<void>;
-    /** Put a secret row back exactly as it was, in the environment it came from. */
+    /** Put a secret row back as it was, unless its row no longer holds what the install stored. */
     restoreSecret: (secret: SealedSecret) => Promise<void>;
     /** Revoke the key minted for this install. */
     revokeReleaseKey: (installId: string, id: string) => Promise<void>;

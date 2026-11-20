@@ -170,6 +170,9 @@ export const installPorts = (
 
         return rows.filter((row) => row.environment === "production" || row.environment === "all");
     };
+    // What this install stored, per name. A rollback undoes a row only while it still
+    // holds that ciphertext, so an owner's concurrent edit survives the install's failure.
+    const written = new Map<string, { ciphertext: string; iv: string }>();
 
     return {
         abandon: (installId) => context.runMutation(internal.catalog.abandonInstall, { installId }),
@@ -215,26 +218,30 @@ export const installPorts = (
             return started.run(() => {});
         },
         removeSecret: async (name) => {
-            const rows = await storedSecrets();
-            const row = rows.find((candidate) => candidate.name === name && candidate.environment === "production");
+            const stamp = written.get(name);
 
-            if (row !== undefined) {
-                await context.runMutation(api.secrets.remove, { id: row.id, organizationId });
+            if (stamp !== undefined) {
+                await context.runMutation(internal.secrets.rollbackInstallWrite, { name, organizationId, projectId, written: stamp });
             }
         },
         restoreSecret: async (secret) => {
-            // Re-sealed rather than written back as it was: `store` marks every row it
-            // writes as bound, which a snapshot of a row from before the binding is not.
+            const stamp = written.get(secret.name);
+
+            if (stamp === undefined) {
+                return;
+            }
+
+            // Re-sealed rather than written back as it was: every stored row is marked
+            // bound, which a snapshot of a row from before the binding is not.
             const plaintext = await openSecret(secretKey, { organizationId, projectId }, secret);
             const sealed = await sealSecret(secretKey, { organizationId, projectId }, secret.environment, secret.name, plaintext);
 
-            await context.runMutation(api.secrets.store, {
-                ciphertext: sealed.ciphertext,
-                environment: secret.environment,
-                iv: sealed.iv,
+            await context.runMutation(internal.secrets.rollbackInstallWrite, {
                 name: secret.name,
                 organizationId,
+                previous: { ciphertext: sealed.ciphertext, iv: sealed.iv },
                 projectId,
+                written: stamp,
             });
         },
         revokeReleaseKey: async (installId, id) => {
@@ -249,6 +256,8 @@ export const installPorts = (
         storeSecret: async (name, value) => {
             const sealed = await sealSecret(secretKey, { organizationId, projectId }, "production", name, value);
 
+            // Recorded before the write, so a store whose reply is lost is still undone.
+            written.set(name, { ciphertext: sealed.ciphertext, iv: sealed.iv });
             await context.runMutation(api.secrets.store, {
                 ciphertext: sealed.ciphertext,
                 environment: "production",

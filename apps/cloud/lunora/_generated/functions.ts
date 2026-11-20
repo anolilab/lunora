@@ -283,6 +283,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "secrets:list": lunora_secrets_31.list as unknown as RegisteredLunoraFunction,
     "secrets:listEncrypted": lunora_secrets_31.listEncrypted as unknown as RegisteredLunoraFunction,
     "secrets:remove": lunora_secrets_31.remove as unknown as RegisteredLunoraFunction,
+    "secrets:rollbackInstallWrite": lunora_secrets_31.rollbackInstallWrite as unknown as RegisteredLunoraFunction,
     "secrets:snapshotRows": lunora_secrets_31.snapshotRows as unknown as RegisteredLunoraFunction,
     "secrets:store": lunora_secrets_31.store as unknown as RegisteredLunoraFunction,
     "sessions:get": lunora_sessions_32.get as unknown as RegisteredLunoraFunction,
@@ -1506,6 +1507,7 @@ export interface Caller {
         list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
         listEncrypted: (args: { deployKey?: unknown; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; cipherVersion?: null | number; environment: string; iv: string; name: string; }[]>;
         remove: (args: { id: Id<"secrets">; organizationId: Id<"organizations"> }) => Promise<void>;
+        rollbackInstallWrite: (args: { name: unknown; organizationId: Id<"organizations">; previous?: { ciphertext: unknown; iv: unknown }; projectId: Id<"projects">; written: { ciphertext: unknown; iv: unknown } }) => Promise<{ applied: boolean; }>;
         snapshotRows: (args: { names: Array<unknown>; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; cipherVersion?: null | number; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string; }[]>;
         store: (args: { ciphertext: unknown; environment?: "all" | "production" | "preview" | "dev"; iv: unknown; name: unknown; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"secrets">>;
     };
@@ -1843,6 +1845,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         list: (args) => callRegistered(context, "secrets:list", args),
         listEncrypted: (args) => callRegistered(context, "secrets:listEncrypted", args),
         remove: (args) => callRegistered(context, "secrets:remove", args),
+        rollbackInstallWrite: (args) => callRegistered(context, "secrets:rollbackInstallWrite", args),
         snapshotRows: (args) => callRegistered(context, "secrets:snapshotRows", args),
         store: (args) => callRegistered(context, "secrets:store", args),
     },
