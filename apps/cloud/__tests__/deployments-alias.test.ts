@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MutationCtx } from "../lunora/_generated/server";
 import { claimAlias } from "../lunora/deployment-aliases";
 import { create as createDeployment } from "../lunora/deployments";
+import { ALIAS_RECLAIM_COOLDOWN_MS } from "../src/plans/plan-resolver";
 import { makeCtx as makeFullCtx, owner } from "./_helpers/fake-ctx";
 
 type AliasRow = { _id: string; alias: string; organizationId: string; projectId: string }; // gitleaks:allow -- a type alias; the scanner matches `projectId` as a Cypress id
@@ -28,6 +29,7 @@ const makeCtx = (
             aliasOwnership: {
                 findMany: ({ where }: { where: { alias: string } }) => Promise.resolve({ page: store.filter((row) => row.alias === where.alias) }),
             },
+            deployments: { findMany: () => Promise.resolve({ page: [] }) },
             insert: vi.fn<(table: string, row: Record<string, unknown>) => Promise<unknown>>((table, row) => {
                 inserts.push({ row, table });
 
@@ -141,6 +143,48 @@ describe("deployments.create while the alias is torn down", () => {
 
         await expect(release().created).resolves.toMatchObject({ deploymentId: "deployments_new" });
         await expect(release(NOW - 31 * 60_000).created).resolves.toMatchObject({ deploymentId: "deployments_new" });
+    });
+});
+
+describe("deployments.create onto an alias another project released", () => {
+    const NOW = 1_700_000_000_000;
+    const reclaim = (releasedAt: number) => {
+        const full = makeFullCtx(
+            {
+                aliasOwnership: [],
+                // The previous owner's torn-down preview: a dispatcher that read its plan answer may serve it until the cooldown ends.
+                deployments: [
+                    {
+                        _id: "dep_old",
+                        kind: "preview",
+                        organizationId: "org_2",
+                        projectId: "prj_2",
+                        scriptName: "web",
+                        status: "destroyed",
+                        updatedAt: releasedAt,
+                    },
+                ],
+                halts: [],
+                members: [owner("org_1")],
+                organizations: [{ _id: "org_1" }],
+                projects: [{ _id: "prj_1", organizationId: "org_1", slug: "site" }],
+            },
+            { now: NOW },
+        );
+
+        return createDeployment.handler(full.ctx, { kind: "preview", organizationId: "org_1" as never, projectId: "prj_1" as never, scriptName: "web" });
+    };
+
+    it("refuses the claim while a dispatcher may still serve the previous owner's plan answer", async () => {
+        expect.assertions(1);
+
+        await expect(reclaim(NOW - ALIAS_RECLAIM_COOLDOWN_MS + 1000)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("claims the alias once every cached answer for the previous owner has expired", async () => {
+        expect.assertions(1);
+
+        await expect(reclaim(NOW - ALIAS_RECLAIM_COOLDOWN_MS)).resolves.toMatchObject({ deploymentId: "deployments_new" });
     });
 });
 

@@ -32,7 +32,7 @@ export interface PlanResolverOptions {
      * consulted only when the control plane cannot be asked. Absent ⇒ no store.
      */
     planStore?: PlanReader;
-    /** Cache TTL in ms. Defaults to 60s. */
+    /** Cache TTL in ms. Defaults to {@link PLAN_CACHE_TTL_MS}. */
     ttlMs?: number;
 }
 
@@ -60,12 +60,23 @@ export const parsePlanMaxStaleHours = (raw: string | undefined): number => {
  */
 export { UNAVAILABLE_PLAN } from "./plan-facts";
 
+/** How long the dispatcher's isolate cache keeps a plan answer before asking again. */
+export const PLAN_CACHE_TTL_MS = 60_000;
+
 /**
  * How long past its TTL a cached answer still stands in for a failed refresh:
  * a control-plane blip keeps serving tenants it last saw healthy, for this
  * long, then refuses them. A `suspended` answer stands until a refresh succeeds.
  */
 export const PLAN_STALE_GRACE_MS = 5 * 60_000;
+
+/**
+ * How long a released alias stays unclaimable by another project: the longest a dispatcher may
+ * still serve a plan answer it read for the previous owner (the TTL, then the grace on a failed
+ * refresh). Re-claimed sooner, the new owner's tenant would be served under the old owner's
+ * answer, which can say unprotected for a password-protected preview.
+ */
+export const ALIAS_RECLAIM_COOLDOWN_MS = PLAN_CACHE_TTL_MS + PLAN_STALE_GRACE_MS;
 
 /**
  * How long one control-plane plan lookup may take before it is abandoned and the
@@ -206,8 +217,9 @@ export const decideFallback = (input: { cached?: CachedVerdict; maxStaleMs: numb
  * Build a cached `resolvePlan` that asks the control plane for a script's plan
  * tier and admission (`GET /v1/tenants/plan`). Per-isolate TTL cache keeps the
  * hot path off a round-trip on every request, keyed by the script name it was
- * resolved for. The answer is only as fresh as the TTL: a suspension, a breach
- * or an alias changing owners reaches this isolate within `ttlMs` (60 s).
+ * resolved for. The answer is only as fresh as the TTL: a suspension or a breach
+ * reaches this isolate within `ttlMs` (60 s). An alias cannot change owners inside
+ * that window, because `claimAlias` refuses to re-claim it for {@link ALIAS_RECLAIM_COOLDOWN_MS}.
  *
  * Fails closed. A lookup that fails, times out ({@link PLAN_LOOKUP_TIMEOUT_MS})
  * or comes back malformed falls back through {@link decideFallback}: the isolate's
@@ -222,7 +234,7 @@ export const decideFallback = (input: { cached?: CachedVerdict; maxStaleMs: numb
 export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: string) => Promise<PlanFacts>) => {
     const fetchImpl = options.fetch ?? fetch;
     const now = options.now ?? Date.now;
-    const ttl = options.ttlMs ?? 60_000;
+    const ttl = options.ttlMs ?? PLAN_CACHE_TTL_MS;
     const timeoutMs = options.lookupTimeoutMs ?? PLAN_LOOKUP_TIMEOUT_MS;
     const maxStaleMs = (options.maxStaleHours ?? PLAN_MAX_STALE_HOURS_DEFAULT) * 3_600_000;
     const report = options.onStore ?? (() => undefined);

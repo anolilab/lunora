@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { ALIAS_RECLAIM_COOLDOWN_MS } from "../src/plans/plan-resolver";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
 import { collectAll } from "./paginate";
@@ -28,6 +29,17 @@ export const claimAlias = async (context: MutationContext, alias: string, organi
         }
 
         return;
+    }
+
+    // A dispatcher may still hold the previous owner's plan answer, protection included, for the
+    // cooldown after that owner's last release changed. A Worker this claim deploys sooner would be
+    // served under it: a password-protected preview without its password gate.
+    const previous = await collectAll<Document_<"deployments">>((cursor) => context.db.deployments.findMany({ cursor, where: { scriptName: alias } }));
+    const lastChange = Math.max(0, ...previous.filter((row) => row.projectId !== projectId).map((row) => row.updatedAt));
+    const waitMs = lastChange + ALIAS_RECLAIM_COOLDOWN_MS - context.now;
+
+    if (waitMs > 0) {
+        throw new LunoraError("CONFLICT", `deployment alias "${alias}" was released moments ago; claim it again in ${String(Math.ceil(waitMs / 1000))} s`);
     }
 
     try {
@@ -79,6 +91,9 @@ export const refuseWhileTearingDown = async (context: MutationContext, alias: st
 /** Whether `error` is {@link claimAlias}'s refusal of an alias another project owns. */
 const isAliasTaken = (error: unknown): boolean => error instanceof LunoraError && error.code === "FORBIDDEN";
 
+/** Whether `error` is {@link claimAlias}'s refusal of an alias another project released too recently. */
+const isAliasCoolingDown = (error: unknown): boolean => error instanceof LunoraError && error.code === "CONFLICT";
+
 /**
  * Claim the first of `candidates` no other project owns, for `projectId`, and
  * answer it — a new project's production alias (`src/deploy/production-alias.ts`).
@@ -97,7 +112,7 @@ export const claimFirstFreeAlias = async (
 
             return alias;
         } catch (error) {
-            if (!isAliasTaken(error)) {
+            if (!isAliasTaken(error) && !isAliasCoolingDown(error)) {
                 throw error;
             }
         }
