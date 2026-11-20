@@ -149,6 +149,21 @@ describe("the celld-vps driver", () => {
             }),
         ).toBe(true);
     });
+
+    it.each(["", "   ", "control.example.com", "ftp://control.example.com"])(
+        "does not converge with an origin %j a box cannot fetch a release from",
+        (origin) => {
+            expect(
+                celldVpsCanConverge({
+                    BOX_SESSION: fakeSessionNamespace(() => {
+                        return {};
+                    }),
+                    DB: {},
+                    LUNORA_ORIGIN_URL: origin,
+                }),
+            ).toBe(false);
+        },
+    );
 });
 
 describe("celld-vps teardown after the project is gone", () => {

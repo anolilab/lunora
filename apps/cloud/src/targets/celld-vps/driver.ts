@@ -123,16 +123,23 @@ export type CelldVpsEnvironment = {
     LUNORA_ORIGIN_URL?: string;
 } & BoxDnsEnvironment;
 
+/** `hostd` refuses a deploy job whose `releaseUrl` is not an absolute http(s) URL, so an origin that cannot root one is no origin. */
+const isReleaseOrigin = (origin: string | undefined): boolean => {
+    const parsed = origin === undefined ? null : URL.parse(origin.trim());
+
+    return parsed?.protocol === "https:" || parsed?.protocol === "http:";
+};
+
 /** Whether this control-plane deployment can converge and tear down `celld-vps` tenants. */
 export const celldVpsCanConverge = (environment: CelldVpsEnvironment): boolean =>
-    environment.BOX_SESSION != null && environment.DB != null && environment.LUNORA_ORIGIN_URL != null;
+    environment.BOX_SESSION != null && environment.DB != null && isReleaseOrigin(environment.LUNORA_ORIGIN_URL);
 
 /** Build the driver for one box off the Worker env. Lazy: nothing is touched until a member is called. */
 export const celldVpsDriverFromEnv = (box: BoxHost, environment: CelldVpsEnvironment): TargetDriver =>
     createCelldVpsDriver({
         box,
         boxDomain: boxDomainOf(environment),
-        controlPlaneOrigin: environment.LUNORA_ORIGIN_URL ?? "",
+        controlPlaneOrigin: environment.LUNORA_ORIGIN_URL?.trim() ?? "",
         session: (boxId) => {
             if (!environment.BOX_SESSION) {
                 throw new Error("this control plane has no box sessions bound (BOX_SESSION)");
