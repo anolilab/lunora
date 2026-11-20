@@ -249,9 +249,15 @@ impl Shared {
 
         *lock(&self.routes) = table;
 
-        let fleets: Vec<(String, FleetRecord)> = lock(&self.state).fleets.iter().map(|(alias, record)| (alias.clone(), record.clone())).collect();
+        let aliases: Vec<String> = lock(&self.state).fleets.keys().cloned().collect();
 
-        for (alias, record) in fleets {
+        for alias in aliases {
+            // Read per fleet, not once up front: the stop of an earlier one awaits, and a job may change or remove
+            // this one meanwhile.
+            let Some(record) = lock(&self.state).fleets.get(&alias).cloned() else {
+                continue;
+            };
+
             if busy(&alias) {
                 continue;
             }
@@ -278,7 +284,13 @@ impl Shared {
             };
 
             if let Some(state) = next {
-                lock(&self.state).fleets.insert(alias, FleetRecord { state, updated_at: now_ms(), ..record });
+                let mut current = lock(&self.state);
+
+                // A job that started during the stop (a destroy, a deploy) owns the record now: writing the old one
+                // back would bring a destroyed fleet back and keep its ports taken.
+                if current.fleets.get(&alias) == Some(&record) {
+                    current.fleets.insert(alias, FleetRecord { state, updated_at: now_ms(), ..record });
+                }
             }
         }
 
@@ -722,6 +734,34 @@ mod tests {
 
         assert_eq!(*lock(&shared.routes), [shop]);
         assert_eq!(lock(&shared.state).fleets["shop"].state, FleetState::Running);
+
+        supervisor.shutdown().await;
+    }
+
+    /// The alias was idle when the table checked it, then a destroy removed the fleet before the table wrote its
+    /// stop back: the fleet stays gone and its ports free.
+    #[tokio::test]
+    async fn a_fleet_destroyed_while_a_routing_table_stops_it_stays_destroyed() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = HostdState::new();
+
+        state.fleets.insert("shop".to_owned(), record(9000, FleetState::Running));
+
+        let (shared, supervisor) = shared_over(directory.path(), state);
+        let sequence = shared.next_route_frame();
+        let destroying = Arc::clone(&shared.state);
+
+        // The busy check is the last point before the stop await, so a destroy landing here is one that landed
+        // during it.
+        shared
+            .on_routes(sequence, Vec::new(), move |alias| {
+                lock(&destroying).fleets.shift_remove(alias);
+
+                false
+            })
+            .await;
+
+        assert!(lock(&shared.state).fleets.is_empty());
 
         supervisor.shutdown().await;
     }
