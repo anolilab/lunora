@@ -120,32 +120,30 @@ const assertKeepsWorkerData = (
 };
 
 /**
- * Refuse a non-production release onto a production alias. One alias is one
- * Worker, converged in place whatever the kind, while the key's scope ceiling and
- * `liveRelease` both go by kind: a preview key naming the production alias would
- * replace production code, and leave production no rollback target. The
+ * Refuse a release onto an alias that releases of another kind stand on. One
+ * alias is one Worker, converged in place whatever the kind, while the key's
+ * scope ceiling, `liveRelease` and `activate` all go by kind: a preview key
+ * naming the production alias would replace production code, and a production
+ * release onto a preview's alias would replace the preview's Worker with no
+ * rollback target and leave the preview row marked live beside it. The
  * project's reserved and active aliases are production's before any row says so.
- * @throws {LunoraError} `FORBIDDEN` when a dev or preview release names a production alias.
+ * @throws {LunoraError} `FORBIDDEN` when the alias belongs to another kind.
  */
-const assertNotProductionAlias = (
+const assertAliasKind = (
     project: Pick<Document_<"projects">, "activeScriptName" | "productionAlias">,
     existing: ReadonlyArray<DeploymentRow>,
     alias: string,
     kind: DeploymentRow["kind"],
 ): void => {
-    if (kind === "production") {
-        return;
-    }
+    const standing = existing.filter((row) => (row.alias ?? row.scriptName) === alias && row.status !== "destroyed");
+    const reserved = alias === project.productionAlias || alias === project.activeScriptName || standing.some((row) => row.kind === "production");
+    // An alias with releases of two kinds predates this guard; production's claim wins, and otherwise a kind already there keeps its own.
+    const owner = reserved ? "production" : (standing.find((row) => row.kind === kind)?.kind ?? standing.at(0)?.kind);
 
-    const production =
-        alias === project.productionAlias ||
-        alias === project.activeScriptName ||
-        existing.some((row) => (row.alias ?? row.scriptName) === alias && row.kind === "production" && row.status !== "destroyed");
-
-    if (production) {
+    if (owner !== undefined && owner !== kind) {
         throw new LunoraError(
             "FORBIDDEN",
-            `${alias} is this project's production Worker and cannot take a ${kind} release; deploy ${kind} under its own script name`,
+            `${alias} is this project's ${owner} Worker and cannot take a ${kind} release; deploy ${kind} under its own script name`,
         );
     }
 };
@@ -523,7 +521,7 @@ export const create = mutation
         // Every page: the data-loss guard and the version number need the alias's whole history, not its first 1000 rows.
         const existing = await collectAll<DeploymentRow>((cursor) => context.db.deployments.findMany({ cursor, where: { projectId: arguments_.projectId } })); // secret-scanner:allow -- domain field name
 
-        assertNotProductionAlias(project, existing, arguments_.scriptName, arguments_.kind);
+        assertAliasKind(project, existing, arguments_.scriptName, arguments_.kind);
 
         const version = 1 + Math.max(0, ...existing.filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
         const previous = await liveRelease(context, { kind: arguments_.kind, projectId: arguments_.projectId, scriptName: arguments_.scriptName }); // secret-scanner:allow -- domain field name

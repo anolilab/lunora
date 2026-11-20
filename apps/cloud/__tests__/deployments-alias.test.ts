@@ -238,6 +238,27 @@ describe("deployments.create onto a production alias", () => {
         await expect(deploy("preview", "web", {}, [live])).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
+    it("refuses a production release onto an alias a preview runs on, and allows it once the preview is destroyed", async () => {
+        expect.assertions(2);
+
+        const preview = (status: string) => {
+            return {
+                _id: "dep_1",
+                alias: "web-pr-feat-x",
+                createdAt: NOW - 1,
+                kind: "preview",
+                organizationId: "org_1",
+                projectId: "prj_1",
+                scriptName: "web-pr-feat-x",
+                status,
+                version: 1,
+            };
+        };
+
+        await expect(deploy("production", "web-pr-feat-x", {}, [preview("live")])).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(deploy("production", "web-pr-feat-x", {}, [preview("destroyed")])).resolves.toMatchObject({ deploymentId: "deployments_new" });
+    });
+
     it("still records a production release on the production alias and a preview on its own", async () => {
         expect.assertions(2);
 

@@ -286,10 +286,10 @@ describe("deployments", () => {
             projects: [{ _id: "prj_1", organizationId: ORG, slug: "web" }],
         });
 
-        // A production alias refuses a dev or preview release outright (`deployments-alias.test.ts`).
+        // An alias takes releases of the kind already on it only (`deployments-alias.test.ts`), so the kind guard refuses first.
         await expect(
             createDeployment.handler(ctx, { kind: "dev", organizationId: ORG as never, projectId: "prj_1" as never, runtime: "worker", scriptName: "web" }),
-        ).rejects.toMatchObject({ code: "CONFLICT" });
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
     it("does not trust a rewritten status: a superseded or verified-then-failed release still names the Worker's runtime", async () => {
