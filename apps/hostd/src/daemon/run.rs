@@ -166,12 +166,15 @@ impl Shared {
 
     /// Start the fleets the box ran before it stopped; the routing table then says which stay up. A failed fleet
     /// stays down: its deploy never got healthy and nothing healthy was put back, so only a new deploy starts it.
-    fn restore_fleets(&self) {
+    /// A starting one was cut off before its health check, so it gets that check now: the returned tasks settle
+    /// each such fleet as running, or stop it as failed.
+    fn restore_fleets(self: &Arc<Self>) -> Vec<tokio::task::JoinHandle<()>> {
         if !self.starts_fleets {
-            return;
+            return Vec::new();
         }
 
         let fleets: Vec<(String, FleetRecord)> = lock(&self.state).fleets.iter().map(|(alias, record)| (alias.clone(), record.clone())).collect();
+        let mut checks = Vec::new();
 
         for (alias, record) in fleets.into_iter().filter(|(_, record)| matches!(record.state, FleetState::Running | FleetState::Starting)) {
             let launch = FleetLaunch { alias: alias.clone(), ports: FleetPorts { internal_port: record.internal_port, public_port: record.public_port } };
@@ -179,7 +182,47 @@ impl Shared {
             if let Err(error) = self.supervisor.start_fleet(launch) {
                 self.logger.warn(&format!("could not start fleet {alias}: {error}"));
             }
+
+            if record.state == FleetState::Starting {
+                let shared = Arc::clone(self);
+
+                checks.push(tokio::spawn(async move { shared.settle_restored(alias, record).await }));
+            }
         }
+
+        checks
+    }
+
+    /// The health check a restart cut off. With no earlier release known to be healthy to put back (the deploy
+    /// that would have put one back is gone), an unhealthy fleet is stopped, as a first deploy's is.
+    async fn settle_restored(self: &Arc<Self>, alias: String, record: FleetRecord) {
+        let healthy = self.supervisor.wait_healthy(&alias).await;
+        let state = match &healthy {
+            Ok(()) => FleetState::Running,
+            Err(error) => {
+                self.logger.warn(&format!("stopping fleet {alias}: it was starting when the box stopped and {}", error.message));
+
+                FleetState::Failed
+            }
+        };
+
+        {
+            let mut current = lock(&self.state);
+
+            // Something else (a new deploy, a routing table that stopped it) settled the fleet meanwhile.
+            if current.fleets.get(&alias) != Some(&record) {
+                return;
+            }
+
+            current.fleets.insert(alias.clone(), FleetRecord { state, updated_at: now_ms(), ..record });
+        }
+
+        if healthy.is_err() {
+            self.supervisor.stop_fleet(&alias).await;
+        }
+
+        self.save_state();
+        self.apply_edge().await;
     }
 
     /// Number the next routing table the session received.
@@ -327,7 +370,8 @@ pub async fn run_daemon(options: DaemonOptions, stop: Arc<tokio::sync::Notify>) 
     }
 
     caddy.listen_ask().await.map_err(|error| ConfigError(format!("cannot serve Caddy's ask endpoint on {}: {error}", config.caddy.ask_address)))?;
-    shared.restore_fleets();
+    // The health checks of fleets a restart cut off settle on their own.
+    drop(shared.restore_fleets());
 
     let session_cell: Arc<OnceLock<SessionHandle>> = Arc::new(OnceLock::new());
     let send: Arc<dyn Fn(BoxMessage) -> bool + Send + Sync> = {
@@ -619,13 +663,43 @@ mod tests {
         }
 
         let (shared, supervisor) = shared_over(directory.path(), state);
-
-        shared.restore_fleets();
-
+        let checks = shared.restore_fleets();
         let mut started = supervisor.aliases();
 
         started.sort();
         assert_eq!(started, ["running", "starting"]);
+
+        // No celld answers its health route: the fleet a restart cut off is stopped, not left running unchecked.
+        for check in checks {
+            check.await.unwrap();
+        }
+
+        assert_eq!(supervisor.aliases(), ["running"]);
+        assert_eq!(lock(&shared.state).fleets["starting"].state, FleetState::Failed);
+        assert_eq!(lock(&shared.state).fleets["running"].state, FleetState::Running);
+
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_restored_starting_fleet_that_gets_healthy_is_running() {
+        use super::super::signed_fetch::test_server::{respond, serve};
+
+        let node = serve(|_| respond(200, "")).await;
+        let port: u16 = node.origin.rsplit(':').next().unwrap().parse().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = HostdState::new();
+
+        state.fleets.insert("shop".to_owned(), FleetRecord { public_port: port, ..record(9000, FleetState::Starting) });
+
+        let (shared, supervisor) = shared_over(directory.path(), state);
+
+        for check in shared.restore_fleets() {
+            check.await.unwrap();
+        }
+
+        assert_eq!(supervisor.aliases(), ["shop"]);
+        assert_eq!(lock(&shared.state).fleets["shop"].state, FleetState::Running);
 
         supervisor.shutdown().await;
     }
