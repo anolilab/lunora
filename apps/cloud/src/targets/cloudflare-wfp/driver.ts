@@ -10,6 +10,7 @@
  * and a fake usage reader; the `*FromEnv` builders are the one place those
  * ports are read off the control plane's Worker env.
  */
+import { LunoraError } from "@lunora/server";
 import { tenantSender } from "../../backup/tenant-transport";
 import { createHttpCloudflareApi } from "../../cloudflare/api";
 import { readDurableObjectDurationByScript, readDurableObjectRequestsByScript, readWorkersCpuByScript } from "../../cloudflare/compute-usage";
@@ -18,6 +19,7 @@ import { createHttpHostList } from "../../cloudflare/host-list";
 import { readD1UsageByAlias, readDurableObjectUsageByScript, unavailableOnRefusal } from "../../cloudflare/storage-usage";
 import type { ControlPlaneStore } from "../../d1-store";
 import { edgeBlockModeOf } from "../../domains/edge-block-mode";
+import { UsageUnavailableError } from "../../metering/unavailable";
 import { BINDING_SUPPORT } from "../../provision-contract";
 import type { ProgressLine, TargetDriver, TargetFleet, UsageReadback, UsageRow, UsageSource } from "../driver";
 import type { ProvisionBox } from "../provision-box/client";
@@ -57,8 +59,12 @@ export interface CloudflareWfpPorts {
     box: () => ProvisionBox;
     /** This control plane's cell (`LUNORA_CELL`) — forwarded to the box with every deploy. */
     cell: string;
-    /** The dispatch namespace every tenant of this environment deploys into (`LUNORA_DISPATCH_NAMESPACE`). */
-    dispatchNamespace: string;
+    /**
+     * The dispatch namespace every tenant of this environment deploys into
+     * (`LUNORA_DISPATCH_NAMESPACE`). Read on use, like `box`, so a cell without one
+     * refuses the deploy rather than refusing to build a driver it may only read through.
+     */
+    dispatchNamespace: () => string;
 
     /**
      * Receives each `log` line the provision box emits, in order. Workers Logs
@@ -83,6 +89,9 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
     return {
         // The provision box's progress goes to Workers Logs (`ports.log`), never to `onProgress`: see `log`.
         deploy: async (spec) => {
+            // Before the box: a cell that cannot name its namespace refuses without waking one.
+            const target = { cell: ports.cell, dispatchNamespace: ports.dispatchNamespace(), kind: "dispatch-namespace" } as const;
+
             await runProvisionJob(
                 ports.box().get(spec.alias),
                 {
@@ -91,7 +100,7 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
                     spec: deployJobSpec(spec, BINDING_SUPPORT["cloudflare-wfp"], {
                         nativeCrons: false,
                         tailConsumer: ports.tailConsumer,
-                        target: { cell: ports.cell, dispatchNamespace: ports.dispatchNamespace, kind: "dispatch-namespace" },
+                        target,
                     }),
                 },
                 ports.log,
@@ -102,11 +111,9 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
             return { url: `https://${spec.alias}.${ports.appDomain}` };
         },
         destroy: async (alias) => {
-            await runProvisionJob(
-                ports.box().get(alias),
-                { action: "destroy", alias, target: { cell: ports.cell, dispatchNamespace: ports.dispatchNamespace, kind: "dispatch-namespace" } },
-                ports.log,
-            );
+            const target = { cell: ports.cell, dispatchNamespace: ports.dispatchNamespace(), kind: "dispatch-namespace" } as const;
+
+            await runProvisionJob(ports.box().get(alias), { action: "destroy", alias, target }, ports.log);
         },
         domains: {
             // A verified hostname gets its certificate — and its route into the SaaS zone — here, never before.
@@ -267,11 +274,42 @@ const saasZoneOf = (environment: CloudflareWfpEnvironment): SaasZone | undefined
  * previews where no dispatcher routes, and staging's tenants outside `lunora-staging`.
  * Aliases are unique platform-wide (the ownership ledger), so kinds share it safely.
  */
-export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string =>
-    environment.LUNORA_DISPATCH_NAMESPACE ?? "lunora-production";
+export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string | undefined => {
+    const namespace = environment.LUNORA_DISPATCH_NAMESPACE?.trim();
+
+    return namespace ? namespace : undefined;
+};
+
+/**
+ * {@link dispatchNamespaceOf}, refusing when it is unset. No default: any guess is
+ * some other environment's namespace, and a staging cell that guessed production
+ * would deploy its tenants where production's dispatcher routes them.
+ * @throws {LunoraError} `MISCONFIGURED` when `LUNORA_DISPATCH_NAMESPACE` is unset.
+ */
+const requireDispatchNamespace = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string => {
+    const namespace = dispatchNamespaceOf(environment);
+
+    if (namespace === undefined) {
+        throw new LunoraError("MISCONFIGURED", "LUNORA_DISPATCH_NAMESPACE is unset; this control plane does not know which dispatch namespace is its own");
+    }
+
+    return namespace;
+};
+
+/** The usage readers' namespace, or the source shown as unavailable while it is unset. */
+const meteredNamespace = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string => {
+    const namespace = dispatchNamespaceOf(environment);
+
+    if (namespace === undefined) {
+        throw new UsageUnavailableError("LUNORA_DISPATCH_NAMESPACE is unset, so this cell's tenants cannot be told apart from another environment's");
+    }
+
+    return namespace;
+};
 
 /** Whether this control-plane deployment can converge and tear down `cloudflare-wfp` tenants. */
-export const cloudflareWfpCanConverge = (environment: CloudflareWfpEnvironment): boolean => environment.CONTAINER_PROVISION_BOX != null;
+export const cloudflareWfpCanConverge = (environment: CloudflareWfpEnvironment): boolean =>
+    environment.CONTAINER_PROVISION_BOX != null && dispatchNamespaceOf(environment) !== undefined;
 
 /** Build the driver off the Worker env. Lazy: nothing is touched until a member is called. */
 export const cloudflareWfpDriverFromEnv = (environment: CloudflareWfpEnvironment): TargetDriver => {
@@ -281,7 +319,7 @@ export const cloudflareWfpDriverFromEnv = (environment: CloudflareWfpEnvironment
         appDomain: environment.LUNORA_APP_DOMAIN ?? "lunora.app",
         box: () => provisionBoxFrom(environment),
         cell: environment.LUNORA_CELL ?? "default",
-        dispatchNamespace: dispatchNamespaceOf(environment),
+        dispatchNamespace: () => requireDispatchNamespace(environment),
         log: (line) => {
             // eslint-disable-next-line no-console -- the provision box's log is the platform's; Workers Logs is its only reader
             console.log("[provision]", line);
@@ -315,21 +353,21 @@ export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment)
                       // Only this environment's tenants: the dispatch namespace its dispatcher routes.
                       durableObjects: async (window) =>
                           unavailableOnRefusal(async () =>
-                              readDurableObjectUsageByScript({ accountId, apiToken }, window, { dispatchNamespace: dispatchNamespaceOf(environment) }),
+                              readDurableObjectUsageByScript({ accountId, apiToken }, window, { dispatchNamespace: meteredNamespace(environment) }),
                           ),
                       durableObjectDuration: async (window) =>
                           unavailableOnRefusal(async () =>
-                              readDurableObjectDurationByScript({ accountId, apiToken }, window, { dispatchNamespace: dispatchNamespaceOf(environment) }),
+                              readDurableObjectDurationByScript({ accountId, apiToken }, window, { dispatchNamespace: meteredNamespace(environment) }),
                           ),
                       durableObjectRequests: async (window) =>
                           unavailableOnRefusal(async () =>
-                              readDurableObjectRequestsByScript({ accountId, apiToken }, window, { dispatchNamespace: dispatchNamespaceOf(environment) }),
+                              readDurableObjectRequestsByScript({ accountId, apiToken }, window, { dispatchNamespace: meteredNamespace(environment) }),
                           ),
                       // The cell account's GraphQL, not the dispatcher's Analytics Engine
                       // dataset: a Worker cannot measure another's CPU time, so AE has none.
                       workersCpu: async (window) =>
                           unavailableOnRefusal(async () =>
-                              readWorkersCpuByScript({ accountId, apiToken }, window, { dispatchNamespace: dispatchNamespaceOf(environment) }),
+                              readWorkersCpuByScript({ accountId, apiToken }, window, { dispatchNamespace: meteredNamespace(environment) }),
                           ),
                   },
                   usage: createHttpAnalyticsReader({ accountId, apiToken, dataset: environment.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage" }),

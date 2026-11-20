@@ -66,7 +66,7 @@ describeTargetConformance("cloudflare-wfp", () => {
             appDomain: "lunora.app",
             box: () => box,
             cell: "default",
-            dispatchNamespace: "lunora-production",
+            dispatchNamespace: () => "lunora-production",
             tailConsumer: "lunora-log-tail",
         }),
         running: () => [...workers.keys()],

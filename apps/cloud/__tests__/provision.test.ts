@@ -56,7 +56,7 @@ const driverFor = (box: ProvisionBox, overrides: Partial<CloudflareWfpPorts> = {
         appDomain: "lunora.app",
         box: () => box,
         cell: "cell-1",
-        dispatchNamespace: "lunora-production",
+        dispatchNamespace: () => "lunora-production",
         tailConsumer: "lunora-log-tail",
         ...overrides,
     });
@@ -129,7 +129,7 @@ describe(createCloudflareWfpDriver, () => {
     it("sends the destroy job to the project's box", async () => {
         const { box, calls } = fakeBox(['{"type":"result"}\n']);
 
-        await driverFor(box, { dispatchNamespace: "lunora-preview" }).destroy("app");
+        await driverFor(box, { dispatchNamespace: () => "lunora-preview" }).destroy("app");
 
         expect(calls).toStrictEqual([
             {

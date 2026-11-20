@@ -181,7 +181,7 @@ describe("the cloudflare-wfp driver's domain hooks", () => {
                 throw new Error("unused");
             },
             cell: "default",
-            dispatchNamespace: "ns",
+            dispatchNamespace: () => "ns",
             ...(saasZone === undefined ? {} : { saasZone }),
             tailConsumer: "lunora-log-tail",
         });
