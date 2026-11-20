@@ -206,7 +206,12 @@ const evaluateMonth = async (
         updatedAt: month.now,
     };
 
-    // The latch first: a crash after it loses one notification, never sends one twice for a month.
+    // The alert row before the latch. Nothing is delivered until the whole sweep returns
+    // (`deliverFiredAlerts`), so a run that fails or dies between the two has sent nothing, and the
+    // next sweep, finding the month unlatched, fires it again: at worst a second alert row, never a
+    // second notification. Latched first, that same failure would silence the month for good.
+    const delivery = fires ? await fireUsageRule(database, rule, { monthToDate, now: month.now, periodStart: month.periodStart }) : undefined;
+
     if (state === undefined) {
         const id = (await database.insert("alertRuleState", {
             createdAt: month.now,
@@ -221,7 +226,7 @@ const evaluateMonth = async (
         reads.stateOf.set(rule._id, { ...state, ...latch });
     }
 
-    return fires ? { delivery: await fireUsageRule(database, rule, { monthToDate, now: month.now, periodStart: month.periodStart }) } : undefined;
+    return delivery === undefined ? undefined : { delivery };
 };
 
 /** Evaluate one organization's usage rules for each evaluated month, oldest first, so a late previous month fires before the latch moves on. */

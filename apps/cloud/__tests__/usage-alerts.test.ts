@@ -137,7 +137,7 @@ describe(runUsageAlertSweep, () => {
                 body: expect.stringContaining("Workers requests on Lunora Cloud reached 2,100,000 requests in June 2026 (UTC)") as string,
                 channel: "email",
                 destination: "ops@example.com",
-                id: "alerts_2",
+                id: "alerts_1",
                 subject: "[Lunora] Requests budget: Workers requests passed 2,000,000 requests this month",
             },
         ]);
@@ -239,6 +239,29 @@ describe(runUsageAlertSweep, () => {
         const result = await runUsageAlertSweep(database, { now: MID_JUNE });
 
         expect(result.deliveries[0]?.subject).toBe("[Lunora] Requests budget: Workers CPU time passed 1,000 CPU ms this month");
+    });
+
+    it("fires the month again on the next sweep when its alert row failed to write", async () => {
+        const database = memoryStore({ alertRules: [rule()], platformUsage: [usage(2_100_000)] });
+        const { insert } = database;
+        let failAlert = true;
+
+        database.insert = async (table, document) => {
+            if (table === "alerts" && failAlert) {
+                failAlert = false;
+
+                throw new Error("D1_ERROR: network connection lost");
+            }
+
+            return insert(table, document);
+        };
+
+        await expect(runUsageAlertSweep(database, { now: MID_JUNE })).rejects.toThrow("network connection lost");
+        expect(database.tables["alertRuleState"] ?? []).toStrictEqual([]);
+
+        await expect(runUsageAlertSweep(database, { now: MID_JUNE + 3_600_000 })).resolves.toMatchObject({ fired: 1 });
+        expect(database.tables["alerts"]).toHaveLength(1);
+        expect(database.tables["alertRuleState"]).toStrictEqual([expect.objectContaining({ firedPeriod: JUNE, firing: true })]);
     });
 
     it("reads nothing past the rules when no organization has a usage rule", async () => {
