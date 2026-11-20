@@ -45,6 +45,32 @@ describe(createDeployRouter, () => {
         expect(ctx.runAction).toHaveBeenCalledTimes(1);
     });
 
+    it("refuses an oversized billing webhook streamed without a length, before the action", async () => {
+        const router = createDeployRouter();
+        const ctx = makeCtx();
+        const chunk = new Uint8Array(64 * 1024).fill(0x61);
+        let sent = 0;
+        // No content-length: only a cap held while the body streams can stop it.
+        const body = new ReadableStream<Uint8Array>({
+            pull: (controller) => {
+                sent += 1;
+
+                if (sent > 64) {
+                    controller.close();
+                } else {
+                    controller.enqueue(chunk);
+                }
+            },
+        });
+        const request = new Request("https://control.lunora.app/v1/billing/webhook", { body, duplex: "half", method: "POST" } as RequestInit);
+        const response = await router.fetch(request, { __lunoraCtx: ctx });
+
+        expect(response.status).toBe(413);
+        expect(ctx.runAction).not.toHaveBeenCalled();
+        // Stopped at the cap, not after buffering all 4 MiB.
+        expect(sent).toBeLessThan(64);
+    });
+
     it("rejects metering ingestion missing required fields", async () => {
         const router = createDeployRouter();
         const response = await router.fetch(post("/v1/usage", { organizationId: "org_1" }), { __lunoraCtx: makeCtx() });
