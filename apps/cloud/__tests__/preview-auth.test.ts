@@ -166,4 +166,50 @@ describe(guardProtectedPreview, () => {
         expect(response?.status).toBe(413);
         expect(verify).not.toHaveBeenCalled();
     });
+
+    /** A stalled control plane must not hold a public login open: the check is bounded, and an unanswered one is no login. */
+    it("answers 503 without a cookie once the control plane's check times out", async () => {
+        const timeout = new AbortController();
+        const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+        const { promise: asked, resolve: markAsked } = Promise.withResolvers<undefined>();
+        // Never answers on its own: it settles only when its signal aborts, as a stalled plane would.
+        const stalled = vi.fn<typeof fetch>(
+            (_input, init) =>
+                new Promise<Response>((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(new DOMException("timed out", "TimeoutError"));
+                    });
+                    markAsked(undefined);
+                }),
+        );
+
+        vi.stubGlobal("fetch", stalled);
+
+        const pending = guardProtectedPreview(login("password=hunter2"), LOGIN, "acme-pr-42", SCOPE, PLANE);
+
+        await asked;
+        timeout.abort();
+
+        const response = await pending;
+
+        expect(timeoutSpy).toHaveBeenCalledWith(5000);
+        expect(response?.status).toBe(503);
+        expect(response?.headers.get("retry-after")).toBe("30");
+        expect(response?.headers.get("set-cookie")).toBeNull();
+        await expect(response?.text()).resolves.toContain("could not be checked");
+
+        timeoutSpy.mockRestore();
+    });
+
+    it("still re-challenges with 401 when the control plane answers that the password is wrong", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn<typeof fetch>(async () => Response.json({ ok: false })),
+        );
+
+        const response = await guardProtectedPreview(login("password=wrong"), LOGIN, "acme-pr-42", SCOPE, PLANE);
+
+        expect(response?.status).toBe(401);
+        await expect(response?.text()).resolves.toContain("did not match");
+    });
 });

@@ -27,6 +27,7 @@
  * and the password prompt on top of them.
  */
 import { fromBase64Url, toBase64Url } from "../../../../shared/base64";
+import { PLAN_LOOKUP_TIMEOUT_MS } from "../plans/plan-resolver";
 import { constantTimeEqual } from "../security/constant-time-equal";
 
 /** Cookie the dispatcher sets once a preview password has been accepted. */
@@ -176,7 +177,16 @@ const PREVIEW_LOGIN_STYLE =
     "input{background:#161c24;color:inherit}button{background:#e3e8ef;color:#0d1117;border:0;cursor:pointer;font-weight:600}" +
     ".e{color:#de7a70;font-size:14px}";
 
-const previewLoginPage = (failed: boolean): Response =>
+/** What the login page tells the visitor under the form: nothing, a wrong password, or a control plane that did not answer. */
+type LoginNotice = "none" | "rejected" | "unavailable";
+
+const LOGIN_NOTICES: Record<LoginNotice, string> = {
+    none: "",
+    rejected: `<p class="e">That password did not match.</p>`,
+    unavailable: `<p class="e">The password could not be checked right now. Try again in a moment.</p>`,
+};
+
+const previewLoginPage = (notice: LoginNotice): Response =>
     new Response(
         `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -187,13 +197,17 @@ const previewLoginPage = (failed: boolean): Response =>
 <h1>This preview is protected</h1>
 <p>Enter the password shared by the project's team.</p>
 <input type="password" name="password" aria-label="Preview password" autocomplete="current-password" autofocus required><!-- secret-scanner:allow -- an autocomplete hint on a login form, not a credential -->
-${failed ? `<p class="e">That password did not match.</p>` : ""}
+${LOGIN_NOTICES[notice]}
 <button type="submit">View preview</button>
 </form></body></html>`,
         // 401 rather than 200: this is an authentication challenge, and a crawler
         // or an uptime check must not record a protected preview as healthy
-        // content. `no-store` because a cached prompt would survive the login.
-        { headers: { "cache-control": "no-store", "content-type": "text/html; charset=utf-8" }, status: 401 },
+        // content. `no-store` because a cached prompt would survive the login. An
+        // unanswered check is the dispatcher's 503 with `retry-after`, as when the
+        // control plane is unconfigured, not a wrong password.
+        notice === "unavailable"
+            ? { headers: { "cache-control": "no-store", "content-type": "text/html; charset=utf-8", "retry-after": "30" }, status: 503 }
+            : { headers: { "cache-control": "no-store", "content-type": "text/html; charset=utf-8" }, status: 401 },
     );
 
 /** The control plane as the login flow uses it: the bearer, and the base URL with no trailing slash. */
@@ -204,12 +218,20 @@ interface PreviewControlPlane {
 
 /**
  * Ask the control plane whether a submitted password is the project's. Never throws.
+ * `unavailable` when the control plane failed, or did not answer within
+ * {@link PLAN_LOOKUP_TIMEOUT_MS}: a public login must not hold its request open on a
+ * stalled plane, and must never accept a password it did not verify.
  *
  * Forwards the END USER's address so the control plane can throttle guesses per
  * attacker. Without it every attempt keys on the dispatcher, which neither
  * isolates one grinder nor stops them throttling everybody else.
  */
-const passwordAccepted = async (password: string, scriptName: string, plane: PreviewControlPlane, clientIp: null | string): Promise<boolean> => {
+const passwordVerdict = async (
+    password: string,
+    scriptName: string,
+    plane: PreviewControlPlane,
+    clientIp: null | string,
+): Promise<"accepted" | "rejected" | "unavailable"> => {
     try {
         const response = await fetch(`${plane.url}/v1/tenants/preview-auth`, {
             body: JSON.stringify({ password, scriptName }),
@@ -219,18 +241,23 @@ const passwordAccepted = async (password: string, scriptName: string, plane: Pre
                 "x-lunora-client-ip": clientIp ?? "unknown",
             },
             method: "POST",
+            // Bounds the body read too: the signal aborts `response.json()` as well.
+            signal: AbortSignal.timeout(PLAN_LOOKUP_TIMEOUT_MS),
         });
 
+        if (response.status >= 500) {
+            return "unavailable";
+        }
+
         if (!response.ok) {
-            return false;
+            return "rejected";
         }
 
         const body: { ok?: boolean } = await response.json();
 
-        return body.ok === true;
+        return body.ok === true ? "accepted" : "rejected";
     } catch {
-        // A control-plane blip must not accept a password it never verified.
-        return false;
+        return "unavailable";
     }
 };
 
@@ -283,8 +310,14 @@ const handlePreviewLogin = async (request: Request, scriptName: string, scope: s
     const form = await new Response(body, { headers: { "content-type": request.headers.get("content-type") ?? "" } }).formData().catch(() => undefined);
     const password = form?.get("password");
 
-    if (typeof password !== "string" || password === "" || !(await passwordAccepted(password, scriptName, plane, request.headers.get("cf-connecting-ip")))) {
-        return previewLoginPage(true);
+    if (typeof password !== "string" || password === "") {
+        return previewLoginPage("rejected");
+    }
+
+    const verdict = await passwordVerdict(password, scriptName, plane, request.headers.get("cf-connecting-ip"));
+
+    if (verdict !== "accepted") {
+        return previewLoginPage(verdict);
     }
 
     // 303 so the browser follows with GET — a 302 would replay the POST.
@@ -324,7 +357,7 @@ export const guardProtectedPreview = async (
         return undefined;
     }
 
-    return previewLoginPage(false);
+    return previewLoginPage("none");
 };
 
 export { PREVIEW_COOKIE_NAME, PREVIEW_SESSION_MS };
