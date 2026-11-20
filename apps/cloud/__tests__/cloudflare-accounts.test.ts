@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { connect, costs, disconnect, list } from "../lunora/cloudflare-accounts";
 import { CloudflareTokenError } from "../src/cloudflare/fetch";
 import { handleCloudflareAccountConnectRoute } from "../src/deploy/routes/cloudflare-accounts";
+import { UsageUnavailableError } from "../src/metering/unavailable";
 import { decryptSecret, encryptSecret } from "../src/secrets/crypto";
 import { inspectAccount, readScriptRequests, verifyToken } from "../src/targets/cloudflare-workers/api";
 import { createCloudflareWorkersFleet } from "../src/targets/cloudflare-workers/driver";
@@ -153,6 +154,17 @@ describe("the cloudflare-workers account API", () => {
         expect(body.query).toContain("workersInvocationsAdaptive");
         expect(body.query).toContain("datetime_gt: $since, datetime_leq: $until");
         expect(body.variables).toStrictEqual({ accountTag: ACCOUNT, since: new Date(1000).toISOString(), until: new Date(5000).toISOString() });
+    });
+
+    it("refuses a result that fills the row limit instead of metering a truncated count", async () => {
+        const rows = Array.from({ length: 10_000 }, (_, index) => {
+            return { dimensions: { scriptName: `w${String(index)}` }, sum: { requests: 1 } };
+        });
+        const fetch = vi.fn<typeof globalThis.fetch>(() =>
+            Promise.resolve(Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: rows }] } }, errors: null })),
+        );
+
+        await expect(readScriptRequests({ accountId: ACCOUNT, apiToken: TOKEN, fetch }, 1000, 5000)).rejects.toBeInstanceOf(UsageUnavailableError);
     });
 
     it("reports a GraphQL authorization error as a refused token", async () => {

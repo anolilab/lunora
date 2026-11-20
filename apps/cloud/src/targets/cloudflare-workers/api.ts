@@ -17,6 +17,7 @@ import { fetchBillableUsage } from "../../cloudflare/billable-usage";
 import type { CloudflareAccountAccess } from "../../cloudflare/fetch";
 import { cloudflareFetch, CloudflareTokenError } from "../../cloudflare/fetch";
 import { cloudflareGraphql, CloudflareGraphqlQueryError, graphqlTime } from "../../cloudflare/graphql";
+import { UsageUnavailableError } from "../../metering/unavailable";
 import type { CloudflarePermission } from "../../provision-contract";
 import { CLOUDFLARE_TOKEN_PERMISSIONS } from "../../provision-contract";
 
@@ -117,7 +118,7 @@ interface InvocationsData {
     };
 }
 
-/** Row cap of one readback: one row per script, so this is the number of Workers an account may run before a window under-counts. */
+/** Row cap of one readback: one row per script. A result this long may be truncated, so it is refused rather than under-counted. */
 const MAX_SCRIPTS = 10_000;
 
 const REQUESTS_QUERY = `query LunoraWorkerRequests($accountTag: string!, $since: Time!, $until: Time!) {
@@ -139,6 +140,8 @@ const REQUESTS_QUERY = `query LunoraWorkerRequests($accountTag: string!, $since:
  * estimate only where Cloudflare's own dashboard is one. `untilMs` defaults to
  * now.
  * @throws {CloudflareTokenError} when the token lacks Account Analytics Read.
+ * @throws {UsageUnavailableError} when the result fills {@link MAX_SCRIPTS} rows: the
+ * rows past the cap are invisible, and a partial total would bill the window as complete.
  */
 export const readScriptRequests = async (access: CloudflareAccountAccess, sinceMs: number, untilMs = Date.now()): Promise<ScriptRequests[]> => {
     const data = await cloudflareGraphql<InvocationsData>(access, REQUESTS_QUERY, {
@@ -149,7 +152,13 @@ export const readScriptRequests = async (access: CloudflareAccountAccess, sinceM
     const totals = new Map<string, number>();
 
     for (const account of data.viewer?.accounts ?? []) {
-        for (const row of account.workersInvocationsAdaptive ?? []) {
+        const rows = account.workersInvocationsAdaptive ?? [];
+
+        if (rows.length >= MAX_SCRIPTS) {
+            throw new UsageUnavailableError(`Workers request analytics hit the ${String(MAX_SCRIPTS)}-row limit; refusing a truncated count`);
+        }
+
+        for (const row of rows) {
             const scriptName = row.dimensions?.scriptName;
             const requests = row.sum?.requests ?? 0;
 
