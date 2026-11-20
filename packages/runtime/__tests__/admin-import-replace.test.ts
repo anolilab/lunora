@@ -347,6 +347,27 @@ describe("admin import — single-request replace", () => {
         expect(stagedRows("c1") + stagedRows("c2")).toBe(0);
     });
 
+    it("drops what it staged when staging throws, since the caller never learns the session to abort", async () => {
+        expect.assertions(4);
+
+        await seed();
+
+        const globals = memoryGlobalStaging();
+
+        vi.mocked(globals.staging.stage).mockRejectedValueOnce(new Error("D1 batch failed"));
+
+        const response = await postImport(workerWith({ importGlobalsStaging: globals.staging }), "?mode=replace&tables=messages,profiles", [
+            message("m1", "c1", "as snapshotted"),
+            message("m5", "c2", "as snapshotted"),
+            { doc: { _id: "p1", userId: "u1" }, table: "profiles" },
+        ]);
+
+        expect(response.ok).toBe(false);
+        expect(globals.staging.abort).toHaveBeenCalledWith(expect.objectContaining({ session: expect.stringMatching(/^once-/u) }));
+        expect(stagedRows("c1") + stagedRows("c2")).toBe(0);
+        await expect(texts("c1")).resolves.toStrictEqual({ m1: "edited since", m2: "created since" });
+    });
+
     it("writes nothing when a line is refused before the fan-out", async () => {
         expect.assertions(3);
 

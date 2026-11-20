@@ -718,7 +718,18 @@ const replaceImport = async (
     warnings?: string[];
 }> => {
     const session = `once-${crypto.randomUUID()}`;
-    const staged = await stageImport(request, context, session, tables);
+    let staged: Awaited<ReturnType<typeof stageImport>>;
+
+    try {
+        staged = await stageImport(request, context, session, tables);
+    } catch (error) {
+        // The session id never reaches the caller, so only this call can drop what a
+        // failed stage left behind.
+        await abortImport(context, session).catch(() => undefined);
+
+        throw error;
+    }
+
     const refused = { conflicts: 0, deleted: {}, inserted: {}, received: staged.received, ...(staged.warnings ? { warnings: staged.warnings } : {}) };
 
     if (staged.errors.length > 0 || staged.failed.length > 0) {
