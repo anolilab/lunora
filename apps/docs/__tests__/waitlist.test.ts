@@ -293,6 +293,32 @@ describe(handleWaitlist, () => {
         expect(new Set(limiter.limit.mock.calls.map(([options]) => options.key)).size).toBe(1);
     });
 
+    it("answers 503 and stores nothing when the limiter fails, logging the error without the address", async () => {
+        expect.assertions(4);
+
+        const failure = new Error("rate limiter unavailable");
+        const error = vi.spyOn(console, "error").mockReturnValue(undefined);
+        const store = memoryStore();
+        const response = await handleWaitlist(signUp({}, { "CF-Connecting-IP": "203.0.113.7" }), {
+            fetcher: siteverify(true),
+            limiter: {
+                limit: async () => {
+                    throw failure;
+                },
+            },
+            store,
+            turnstileSecret: SECRET,
+        });
+        const logged = [...error.mock.calls];
+
+        error.mockRestore();
+
+        expect(response.status).toBe(503);
+        expect(store.entries.size).toBe(0);
+        expect(logged).toStrictEqual([["waitlist: rate limit check failed", failure]]);
+        expect(JSON.stringify(logged)).not.toContain("203.0.113.7");
+    });
+
     it("skips the limit when the client address is unknown, rather than sharing one bucket", async () => {
         expect.assertions(1);
 

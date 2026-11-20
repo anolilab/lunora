@@ -66,16 +66,25 @@ const refuseRequest = (request: Request): Response | undefined => {
  * requests that fail validation or Turnstile never use up the allowance of other
  * people behind the same address. Without a client address every caller would share
  * one bucket, so the limit is skipped rather than applied to all. An IPv6 client
- * counts against its /64, which it usually holds whole.
+ * counts against its /64, which it usually holds whole. When the limiter itself fails,
+ * the sign-up is refused rather than stored unchecked.
  */
-const isOverLimit = async (clientIp: string | null, limiter: WaitlistDependencies["limiter"]): Promise<boolean> => {
+const checkLimit = async (clientIp: string | null, limiter: WaitlistDependencies["limiter"]): Promise<"allowed" | "limited" | "unavailable"> => {
     if (!clientIp) {
-        return false;
+        return "allowed";
     }
 
-    const { success } = await limiter.limit({ key: ipRateLimitKey(clientIp) });
+    try {
+        const { success } = await limiter.limit({ key: ipRateLimitKey(clientIp) });
 
-    return !success;
+        return success ? "allowed" : "limited";
+    } catch (error) {
+        // The error is logged without the key, which holds the client address.
+        // eslint-disable-next-line no-console -- Workers Logs is the only record of a failed limit check
+        console.error("waitlist: rate limit check failed", error);
+
+        return "unavailable";
+    }
 };
 
 /** KV's per-key write cooldown; a write after it is no longer throttled by the one before. */
@@ -164,8 +173,14 @@ const handleWaitlist = async (request: Request, { fetcher, limiter, store, turns
         return Response.json({ error: "verification_failed" }, { status: 403 });
     }
 
-    if (await isOverLimit(clientIp, limiter)) {
+    const limit = await checkLimit(clientIp, limiter);
+
+    if (limit === "limited") {
         return Response.json({ error: "rate_limited" }, { status: 429 });
+    }
+
+    if (limit === "unavailable") {
+        return Response.json({ error: "rate_limit_unavailable" }, { status: 503 });
     }
 
     if (!(await storeSignUp({ store, wait }, email, typeof body.source === "string" && SOURCES.has(body.source) ? body.source : "stable"))) {
