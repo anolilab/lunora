@@ -62,7 +62,7 @@ export const handleWebhookRoute = (request: Request, environment: RouterEnv): Pr
                 repository: intent.repository,
                 trigger: "push",
             }),
-        resolveProject: (repository) => context.runMutation<null | ProjectResolution>(internal.projects.byGithubRepo, { repository }),
+        resolveProject: (repository) => context.runQuery<null | ProjectResolution>(internal.projects.byGithubRepo, { repository }),
         secret: environment.GITHUB_WEBHOOK_SECRET,
     });
 };
