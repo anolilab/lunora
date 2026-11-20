@@ -2580,6 +2580,80 @@ export const backfillNames = defineMigration({
             expect(infos.some((line) => line.includes("migrations: applied"))).toBe(false);
         });
 
+        it("--migrate fails after the deploy when migration discovery throws, and runs no migration", async () => {
+            expect.assertions(4);
+
+            // Two declarations sharing one id: discovery rejects the project rather than pick one.
+            const duplicate = (exportName: string): string => `import { defineMigration } from "@lunora/server";
+
+export const ${exportName} = defineMigration({
+    id: "backfill-names",
+    table: "users",
+    up: (doc) => doc,
+});
+`;
+
+            writeFileSync(join(workdir, "lunora", "migrations.ts"), duplicate("backfillNames"), "utf8");
+            writeFileSync(join(workdir, "lunora", "more-migrations.ts"), duplicate("backfillNamesAgain"), "utf8");
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+            const urls: string[] = [];
+            const fetchStub: StreamingFetchLike = async (url) => {
+                urls.push(url);
+
+                return { ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ status: "ok" })) } as Response;
+            };
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                fetchImpl: fetchStub,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                skipCodegen: true,
+                spawner,
+            });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(1);
+            expect(errors.some((line) => line.includes("no migration was run"))).toBe(true);
+            expect(urls.some((url) => url.endsWith("/_lunora/migrate"))).toBe(false);
+        });
+
+        it("--migrate succeeds with nothing to run when there is no lunora/ directory", async () => {
+            expect.assertions(3);
+
+            rmSync(join(workdir, "lunora"), { force: true, recursive: true });
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { errors, infos, logger } = silentLogger();
+            const fetchStub: StreamingFetchLike = () =>
+                Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify({ status: "ok" })) } as Response);
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                fetchImpl: fetchStub,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                skipCodegen: true,
+                spawner,
+            });
+
+            expect(result.code).toBe(0);
+            expect(errors).toStrictEqual([]);
+            expect(infos.some((line) => line.includes("no data migrations declared"))).toBe(true);
+        });
+
         describe("--format json", () => {
             it("hands back the structured result the envelope is built from", async () => {
                 expect.assertions(5);

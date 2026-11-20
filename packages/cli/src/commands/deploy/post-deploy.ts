@@ -76,9 +76,11 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        options.logger.warn(`--migrate: could not discover migrations (${message}); skipping`);
+        // The worker is already live: failing here is what keeps a pipeline from reading new code on
+        // unmigrated data as a successful deploy-and-migrate.
+        options.logger.error(`--migrate: could not discover migrations (${message}); no migration was run`);
 
-        return 0;
+        return 1;
     }
 
     if (migrations.length === 0) {
