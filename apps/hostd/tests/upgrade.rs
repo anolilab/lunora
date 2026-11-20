@@ -151,7 +151,13 @@ impl Fixture {
 
     fn assert_nothing_installed(&self) {
         assert_eq!(self.current(), INITIAL_RELEASE);
-        assert_eq!(["hostd-v9_9_9", "hostd-v9_9_9.partial"].map(|name| self.install_dir().join(name).exists()), [false, false]);
+        let left: Vec<String> = std::fs::read_dir(self.install_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("hostd-v9_9_9"))
+            .collect();
+
+        assert_eq!(left, Vec::<String>::new());
     }
 }
 

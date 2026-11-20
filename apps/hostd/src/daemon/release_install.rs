@@ -8,13 +8,16 @@
 //! its size and then its SHA-256 checked before it is decompressed, and it is
 //! run once (`--version`) to prove it starts here. Nothing outside the staging
 //! directory changes until all three passed; then the directory is renamed
-//! into place and `current` swapped to it in one rename. The release that ran
+//! into place and `current` swapped to it in one rename. Installs hold
+//! `{installDir}/.install.lock`, so an upgrade job and an operator's
+//! `install-release` never stage or swap the same release at once. The release that ran
 //! before stays, for a manual rollback; older ones are removed. A release that
 //! already runs is left alone, and one whose `lunora-hostd` is older than the
 //! installed one is refused unless the caller explicitly allows a downgrade.
 
 use std::collections::HashSet;
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -26,6 +29,7 @@ use super::config::{CURRENT_RELEASE_LINK, binary_path};
 use super::fleet_env::path_only;
 use super::job_error::{JobError, codes};
 use super::log::Logger;
+use super::release_files::swap_into_place;
 use crate::release::{Artifact, Envelope, Platform, ReleaseComponent, compare_versions, verify_artifact};
 use crate::wire::types::BoxVersions;
 
@@ -271,10 +275,67 @@ pub struct Installed {
     pub previous: Option<String>,
 }
 
+const INSTALL_LOCK: &str = ".install.lock";
+
+/// `flock(operation)` on `file`: `false` when `LOCK_NB` was asked for and another holder has it.
+fn flock(file: &fs::File, operation: i32) -> std::io::Result<bool> {
+    loop {
+        // SAFETY: the descriptor belongs to `file`, which stays open for the call.
+        if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
+            return Ok(true);
+        }
+
+        let error = std::io::Error::last_os_error();
+
+        match error.raw_os_error() {
+            Some(libc::EINTR) => {}
+            Some(libc::EWOULDBLOCK) if operation & libc::LOCK_NB != 0 => return Ok(false),
+            _ => return Err(error),
+        }
+    }
+}
+
+/// Take the install lock, waiting for another install to finish. The lock goes with the returned file: it is
+/// released when the file closes, so also when the process dies mid-install.
+async fn lock_installs(install_dir: &str, progress: Progress<'_>) -> Result<fs::File, JobError> {
+    fs::create_dir_all(install_dir)?;
+
+    let path = Path::new(install_dir).join(INSTALL_LOCK);
+    let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o600).open(&path)?;
+
+    if flock(&file, libc::LOCK_EX | libc::LOCK_NB)? {
+        return Ok(file);
+    }
+
+    progress(&format!("another install holds {}; waiting for it to finish", path.display()));
+
+    // A blocking `flock` would stall the runtime the daemon's other jobs share.
+    let locked = tokio::task::spawn_blocking(move || flock(&file, libc::LOCK_EX).map(|_| file)).await.map_err(|error| JobError::from(error.to_string()))?;
+
+    Ok(locked?)
+}
+
+/// Remove `{releaseId}.partial*` left by an install that died; only one that holds the install lock may call this.
+fn remove_stale_staging(install_dir: &str, release_id: &str) -> std::io::Result<()> {
+    let prefix = format!("{release_id}.partial");
+
+    for entry in fs::read_dir(install_dir)? {
+        let entry = entry?;
+
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            fs::remove_dir_all(entry.path())?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Install a verified release beside the running one and switch `current` to it. On an error nothing outside the
 /// staging directory has changed.
 pub async fn install_release(input: InstallInput<'_>) -> Result<Installed, JobError> {
     let manifest = &input.envelope.manifest;
+    // Held to the end: whether the release already runs is only known once no other install can switch `current`.
+    let _lock = lock_installs(input.install_dir, input.progress).await?;
     let running = current_release(input.install_dir);
 
     if running.as_deref() == Some(manifest.release_id.as_str()) {
@@ -301,9 +362,10 @@ pub async fn install_release(input: InstallInput<'_>) -> Result<Installed, JobEr
     }
 
     let target = Path::new(input.install_dir).join(&manifest.release_id);
-    let staging = PathBuf::from(format!("{}.partial", target.display()));
+    // Per process as well as locked, so no two installers can ever write the same staging directory.
+    let staging = PathBuf::from(format!("{}.partial-{}", target.display(), std::process::id()));
 
-    let _ = fs::remove_dir_all(&staging);
+    remove_stale_staging(input.install_dir, &manifest.release_id)?;
     fs::create_dir_all(&staging)?;
     // Not left to the umask: the fleet user executes celld from here.
     fs::set_permissions(&staging, fs::Permissions::from_mode(0o755))?;
@@ -330,8 +392,9 @@ pub async fn install_release(input: InstallInput<'_>) -> Result<Installed, JobEr
         return Err(error);
     }
 
-    let _ = fs::remove_dir_all(&target);
-    fs::rename(&staging, &target)?;
+    // A copy of this release that is not the running one (a rollback target, a leftover) is renamed aside, not
+    // deleted first, so a failed rename leaves it where it was.
+    swap_into_place(&staging, &target, |from, to| fs::rename(from, to))?;
     switch_current(input.install_dir, &manifest.release_id)?;
     (input.progress)(&format!("installed release {} at {}; {CURRENT_RELEASE_LINK} -> {}", manifest.release_id, target.display(), manifest.release_id));
 
@@ -427,6 +490,78 @@ mod tests {
         let lines = lines.lock().unwrap().clone();
 
         (result, lines)
+    }
+
+    fn staging_left(root: &Path) -> Vec<String> {
+        fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".partial") || name.ends_with(".previous"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn two_installs_of_one_release_at_once_leave_it_intact() {
+        let directory = tempfile::tempdir().unwrap();
+        let install_dir = directory.path().to_str().unwrap();
+        let next = release("hostd-v0_0_2", "0.0.2", gzip(&script("echo celld 0.6.0")));
+
+        install(install_dir, &release("hostd-v0_0_1", "0.0.1", gzip(&script("echo celld 0.6.0"))), false).await.0.unwrap();
+
+        let ((first, _), (second, _)) = tokio::join!(install(install_dir, &next, false), install(install_dir, &next, false));
+        let mut outcomes = [first.unwrap(), second.unwrap()].map(|outcome| outcome.installed);
+
+        outcomes.sort();
+        assert_eq!(outcomes, [false, true]);
+        assert_eq!(current_release(install_dir).as_deref(), Some("hostd-v0_0_2"));
+        assert_eq!(installed_hostd_version(install_dir).as_deref(), Some("0.0.2"));
+
+        for component in ReleaseComponent::ALL {
+            assert!(version_output(&binary_path(install_dir, component), component.version_args()).await.is_some(), "{}", component.as_str());
+        }
+
+        assert!(directory.path().join("hostd-v0_0_1").exists());
+        assert_eq!(staging_left(directory.path()), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn an_install_waits_for_the_one_holding_the_lock_and_clears_its_dead_staging() {
+        let directory = tempfile::tempdir().unwrap();
+        let install_dir = directory.path().to_str().unwrap().to_owned();
+        let held = fs::OpenOptions::new().write(true).create(true).truncate(false).open(directory.path().join(INSTALL_LOCK)).unwrap();
+
+        assert!(flock(&held, libc::LOCK_EX | libc::LOCK_NB).unwrap());
+        fs::create_dir(directory.path().join("hostd-v0_0_1.partial-1")).unwrap();
+
+        let (waiting, mut told) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let pending = tokio::spawn(async move {
+            let next = release("hostd-v0_0_1", "0.0.1", gzip(&script("echo celld 0.6.0")));
+            let obtain = move |component: ReleaseComponent, _artifact: Artifact, path: PathBuf| -> BoxFuture<'static, Result<(), JobError>> {
+                let bytes = next.files.iter().find(|(name, _)| *name == component.binary_name()).map(|(_, bytes)| bytes.clone()).unwrap_or_default();
+
+                Box::pin(async move { fs::write(path, bytes).map_err(JobError::from) })
+            };
+            let progress = move |line: &str| drop(waiting.send(line.to_owned()));
+            let envelope = release("hostd-v0_0_1", "0.0.1", gzip(&script("echo celld 0.6.0"))).envelope;
+
+            install_release(InstallInput {
+                allow_downgrade: false,
+                envelope: &envelope,
+                install_dir: &install_dir,
+                obtain: &obtain,
+                platform: Platform::LinuxX64,
+                progress: &progress,
+                running_version: None,
+            })
+            .await
+        });
+
+        assert!(told.recv().await.unwrap().starts_with("another install holds "));
+        assert_eq!(current_release(directory.path().to_str().unwrap()), None);
+        drop(held);
+        assert!(pending.await.unwrap().unwrap().installed);
+        assert_eq!(current_release(directory.path().to_str().unwrap()).as_deref(), Some("hostd-v0_0_1"));
+        assert_eq!(staging_left(directory.path()), Vec::<String>::new());
     }
 
     #[tokio::test]
@@ -528,7 +663,7 @@ mod tests {
         assert_eq!(error.code, codes::ARTIFACT_INVALID);
         assert!(error.message.starts_with("celld: the manifest says gzip, but it does not decompress"), "{}", error.message);
         assert_eq!(current_release(install_dir), None);
-        assert!(!directory.path().join("hostd-v0_0_1.partial").exists());
+        assert_eq!(staging_left(directory.path()), Vec::<String>::new());
 
         let wrong = release("hostd-v0_0_1", "0.0.1", gzip(b"#!/bin/sh\nexit 1\n"));
         let error = install(install_dir, &wrong, false).await.0.unwrap_err();
@@ -586,7 +721,7 @@ mod tests {
             assert_eq!(error.code, codes::ARTIFACT_INVALID);
             assert_eq!(error.message, format!("celld: https://example.com/celld reports {reported:?}, but the manifest pins version v0.6.0"));
             assert_eq!(current_release(install_dir), None);
-            assert!(!directory.path().join("hostd-v0_0_1.partial").exists());
+            assert_eq!(staging_left(directory.path()), Vec::<String>::new());
         }
 
         let mut lagging = release("hostd-v0_0_2", "0.0.2", gzip(&script("echo celld 0.6.0")));

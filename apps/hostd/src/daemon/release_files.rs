@@ -345,7 +345,7 @@ fn sibling(directory: &Path, suffix: &str) -> PathBuf {
 /// `directory` exists nowhere: it is renamed aside, not deleted, until the new one is in
 /// place, and renamed back if that fails. Portable renames, not `RENAME_EXCHANGE`, which
 /// macOS lacks.
-fn swap_into_place(staging: &Path, directory: &Path, rename: impl Fn(&Path, &Path) -> std::io::Result<()>) -> std::io::Result<()> {
+pub(super) fn swap_into_place(staging: &Path, directory: &Path, rename: impl Fn(&Path, &Path) -> std::io::Result<()>) -> std::io::Result<()> {
     let previous = sibling(directory, ".previous");
 
     // A crash between the two renames below leaves the running release only under

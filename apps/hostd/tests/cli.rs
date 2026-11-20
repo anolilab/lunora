@@ -144,7 +144,12 @@ impl Install {
     }
 
     fn installed(&self) -> Vec<String> {
-        std::fs::read_dir(&self.install_dir).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect()
+        // The install lock is left behind by every run, an install or not.
+        std::fs::read_dir(&self.install_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != ".install.lock")
+            .collect()
     }
 }
 
