@@ -15,8 +15,8 @@
  * left for the caller to add through `env`.
  */
 
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 
@@ -231,6 +231,47 @@ const createBindingPlatform = (
     });
 };
 
+/**
+ * Wrangler's rule for a binding name, a JavaScript identifier. A binding's name is also a directory and a file name under
+ * `dataDirectory`, so anything else (`..`, `a/b`) could open storage outside it.
+ */
+const BINDING_NAME = /^[A-Za-z_$][\w$]*$/u;
+
+/** Whether `path` lies strictly inside `directory`, compared by path segment rather than by prefix. */
+const isInside = (directory: string, path: string): boolean => {
+    const fromDirectory = relative(directory, path);
+
+    return fromDirectory !== "" && !fromDirectory.startsWith("..") && !isAbsolute(fromDirectory);
+};
+
+/**
+ * Refuse a binding whose storage would land outside `dataDirectory`: a name that is not an identifier, or a shard directory or
+ * platform database that already exists as a link out of it. Checked through `realpathSync`, since `join` does not follow links.
+ */
+const checkBindingStorage = (name: string, dataDirectory: string | undefined): void => {
+    if (!BINDING_NAME.test(name)) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: Durable Object binding ${JSON.stringify(name)} is not a valid binding name (a JavaScript identifier such as SHARD), and its name becomes a directory under the data directory`,
+        );
+    }
+
+    if (dataDirectory === undefined || !existsSync(dataDirectory)) {
+        return;
+    }
+
+    const root = realpathSync(dataDirectory);
+
+    for (const path of [join(dataDirectory, name), join(dataDirectory, `${name}.platform.sqlite3`)]) {
+        if (existsSync(path) && !isInside(root, realpathSync(path))) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: Durable Object binding ${name} would store data outside ${dataDirectory}: ${path} links out of it`,
+            );
+        }
+    }
+};
+
 /** Whether `value` can be called with `new`, checked without calling it: `Reflect.construct` refuses a non-constructor target first. */
 const isConstructor = (value: unknown): boolean => {
     if (typeof value !== "function") {
@@ -248,7 +289,7 @@ const isConstructor = (value: unknown): boolean => {
 
 /**
  * Throw what `createNodeAppHost` would refuse for `options`, without opening a database or arming a timer: the default export,
- * every binding's class, and the declared crons. `createNodeAppHost` runs it before building anything, so a refused composition
+ * every binding's name and class, and the declared crons. `createNodeAppHost` runs it before building anything, so a refused composition
  * changes no stored state (cron rows included); a caller replacing a running host runs it first, so a refused candidate leaves
  * that host serving.
  */
@@ -258,6 +299,8 @@ const checkNodeAppHost = (options: NodeAppHostOptions): void => {
     }
 
     for (const binding of options.durableObjects) {
+        checkBindingStorage(binding.name, options.dataDirectory);
+
         const exported = options.worker[binding.className];
 
         if (exported === undefined) {

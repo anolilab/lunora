@@ -371,7 +371,9 @@ stops them waiting for the rest.
 
 Throws what `createNodeAppHost` would refuse for the same options (no default
 `fetch` handler, a binding whose export is missing or cannot be constructed with
-`new`, crons with no shard binding or a workflow target) without opening a
+`new`, a binding name that is not an identifier or whose existing shard
+directory or platform database links out of `dataDirectory`, crons with no shard
+binding or a workflow target) without opening a
 database or arming a timer. `createNodeAppHost` runs it before building
 anything, so a refused composition leaves stored state, cron rows included, as
 it was. A caller replacing a running host runs it first and keeps the running

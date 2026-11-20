@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -491,5 +491,32 @@ describe(createNodeAppHost, () => {
             }),
         ).toThrow(/names class Missing/u);
         expect(Object.values(declaredCrons(dataDirectory))).toStrictEqual(["reports:a"]);
+    });
+
+    it("refuses a binding name that would put its storage outside the data directory", () => {
+        expect.assertions(2);
+
+        const options = {
+            dataDirectory: join(directory, "state"),
+            durableObjects: [{ className: "Counter", name: "../escape" }],
+            worker,
+        };
+
+        expect(() => {
+            checkNodeAppHost(options);
+        }).toThrow(/not a valid binding name/u);
+        expect(() => createNodeAppHost(options)).toThrow(/not a valid binding name/u);
+    });
+
+    it("refuses a binding whose shard directory links out of the data directory", () => {
+        expect.assertions(1);
+
+        const dataDirectory = join(directory, "state");
+
+        mkdirSync(join(directory, "elsewhere"), { recursive: true });
+        mkdirSync(dataDirectory, { recursive: true });
+        symlinkSync(join(directory, "elsewhere"), join(dataDirectory, "COUNTER"), "dir");
+
+        expect(() => createNodeAppHost({ dataDirectory, durableObjects: [{ className: "Counter", name: "COUNTER" }], worker })).toThrow(/links out of it/u);
     });
 });
