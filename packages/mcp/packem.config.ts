@@ -9,8 +9,8 @@ export default defineConfig({
      *
      * `src/paid.ts` imports types from `@lunora/x402/charge`. Since x402 became
      * an OPTIONAL peer it is no longer in the dependency closure a consumer
-     * builds — `pnpm --filter @lunora/docs... run build`, which is what Netlify
-     * runs, never builds it — so the dts bundler tried to inline a `dist/` that
+     * builds — `pnpm --filter @lunora/docs... run build`, which is what the docs
+     * deploy runs, never builds it — so the dts bundler tried to inline a `dist/` that
      * does not exist yet and failed the whole site build. Declaring it external
      * emits a type *reference* instead, which is what a peer dependency should
      * produce anyway.
