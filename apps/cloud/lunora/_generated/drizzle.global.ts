@@ -252,6 +252,7 @@ export const builds = sqliteTable("builds", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     advisories: text("advisories", { mode: "json" }).$type<Array<{ cacheKey: string; detail: string; file: string; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }>>(),
+    before: text("before"),
     branch: text("branch").notNull(),
     bundleHash: text("bundleHash"),
     commitSha: text("commitSha").notNull(),
@@ -278,6 +279,7 @@ export const builds = sqliteTable("builds", {
     failedAt: real("failedAt"),
 }, (t) => ({
     by_project_commit: index("by_project_commit").on(t.projectId, t.commitSha),
+    by_project_before: index("by_project_before").on(t.projectId, t.before),
     by_org: index("by_org").on(t.organizationId),
 }));
 

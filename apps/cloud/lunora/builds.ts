@@ -94,16 +94,55 @@ const DELIVERY_PRUNE_BATCH = 20;
 type ClaimResult = null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string; runtime?: "worker" };
 
 /**
- * Why a production push of an already-built commit must NOT re-release it, or
- * `undefined` when it may: the push moved `branch` from the newest commit
- * pushed to it (`before`), so it is a deliberate reset to that commit rather
- * than an older push arriving late.
+ * Pushes followed forward from a commit before {@link newerPushReleased} stops
+ * looking. Longer chains of path-filtered pushes only are counted as newer
+ * work, the side that never rolls production back.
+ */
+const FORWARD_CHAIN_LIMIT = 10;
+
+/**
+ * Whether a push recorded after `commitSha` — one that moved `branch` on from
+ * it, followed forward — set out to release something. A path-filtered skip
+ * released nothing, so it is followed to the push after it; any other row
+ * (queued, built, failed or stale-skipped) means production holds or is
+ * getting newer work.
+ */
+const newerPushReleased = async (context: MutationContext, projectId: Id<"projects">, branch: string, commitSha: string): Promise<boolean> => {
+    let from = commitSha;
+
+    for (let step = 0; step < FORWARD_CHAIN_LIMIT; step += 1) {
+        // eslint-disable-next-line no-await-in-loop -- each step follows the push the previous one found
+        const { page } = await context.db.builds.findMany({ limit: 1, where: { before: from, branch, projectId, trigger: "push" } }); // secret-scanner:allow -- domain field name
+        const next = page.at(0);
+
+        if (next === undefined) {
+            return false;
+        }
+
+        if (next.status !== "skipped" || next.pathFiltered !== true) {
+            return true;
+        }
+
+        from = next.commitSha;
+    }
+
+    return true;
+};
+
+/**
+ * Why a production push must NOT release its commit, or `undefined` when it
+ * may. A push that moved `branch` from the newest commit pushed to it (`before`)
+ * is the branch's next state — a new commit, or a deliberate reset to an older
+ * one — and always may. Any other push arrived late: it is stale when its
+ * commit was released before (`rereleased`), or when a push recorded after it
+ * moved the branch on from its commit and released something. One whose
+ * predecessor's webhook never arrived has no such later push, so it deploys.
  */
 const staleRelease = async (
     context: MutationContext,
-    push: { before: string | undefined; branch: string; projectId: Id<"projects"> },
+    push: { before: string | undefined; branch: string; commitSha: string; projectId: Id<"projects">; rereleased: boolean },
 ): Promise<string | undefined> => {
-    const { before, branch, projectId } = push;
+    const { before, branch, commitSha, projectId } = push;
     // The head alone, asked for directly: a page of the project's whole build history may not hold it.
     const { page } = await context.db.builds.findMany({ limit: 1, orderBy: [{ createdAt: "desc" }], where: { branch, projectId, trigger: "push" } }); // secret-scanner:allow -- domain field name
     const head = page.at(0);
@@ -112,7 +151,11 @@ const staleRelease = async (
         return undefined;
     }
 
-    return `not re-released: this push moved ${branch} from ${before ?? "an unknown commit"}, but the newest push recorded for it is ${head.commitSha}, so it is a stale or out-of-order delivery and would roll production back`;
+    if (!push.rereleased && !(await newerPushReleased(context, projectId, branch, commitSha))) {
+        return undefined;
+    }
+
+    return `not released: this push moved ${branch} from ${before ?? "an unknown commit"}, but the newest push recorded for it is ${head.commitSha}, so it is a stale or out-of-order delivery and would roll production back`;
 };
 
 /**
@@ -243,9 +286,13 @@ const recordProjectPush = async (
     // Only a build that recorded a deployment has a stored release to re-release.
     const rereleased = prior?.deployment == null ? undefined : prior.build;
     const staleReason =
-        trigger === "push" && rereleased !== undefined ? await staleRelease(context, { before: push.before, branch, projectId: project._id }) : undefined;
+        trigger === "push"
+            ? await staleRelease(context, { before: push.before, branch, commitSha, projectId: project._id, rereleased: rereleased !== undefined })
+            : undefined;
     const { decision, filtered, reusesBuildId } = planBuild({ changes, rereleased, rootDirectory, staleReason, watchPaths, workspacePackages });
     const common = {
+        // Links this push to the one before it, so a late delivery of that one can tell it was moved past.
+        ...(push.before === undefined ? {} : { before: push.before }),
         branch,
         commitSha,
         createdAt: now,
@@ -342,7 +389,9 @@ export const installedProjects = async (context: MutationContext, repository: st
  * commit) — a deliberate reset of the branch to an older commit. A stale or
  * out-of-order delivery of an older push carries the `before` of ITS time, so
  * it is recorded as a `skipped` build saying so, and never rolls production
- * back over the newer release. A redelivered webhook (its `X-GitHub-Delivery`
+ * back over the newer release. The same holds for a late push of a commit
+ * never built: once a push recorded after it moved the branch on from its
+ * commit and released something, it is skipped too. A redelivered webhook (its `X-GitHub-Delivery`
  * id seen before, `deliveryId`) records nothing at all (`duplicate`).
  *
  * Path filter: a push whose changed files match none of the project's watch

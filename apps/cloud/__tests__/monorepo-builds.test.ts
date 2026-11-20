@@ -242,6 +242,42 @@ describe("builds.recordPush path filter", () => {
         expect(inserted?.document).not.toHaveProperty("reusesBuildId");
     });
 
+    /** `abc123` (pushed from `parent0`), then `def456` pushed on top of it, recorded first. */
+    const outOfOrder = (newer: Row) =>
+        makeCtx({
+            ...world(project(), [
+                { _id: "bld_head", before: "abc123", branch: "main", commitSha: "def456", createdAt: 3, projectId: "prj_1", trigger: "push", ...newer },
+            ]),
+            githubDeliveries: [],
+        });
+
+    it("never releases a late push of a commit never built once a newer push moved the branch on from it", async () => {
+        const { ctx, ops } = outOfOrder({ status: "pending" });
+
+        const result = await recordPush.handler(ctx, { ...push, before: "parent0", changes: { files: ["src/index.ts"] } });
+
+        expect(result).toMatchObject([{ skipped: expect.stringContaining("the newest push recorded for it is def456") as unknown }]);
+        expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { before: "parent0", status: "skipped" } });
+    });
+
+    it("builds a late push of a commit whose only newer push was path-filtered, which released nothing", async () => {
+        const { ctx, ops } = outOfOrder({ pathFiltered: true, skipReason: "no changes under apps/web/", status: "skipped" });
+
+        await expect(recordPush.handler(ctx, { ...push, before: "parent0", changes: { files: ["src/index.ts"] } })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
+        expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { status: "pending" } });
+    });
+
+    it("builds a push whose predecessor's webhook never arrived", async () => {
+        // def456's push was recorded; ghi789's moved the branch from a commit (lost0) whose push never came.
+        const { ctx } = outOfOrder({ status: "successful" });
+
+        await expect(recordPush.handler(ctx, { ...push, before: "lost0", changes: { files: ["src/index.ts"] }, commitSha: "ghi789" })).resolves.toStrictEqual([
+            { buildId: "builds_new", projectId: "prj_1", reused: false },
+        ]);
+    });
+
     it("records a webhook delivery once: a redelivery records nothing", async () => {
         const fresh = makeCtx({ ...world(project()), githubDeliveries: [] });
 

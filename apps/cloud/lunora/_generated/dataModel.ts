@@ -239,6 +239,7 @@ export interface Doc_builds {
     _id: Id<"builds">;
     _creationTime: number;
     advisories?: Array<{ cacheKey: string; detail: string; file: string; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }> | null;
+    before?: string | null;
     branch: string;
     bundleHash?: string | null;
     commitSha: string;
@@ -893,7 +894,7 @@ export interface IndexNamesByTable {
     aliasOwnership: "by_alias" | "by_project";
     deployKeys: "by_hash" | "by_org";
     githubDeliveries: "by_delivery" | "by_received";
-    builds: "by_project_commit" | "by_org";
+    builds: "by_project_commit" | "by_project_before" | "by_org";
     buildLogs: "by_build" | "by_org";
     domains: "by_hostname" | "by_project";
     certificateReleases: never;
@@ -1322,6 +1323,7 @@ export interface Insert_builds {
     _id?: Id<"builds">;
     _creationTime?: number;
     advisories?: Array<{ cacheKey: string; detail: string; file: string; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }>;
+    before?: string;
     branch: string;
     bundleHash?: string;
     commitSha: string;

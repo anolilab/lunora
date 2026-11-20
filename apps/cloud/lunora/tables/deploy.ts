@@ -284,6 +284,9 @@ export const deployTables = {
                 }),
             ),
         ),
+        // The commit a `push` moved the branch from (the webhook's `before`), so a
+        // late delivery of that earlier push can see it was moved past.
+        before: v.optional(v.string()),
         branch: v.string(),
         bundleHash: v.optional(v.string()),
         commitSha: v.string(),
@@ -336,6 +339,8 @@ export const deployTables = {
     })
         .global()
         .index("by_project_commit", ["projectId", "commitSha"])
+        // `recordPush` follows a branch forward from a commit by the push that moved it on.
+        .index("by_project_before", ["projectId", "before"])
         // `purgeDeleted` filters this table by `organizationId`; without the index
         // each org-deletion sweep degrades into a full scan of every build ever run.
         .index("by_org", ["organizationId"]),
