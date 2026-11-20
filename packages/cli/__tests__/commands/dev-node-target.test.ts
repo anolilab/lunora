@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSy
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 import { checkNodeAppHost, createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } from "@lunora/platform-node";
@@ -178,9 +179,10 @@ const portIsFree = async (port: number): Promise<boolean> =>
     });
 
 /** A logger whose info and error lines can be awaited: each wait resolves on the next line containing the text, never on a timer. */
-const milestoneLogger = (): { errors: string[]; logger: Logger; next: (text: string) => Promise<void> } => {
+const milestoneLogger = (): { errors: string[]; logger: Logger; next: (text: string) => Promise<void>; warnings: string[] } => {
     const waiters: { resolve: () => void; text: string }[] = [];
     const errors: string[] = [];
+    const warnings: string[] = [];
     const info = (message: string): void => {
         for (const waiter of waiters.filter((candidate) => message.includes(candidate.text))) {
             waiters.splice(waiters.indexOf(waiter), 1);
@@ -197,12 +199,15 @@ const milestoneLogger = (): { errors: string[]; logger: Logger; next: (text: str
             },
             info,
             success: () => {},
-            warn: () => {},
+            warn: (message: string) => {
+                warnings.push(message);
+            },
         },
         next: async (text) =>
             new Promise<void>((resolve) => {
                 waiters.push({ resolve, text });
             }),
+        warnings,
     };
 };
 
@@ -645,13 +650,14 @@ export default crons;
 
             await generating.stop();
 
-            const { errors, logger, next } = milestoneLogger();
+            const { errors, logger, next, warnings } = milestoneLogger();
             const port = await findAvailablePort(18_870);
             const worker = await startNodeDevWorker({ codegenWatch: false, logger, port, projectRoot: workdir, ...inputs });
 
             return {
                 errors,
                 next,
+                warnings,
                 origin: `http://localhost:${String(port)}`,
                 port,
                 stop: async () => {
@@ -909,6 +915,97 @@ export default crons;
             }
         });
 
+        it("refuses a Secrets Store or Hyperdrive binding named WORKER_ENV, which dev sets itself", async () => {
+            expect.assertions(2);
+
+            const { logger } = milestoneLogger();
+            const start = async (wrangler: Record<string, unknown>): Promise<unknown> => {
+                writeFixture(workdir, wrangler);
+
+                try {
+                    return await startNodeDevWorker({ codegenWatch: false, logger, port: await findAvailablePort(18_870), projectRoot: workdir });
+                } finally {
+                    rmSync(workdir, { force: true, recursive: true });
+                    mkdirSync(workdir);
+                }
+            };
+
+            await expect(start({ secrets_store_secrets: [{ binding: "WORKER_ENV", secret_name: "mode", store_id: "local" }] })).rejects.toThrow(
+                /sets WORKER_ENV to development itself, and wrangler\.jsonc also declares it in secrets_store_secrets/u,
+            );
+            await expect(start({ hyperdrive: [{ binding: "WORKER_ENV", id: "local" }] })).rejects.toThrow(/also declares it in hyperdrive/u);
+        });
+
+        it("refuses a Durable Object binding name that is not an identifier", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { durable_objects: { bindings: [{ class_name: "ShardDO", name: "../SHARD" }] } });
+
+            const { logger } = milestoneLogger();
+
+            await expect(startNodeDevWorker({ codegenWatch: false, logger, port: await findAvailablePort(18_870), projectRoot: workdir })).rejects.toThrow(
+                /not a valid binding name/u,
+            );
+        });
+
+        it("resyncs the cron schedule when the generated cron map changes without the codegen watcher", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/server";\n\nimport { internal } from "./_generated/internal.js";\n\nconst crons = cronJobs();\n\ncrons.cron("tick", "0 * * * *", internal.notes.tick, {});\n\nexport default crons;\n`,
+                "utf8",
+            );
+
+            const dev = await startWorker();
+            const schedules = (): string[] => {
+                const database = new DatabaseSync(join(workdir, ".lunora", "node", "SHARD.platform.sqlite3"), { readOnly: true });
+
+                try {
+                    return (database.prepare("SELECT expression FROM _lunora_scheduler_crons").all() as { expression: string }[]).map((row) => row.expression);
+                } finally {
+                    database.close();
+                }
+            };
+
+            try {
+                expect(schedules()).toStrictEqual(["0 * * * *"]);
+
+                const reloaded = dev.next("node: reloaded");
+
+                editFile(join(workdir, "lunora", "_generated", "crons.ts"), /0 \* \* \* \*/gu, "30 * * * *");
+                await reloaded;
+
+                expect(schedules()).toStrictEqual(["30 * * * *"]);
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("names every declared binding it does not compose in the startup warning", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, {
+                assets: { binding: "ASSETS", directory: "./public" },
+                durable_objects: {
+                    bindings: [
+                        { class_name: "ShardDO", name: "SHARD" },
+                        { class_name: "Room", name: "ROOMS", script_name: "rooms-worker" },
+                    ],
+                },
+            });
+
+            const dev = await startWorker();
+
+            try {
+                expect(dev.warnings.join("\n")).toMatch(/not bound[^\n]*assets/u);
+                expect(dev.warnings.join("\n")).toMatch(/durable_objects\.ROOMS/u);
+            } finally {
+                await dev.stop();
+            }
+        });
+
         it("fails the start with the port released when the config directory cannot be watched", async () => {
             expect.assertions(2);
 
@@ -932,6 +1029,42 @@ export default crons;
 
             await expect(portIsFree(port)).resolves.toBe(true);
         });
+    });
+
+    it("watches and reloads a worker entry shared from outside the project", async () => {
+        expect.assertions(2);
+
+        const appRoot = join(workdir, "app");
+        const sharedEntry = join(workdir, "shared", "entry.ts");
+        const sharedSource = (version: string): string => `import worker from "../app/src/worker";
+
+export { ShardDO } from "../app/src/worker";
+
+export default {
+    fetch: (request: Request, env: never, ctx: never): Promise<Response> | Response =>
+        new URL(request.url).pathname === "/__which" ? new Response(${JSON.stringify(version)}) : worker.fetch(request, env, ctx),
+};
+`;
+
+        mkdirSync(appRoot);
+        mkdirSync(join(workdir, "shared"));
+        writeFixture(appRoot, { main: "../shared/entry.ts" });
+        writeFileSync(sharedEntry, sharedSource("shared-v1"), "utf8");
+
+        const dev = await startDev(appRoot);
+
+        try {
+            await expect(readWhich(dev.origin)).resolves.toBe("shared-v1");
+
+            const reloaded = dev.next("node: reloaded");
+
+            writeFileSync(sharedEntry, sharedSource("shared-v2"), "utf8");
+            await reloaded;
+
+            await expect(readWhich(dev.origin)).resolves.toBe("shared-v2");
+        } finally {
+            await dev.stop();
+        }
     });
 });
 

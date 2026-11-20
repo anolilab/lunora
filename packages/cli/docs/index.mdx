@@ -509,6 +509,14 @@ so it cannot keep serving meanwhile.
 that environment's `main` (inherited when it sets none), its bindings and `vars`
 (never inherited), and `.dev.vars.<env>` before `.dev.vars`.
 
+Every declared binding the Node host does not compose (static `assets`, D1, KV,
+R2, queues, a Durable Object bound to another worker's class, and any other
+section) is named in one startup warning. A Secrets Store, Hyperdrive or Durable
+Object binding named `WORKER_ENV` is refused, since dev sets it to `development`
+itself, and so is a Durable Object binding name that is not an identifier,
+since it names a directory under `.lunora/node/`. A `main` outside the project
+(a worker shared between apps) is watched and reloaded like one inside it.
+
 Studio works against it (data browser, logs, live subscriptions). Durable Object
 bindings, vars, declared crons, Secrets Store secrets (read from `.dev.vars` or
 the shell) and Hyperdrive (built from `DATABASE_URL`) are bound; any other

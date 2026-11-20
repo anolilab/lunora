@@ -36,6 +36,7 @@ import { resolveLocalWorkerEnv, resolveSchemaDirectory, wranglerDotenvFiles } fr
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 
+import { BINDING_NAME, refuseWorkerEnvOverride, unboundSections, WORKER_ENV } from "../../util/node-target-bindings";
 import { codegenRequested } from "./lifecycle";
 import type { DevCommandOptions, DevCommandPlan, NodeAppHost, NodeAppHostCandidate, NodeDevWorker, NodeDevWorkerInputs, PlatformNode } from "./types";
 
@@ -50,27 +51,6 @@ const RELOAD_DEBOUNCE_MS = 100;
  * alarms) before closing it anyway. The port is closed for that long, so it is short: a dev loop waits on a save, not a deploy.
  */
 const NODE_DEV_DRAIN_TIMEOUT_MS = 5000;
-
-/**
- * Wrangler keys that declare a binding this host does not compose in dev. Each is named once at startup, so a request
- * that reads one fails where the developer was already told it would.
- */
-const UNBOUND_BINDING_KEYS = [
-    "ai",
-    "analytics_engine_datasets",
-    "browser",
-    "containers",
-    "d1_databases",
-    "images",
-    "kv_namespaces",
-    "pipelines",
-    "queues",
-    "r2_buckets",
-    "send_email",
-    "services",
-    "vectorize",
-    "workflows",
-] as const;
 
 interface NodeWranglerConfig {
     durable_objects?: { bindings?: ReadonlyArray<{ class_name?: unknown; name?: unknown; script_name?: unknown }> };
@@ -103,8 +83,6 @@ interface NodeDevProject {
     /** Declared bindings with no Node composition in dev, by wrangler key. */
     unbound: string[];
 }
-
-const isPresent = (value: unknown): boolean => (Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null);
 
 const bindingNames = (entries: ReadonlyArray<{ binding?: unknown }> | undefined): string[] =>
     (entries ?? []).flatMap((entry) => (typeof entry.binding === "string" ? [entry.binding] : []));
@@ -148,25 +126,55 @@ const readNodeDevProject = (projectRoot: string, environment: string | undefined
         throw new TypeError(`--target node serves the worker entry \`main\` names, and ${relative(projectRoot, configPath)} has no \`main\``);
     }
 
+    const configName = relative(projectRoot, configPath);
     const durableObjects: DurableObjectBinding[] = [];
+    const external: string[] = [];
 
     for (const binding of view.durable_objects?.bindings ?? []) {
-        // A binding to another worker's class has no class in this entry to construct.
-        if (typeof binding.name === "string" && typeof binding.class_name === "string" && binding.script_name === undefined) {
+        if (typeof binding.name !== "string" || typeof binding.class_name !== "string") {
+            continue;
+        }
+
+        // The name becomes a directory under `.lunora/node/`: anything but an identifier ("..", "a/b") could put shard files
+        // outside it.
+        if (!BINDING_NAME.test(binding.name)) {
+            throw new Error(
+                `--target node stores each Durable Object binding's shards in a directory named after it, and the binding ${JSON.stringify(binding.name)} in ${configName} is not a valid binding name (a JavaScript identifier such as SHARD)`,
+            );
+        }
+
+        // A binding to another worker's class has no class in this entry to construct, and no other worker runs here.
+        if (binding.script_name === undefined) {
             durableObjects.push({ className: binding.class_name, name: binding.name });
+        } else {
+            external.push(`durable_objects.${binding.name}`);
         }
     }
 
-    const unbound = UNBOUND_BINDING_KEYS.filter((key) => isPresent((view as Record<string, unknown>)[key]));
+    const hyperdrive = bindingNames(view.hyperdrive);
+    const secrets = bindingNames(view.secrets_store_secrets);
+
+    // `WORKER_ENV` is set to `development` on the env these bindings are spread over; a binding of that name would replace it.
+    refuseWorkerEnvOverride(
+        [
+            { names: secrets, source: "secrets_store_secrets" },
+            { names: hyperdrive, source: "hyperdrive" },
+            { names: durableObjects.map((binding) => binding.name), source: "durable_objects.bindings" },
+        ],
+        configName,
+        "development",
+    );
+
+    const unbound = [...unboundSections(view as Record<string, unknown>), ...external];
 
     return {
         configPath,
         durableObjects,
         entry: resolve(projectRoot, view.main),
         environment,
-        hyperdrive: bindingNames(view.hyperdrive),
+        hyperdrive,
         parsed,
-        secrets: bindingNames(view.secrets_store_secrets),
+        secrets,
         unbound,
     };
 };
@@ -232,6 +240,8 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     const { createJiti } = await import("jiti");
     const jiti = createJiti(join(projectRoot, "package.json"), { interopDefault: false });
     const schemaDirectory = resolve(projectRoot, resolveSchemaDirectory(projectRoot));
+    // The generated cron map; absent until codegen has run once, and an app with no `crons.ts` declares none either way.
+    const cronsModule = join(schemaDirectory, "_generated", "crons.ts");
 
     let platform: PlatformNode;
 
@@ -262,7 +272,11 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         );
     }
 
-    const isProjectSource = (path: string): boolean => isUnder(path, projectRoot) && !path.split(sep).includes("node_modules");
+    // The project and, when `main` sits outside it (a worker shared between apps), the entry's own directory: both are source
+    // the developer edits. Packages are not, wherever they resolve to, since a workspace package's realpath is outside
+    // `node_modules`; they load once and stay.
+    let sourceRoots: string[] = [projectRoot];
+    const isProjectSource = (path: string): boolean => sourceRoots.some((root) => isUnder(path, root)) && !path.split(sep).includes("node_modules");
 
     let watchers: FSWatcher[] = [];
     let debounce: NodeJS.Timeout | undefined;
@@ -340,7 +354,13 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             return;
         }
 
-        const current = Object.keys(jiti.cache).filter((path) => isProjectSource(path) && !(inputs.codegenWatch && isUnder(path, schemaDirectory)));
+        const watchable = (path: string): boolean => !(inputs.codegenWatch && isUnder(path, schemaDirectory));
+        // The generated cron map is read after the entry, and without the codegen watcher nothing else reloads on it. Watched by
+        // name even before it exists, so a first `crons.ts` is seen too.
+        const current = [
+            ...Object.keys(jiti.cache).filter((path) => isProjectSource(path) && watchable(path)),
+            ...(watchable(cronsModule) ? [cronsModule] : []),
+        ];
         const sources = loaded ? new Set(current) : new Set([...lastLoadedSources, ...current]);
 
         if (loaded) {
@@ -370,15 +390,23 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         }
     };
 
-    const load = async (entry: string): Promise<Record<string, unknown>> => {
+    const load = async (entry: string): Promise<{ crons: Readonly<Record<string, ReadonlyArray<unknown>>> | undefined; worker: Record<string, unknown> }> => {
         // The wall clock the file system stamps mtimes with, read without `Date`: a clock an app or a test moves would make every
         // file look changed, or none.
         const loadStartedAt = performance.timeOrigin + performance.now();
 
         // Only the project's own modules are evicted: packages under node_modules load natively once and stay, so a reload
         // re-evaluates the app and nothing else.
+        const entryDirectory = dirname(existsSync(entry) ? realpathSync(entry) : entry);
+
+        // The previous load's roots still apply to what it cached, so an entry that moved back inside the project still evicts
+        // the shared one's modules.
+        const previousRoots = sourceRoots;
+
+        sourceRoots = isUnder(entryDirectory, projectRoot) ? [projectRoot] : [projectRoot, entryDirectory];
+
         for (const path of Object.keys(jiti.cache)) {
-            if (isProjectSource(path)) {
+            if (isProjectSource(path) || previousRoots.some((root) => isUnder(path, root) && !path.split(sep).includes("node_modules"))) {
                 // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- jiti's module cache is keyed by file path
                 delete jiti.cache[path];
             }
@@ -388,21 +416,21 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
 
         try {
             const worker = await jiti.import<Record<string, unknown>>(entry);
+            // After the entry, which evicted it with the rest of the project, so a schedule edit lands with the reload codegen
+            // triggers. Absent until codegen has run once; an app with no `crons.ts` declares none either way.
+            const generated = existsSync(cronsModule)
+                ? await jiti.import<{ LUNORA_CRONS?: Readonly<Record<string, ReadonlyArray<unknown>>> }>(cronsModule)
+                : undefined;
 
             loaded = true;
 
-            return worker;
+            return { crons: generated?.LUNORA_CRONS, worker };
         } finally {
             // Also after a failed load: the file that broke it is in the set, and its next save is the fix.
             watchLoadedSources(loadStartedAt, loaded);
         }
     };
 
-    // Loads and composes without touching the running version: a host opens no shard database until a request reaches one,
-    // so a module that cannot be composed (a removed Durable Object export, a broken wrangler config) is caught while the
-    // previous version still serves.
-    // Absent until codegen has run once; an app with no `crons.ts` declares none either way.
-    const cronsModule = join(schemaDirectory, "_generated", "crons.ts");
     let hyperdriveWarned = false;
 
     // `.dev.vars` (or `.env`) over the shell, as the worker's own env has them. Read without a `secrets` block's filter, which
@@ -455,18 +483,14 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
 
         // Read first, so an edited `main` is the entry this load imports.
         const current = readNodeDevProject(projectRoot, activeWranglerEnvironment());
-        const worker = await load(current.entry);
+        const { crons, worker } = await load(current.entry);
         const { env } = resolveLocalWorkerEnv({
             config: current.parsed,
             configPath: current.configPath,
             environment: current.environment,
             projectRoot,
-            vars: { WORKER_ENV: "development" },
+            vars: { [WORKER_ENV]: "development" },
         });
-        // After `load`, which evicted it with the rest of the project, so a schedule edit lands with the reload codegen triggers.
-        const generated = existsSync(cronsModule)
-            ? await jiti.import<{ LUNORA_CRONS?: Readonly<Record<string, ReadonlyArray<unknown>>> }>(cronsModule)
-            : undefined;
 
         // A run that started during the load may have rewritten what it read. Its own settled run reloads once it succeeds, and
         // the previous version keeps serving if it fails. The first start has no previous version, so it serves what it read
@@ -476,7 +500,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         }
 
         const candidate: NodeAppHostCandidate = {
-            crons: generated?.LUNORA_CRONS,
+            crons,
             dataDirectory: join(projectRoot, NODE_DEV_STATE_DIRECTORY),
             durableObjects: current.durableObjects,
             env: bindPlatformEnv(current, env),

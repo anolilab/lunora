@@ -21,6 +21,7 @@ import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import type { Node as JsonNode } from "jsonc-parser";
 import { findNodeAtLocation, parseTree } from "jsonc-parser";
 
+import { BINDING_NAME, isDeclared, refuseWorkerEnvOverride, unboundSections, WORKER_ENV } from "../../util/node-target-bindings";
 import type { Spawner } from "../../util/spawn";
 
 /** Where the build context is written, relative to the project root. `.lunora/` is already the CLI's gitignored state directory. */
@@ -40,9 +41,6 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 8000;
 /** The variable that overrides {@link DEFAULT_SHUTDOWN_TIMEOUT_MS}. */
 const SHUTDOWN_TIMEOUT_VARIABLE = ["LUNORA", "SHUTDOWN", "TIMEOUT", "MS"].join("_");
 
-/** What the server tells the app it runs as; the dev server sets `development` instead. */
-const WORKER_ENV = "WORKER_ENV";
-
 /** The port the server listens on when `PORT` is unset or empty, matching `wrangler dev`'s default. */
 const DEFAULT_PORT = 8787;
 
@@ -53,60 +51,6 @@ const DEFAULT_PORT = 8787;
  */
 const OPTIONAL_NATIVE_MODULES = ["bufferutil", "utf-8-validate"] as const;
 
-/**
- * Top-level wrangler keys the generated entry composes, or that configure the Worker rather than bind something into `env`.
- * Every other declared key is reported at deploy time as unbound: an allowlist, so a binding section wrangler adds later is
- * named rather than silently missing from the container. `durable_objects` is checked per binding, since an external one is unbound.
- */
-const COMPOSED_OR_CONFIG_KEYS: ReadonlySet<string> = new Set([
-    "$schema",
-    "account_id",
-    "alias",
-    "base_dir",
-    "build",
-    "cache",
-    "compatibility_date",
-    "compatibility_flags",
-    "define",
-    "dev",
-    "durable_objects",
-    "env",
-    "find_additional_modules",
-    "first_party_worker",
-    "hyperdrive",
-    "jsx_factory",
-    "jsx_fragment",
-    "keep_names",
-    "keep_vars",
-    "legacy_env",
-    "limits",
-    "logpush",
-    "main",
-    "migrations",
-    "minify",
-    "name",
-    "no_bundle",
-    "node_compat",
-    "observability",
-    "placement",
-    "preserve_file_names",
-    "preview_urls",
-    "route",
-    "routes",
-    "rules",
-    "secrets",
-    "secrets_store_secrets",
-    "send_metrics",
-    "streaming_tail_consumers",
-    "tail_consumers",
-    "triggers",
-    "tsconfig",
-    "upload_source_maps",
-    "usage_model",
-    "vars",
-    "workers_dev",
-]);
-
 /** The classes `@lunora/config` binds as the app's shard (`DURABLE_OBJECT_BINDINGS`): the one that receives crons and jobs. */
 const SHARD_DURABLE_OBJECT_CLASSES: ReadonlySet<string> = new Set(
     Object.keys(DURABLE_OBJECT_BINDINGS).filter((className) => DURABLE_OBJECT_BINDINGS[className as keyof typeof DURABLE_OBJECT_BINDINGS] === "SHARD"),
@@ -114,9 +58,6 @@ const SHARD_DURABLE_OBJECT_CLASSES: ReadonlySet<string> = new Set(
 
 /** An environment variable name as a container runtime sets one. */
 const ENV_NAME = /^[A-Z_a-z]\w*$/u;
-
-/** Wrangler's rule for a binding name: a JavaScript identifier. A Durable Object binding's name is also a directory on the data volume. */
-const BINDING_NAME = /^[A-Za-z_$][\w$]*$/u;
 
 /**
  * The queue `@lunora/mail`'s producer writes to: the name the `mail` starter's wrangler config gives it, and the one
@@ -193,19 +134,6 @@ interface NodeContainerArtifact {
     /** Declared wrangler bindings the server does not compose. */
     unbound: string[];
 }
-
-/** Whether a declared section binds anything: an empty list or object is no binding. */
-const isDeclared = (value: unknown): boolean => {
-    if (Array.isArray(value)) {
-        return value.length > 0;
-    }
-
-    if (typeof value === "object" && value !== null) {
-        return Object.keys(value).length > 0;
-    }
-
-    return value !== undefined && value !== null;
-};
 
 /**
  * Refuse a worker the Node deploy cannot bundle. A framework project's worker is produced by a Cloudflare-targeted framework
@@ -378,21 +306,6 @@ const prototypeKeysUnderVariables = (text: string): string[] => {
     }
 
     return found;
-};
-
-/**
- * The server sets `WORKER_ENV` to `production` itself. A var, secret or binding of that name would replace it, and a var or
- * secret can also be replaced from the container's environment: `development` there turns on development-only behaviour, such
- * as mail capture, in production.
- */
-const refuseWorkerEnvOverride = (sources: ReadonlyArray<{ names: ReadonlyArray<string>; source: string }>, configName: string): void => {
-    const setBy = sources.filter(({ names }) => names.includes(WORKER_ENV)).map(({ source }) => source);
-
-    if (setBy.length > 0) {
-        throw new Error(
-            `--target node sets ${WORKER_ENV} to production itself, and ${configName} also declares it in ${setBy.join(", ")}. Remove it: a ${WORKER_ENV} of development turns on development-only behaviour, such as mail capture, in production`,
-        );
-    }
 };
 
 /** `triggers.crons`: each a cron expression string. */
@@ -627,7 +540,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     ];
 
     refuseEnvCollisions(envSources, configName);
-    refuseWorkerEnvOverride(envSources, configName);
+    refuseWorkerEnvOverride(envSources, configName, "production");
 
     const declared = parsed as Record<string, unknown>;
 
@@ -645,11 +558,8 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         hyperdrive: hyperdrive[0],
         mailQueues,
         storeSecrets,
-        unbound: [
-            ...Object.keys(declared).filter((key) => key !== "queues" && !COMPOSED_OR_CONFIG_KEYS.has(key) && isDeclared(declared[key])),
-            ...unboundQueues(declared.queues, mailQueues),
-            ...external,
-        ],
+        // Every mail-queue producer is composed by the mail host; any other queue is unbound.
+        unbound: [...unboundSections({ ...declared, queues: undefined }), ...unboundQueues(declared.queues, mailQueues), ...external],
         vars: variables,
         workerSecrets,
     };
