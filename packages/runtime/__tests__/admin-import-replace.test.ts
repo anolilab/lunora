@@ -953,6 +953,42 @@ describe("admin import — staged replace of chunked sections", () => {
         expect(Buffer.from(bucket.get("doc.bin")!.bytes).equals(Buffer.from(object))).toBe(true);
     }, 60_000);
 
+    it("refuses to commit a session whose stream ended before a chunked value's or object's last chunk, leaving the live ones", async () => {
+        expect.assertions(5);
+
+        await seed();
+
+        const source = createStores();
+
+        // A value that arrives whole: the session has staged rows, so only the owed chunks can refuse it.
+        source.kv.get("CACHE")!.set("small", { value: new Uint8Array([1]) });
+        source.kv.get("CACHE")!.set("big", { value: randomBytes(1024 * 1024 + 5) });
+        source.buckets.get("default")!.set("doc.bin", { bytes: randomBytes(1024 * 1024 + 7), contentType: "application/octet-stream" });
+
+        const exported = await exportLines(workerWith({ ...source.options }), { sections: ["kv", "storage"], tables: [] });
+        // The stream ends after each chunked target's leading chunks: no record carries `last`.
+        const lines = exported.filter((line) => (JSON.parse(line) as { doc: Record<string, unknown> }).doc["last"] !== true);
+        const target = createStores();
+        const live = new Uint8Array([7, 7, 7]);
+
+        target.kv.get("CACHE")!.set("big", { value: live });
+        target.buckets.get("default")!.set("doc.bin", { bytes: live });
+
+        const worker = workerWith({ ...target.options });
+        const answers = await stageLines(worker, "truncated", lines);
+        const committed = await postSession(worker, "commit", "truncated");
+        const answer: { errors: { code: string; message: string; table: string }[] } = await committed.json();
+
+        expect(answers.flatMap((staged) => staged.errors)).toStrictEqual([]);
+        expect(committed.status).toBe(409);
+        expect(answer.errors.map((error) => [error.code, error.table, error.message.split(" never")[0]])).toStrictEqual([
+            ["IMPORT_SESSION_INCOMPLETE", "$kv", "KV value CACHE/big"],
+            ["IMPORT_SESSION_INCOMPLETE", "$storage", "storage object default/doc.bin"],
+        ]);
+        expect(target.kv.get("CACHE")!.get("big")!.value).toStrictEqual(live);
+        expect(target.buckets.get("default")!.get("doc.bin")!.bytes).toStrictEqual(live);
+    }, 60_000);
+
     it("refuses a session whose chunked value does not hash to its export's sha256, before any commit", async () => {
         expect.assertions(3);
 

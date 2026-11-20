@@ -405,5 +405,6 @@ export {
     stagingRoot,
     stagingStore,
     sweepStaleStaging,
+    unseal,
     uploadMultipart,
 };

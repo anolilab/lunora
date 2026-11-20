@@ -68,6 +68,7 @@ import type { ReplaceSection, SessionRef, StagedSectionRow } from "./import-sess
 import {
     commitSection,
     dropStagedObjects,
+    owedTargets,
     prepareAuth,
     REPLACE_SECTIONS,
     SECTION_TABLE,
@@ -606,6 +607,38 @@ const runCommitSteps = async (
     return manifest;
 };
 
+/**
+ * Check an open session can commit, writing nothing: no chunked value the stream
+ * cut short, every shard's swap in a dry run, the auth rows against the store.
+ * The refusal, or `undefined` when the commit may begin.
+ */
+const prepareCommit = async (
+    context: ImportSessionContext,
+    manifest: ImportManifest,
+    targets: ReadonlyArray<string>,
+    shardScope: ReadonlyArray<string>,
+): Promise<CommitImportResult | undefined> => {
+    const { options } = context;
+    const { session } = manifest;
+    // Checked only while open: a session that began committing passed it, and its
+    // last chunks are staged rows the retry re-assembles from.
+    const owed = manifest.storage ? await owedTargets(options, refOf(manifest)) : [];
+
+    if (owed.length > 0) {
+        return { errors: owed, failed: [], session, status: "refused" };
+    }
+
+    const prepared = await commitShards(context, manifest, targets, shardScope, true);
+
+    if (prepared.errors.length > 0 || prepared.failed.length > 0) {
+        return { errors: prepared.errors, failed: prepared.failed, session, status: "refused" };
+    }
+
+    const authErrors = manifest.sections.includes("auth") ? await prepareAuth(options, stagedRecords(context, session, "auth")) : [];
+
+    return authErrors.length > 0 ? { errors: authErrors, failed: [], session, status: "refused" } : undefined;
+};
+
 /** Swap a staged session in. See the module doc for what holds at each step. */
 const commitImport = async (context: ImportSessionContext, session: string): Promise<CommitImportResult> => {
     const { options } = context;
@@ -631,16 +664,10 @@ const commitImport = async (context: ImportSessionContext, session: string): Pro
             : [...new Set([...manifest.shards, ...(await context.coordinator.shardKeysForTables(shardScope, defaultShardOf(options)))])];
 
     if (manifest.state === "open") {
-        const prepared = await commitShards(context, manifest, targets, shardScope, true);
+        const refusal = await prepareCommit(context, manifest, targets, shardScope);
 
-        if (prepared.errors.length > 0 || prepared.failed.length > 0) {
-            return { errors: prepared.errors, failed: prepared.failed, session, status: "refused" };
-        }
-
-        const authErrors = manifest.sections.includes("auth") ? await prepareAuth(options, stagedRecords(context, session, "auth")) : [];
-
-        if (authErrors.length > 0) {
-            return { errors: authErrors, failed: [], session, status: "refused" };
+        if (refusal !== undefined) {
+            return refusal;
         }
 
         // The compare-and-set: refused unless the session is still open, clean, and took no batch since this prepare read it.

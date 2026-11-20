@@ -10,7 +10,9 @@
  * to `_lunora/restore-session/<session>/<generation>/<sha256 of target>/<offset>`,
  * and the last chunk waits on the root shard. When the last chunk arrives the
  * staged ones are read back and checked (no gap, the export's sha256), so a
- * value that cannot be assembled refuses the session before any commit.
+ * value that cannot be assembled refuses the session before any commit. A
+ * target whose last chunk never arrived leaves an owed marker under the
+ * session's prefix, and the commit refuses while any is left.
  *
  * That prefix is disjoint from the append import's `_lunora/restore/` staging:
  * neither import's sweep lists, let alone deletes, the other's chunks. A
@@ -47,7 +49,7 @@ import {
 } from "./export-sections";
 import type { ImportRowError } from "./import-stream";
 import type { ChunkRecord, StagingStore } from "./section-chunks";
-import { assertWholeChunk, chunkKey, collectChunks, parseChunk, seal, stagedChunks, stagingStore, uploadMultipart } from "./section-chunks";
+import { assertWholeChunk, chunkKey, collectChunks, parseChunk, seal, stagedChunks, stagingStore, unseal, uploadMultipart } from "./section-chunks";
 import { STORAGE_UPLOAD_MAX_BODY_BYTES, toHex } from "./storage-admin-routes";
 
 /** The sections a replace can make exact, by the name the header lists them under. */
@@ -86,9 +88,18 @@ type Where = { bucket?: string };
 /** Where all of one session's chunks live. */
 const sessionStagingPrefix = (ref: SessionRef): string => `${SESSION_STAGING_PREFIX}${ref.session}/${ref.generation}/`;
 
+/**
+ * Where a session's owed markers live: one per chunked target whose last chunk
+ * has not been staged yet. Under the session's prefix, so its commit, abort or
+ * expiry drops them with the chunks; outside every target's prefix, so no chunk
+ * read lists them.
+ */
+const owedPrefix = (ref: SessionRef): string => `${sessionStagingPrefix(ref)}owed/`;
+
+const scopeHash = async (scope: string): Promise<string> => toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(scope)));
+
 /** Where one target's chunks live inside the session's prefix: `scope` names the target (section, bucket or namespace, key). */
-const targetPrefix = async (ref: SessionRef, scope: string): Promise<string> =>
-    `${sessionStagingPrefix(ref)}${toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(scope)))}/`;
+const targetPrefix = async (ref: SessionRef, scope: string): Promise<string> => `${sessionStagingPrefix(ref)}${await scopeHash(scope)}/`;
 
 const kvScope = (namespace: string, key: string): string => `kv\u0000${namespace}\u0000${key}`;
 
@@ -141,19 +152,43 @@ const verifyChunks = async (
     }
 };
 
+/** A chunked target, as staging writes it: its chunks' prefix and bucket, and its owed marker. */
+interface ChunkTarget {
+    kind: "KV" | "STORAGE";
+    /** Names the target in a refusal — its namespace or bucket and key, never its bytes. */
+    label: string;
+    /** The owed marker's key. */
+    owed: string;
+    prefix: string;
+    where: Where;
+}
+
+const chunkTarget = async (ref: SessionRef, kind: ChunkTarget["kind"], scope: string, label: string, where: Where): Promise<ChunkTarget> => {
+    const hash = await scopeHash(scope);
+
+    return { kind, label, owed: `${owedPrefix(ref)}${kind === "KV" ? "kv" : "storage"}/${hash}`, prefix: `${sessionStagingPrefix(ref)}${hash}/`, where };
+};
+
 /**
  * Stage one chunk of a chunked value or object: one in front of the last is
  * uploaded; the last is checked against the staged ones and returned to wait on
  * the root shard. `undefined` for a chunk in front of the last, or a refusal.
+ *
+ * A chunk in front of the last leaves no staged row, so without the owed marker
+ * a stream that ended before the last chunk would commit as though the snapshot
+ * never held the target, and the commit's prune would delete the live one. The
+ * marker goes up before the chunk, so no staged chunk is ever unaccounted for,
+ * and comes down only once the last chunk verified.
  */
 const stageChunked = async (
     store: StagingStore,
     row: SectionRow,
     errors: ImportRowError[],
-    target: { kind: "KV" | "STORAGE"; prefix: string; where: Where },
+    target: ChunkTarget,
     chunk: ChunkRecord,
 ): Promise<StagedSectionRow | undefined> => {
     if (chunk.lastSize === undefined) {
+        await store.upload(target.owed, await seal(store.secret, target.owed, new TextEncoder().encode(target.label)), target.where);
         await uploadChunk(store, target.prefix, target.where, chunk);
 
         return undefined;
@@ -166,6 +201,8 @@ const stageChunked = async (
 
         return undefined;
     }
+
+    await store.delete(target.owed, target.where);
 
     return { doc: row.doc, line: row.line, table: row.table };
 };
@@ -243,7 +280,7 @@ const stageKvRow = async (options: WorkerOptions, ref: SessionRef, row: SectionR
         return undefined;
     }
 
-    return stageChunked(store, row, errors, { kind: "KV", prefix: await targetPrefix(ref, kvScope(namespace, key)), where: {} }, chunk);
+    return stageChunked(store, row, errors, await chunkTarget(ref, "KV", kvScope(namespace, key), `KV value ${namespace}/${key}`, {}), chunk);
 };
 
 const stageStorageRow = async (options: WorkerOptions, ref: SessionRef, row: SectionRow, errors: ImportRowError[]): Promise<StagedSectionRow | undefined> => {
@@ -304,7 +341,13 @@ const stageStorageRow = async (options: WorkerOptions, ref: SessionRef, row: Sec
         store,
         row,
         errors,
-        { kind: "STORAGE", prefix: await targetPrefix(ref, storageScope(record.where, record.key)), where: record.where },
+        await chunkTarget(
+            ref,
+            "STORAGE",
+            storageScope(record.where, record.key),
+            `storage object ${record.where.bucket === undefined ? "" : `${record.where.bucket}/`}${record.key}`,
+            record.where,
+        ),
         record,
     );
 };
@@ -571,6 +614,49 @@ const dropStagedObjects = async (options: WorkerOptions, ref: SessionRef): Promi
     }
 };
 
+/** The refusal for one owed marker, naming its target by the label sealed in it (or, failing that, by the marker's key). */
+const owedError = async (store: StagingStore, ref: SessionRef, key: string, where: Where): Promise<ImportRowError> => {
+    const marker = await store.download(key, where);
+    const label = marker?.body ? await unseal(store.secret, key, new Uint8Array(await new Response(marker.body).arrayBuffer())) : undefined;
+
+    return {
+        code: "IMPORT_SESSION_INCOMPLETE",
+        line: 0,
+        message: `${label === undefined ? key : new TextDecoder().decode(label)} never received its last chunk — the snapshot stream ended part-way through it`,
+        table: key.slice(owedPrefix(ref).length).startsWith("kv/") ? KV_TABLE : STORAGE_TABLE,
+    };
+};
+
+/**
+ * One refusal per chunked target of the session whose last chunk was never
+ * staged: the stream ended part-way through it. A marker this deployment did
+ * not seal still refuses.
+ */
+const owedTargets = async (options: WorkerOptions, ref: SessionRef): Promise<ImportRowError[]> => {
+    const store = stagingStore(options);
+
+    if (!store) {
+        // Nothing chunked could have been staged without the store.
+        return [];
+    }
+
+    // The unnamed bucket is usually also a named one: list both, count each marker once.
+    const markers = new Map<string, Where>();
+
+    for (const bucket of new Set([undefined, ...(options.storageBuckets ?? [])])) {
+        const where = bucket === undefined ? {} : { bucket };
+
+        // eslint-disable-next-line no-await-in-loop -- buckets one at a time
+        for (const key of await keysUnder(store.list, owedPrefix(ref), where)) {
+            if (!markers.has(key)) {
+                markers.set(key, where);
+            }
+        }
+    }
+
+    return Promise.all([...markers].map(async ([key, where]) => owedError(store, ref, key, where)));
+};
+
 /** Write one staged object: straight through, assembled in memory, or through a multipart upload. */
 const writeObject = async (options: WorkerOptions, ref: SessionRef, record: StorageRecord): Promise<void> => {
     const upload = options.storageUpload;
@@ -675,4 +761,14 @@ const commitSection = async (
 };
 
 export type { ReplaceSection, SectionStepResult, SessionRef, StagedSectionRow };
-export { commitSection, dropStagedObjects, prepareAuth, REPLACE_SECTIONS, SECTION_TABLE, sectionUnsupported, SESSION_STAGING_PREFIX, stageSectionRows };
+export {
+    commitSection,
+    dropStagedObjects,
+    owedTargets,
+    prepareAuth,
+    REPLACE_SECTIONS,
+    SECTION_TABLE,
+    sectionUnsupported,
+    SESSION_STAGING_PREFIX,
+    stageSectionRows,
+};
