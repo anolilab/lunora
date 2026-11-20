@@ -60,7 +60,10 @@ import { createNodeShardHost } from "./node-shard-host";
 import type { NodeSocketHost } from "./node-socket-host";
 import { createNodeSocketHost } from "./node-socket-host";
 
-/** Extension used for a file-backed shard's database. */
+/**
+ * Extension used for a file-backed shard's database. Exported for `createNodePlatform`'s mail-path
+ * check, which refuses a file the registry would open as a shard; not part of the package index.
+ */
 const SHARD_FILE_SUFFIX = ".sqlite3";
 
 /**
@@ -747,3 +750,5 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         suspendAlarms: suspendAllAlarms,
     };
 };
+
+export { SHARD_FILE_SUFFIX };

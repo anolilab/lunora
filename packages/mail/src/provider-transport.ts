@@ -7,7 +7,7 @@
  * drifting) per provider. Each transport supplies only its provider instance
  * and its recipient policy.
  */
-import { toAddress, toAddressList } from "./address";
+import { assertHasContent, toAddress, toAddressList } from "./address";
 import { MailSendError } from "./send-error";
 import type { SendPayload } from "./types";
 
@@ -158,6 +158,9 @@ const requireRecipients = (to: SendPayload["to"]): { first: ProviderAddress; lis
 
 /** Map a rendered {@link SendPayload} onto the provider-email shape, with the resolved `to`. */
 const toProviderEmail = (payload: SendPayload, defaultFrom: string, to: ProviderAddress | ProviderAddress[]): ProviderEmail => {
+    // A transport called directly skips `createMailer`'s check, and the provider's own refusal reads as retryable.
+    assertHasContent(payload);
+
     return {
         bcc: toAddressList(payload.bcc),
         cc: toAddressList(payload.cc),

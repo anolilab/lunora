@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1157,12 +1157,582 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(viaFactory.generated.server).not.toContain(imagesField);
     });
 
-    it("gates mail on its import, since it has no ctx helper to read", () => {
+    describe("cloudflare:* built-in modules", () => {
+        /** The registry `mail` starter's shape: `env` from `cloudflare:workers`, the send binding through `cloudflare:email`. */
+        const writeMailStarter = (): void => {
+            write(
+                "mailer.ts",
+                [
+                    `import { createMailerFromEnv } from "@lunora/mail";`,
+                    `import { env } from "cloudflare:workers";`,
+                    ``,
+                    `export const mailer = () => createMailerFromEnv(env as Record<string, unknown>);`,
+                    `export const cloudflareSend = async () => (await import("cloudflare:email")).EmailMessage;`,
+                    ``,
+                ].join("\n"),
+            );
+        };
+
+        it("refuses a node app module that loads cloudflare:workers, and names it", () => {
+            expect.assertions(2);
+
+            writeMailStarter();
+
+            const refusals = codegen().platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"));
+
+            expect(refusals).toMatchObject([{ level: "error", name: "platform_unsupported_feature", target: "node" }]);
+            expect(refusals[0]?.message).toContain("lunora/mailer.ts (cloudflare:workers, cloudflare:email)");
+        });
+
+        it("lets a node app that sends through platform.mail.mailer build, type-only cloudflare: imports included", async () => {
+            expect.assertions(2);
+
+            // The Node mail path: the app takes the host's mailer; `import type` erases and loads nothing.
+            write(
+                "mailer.ts",
+                [
+                    `import type { Mailer } from "@lunora/mail";`,
+                    `import type { ExecutionContext } from "cloudflare:workers";`,
+                    ``,
+                    `export const sendWelcome = async (mailer: Mailer, _context?: ExecutionContext) =>`,
+                    `    mailer.queue({ subject: "Welcome", text: "Hi", to: "ada@example.com" });`,
+                    ``,
+                ].join("\n"),
+            );
+
+            const { NODE_CAPABILITIES } = await import("@lunora/platform");
+
+            // The gate is live on node, so the silence below is the import being judged, not ignored.
+            expect(NODE_CAPABILITIES.features.cloudflareModules?.level).toBe("unsupported");
+            expect(codegen().platformDiagnostics).toStrictEqual([]);
+        });
+
+        /** The cloudflare: refusals codegen returned for the current project. */
+        const cloudflareRefusals = (): ReturnType<typeof codegen>["platformDiagnostics"] =>
+            codegen().platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"));
+
+        /** Write `name` under `lunora/`, creating its directories. */
+        const writeNested = (name: string, source: string): void => {
+            const path = join(workdir, "lunora", name);
+
+            mkdirSync(dirname(path), { recursive: true });
+            writeFileSync(path, source, "utf8");
+        };
+
+        const LOADS_ENV = `import { env } from "cloudflare:workers";\n\nexport const binding = () => env;\n`;
+
+        it("follows an included module's import into a helper codegen.exclude skips", () => {
+            expect.assertions(1);
+
+            // Excluded from function discovery, but still bundled: send.ts imports it.
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { codegen: { exclude: ["helpers/**"] }, target: "node" };\n`, "utf8");
+            writeNested("helpers/env.ts", LOADS_ENV);
+            write("send.ts", `import { binding } from "./helpers/env";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helpers/env.ts (cloudflare:workers)");
+        });
+
+        it("follows a dynamic import into an excluded helper", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { codegen: { exclude: ["helpers/**"] }, target: "node" };\n`, "utf8");
+            writeNested("helpers/later.ts", LOADS_ENV);
+            write("send.ts", `export const load = async () => import("./helpers/later");\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helpers/later.ts (cloudflare:workers)");
+        });
+
+        it.each([
+            [".tsx", "./view", "view.tsx"],
+            [".mts, written as .mjs", "./util.mjs", "util.mts"],
+            [".cts", "./legacy", "legacy.cts"],
+        ])("follows an import into a %s helper the lister never lists", (_label, specifier, file) => {
+            expect.assertions(1);
+
+            writeNested(file, LOADS_ENV);
+            write("send.ts", `import { binding } from "${specifier}";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain(`lunora/${file} (cloudflare:workers)`);
+        });
+
+        it("refuses a .tsx sibling the bundler may pick over a clean .ts of the same name", () => {
+            expect.assertions(1);
+
+            // esbuild resolves ./helper to helper.tsx first; the gate walks both rather than guess.
+            write("helper.ts", "export const binding = () => undefined;\n");
+            writeNested("helper.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "./helper";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helper.tsx (cloudflare:workers)");
+        });
+
+        it("scans the root schema.ts, which the generated shard imports", () => {
+            expect.assertions(1);
+
+            // The lister skips the root schema (discoverSchema reads it on its own); the bundle does not.
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+
+            writeFileSync(
+                schemaPath,
+                `import { env } from "cloudflare:workers";\n\nexport const schemaEnv = () => env;\n${readFileSync(schemaPath, "utf8")}`,
+                "utf8",
+            );
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/schema.ts (cloudflare:workers)");
+        });
+
+        it.each([
+            ["a require() call", "legacy.cjs", `const { env } = require("cloudflare:workers");\nmodule.exports = { env };\n`, "./legacy.cjs"],
+            ["an import = require() declaration", "legacy.cts", `import workers = require("cloudflare:workers");\nexport = workers;\n`, "./legacy"],
+        ])("collects %s, the CommonJS form a helper loads cloudflare:workers with", (_label, file, source, specifier) => {
+            expect.assertions(1);
+
+            writeNested(file, source);
+            write("send.ts", `import legacy from "${specifier}";\n\nexport const use = () => legacy;\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain(`lunora/${file} (cloudflare:workers)`);
+        });
+
+        it("follows imports in a checkout that itself lives under a directory named _generated", () => {
+            expect.assertions(1);
+
+            // The exclusion is for the project's own _generated/, judged from the project root.
+            const parent = mkdtempSync(join(tmpdir(), "lunora-generated-parent-"));
+            const project = join(parent, "_generated", "app");
+
+            try {
+                cpSync(join(fixtureRoot, "lunora"), join(project, "lunora"), { recursive: true });
+                writeFileSync(join(project, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+                writeFileSync(join(project, "lunora", "view.tsx"), LOADS_ENV, "utf8");
+                writeFileSync(join(project, "lunora", "send.ts"), `import { binding } from "./view";\n\nexport const use = () => binding();\n`, "utf8");
+
+                const { platformDiagnostics } = runCodegen({ projectRoot: project, wranglerQueueProducers: [] });
+                const refusal = platformDiagnostics.find((entry) => entry.message.includes("cloudflare:"));
+
+                expect(refusal?.message).toContain("lunora/view.tsx (cloudflare:workers)");
+            } finally {
+                rmSync(parent, { force: true, recursive: true });
+            }
+        });
+
+        it("walks a file reached through a symlinked directory once, by its real path", () => {
+            expect.assertions(1);
+
+            writeNested("shared/env.tsx", LOADS_ENV);
+            symlinkSync(join(workdir, "lunora", "shared"), join(workdir, "lunora", "linked"));
+            write(
+                "send.ts",
+                `import { binding } from "./shared/env";\nimport { binding as again } from "./linked/env";\n\nexport const use = () => [binding(), again()];\n`,
+            );
+
+            // One file, one entry: not shared/env.tsx and linked/env.tsx as two modules.
+            expect(cloudflareRefusals()[0]?.message.match(/\(cloudflare:workers\)/gu)).toHaveLength(1);
+        });
+
+        it("follows a #lunora/* alias import into the helper it names", () => {
+            expect.assertions(1);
+
+            // The templates' wiring: package.json `imports` maps the alias, bundler resolution reads it.
+            writeFileSync(
+                join(workdir, "package.json"),
+                `${JSON.stringify({
+                    // The packages the fixture schema's generated code imports, which a declared package.json is checked for.
+                    dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" },
+                    imports: { "#lunora/*": "./lunora/*" },
+                    name: "alias-app",
+                    type: "module",
+                })}\n`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", target: "ES2022" }, include: ["lunora"] })}\n`,
+                "utf8",
+            );
+            writeNested("helpers/aliased.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "#lunora/helpers/aliased.tsx";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helpers/aliased.tsx (cloudflare:workers)");
+        });
+
+        it("follows an alias whose target lies outside the project root, as a relative import would", () => {
+            expect.assertions(1);
+
+            // A monorepo `paths` entry into a sibling package: outside the project, still bundled.
+            const parent = mkdtempSync(join(tmpdir(), "lunora-alias-outside-"));
+            const project = join(parent, "app");
+
+            try {
+                cpSync(join(fixtureRoot, "lunora"), join(project, "lunora"), { recursive: true });
+                mkdirSync(join(parent, "shared"));
+                writeFileSync(join(parent, "shared", "helper.tsx"), LOADS_ENV, "utf8");
+                writeFileSync(join(project, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+                writeFileSync(
+                    join(project, "tsconfig.json"),
+                    `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", paths: { "@shared/*": ["../shared/*"] }, target: "ES2022" } })}\n`,
+                    "utf8",
+                );
+                writeFileSync(
+                    join(project, "lunora", "send.ts"),
+                    `import { binding } from "@shared/helper.tsx";\n\nexport const use = () => binding();\n`,
+                    "utf8",
+                );
+
+                const { platformDiagnostics } = runCodegen({ projectRoot: project, wranglerQueueProducers: [] });
+                const refusal = platformDiagnostics.find((entry) => entry.message.includes("cloudflare:"));
+
+                expect(refusal?.message).toContain("../shared/helper.tsx (cloudflare:workers)");
+            } finally {
+                rmSync(parent, { force: true, recursive: true });
+            }
+        });
+
+        it("refuses a require() through a loader made with createRequire", () => {
+            expect.assertions(1);
+
+            // A local binding, and a real loader all the same.
+            write(
+                "loader.ts",
+                `import { createRequire } from "node:module";\n\nconst require = createRequire(import.meta.url);\n\nexport const workers = require("cloudflare:workers");\n`,
+            );
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/loader.ts (cloudflare:workers)");
+        });
+
+        it.each([
+            ["module.require", "module", "module.require"],
+            ["a loader object's require", "loaders", "loaders.node.require"],
+            ['module["require"]', "module", 'module["require"]'],
+        ])('refuses %s("cloudflare:workers"), whatever require is called on', (_label, declared, callee) => {
+            expect.assertions(1);
+
+            // Node's own loader, or any object's: a method named require is taken as one, failing closed.
+            write("method.ts", `declare const ${declared}: any;\n\nexport const workers = ${callee}("cloudflare:workers");\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/method.ts (cloudflare:workers)");
+        });
+
+        it.each([
+            ["a dynamic import", "import"],
+            ["a require", "require"],
+        ])("refuses %s of a computed cloudflare: specifier, reported by its static head", (_label, loader) => {
+            expect.assertions(1);
+
+            // Which built-in is known only at runtime; that it is one is not.
+            write("computed.ts", `export const load = async (name: string) => ${loader}(\`cloudflare:\${name}\`);\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/computed.ts (cloudflare:*)");
+        });
+
+        it("does not resolve a fully dynamic specifier, or a template naming anything else", () => {
+            expect.assertions(1);
+
+            write("computed.ts", `export const load = async (name: string) => [await import(name), await import(\`./locale/\${name}\`)];\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
+
+        it("refuses a call to the file's own function named require, failing closed until it is renamed", () => {
+            expect.assertions(1);
+
+            // It loads nothing, but a callee named require is counted whatever binds it.
+            write("local.ts", `function require(name: string): string {\n    return name;\n}\n\nexport const label = require("cloudflare:workers");\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/local.ts (cloudflare:workers)");
+        });
+
+        it("expands an extensionless alias target to every sibling, as a relative import is", () => {
+            expect.assertions(1);
+
+            // TypeScript resolves `@shared/helper` to the clean .ts; the bundler may take the .tsx.
+            const parent = mkdtempSync(join(tmpdir(), "lunora-alias-siblings-"));
+            const project = join(parent, "app");
+
+            try {
+                cpSync(join(fixtureRoot, "lunora"), join(project, "lunora"), { recursive: true });
+                mkdirSync(join(parent, "shared"));
+                writeFileSync(join(parent, "shared", "helper.ts"), "export const binding = () => undefined;\n", "utf8");
+                writeFileSync(join(parent, "shared", "helper.tsx"), LOADS_ENV, "utf8");
+                writeFileSync(join(project, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+                writeFileSync(
+                    join(project, "tsconfig.json"),
+                    `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", paths: { "@shared/*": ["../shared/*"] }, target: "ES2022" } })}\n`,
+                    "utf8",
+                );
+                writeFileSync(join(project, "lunora", "send.ts"), `import { binding } from "@shared/helper";\n\nexport const use = () => binding();\n`, "utf8");
+
+                const { platformDiagnostics } = runCodegen({ projectRoot: project, wranglerQueueProducers: [] });
+                const refusal = platformDiagnostics.find((entry) => entry.message.includes("cloudflare:"));
+
+                expect(refusal?.message).toContain("../shared/helper.tsx (cloudflare:workers)");
+            } finally {
+                rmSync(parent, { force: true, recursive: true });
+            }
+        });
+
+        it.each([
+            ["null", "null"],
+            ["an array", "[]"],
+            ["a string", '"./entry.js"'],
+        ])("reads a local package whose package.json parses to %s as having no entries", (_label, manifest) => {
+            expect.assertions(1);
+
+            writeNested("oddpkg/package.json", `${manifest}\n`);
+            write("send.ts", `import "./oddpkg";\n\nexport const use = () => undefined;\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
+
+        it.each([
+            ["workerd", { exports: { ".": { node: "./node.js", workerd: "./worker.js" } } }],
+            ["worker", { exports: { node: "./node.js", worker: "./worker.js" } }],
+            ["browser, nested", { exports: { ".": { import: { browser: "./worker.js", default: "./node.js" } } } }],
+        ])("does not refuse a dual package's %s entry, which a Node process never loads", (_label, manifest) => {
+            expect.assertions(1);
+
+            writeNested("dualpkg/package.json", `${JSON.stringify({ name: "dualpkg", ...manifest })}\n`);
+            writeNested("dualpkg/worker.js", LOADS_ENV);
+            writeNested("dualpkg/node.js", "export const binding = () => process.env;\n");
+            write("send.ts", `import { binding } from "./dualpkg";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
+
+        it("still refuses a dual package whose node entry loads cloudflare:workers", () => {
+            expect.assertions(1);
+
+            writeNested("dualpkg/package.json", `${JSON.stringify({ exports: { node: "./node.js", workerd: "./worker.js" }, name: "dualpkg" })}\n`);
+            writeNested("dualpkg/worker.js", "export const binding = () => undefined;\n");
+            writeNested("dualpkg/node.js", LOADS_ENV);
+            write("send.ts", `import { binding } from "./dualpkg";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/dualpkg/node.js (cloudflare:workers)");
+        });
+
+        it.each([
+            ["main", { main: "./entry.tsx" }, "entry.tsx"],
+            ['exports["."]', { exports: { ".": { import: "./esm.tsx" } } }, "esm.tsx"],
+        ])("follows a local package directory's %s entrypoint", (_label, manifest, entry) => {
+            expect.assertions(1);
+
+            // `./localpkg` names a directory whose package.json, not an index file, says what it loads.
+            writeNested("localpkg/package.json", `${JSON.stringify({ name: "localpkg", ...manifest })}\n`);
+            writeNested(`localpkg/${entry}`, LOADS_ENV);
+            write("send.ts", `import { binding } from "./localpkg";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain(`lunora/localpkg/${entry} (cloudflare:workers)`);
+        });
+
+        it("follows a package.json imports alias in a project with no tsconfig", () => {
+            expect.assertions(1);
+
+            // No tsconfig: the default resolution mode ignores `imports`, which the bundler still reads.
+            writeFileSync(
+                join(workdir, "package.json"),
+                `${JSON.stringify({
+                    // The packages the fixture schema's generated code imports, which a declared package.json is checked for.
+                    dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" },
+                    imports: { "#helpers/*": "./lunora/helpers/*" },
+                    name: "imports-app",
+                    type: "module",
+                })}\n`,
+                "utf8",
+            );
+            writeNested("helpers/env.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "#helpers/env.tsx";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helpers/env.tsx (cloudflare:workers)");
+        });
+
+        it("follows an alias TypeScript answers with a declaration file to the implementation it declares", () => {
+            expect.assertions(1);
+
+            // `@shared/bridge.js` resolves to bridge.d.ts for TypeScript; the bundle loads bridge.js.
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", paths: { "@shared/*": ["./shared/*"] }, target: "ES2022" } })}\n`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "shared"));
+            writeFileSync(join(workdir, "shared", "bridge.d.ts"), "export declare const binding: () => unknown;\n", "utf8");
+            writeFileSync(join(workdir, "shared", "bridge.js"), LOADS_ENV, "utf8");
+            write("send.ts", `import { binding } from "@shared/bridge.js";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("shared/bridge.js (cloudflare:workers)");
+        });
+
+        it("follows an alias that names .js to the .js file, not only the .ts TypeScript resolves it to", () => {
+            expect.assertions(1);
+
+            // TypeScript answers `@shared/bridge.js` with bridge.ts; the bundle may load bridge.js.
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", paths: { "@shared/*": ["./shared/*"] }, target: "ES2022" } })}\n`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "shared"));
+            writeFileSync(join(workdir, "shared", "bridge.ts"), "export const binding = () => undefined;\n", "utf8");
+            writeFileSync(join(workdir, "shared", "bridge.js"), LOADS_ENV, "utf8");
+            write("send.ts", `import { binding } from "@shared/bridge.js";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("shared/bridge.js (cloudflare:workers)");
+        });
+
+        it("probes a package entry that names a directory for its index file", () => {
+            expect.assertions(1);
+
+            // `main: "./dist"` is a directory: the bundler loads dist/index.*.
+            writeNested("localpkg/package.json", `${JSON.stringify({ main: "./dist", name: "localpkg" })}\n`);
+            writeNested("localpkg/dist/index.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "./localpkg";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/localpkg/dist/index.tsx (cloudflare:workers)");
+        });
+
+        it.each([
+            ['a null "." export', { exports: { ".": null }, main: "./entry.tsx" }],
+            ["a nested null condition", { exports: { ".": { default: "./entry.tsx", import: null } } }],
+        ])("treats %s as no target instead of crashing", (_label, manifest) => {
+            expect.assertions(1);
+
+            // `null` blocks a path in `exports`; the package's other entry still loads cloudflare:workers.
+            writeNested("blocked/package.json", `${JSON.stringify({ name: "blocked", ...manifest })}\n`);
+            writeNested("blocked/entry.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "./blocked";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/blocked/entry.tsx (cloudflare:workers)");
+        });
+
+        it("does not refuse a declaration file under lunora/ for its cloudflare:workers import", () => {
+            expect.assertions(1);
+
+            // Never bundled, and every import in a declaration is type-only, with or without `type`:
+            // the walk's roots skip declarations, as its followed files do.
+            write("env.d.ts", `import { Env as WorkerEnv } from "cloudflare:workers";\n\ndeclare global {\n    type AppEnv = WorkerEnv;\n}\n\nexport {};\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
+
+        it("does not refuse a src/server/ helper the worker entry never imports", () => {
+            expect.assertions(1);
+
+            // Unreachable from the entry, so not in the bundle; the walk had seeded all of src/server/.
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(join(workdir, "src", "server.ts"), "export default { fetch: () => new Response() };\n", "utf8");
+            writeFileSync(join(workdir, "src", "server", "helper.ts"), LOADS_ENV, "utf8");
+
+            const { platformDiagnostics } = runCodegen({ projectRoot: workdir, workerEntry: join(workdir, "src", "server.ts"), wranglerQueueProducers: [] });
+
+            expect(platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"))).toStrictEqual([]);
+        });
+
+        it("starts from a custom worker entry the caller passes from wrangler's main", () => {
+            expect.assertions(1);
+
+            // Outside every conventional place: only the caller, which reads wrangler, knows it.
+            mkdirSync(join(workdir, "worker"));
+            writeFileSync(join(workdir, "worker", "main.ts"), LOADS_ENV, "utf8");
+
+            const { platformDiagnostics } = runCodegen({ projectRoot: workdir, workerEntry: join(workdir, "worker", "main.ts"), wranglerQueueProducers: [] });
+
+            expect(platformDiagnostics.find((entry) => entry.message.includes("cloudflare:"))?.message).toContain("worker/main.ts (cloudflare:workers)");
+        });
+
+        it("adds no suppression warning for a helper the walk reads outside lunora/", () => {
+            expect.assertions(1);
+
+            // The walk only reads this file; a directive in it is not the app's lunora/ code to judge.
+            mkdirSync(join(workdir, "shared"));
+            writeFileSync(
+                join(workdir, "shared", "helper.ts"),
+                "// lunora-advisor-exempt unindexed_foreign_key -- a helper the import gate walks into\nexport const value = 1;\n",
+                "utf8",
+            );
+            write("send.ts", `import { value } from "../shared/helper";\n\nexport const use = () => value;\n`);
+
+            const suppressionWarnings = codegen().advisories.filter(
+                (finding) =>
+                    finding.name.startsWith("advisor_suppression_") &&
+                    typeof finding.metadata?.file === "string" &&
+                    finding.metadata.file.includes("shared/helper"),
+            );
+
+            expect(suppressionWarnings).toStrictEqual([]);
+        });
+
+        it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
+            expect.assertions(1);
+
+            writeNested("_generated/registryStub.ts", LOADS_ENV);
+            write("send.ts", `import { binding } from "./_generated/registryStub";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
+
+        it("refuses the real registry mail starter on node, so no Node build can run it", () => {
+            expect.assertions(1);
+
+            // The file `lunora registry add mail` copies in, read from the repo rather than restated, so this
+            // notices if the starter ever changes how it loads its env or its send binding.
+            write("mailStarter.ts", readFileSync(join(here, "..", "..", "..", "registry", "mail", "mail.ts"), "utf8"));
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/mailStarter.ts (cloudflare:workers, cloudflare:email)");
+        });
+
+        it("refuses an import with only inline type specifiers, which verbatim module syntax keeps as a load", () => {
+            expect.assertions(1);
+
+            // Emitted as `import {} from "cloudflare:workers"`: the module still loads.
+            write("context.ts", `import { type ExecutionContext } from "cloudflare:workers";\n\nexport const wrap = (context: ExecutionContext) => context;\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/context.ts (cloudflare:workers)");
+        });
+
+        it("refuses a dynamic import written as a backtick literal", () => {
+            expect.assertions(1);
+
+            write("send.ts", "export const load = async () => import(`cloudflare:email`);\n");
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/send.ts (cloudflare:email)");
+        });
+
+        it.each([
+            ["refuses", 'export { type ExecutionContext } from "cloudflare:workers";\n', 1],
+            ["lets through", 'export type { ExecutionContext } from "cloudflare:workers";\n', 0],
+        ])("%s a re-export of cloudflare:workers by the declaration's own type-only flag", (_verdict, source, refusals) => {
+            expect.assertions(1);
+
+            // Only a whole `export type` declaration is erased; `export { type X }` keeps `export {} from`.
+            write("reexport.ts", source);
+
+            expect(cloudflareRefusals()).toHaveLength(refusals);
+        });
+
+        it.each([
+            ["cloudflare", "native"],
+            // celld implements the Workers API, so cloudflare:workers loads there: every shard imports it.
+            ["celld", "native"],
+        ])("lets a %s app load cloudflare:workers", async (target, level) => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "${target}" };\n`, "utf8");
+            writeMailStarter();
+
+            const { CELLD_CAPABILITIES, CLOUDFLARE_CAPABILITIES } = await import("@lunora/platform");
+            const matrix = target === "celld" ? CELLD_CAPABILITIES : CLOUDFLARE_CAPABILITIES;
+
+            expect(matrix.features.cloudflareModules?.level).toBe(level);
+            expect(codegen().platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"))).toStrictEqual([]);
+        });
+    });
+
+    it("lets a @lunora/mail import through on node, whose host queues and delivers the sends", () => {
         expect.assertions(1);
 
+        // Mail has no ctx helper, so the import is what the gate reads; createNodeMailHost serves it here.
         write("send.ts", `import { createMailer } from "@lunora/mail";\n\nexport const mailer = createMailer;\n`);
 
-        expect(codegen().platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["mail"]);
+        expect(codegen().platformDiagnostics).toStrictEqual([]);
     });
 
     it("emits ctx.secrets for node, which maps it onto process.env", () => {

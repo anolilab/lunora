@@ -86,7 +86,7 @@ describe("createMailer", () => {
         const { sent, transport } = fakeTransport();
         const mailer = createMailer({ from: "Default <noreply@x.test>", transport });
 
-        await mailer.send({ from: "Bob <bob@x.test>", subject: "Hi", to: "bob@x.test" });
+        await mailer.send({ from: "Bob <bob@x.test>", subject: "Hi", text: "Hi", to: "bob@x.test" });
 
         expect(sent[0]?.from).toBe("Bob <bob@x.test>");
     });

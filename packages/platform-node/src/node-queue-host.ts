@@ -164,6 +164,67 @@ const delayMs = (delaySeconds: number | undefined): number => {
     return Math.min(Math.max(0, Math.ceil(delaySeconds)), MAX_DELAY_SECONDS) * 1000;
 };
 
+/**
+ * Validate and encode a message now, and return the insert that queues it with
+ * the value it will store. Everything that can refuse the message (content type,
+ * the 128 KiB ceiling) runs before the insert exists, so a caller can run it
+ * inside its own transaction knowing it can only fail on the database itself.
+ *
+ * `stored` is the encoded bytes decoded back: exactly what a consumer will read,
+ * which for a JSON body with a `toJSON()` differs from the object passed in.
+ */
+type PreparedSend = (message: unknown, sendOptions?: QueueSendOptions) => { insert: () => void; stored: unknown };
+
+/**
+ * The synchronous producers behind each host's async `QueueBindingLike`, keyed
+ * by host. Package-internal: `createNodeMailHost` needs to put its content
+ * reservation and the row insert in one transaction, which the async binding
+ * cannot join. Not exported from the package root, so not public API.
+ */
+const preparedSends = new WeakMap<object, ReadonlyMap<string, PreparedSend>>();
+
+/**
+ * The synchronous producer for one declared queue of `host`, by its
+ * `lunora/queues.ts` export name. Package-internal: exported from this module
+ * for `createNodeMailHost`, never from the package root. Deliberately carries no
+ * internal JSDoc tag: `stripInternal` would drop the declaration from the build
+ * and leave this module's export statement dangling.
+ */
+const preparedSendOf = (host: object, exportName: string): PreparedSend => {
+    const prepared = preparedSends.get(host)?.get(exportName);
+
+    if (prepared === undefined) {
+        throw new LunoraError("INTERNAL", `@lunora/platform-node: no queue "${exportName}" on this host`);
+    }
+
+    return prepared;
+};
+
+/**
+ * The queue name the mail host declares. Reserved: an app queue of this name, on any
+ * connection to the same file or in another process, would claim and settle mail
+ * rows as its own and drop them. A per-connection registry cannot see a second
+ * connection, so the name is refused outright and only the mail host may declare it.
+ */
+const RESERVED_MAIL_QUEUE_NAME = "lunora-mail";
+
+/** The options objects allowed to declare {@link RESERVED_MAIL_QUEUE_NAME}: only the mail host's. */
+const reservedNameHolders = new WeakSet<object>();
+
+/**
+ * Mark the options of the one host allowed to declare the reserved mail queue
+ * name. Package-internal: exported from this module for `createNodeMailHost`,
+ * never from the package root, and not a field of the public options type.
+ */
+const allowReservedQueueName = <Options extends object>(options: Options): Options => {
+    reservedNameHolders.add(options);
+
+    return options;
+};
+
+/** The queue names each database connection's hosts declared, so a second host cannot take one. */
+const declaredOnConnection = new WeakMap<Database.Database, Set<string>>();
+
 /** One declared queue, resolved from its `defineQueue` result. */
 interface CompiledQueue {
     definition: QueueDefinition;
@@ -221,7 +282,7 @@ interface NodeQueueHost<Queues extends Record<string, { isLunoraQueue: true }>> 
      */
     deadLetters: {
         list: (queue: string) => { attempts: number; body: unknown; id: string }[];
-        /** Return a parked message to its queue with `attempts` reset. `false` when no such message is parked. */
+        /** Return a parked message to its queue with `attempts` reset. `false` when no message of a queue this host declared is parked under that id. */
         requeue: (id: string) => boolean;
     };
     /** The caller's `env` plus one `QUEUE_<EXPORT>` binding per queue. */
@@ -293,8 +354,10 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         "SELECT COUNT(*) AS n FROM _lunora_queue_messages WHERE queue = ? AND state = 'pending' AND visible_at <= ?",
     );
     const listDead = database.prepare<[string], MessageRow>("SELECT * FROM _lunora_queue_messages WHERE queue = ? AND state = 'dead' ORDER BY enqueued_at");
-    const revive = database.prepare<[number, string]>(
-        "UPDATE _lunora_queue_messages SET state = 'pending', attempts = 0, visible_at = ? WHERE id = ? AND state = 'dead'",
+    // Scoped to the queues this host declared: the table is shared, and a row of another host's
+    // queue (the mail host's, which keeps attempts on requeue for its dedupe check) is not ours to reset.
+    const revive = database.prepare<[number, string, string]>(
+        "UPDATE _lunora_queue_messages SET state = 'pending', attempts = 0, visible_at = ? WHERE id = ? AND state = 'dead' AND queue IN (SELECT value FROM json_each(?))",
     );
 
     const compiled: CompiledQueue[] = Object.entries(options.queues).map(([exportName, value]) => {
@@ -306,6 +369,26 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
     });
 
     const declared = new Set(compiled.map((queue) => queue.name));
+
+    if (declared.has(RESERVED_MAIL_QUEUE_NAME) && !reservedNameHolders.has(options)) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: queue name "${RESERVED_MAIL_QUEUE_NAME}" is reserved for the mail host, which would otherwise share its rows with this queue — give the queue another name`,
+        );
+    }
+
+    // Two app hosts on one connection would both claim a name's rows, each settling the other's.
+    const taken = declaredOnConnection.get(database) ?? new Set<string>();
+    const clash = [...declared].find((name) => taken.has(name));
+
+    if (clash !== undefined) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: queue "${clash}" is already declared by another host on this database connection, and both would claim its rows — give it another name, or a connection of its own`,
+        );
+    }
+
+    const declaredJson = JSON.stringify([...declared]);
 
     // Checked once, at construction, because both failures are silent at runtime:
     // a queue that dead-letters to itself re-enqueues with `attempts` reset and
@@ -390,14 +473,36 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
 
     const bindings: Record<string, QueueBindingLike> = {};
     const env: Record<string, unknown> = { ...options.env };
+    const preparedByQueue = new Map<string, PreparedSend>();
 
     for (const queue of compiled) {
+        const prepareSend: PreparedSend = (message, sendOptions) => {
+            const contentType = sendOptions?.contentType ?? "json";
+            const encoded = encodeMessage(message, contentType, queue.name);
+            const delay = delayMs(sendOptions?.delaySeconds);
+
+            // Decoded only when read, and once: the mail host asks for it, but the app queues'
+            // own sends (through the binding below) never do, and must not pay a decode per send.
+            let decoded: { value: unknown } | undefined;
+
+            return {
+                insert: () => {
+                    enqueue(queue.name, encoded, contentType, delay, clock());
+                },
+                get stored(): unknown {
+                    decoded ??= { value: decodeBody(encoded, contentType) };
+
+                    return decoded.value;
+                },
+            };
+        };
+
+        preparedByQueue.set(queue.exportName, prepareSend);
+
         const binding: QueueBindingLike = {
             // eslint-disable-next-line @typescript-eslint/require-await -- the contract is async so a real binding can await the network; SQLite is synchronous
             send: async (message: unknown, sendOptions?: QueueSendOptions): Promise<unknown> => {
-                const contentType = sendOptions?.contentType ?? "json";
-
-                enqueue(queue.name, encodeMessage(message, contentType, queue.name), contentType, delayMs(sendOptions?.delaySeconds), clock());
+                prepareSend(message, sendOptions).insert();
 
                 return undefined;
             },
@@ -532,14 +637,14 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         return true;
     };
 
-    return {
+    const host: NodeQueueHost<Queues> = {
         bindings: bindings as NodeQueueHost<Queues>["bindings"],
         deadLetters: {
             list: (queueName: string) =>
                 listDead.all(queueName).map((row) => {
                     return { attempts: row.attempts, body: safeDecode(row), id: row.id };
                 }),
-            requeue: (id: string) => revive.run(clock(), id).changes > 0,
+            requeue: (id: string) => revive.run(clock(), id, declaredJson).changes > 0,
         },
         env,
         poll: async (now = clock()): Promise<number> => {
@@ -561,6 +666,20 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
             return delivered;
         },
     };
+
+    preparedSends.set(host, preparedByQueue);
+
+    // Reserved last, after every construction check above has passed and with nothing left that
+    // can throw: a rejected construction (a dead-letter queue that names itself or nothing) must
+    // not leave its names taken, or a corrected retry on the same connection would be refused.
+    for (const name of declared) {
+        taken.add(name);
+    }
+
+    declaredOnConnection.set(database, taken);
+
+    return host;
 };
 
-export type { NodeQueueHost, NodeQueueHostOptions };
+export { allowReservedQueueName, preparedSendOf, RESERVED_MAIL_QUEUE_NAME };
+export type { NodeQueueHost, NodeQueueHostOptions, PreparedSend };

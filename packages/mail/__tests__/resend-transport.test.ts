@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
 import { consumeQueuedSend } from "../src/queue";
+import createResendTransport from "../src/resend-transport";
 import { isOutcomeUnknownMailError, isRetryableMailError, MailSendError } from "../src/send-error";
 
 // Drive the private Resend transport's error-mapping branches by faking the
@@ -38,7 +39,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ data: { messageId: "abc-123" }, success: true });
 
-        const result = await mailer().send({ subject: "Hi", to: "a@x.test" });
+        const result = await mailer().send({ subject: "Hi", text: "Hi", to: "a@x.test" });
 
         expect(result).toEqual({ id: "abc-123" });
         expect(initialize).toHaveBeenCalledTimes(1);
@@ -49,7 +50,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ data: { messageId: "abc-123" }, success: true });
 
-        await mailer().send({ idempotencyKey: "order-42-receipt", subject: "Hi", to: "a@x.test" });
+        await mailer().send({ idempotencyKey: "order-42-receipt", subject: "Hi", text: "Hi", to: "a@x.test" });
 
         const [email] = sendEmail.mock.calls[0] as [{ headers?: Record<string, string>; idempotencyKey?: string }];
 
@@ -73,7 +74,7 @@ describe("resend transport error mapping", () => {
             },
         });
 
-        await producer.queue({ subject: "Hi", to: "a@x.test" });
+        await producer.queue({ subject: "Hi", text: "Hi", to: "a@x.test" });
         await consumeQueuedSend(mailer(), bodies[0]);
 
         const [email] = sendEmail.mock.calls[0] as [{ idempotencyKey?: string }];
@@ -85,7 +86,7 @@ describe("resend transport error mapping", () => {
         expect.assertions(4);
 
         const error = await mailer()
-            .send({ idempotencyKey: "has a space", subject: "Hi", to: "a@x.test" })
+            .send({ idempotencyKey: "has a space", subject: "Hi", text: "Hi", to: "a@x.test" })
             .catch((error_: unknown) => error_);
 
         expect(error).toBeInstanceOf(MailSendError);
@@ -99,7 +100,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: new Error("rate limited"), success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("rate limited"));
     });
 
@@ -109,7 +110,7 @@ describe("resend transport error mapping", () => {
         sendEmail.mockResolvedValue({ success: true });
 
         const error = await mailer()
-            .send({ subject: "Hi", to: "a@x.test" })
+            .send({ subject: "Hi", text: "Hi", to: "a@x.test" })
             .catch((error_: unknown) => error_);
 
         expect(error).toBeInstanceOf(MailSendError);
@@ -121,7 +122,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: "boom", success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("boom"));
     });
 
@@ -130,7 +131,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: 503, success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("503"));
     });
 
@@ -139,7 +140,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: null, success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("send failed"));
     });
 
@@ -148,7 +149,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: { code: "E", detail: "nope" }, success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("nope"));
     });
 
@@ -157,7 +158,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: Symbol("x"), success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("send failed"));
     });
 
@@ -167,7 +168,25 @@ describe("resend transport error mapping", () => {
         sendEmail.mockResolvedValue({ data: { messageId: "x" }, success: true });
 
         // An empty recipient list reaches the transport as `[]`.
-        await expect(mailer().send({ subject: "Hi", to: [] })).rejects.toThrow(/at least one recipient/);
+        await expect(mailer().send({ subject: "Hi", text: "Hi", to: [] })).rejects.toThrow(/at least one recipient/);
+    });
+
+    it("refuses a message with neither text nor html as final, without asking the provider", async () => {
+        expect.assertions(3);
+
+        // What @visulima/email answers for it: a plain error with no status, which reads as transient.
+        sendEmail.mockResolvedValue({
+            error: new Error("[@visulima/email] [resend] Invalid email options: Either text or html content is required"),
+            success: false,
+        });
+
+        const error = await createResendTransport("test-key", "noreply@x.test")
+            .send({ subject: "Hi", to: "a@x.test" })
+            .catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(MailSendError);
+        expect(isRetryableMailError(error)).toBe(false);
+        expect(sendEmail).not.toHaveBeenCalled();
     });
 
     describe("send failure classification", () => {
@@ -175,7 +194,7 @@ describe("resend transport error mapping", () => {
             sendEmail.mockResolvedValue({ error, success: false });
 
             return mailer()
-                .send({ idempotencyKey, subject: "Hi", to: "a@x.test" })
+                .send({ idempotencyKey, subject: "Hi", text: "Hi", to: "a@x.test" })
                 .catch((error_: unknown) => error_);
         };
 
@@ -276,7 +295,7 @@ describe("resend transport error mapping", () => {
             );
 
             const settled = createMailer({ apiKey: "test-key", from: "noreply@x.test", sendTimeoutMs: 1000 })
-                .send({ idempotencyKey: "order-42-receipt", subject: "Hi", to: "a@x.test" })
+                .send({ idempotencyKey: "order-42-receipt", subject: "Hi", text: "Hi", to: "a@x.test" })
                 .catch((error_: unknown) => error_);
 
             await vi.advanceTimersByTimeAsync(1000);

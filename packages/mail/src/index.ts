@@ -1,3 +1,5 @@
+// For a host that queues mail itself (`@lunora/platform-node`), so it refuses at enqueue exactly the keys the consumer would.
+export { assertValidIdempotencyKey } from "./address";
 export type { CapturedMail, MailboxSink } from "./capture-transport";
 export { createCaptureTransport } from "./capture-transport";
 export type { CloudflareSend, CloudflareTransportOptions } from "./cloudflare-transport";

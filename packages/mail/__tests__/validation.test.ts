@@ -28,7 +28,7 @@ describe("address validation (applies to every transport + the queue path)", () 
         const { sent, transport } = captureTransport();
         const mailer = createMailer({ from: "Default <noreply@x.test>", transport });
 
-        await mailer.send({ subject: "Hi", to: "Alice <alice@x.test>" });
+        await mailer.send({ subject: "Hi", text: "Hi", to: "Alice <alice@x.test>" });
 
         expect(sent[0]?.to).toBe("Alice <alice@x.test>");
     });
@@ -41,7 +41,7 @@ describe("address validation (applies to every transport + the queue path)", () 
         // mangled into a bracketed literal address downstream.
         const mailer = createMailer({ from: "<noreply@x.test>", transport });
 
-        await mailer.send({ subject: "Hi", to: "<bob@x.test>" });
+        await mailer.send({ subject: "Hi", text: "Hi", to: "<bob@x.test>" });
 
         expect(sent[0]?.to).toBe("<bob@x.test>");
     });
@@ -52,7 +52,7 @@ describe("address validation (applies to every transport + the queue path)", () 
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", transport });
 
-        await expect(mailer.send({ subject: "Hi", to: "a@x.test\r\nbcc: evil@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
+        await expect(mailer.send({ subject: "Hi", text: "Hi", to: "a@x.test\r\nbcc: evil@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
     });
 
     it("rejects an address with a comma (smuggled second recipient)", async () => {
@@ -61,7 +61,7 @@ describe("address validation (applies to every transport + the queue path)", () 
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", transport });
 
-        await expect(mailer.send({ subject: "Hi", to: "a@x.test,evil@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
+        await expect(mailer.send({ subject: "Hi", text: "Hi", to: "a@x.test,evil@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
     });
 
     it("rejects an oversized email (> 320 chars)", async () => {
@@ -71,7 +71,7 @@ describe("address validation (applies to every transport + the queue path)", () 
         const mailer = createMailer({ from: "noreply@x.test", transport });
         const huge = `${"a".repeat(321)}@x.test`;
 
-        await expect(mailer.send({ subject: "Hi", to: huge })).rejects.toThrow(/<= 320 characters/);
+        await expect(mailer.send({ subject: "Hi", text: "Hi", to: huge })).rejects.toThrow(/<= 320 characters/);
     });
 
     it("rejects an oversized display name (> 256 chars)", async () => {
@@ -81,7 +81,7 @@ describe("address validation (applies to every transport + the queue path)", () 
         const mailer = createMailer({ from: "noreply@x.test", transport });
         const longName = "a".repeat(257);
 
-        await expect(mailer.send({ subject: "Hi", to: `${longName} <a@x.test>` })).rejects.toThrow(/<= 256 characters/);
+        await expect(mailer.send({ subject: "Hi", text: "Hi", to: `${longName} <a@x.test>` })).rejects.toThrow(/<= 256 characters/);
     });
 
     it("validates cc / bcc / replyTo on a custom transport", async () => {
@@ -90,8 +90,8 @@ describe("address validation (applies to every transport + the queue path)", () 
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", transport });
 
-        await expect(mailer.send({ cc: ["a@x.test", "b@x.test,evil@x.test"], subject: "Hi", to: "x@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
-        await expect(mailer.send({ replyTo: "reply@x.test\r\nx: y", subject: "Hi", to: "x@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
+        await expect(mailer.send({ cc: ["a@x.test", "b@x.test,evil@x.test"], subject: "Hi", text: "Hi", to: "x@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
+        await expect(mailer.send({ replyTo: "reply@x.test\r\nx: y", subject: "Hi", text: "Hi", to: "x@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
     });
 
     it("validates addresses on the queue path before enqueueing", async () => {
@@ -106,7 +106,7 @@ describe("address validation (applies to every transport + the queue path)", () 
         };
         const mailer = createMailer({ from: "noreply@x.test", queue, transport });
 
-        await expect(mailer.queue({ subject: "Hi", to: "a@x.test,evil@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
+        await expect(mailer.queue({ subject: "Hi", text: "Hi", to: "a@x.test,evil@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
         expect(messages).toHaveLength(0);
     });
 });
@@ -118,7 +118,7 @@ describe("header / subject validation", () => {
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", transport });
 
-        await expect(mailer.send({ subject: "Hi\r\nX: y", to: "a@x.test" })).rejects.toThrow(/subject must not contain CR or LF/);
+        await expect(mailer.send({ subject: "Hi\r\nX: y", text: "Hi", to: "a@x.test" })).rejects.toThrow(/subject must not contain CR or LF/);
     });
 
     it("rejects CR/LF in a header key", async () => {
@@ -127,7 +127,7 @@ describe("header / subject validation", () => {
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", transport });
 
-        await expect(mailer.send({ headers: { "X-Bad\r\nInjected": "v" }, subject: "Hi", to: "a@x.test" })).rejects.toThrow(
+        await expect(mailer.send({ headers: { "X-Bad\r\nInjected": "v" }, subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow(
             /header name .* must not contain CR or LF/s,
         );
     });
@@ -138,7 +138,7 @@ describe("header / subject validation", () => {
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", transport });
 
-        await expect(mailer.send({ headers: { "X-Ok": "v\r\nInjected: y" }, subject: "Hi", to: "a@x.test" })).rejects.toThrow(
+        await expect(mailer.send({ headers: { "X-Ok": "v\r\nInjected: y" }, subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow(
             /header .* value must not contain CR or LF/,
         );
     });
@@ -177,25 +177,25 @@ describe("consumeQueuedSend rejects malformed queue bodies", () => {
     it("rejects a bad `to`", async () => {
         expect.assertions(1);
 
-        await expect(consumeQueuedSend(noopMailer(), { subject: "Hi", to: 42 })).rejects.toThrow(/`to` must be a string or string\[\]/);
+        await expect(consumeQueuedSend(noopMailer(), { subject: "Hi", text: "Hi", to: 42 })).rejects.toThrow(/`to` must be a string or string\[\]/);
     });
 
     it("rejects a non-string `from`", async () => {
         expect.assertions(1);
 
-        await expect(consumeQueuedSend(noopMailer(), { from: 5, subject: "Hi", to: "a@x.test" })).rejects.toThrow(/`from` must be a string/);
+        await expect(consumeQueuedSend(noopMailer(), { from: 5, subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow(/`from` must be a string/);
     });
 
     it("rejects a non-object `headers`", async () => {
         expect.assertions(1);
 
-        await expect(consumeQueuedSend(noopMailer(), { headers: 5, subject: "Hi", to: "a@x.test" })).rejects.toThrow(/`headers` must be an object/);
+        await expect(consumeQueuedSend(noopMailer(), { headers: 5, subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow(/`headers` must be an object/);
     });
 
     it("rejects a `headers` map with a non-string value", async () => {
         expect.assertions(1);
 
-        await expect(consumeQueuedSend(noopMailer(), { headers: { "X-A": 1 }, subject: "Hi", to: "a@x.test" })).rejects.toThrow(
+        await expect(consumeQueuedSend(noopMailer(), { headers: { "X-A": 1 }, subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow(
             /header "X-A" must be a string/,
         );
     });
@@ -208,12 +208,13 @@ describe("consumeQueuedSend rejects malformed queue bodies", () => {
             from: "noreply@x.test",
             headers: { "X-Tag": "welcome" },
             subject: "Hi",
+            text: "Hi",
             to: ["a@x.test", "b@x.test"],
         });
 
         expect(result).toEqual({ deduplicated: false, id: "queued-send" });
         expect(mailer.send).toHaveBeenCalledWith(
-            expect.objectContaining({ from: "noreply@x.test", headers: { "X-Tag": "welcome" }, subject: "Hi", to: ["a@x.test", "b@x.test"] }),
+            expect.objectContaining({ from: "noreply@x.test", headers: { "X-Tag": "welcome" }, subject: "Hi", text: "Hi", to: ["a@x.test", "b@x.test"] }),
         );
     });
 });

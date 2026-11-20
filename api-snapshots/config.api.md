@@ -2759,6 +2759,7 @@ interface WranglerCodegenInputs {
         binding: string;
         directory: string;
     };
+    workerEntry?: string;
     wranglerQueueProducers: WranglerQueueProducerIR[];
     wranglerVariables: WranglerVariableIR[];
 }

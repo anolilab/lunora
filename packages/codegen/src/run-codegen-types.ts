@@ -100,6 +100,16 @@ export interface CodegenOptions {
     target?: string;
 
     /**
+     * The worker entry the deploy bundles, as an absolute path. It seeds the
+     * `cloudflare:*` import gate alongside `lunora/` and the schema, so an import
+     * in the entry, or in anything it imports, is refused at build time on a
+     * target without those modules. Produced by `@lunora/config`'s
+     * `wranglerCodegenInputs`, which resolves it the way the deploy does; absent
+     * when no entry file exists (the composed `virtual:lunora/worker` included).
+     */
+    workerEntry?: string;
+
+    /**
      * Every `queues.producers[]` entry of `wrangler.jsonc`, top level and each
      * `env.<name>` block. A producer naming a push queue's binding with another
      * queue name becomes an extra route in `_generated/queues.ts`, so a batch from

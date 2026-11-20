@@ -1127,6 +1127,153 @@ describe("lunora deploy --target node", () => {
             }
         });
 
+        /** The `mail` starter's wiring: a producer for the reserved `lunora-mail` queue, bound as MAIL_QUEUE. */
+        const MAIL_PRODUCER = { queues: { producers: [{ binding: "MAIL_QUEUE", queue: "lunora-mail" }] } };
+
+        it("gives an app that queues mail a durable mail queue in the data volume, bound to its producer and polled", async () => {
+            expect.assertions(8);
+
+            writeFixture(workdir, { wrangler: MAIL_PRODUCER });
+
+            const deployed = await deploy(workdir);
+            const bundle = readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8");
+            const readme = readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "README.md"), "utf8");
+
+            // The queues section is composed now, so it is not reported unbound.
+            expect(deployed).toMatchObject({ code: 0 });
+            // esbuild renames a clashing `join` (join4) and prints 1000 as 1e3.
+            expect(bundle).toMatch(/mail: \{ env, path: join\d*\(dataDirectory, "mail\.sqlite3"\) \}/u);
+            expect(bundle).toMatch(/for \(const (\w+) of CONFIG\.mailQueues\) \{\s*env\[\1\] = platform\.mail\.queue;/u);
+            expect(bundle).toMatch(/setInterval\(pollMail, 1e3\)/u);
+            expect(bundle).toMatch(/"requiredEnv": \[[^\]]*"MAIL_FROM",\s*"RESEND_API_KEY"/u);
+            expect(readme).toContain("queue producer is bound to a durable mail queue in `mail.sqlite3`");
+            // A provider's outright refusal is acked, not parked: the README must not promise otherwise.
+            expect(readme).toContain("is logged as `lunora.mail.send_refused` and dropped");
+            expect(readme).not.toContain("never dropped");
+        });
+
+        it.each(["MAIL_FROM", "RESEND_API_KEY"])("refuses a lunora-mail producer bound as %s, which the mail host's setting would share", async (binding) => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { queues: { producers: [{ binding, queue: "lunora-mail" }] } } });
+
+            // One name on env for two things: the queue would overwrite the sender or the key, or the other way round.
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 2,
+                error: expect.stringContaining(`${binding} (the lunora-mail queue producers and the mail host's settings)`),
+            });
+            expect(existsSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"))).toBe(false);
+        });
+
+        it("names an app's lunora-mail consumer as unbound, since the mail host consumes that queue", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, {
+                wrangler: { queues: { consumers: [{ queue: "lunora-mail" }], producers: [{ binding: "MAIL_QUEUE", queue: "lunora-mail" }] } },
+            });
+
+            const { logger, warnings } = recordingLogger();
+
+            await expect(runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" })).resolves.toMatchObject({
+                code: 0,
+            });
+            // The worker's queue() handler for it never runs in the container: the deploy says so.
+            expect(warnings.join("\n")).toContain("queues.consumers lunora-mail (the mail host consumes it; the worker's queue handler never runs for it)");
+        });
+
+        it("binds the platform mail queue under every producer binding that targets lunora-mail", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, {
+                wrangler: {
+                    queues: {
+                        producers: [
+                            { binding: "MAIL_QUEUE", queue: "lunora-mail" },
+                            { binding: "NOTIFY_MAIL", queue: "lunora-mail" },
+                        ],
+                    },
+                },
+            });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+            // Either name the app reads reaches the same durable queue, not just the first one declared.
+            expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).toMatch(/"mailQueues": \[\s*"MAIL_QUEUE",\s*"NOTIFY_MAIL"\s*\]/u);
+        });
+
+        it(
+            "delivers a mail the app queues through the container server",
+            async () => {
+                expect.assertions(2);
+
+                writeFixture(workdir, { extraModules: { "@lunora/mail": join(PACKAGE_NODE_MODULES, "..", "..", "mail") }, wrangler: MAIL_PRODUCER });
+                writeFileSync(
+                    join(workdir, "src", "worker.ts"),
+                    `import type { QueueLike } from "@lunora/mail";
+import { createMailerFromEnv } from "@lunora/mail";
+
+${readFileSync(join(workdir, "src", "worker.ts"), "utf8").replace(
+    "switch (url.pathname) {",
+    `switch (url.pathname) {
+            case "/__fixture/mail":
+                await createMailerFromEnv(env, { queue: env.MAIL_QUEUE as unknown as QueueLike }).queue({ subject: "Welcome", text: "Hi", to: "ada@example.com" });
+
+                return new Response("queued");`,
+)}`,
+                    "utf8",
+                );
+                // Resend's API answered in the server process, where @visulima/email's fetch goes: the transport's network edge.
+                writeFileSync(
+                    join(workdir, "fake-resend.mjs"),
+                    `const realFetch = globalThis.fetch;
+
+globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+    if (!url.startsWith("https://api.resend.com")) {
+        return realFetch(input, init);
+    }
+
+    if (url.endsWith("/emails") && init?.method === "POST") {
+        console.log("fake-resend: sent %s", JSON.parse(String(init.body)).subject);
+
+        return Response.json({ id: "re_fake" });
+    }
+
+    return Response.json({ data: [] });
+};
+`,
+                    "utf8",
+                );
+
+                await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+                const artifact = join(workdir, NODE_DEPLOY_DIRECTORY);
+
+                mkdirSync(join(artifact, "node_modules"));
+                symlinkSync(BETTER_SQLITE3, join(artifact, "node_modules", "better-sqlite3"), "dir");
+
+                const run = startServer(artifact, join(workdir, "data"), { ...RUN_ENV, MAIL_FROM: "Acme <noreply@acme.test>", RESEND_API_KEY: "re_test_key" }, [
+                    "--import",
+                    join(workdir, "fake-resend.mjs"),
+                ]);
+
+                try {
+                    const origin = await run.listening;
+
+                    await fetch(`${origin}/__fixture/mail`);
+                    // The milestone is the provider receiving the send: the poll loop delivered what the app queued.
+                    await run.waitForStdout("fake-resend: sent Welcome");
+
+                    expect(run.stdout()).toContain("fake-resend: sent Welcome");
+                } finally {
+                    run.child.kill("SIGTERM");
+                    await run.exited;
+                }
+            },
+            SERVER_TEST_TIMEOUT,
+        );
+
         it("writes a reproducible build context: a lockfile npm ci installs from, and the same bytes on every deploy", async () => {
             expect.assertions(5);
 

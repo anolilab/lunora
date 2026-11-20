@@ -58,6 +58,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "celld implements no jurisdictions — a fleet has only the machines you run, and `newUniqueId({ jurisdiction })` / `namespace.jurisdiction()` throw — so there is no jurisdiction-pinned auth object to copy into, and a schema that pins auth with `.jurisdiction(…)` fails closed",
         },
         browser: { level: "unsupported", note: "Browser Rendering is not a celld binding type" },
+        cloudflareModules: {
+            level: "native",
+            note: "celld implements the Workers API itself and runs Wrangler bundles, so cloudflare:workers loads (every Lunora shard imports it through @lunora/do). Which bindings a module reaches is rated per key here: cloudflare:email loads, but celld has no send_email binding for it to send through",
+        },
         commitOrderedTables: {
             level: "native",
             note: "The two host properties the guarantee rests on are both celld's: `storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a cell executes one event at a time behind the same output gate Cloudflare's Durable Objects use. Derived from celld's documented Durable Object surface, not from a TCK run against a fleet",

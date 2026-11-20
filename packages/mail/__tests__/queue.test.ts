@@ -1,3 +1,4 @@
+import { createElement } from "react";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
@@ -45,6 +46,67 @@ const noopMailer = (): Mailer => {
     };
 };
 
+describe("queued send content", () => {
+    it("refuses a react element whose explicit empty html and text win over its render, at enqueue", async () => {
+        expect.assertions(2);
+
+        const { messages, queue } = captureQueue();
+        const { transport } = captureTransport();
+        const mailer = createMailer({ from: "noreply@x.test", queue, transport });
+        // `html: ""` is kept over the render (`??`), so nothing would be sent: react alone is no content.
+        const error = await mailer
+            .queue({ html: "", react: createElement("p", null, "Hi"), subject: "Hi", text: "", to: "a@x.test" })
+            .catch((error_: unknown) => error_);
+
+        expect(String(error)).toMatch(/needs `text` or `html`/u);
+        expect(messages).toStrictEqual([]);
+    });
+
+    it("queues a react element's render when no html or text is given", async () => {
+        expect.assertions(1);
+
+        const { messages, queue } = captureQueue();
+        const { transport } = captureTransport();
+        const mailer = createMailer({ from: "noreply@x.test", queue, transport });
+
+        await mailer.queue({ react: createElement("p", null, "Hi"), subject: "Hi", to: "a@x.test" });
+
+        expect(messages[0]?.html).toContain("Hi");
+    });
+
+    it.each([
+        ["a number as html", { html: 42 }, /`html` must be a string, got number/u],
+        ["an object as text", { text: { body: "Hi" } }, /`text` must be a string, got object/u],
+        ["a non-string html beside a valid text", { html: true, text: "Hi" }, /`html` must be a string, got boolean/u],
+    ])("refuses %s at enqueue, as final", async (_label, content, message) => {
+        expect.assertions(3);
+
+        const { messages, queue } = captureQueue();
+        const { transport } = captureTransport();
+        const mailer = createMailer({ from: "noreply@x.test", queue, transport });
+        // Untrusted JSON as often as typed code: truthy, but not content a provider can send.
+        const error = await mailer.queue({ subject: "Hi", to: "a@x.test", ...(content as object) }).catch((error_: unknown) => error_);
+
+        expect(isRetryableMailError(error)).toBe(false);
+        expect(String(error)).toMatch(message);
+        expect(messages).toStrictEqual([]);
+    });
+
+    it("refuses a message with neither text nor html at enqueue, as final", async () => {
+        expect.assertions(3);
+
+        const { messages, queue } = captureQueue();
+        const { transport } = captureTransport();
+        const mailer = createMailer({ from: "noreply@x.test", queue, transport });
+        const error = await mailer.queue({ subject: "Hi", text: "", to: "a@x.test" }).catch((error_: unknown) => error_);
+
+        // Queued, it would reach a provider that refuses it with no status, and be retried into the dead-letter queue.
+        expect(isRetryableMailError(error)).toBe(false);
+        expect(String(error)).toMatch(/needs `text` or `html`/u);
+        expect(messages).toStrictEqual([]);
+    });
+});
+
 describe("queued send idempotency key", () => {
     it("stays stable across two consumes of the same enqueued payload — key is minted at enqueue time, not on every redelivery", async () => {
         expect.assertions(3);
@@ -53,7 +115,7 @@ describe("queued send idempotency key", () => {
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", queue, transport });
 
-        await mailer.queue({ subject: "Hi", to: "a@x.test" });
+        await mailer.queue({ subject: "Hi", text: "Hi", to: "a@x.test" });
 
         expect(messages).toHaveLength(1);
 
@@ -83,7 +145,7 @@ describe("queued send idempotency key", () => {
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", queue, transport });
 
-        await mailer.queue({ idempotencyKey: "order-42", subject: "Hi", to: "a@x.test" });
+        await mailer.queue({ idempotencyKey: "order-42", subject: "Hi", text: "Hi", to: "a@x.test" });
 
         expect(messages[0]?.idempotencyKey).toBe("order-42");
     });
@@ -96,7 +158,9 @@ describe("queued send idempotency key", () => {
         const mailer = createMailer({ from: "noreply@x.test", queue, transport });
 
         // A number matches the key pattern through its string form, but the consumer refuses it.
-        const error = await mailer.queue({ idempotencyKey: 42 as unknown as string, subject: "Hi", to: "a@x.test" }).catch((error_: unknown) => error_);
+        const error = await mailer
+            .queue({ idempotencyKey: 42 as unknown as string, subject: "Hi", text: "Hi", to: "a@x.test" })
+            .catch((error_: unknown) => error_);
 
         expect(error).toBeInstanceOf(MailSendError);
         expect(isRetryableMailError(error)).toBe(false);
@@ -110,7 +174,7 @@ describe("queued send idempotency key", () => {
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", queue, transport });
 
-        await expect(mailer.queue({ idempotencyKey, subject: "Hi", to: "a@x.test" })).rejects.toThrow(/idempotencyKey/u);
+        await expect(mailer.queue({ idempotencyKey, subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow(/idempotencyKey/u);
         expect(messages).toHaveLength(0);
     });
 
@@ -118,14 +182,14 @@ describe("queued send idempotency key", () => {
         expect.assertions(4);
 
         const mailer = noopMailer();
-        const refusal = await consumeQueuedSend(mailer, { bcc: 42, subject: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
+        const refusal = await consumeQueuedSend(mailer, { bcc: 42, subject: "Hi", text: "Hi", to: "a@x.test" }).catch((error: unknown) => error);
 
         expect(refusal).toBeInstanceOf(MailSendError);
         expect(isRetryableMailError(refusal)).toBe(false);
 
-        await consumeQueuedSend(mailer, { bcc: "b@x.test", subject: "Hi", to: "a@x.test" });
+        await consumeQueuedSend(mailer, { bcc: "b@x.test", subject: "Hi", text: "Hi", to: "a@x.test" });
 
-        await consumeQueuedSend(mailer, { bcc: ["b@x.test", "c@x.test"], subject: "Hi", to: "a@x.test" });
+        await consumeQueuedSend(mailer, { bcc: ["b@x.test", "c@x.test"], subject: "Hi", text: "Hi", to: "a@x.test" });
 
         expect(vi.mocked(mailer.send).mock.calls[0]?.[0].bcc).toStrictEqual(["b@x.test"]);
         expect(vi.mocked(mailer.send).mock.calls[1]?.[0].bcc).toStrictEqual(["b@x.test", "c@x.test"]);
@@ -135,14 +199,14 @@ describe("queued send idempotency key", () => {
         expect.assertions(2);
 
         await expect(consumeQueuedSend(noopMailer(), { to: "a@x.test" })).rejects.toThrow(/string `subject`/);
-        await expect(consumeQueuedSend(noopMailer(), { idempotencyKey: 42, subject: "Hi", to: "a@x.test" })).rejects.toThrow(
+        await expect(consumeQueuedSend(noopMailer(), { idempotencyKey: 42, subject: "Hi", text: "Hi", to: "a@x.test" })).rejects.toThrow(
             /`idempotencyKey` must be a string/,
         );
     });
 });
 
 describe("consumeQueuedSend with a sent-mail store", () => {
-    const body = { idempotencyKey: "order-42", subject: "Hi", to: "a@x.test" };
+    const body = { idempotencyKey: "order-42", subject: "Hi", text: "Hi", to: "a@x.test" };
 
     /** A KV-shaped store over a Map, recording every `put`. */
     /** The sent records a store was given, without the attempt marks kept beside them. */
@@ -643,7 +707,7 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         const mailer = noopMailer();
         const { store } = memoryStore();
 
-        const error = await consumeQueuedSend(mailer, { subject: "Hi", to: "a@x.test" }, { sent: store }).catch((error_: unknown) => error_);
+        const error = await consumeQueuedSend(mailer, { subject: "Hi", text: "Hi", to: "a@x.test" }, { sent: store }).catch((error_: unknown) => error_);
 
         expect(error).toBeInstanceOf(MailSendError);
         expect(isRetryableMailError(error)).toBe(false);
@@ -660,7 +724,7 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         });
         const store: SentMailStore = { get, put: async () => undefined };
 
-        const error = await consumeQueuedSend(mailer, { idempotencyKey: "k".repeat(600), subject: "Hi", to: "a@x.test" }, { sent: store }).catch(
+        const error = await consumeQueuedSend(mailer, { idempotencyKey: "k".repeat(600), subject: "Hi", text: "Hi", to: "a@x.test" }, { sent: store }).catch(
             (error_: unknown) => error_,
         );
 
@@ -676,9 +740,11 @@ describe("consumeQueuedSend with a sent-mail store", () => {
         const mailer = noopMailer();
         const get = vi.fn<SentMailStore["get"]>(async () => null);
 
-        const error = await consumeQueuedSend(mailer, { idempotencyKey, subject: "Hi", to: "a@x.test" }, { sent: { get, put: async () => undefined } }).catch(
-            (error_: unknown) => error_,
-        );
+        const error = await consumeQueuedSend(
+            mailer,
+            { idempotencyKey, subject: "Hi", text: "Hi", to: "a@x.test" },
+            { sent: { get, put: async () => undefined } },
+        ).catch((error_: unknown) => error_);
 
         expect(isRetryableMailError(error)).toBe(false);
         expect(get).not.toHaveBeenCalled();
