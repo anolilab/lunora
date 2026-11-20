@@ -249,8 +249,8 @@ export const trustedKeyOf = async (keyId: string, privateKey: CryptoKey): Promis
 };
 
 /**
- * The base URL with its trailing slashes removed. Only `https` is accepted: an index
- * must not point installs at plain text.
+ * The base URL with its trailing slashes removed. Only a plain `https` URL is
+ * accepted: an index must not point installs at plain text.
  */
 export const artifactBaseUrl = (baseUrl: string): string => {
     let url: URL;
@@ -263,6 +263,16 @@ export const artifactBaseUrl = (baseUrl: string): string => {
 
     if (url.protocol !== "https:") {
         throw new Error(`base URL ${baseUrl} must be https`);
+    }
+
+    // Artifact URLs are built by appending path segments to this text, so a query
+    // or fragment would swallow them and credentials would ship in a public index.
+    if (url.search !== "" || url.hash !== "" || baseUrl.includes("?") || baseUrl.includes("#")) {
+        throw new Error(`base URL ${baseUrl} must not carry a query or fragment`);
+    }
+
+    if (url.username !== "" || url.password !== "") {
+        throw new Error("base URL must not carry credentials");
     }
 
     let end = baseUrl.length;

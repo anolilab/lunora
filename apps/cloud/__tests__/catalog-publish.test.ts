@@ -121,6 +121,17 @@ describe("catalog publishing", () => {
         await expect(publishCatalog({ apps: [], baseUrl: "http://catalog.example.com", keyId: KEY_ID, privateKey })).rejects.toThrow("must be https");
     });
 
+    it.each([
+        ["a query", "https://catalog.example.com/apps?v=1", "must not carry a query or fragment"],
+        ["an empty query", "https://catalog.example.com/apps?", "must not carry a query or fragment"],
+        ["a fragment", "https://catalog.example.com/apps#top", "must not carry a query or fragment"],
+        ["credentials", `https://${"publisher"}:${"pw"}@catalog.example.com/apps`, "must not carry credentials"],
+    ])("refuses a base URL with %s, which artifact paths would land inside", async (_label, baseUrl, message) => {
+        const { privateKey } = await signer();
+
+        await expect(publishCatalog({ apps: [app({ version: "1.0.0" })], baseUrl, keyId: KEY_ID, privateKey })).rejects.toThrow(message);
+    });
+
     it("publishes files that the real artifact and index verifiers accept under the printed key", async () => {
         const { privateKey, trusted } = await signer();
         const apps = [
