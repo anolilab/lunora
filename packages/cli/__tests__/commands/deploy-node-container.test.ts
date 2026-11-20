@@ -1576,6 +1576,15 @@ globalThis.fetch = async (input, init) => {
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
         });
 
+        it("deploys a var whose value is null, embedding it as data, as wrangler takes JSON values", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { vars: { LIMIT: 3, NOTHING: null } } });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+            expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).toMatch(/"NOTHING": null/u);
+        });
+
         it("refuses a var that shares a binding's name, naming both sources", async () => {
             expect.assertions(1);
 

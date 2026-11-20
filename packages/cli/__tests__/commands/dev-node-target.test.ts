@@ -1371,6 +1371,29 @@ export default crons;
             ).rejects.toThrow(/uses __proto__ as a key at vars\.__proto__/u);
         });
 
+        it("hands JSON var values to the worker as data, null included, as wrangler does", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { vars: { LIMIT: 3, NESTED: { enabled: true }, NOTHING: null, ON: false } });
+
+            let env: Record<string, unknown> | undefined;
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    ({ env } = options);
+
+                    return realPlatform.createNodeAppHost(options);
+                },
+            };
+            const dev = await startWorker({ platform });
+
+            try {
+                expect(env).toMatchObject({ LIMIT: 3, NESTED: { enabled: true }, NOTHING: null, ON: false });
+            } finally {
+                await dev.stop();
+            }
+        });
+
         it("hands any other wrangler var name to the worker as a string, constructor and prototype included", async () => {
             expect.assertions(1);
 

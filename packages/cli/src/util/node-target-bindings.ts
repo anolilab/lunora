@@ -208,7 +208,8 @@ const RESERVED_OBJECT_KEYS: ReadonlySet<string> = new Set(["__proto__"]);
  * `vars`: an object of names and values. Its names follow one of two rules. The container (`"environment"`) lets the
  * environment variable of the same name override each var, so every name must be one a container runtime can set. The dev
  * host (`"binding"`) reads them only from the config and `.dev.vars`, so any wrangler var name is fine there (`API-URL`,
- * `app.mode`) except `__proto__`. Values must be what wrangler accepts: anything JSON but `null`.
+ * `app.mode`) except `__proto__`. Values are JSON, as wrangler takes them (`null`, numbers, booleans and objects included), and
+ * reach the worker as that data.
  */
 const declaredVariables = (value: unknown, configName: string, names: "binding" | "environment"): Record<string, unknown> => {
     if (value === undefined || value === null) {
@@ -233,14 +234,6 @@ const declaredVariables = (value: unknown, configName: string, names: "binding" 
 
         throw new Error(
             `--target node puts each var on env under its name, and vars in ${configName} has ${list}, which ${one ? "sets" : "set"} an object's prototype rather than naming a var`,
-        );
-    }
-
-    const empty = Object.keys(value).filter((name) => value[name] === null);
-
-    if (empty.length > 0) {
-        throw new Error(
-            `--target node reads each var as a string or a JSON value, and vars in ${configName} sets ${empty.map((name) => JSON.stringify(name)).join(", ")} to null`,
         );
     }
 
