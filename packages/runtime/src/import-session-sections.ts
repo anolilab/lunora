@@ -254,7 +254,7 @@ const stageStorageRow = async (options: WorkerOptions, ref: SessionRef, row: Sec
             errors,
             row,
             "BAD_ROW",
-            "a `$storage` record needs a string `key` outside `_lunora/` and base64 `data`, an integer `offset`, and a `size` on its last chunk",
+            "a `$storage` record needs a string `key` outside `_lunora/` and base64 `data`, an integer `offset`, a `size` on its last chunk, and string `customMetadata` within 8,192 bytes if any",
         );
 
         return undefined;

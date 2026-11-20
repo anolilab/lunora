@@ -1002,6 +1002,28 @@ describe("admin import — staged replace of chunked sections", () => {
         expect(target.buckets.get("default")!.has(staging)).toBe(false);
     });
 
+    it("refuses custom metadata R2 would not take at staging, so the commit never restores the database without the object", async () => {
+        expect.assertions(3);
+
+        await seed();
+
+        const target = createStores();
+        const storageUpload = vi.fn<NonNullable<WorkerOptions["storageUpload"]>>(target.options.storageUpload);
+        const worker = workerWith({ ...target.options, storageUpload });
+        const data = Buffer.from("hello").toString("base64");
+        const response = await postImport(worker, "?mode=replace&tables=messages&stage=metadata", [
+            { doc: { format: 2, sections: ["storage"] }, table: "$lunora" },
+            { doc: { customMetadata: { owner: 7 }, data, key: "typed.txt", last: true, offset: 0, size: 5 }, table: "$storage" },
+            { doc: { customMetadata: { note: "x".repeat(8192) }, data, key: "huge.txt", last: true, offset: 0, size: 5 }, table: "$storage" },
+        ]);
+        const answer: { errors: { code: string }[] } = await response.json();
+        const committed = await postSession(worker, "commit", "metadata");
+
+        expect(answer.errors.map((error) => error.code)).toStrictEqual(["BAD_ROW", "BAD_ROW"]);
+        expect(committed.status).toBe(409);
+        expect(storageUpload).not.toHaveBeenCalled();
+    });
+
     it("refuses a chunked value it has no staging for, and so never commits the session", async () => {
         expect.assertions(2);
 

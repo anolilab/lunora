@@ -639,6 +639,33 @@ interface StorageRecord extends ChunkRecord {
     where: { bucket?: string };
 }
 
+/** R2's ceiling on an object's metadata, in bytes. */
+const R2_METADATA_MAX_BYTES = 8192;
+
+/**
+ * Custom metadata R2 will take: string values, within {@link R2_METADATA_MAX_BYTES}.
+ * Checked when the record is read, because the upload that would refuse it runs
+ * last in a restore, after the database sections have committed.
+ */
+const isUploadableMetadata = (value: unknown): value is Record<string, string> => {
+    if (!isRecord(value)) {
+        return false;
+    }
+
+    const encoder = new TextEncoder();
+    let bytes = 0;
+
+    for (const [name, entry] of Object.entries(value)) {
+        if (typeof entry !== "string") {
+            return false;
+        }
+
+        bytes += encoder.encode(name).byteLength + encoder.encode(entry).byteLength;
+    }
+
+    return bytes <= R2_METADATA_MAX_BYTES;
+};
+
 const parseStorageRecord = (document: Record<string, unknown>): StorageRecord | undefined => {
     const { bucket, contentType, customMetadata, key } = document;
     const chunk = parseChunk(document);
@@ -646,6 +673,12 @@ const parseStorageRecord = (document: Record<string, unknown>): StorageRecord | 
     // A reserved key is never exported, so a backup that holds one was crafted: writing it
     // could land on this or another restore's staging objects.
     if (typeof key !== "string" || key.startsWith(RESERVED_STORAGE_PREFIX) || !chunk || (bucket !== undefined && typeof bucket !== "string")) {
+        return undefined;
+    }
+
+    const metadata = customMetadata === undefined || isUploadableMetadata(customMetadata) ? customMetadata : false;
+
+    if (metadata === false) {
         return undefined;
     }
 
@@ -657,7 +690,7 @@ const parseStorageRecord = (document: Record<string, unknown>): StorageRecord | 
         upload: {
             ...where,
             ...(typeof contentType === "string" ? { contentType } : {}),
-            ...(isRecord(customMetadata) ? { customMetadata: customMetadata as Record<string, string> } : {}),
+            ...(metadata === undefined ? {} : { customMetadata: metadata }),
             ...(chunk.sha256 === undefined ? {} : { sha256: chunk.sha256 }),
         },
         where,
@@ -800,7 +833,7 @@ const importStorageRow = async (options: WorkerOptions, row: SectionRow, totals:
             totals,
             row,
             "BAD_ROW",
-            "a `$storage` record needs a string `key` outside `_lunora/` and base64 `data`, an integer `offset`, and a `size` on its last chunk",
+            "a `$storage` record needs a string `key` outside `_lunora/` and base64 `data`, an integer `offset`, a `size` on its last chunk, and string `customMetadata` within 8,192 bytes if any",
         );
 
         return;
