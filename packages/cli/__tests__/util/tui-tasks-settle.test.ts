@@ -6,7 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // component and hook stays real, and the "mounted" mode renders through
 // `@visulima/tui`'s own test renderer so the effects really run.
 const state = vi.hoisted(() => {
-    return { mount: false };
+    return {
+        mount: false,
+        /** Lets the in-flight task finish; called once the app has ended, so the task is always still running at that moment. */
+        release: undefined as (() => void) | undefined,
+        /** Settles once the task chain has started. */
+        started: undefined as Promise<void> | undefined,
+    };
 });
 
 vi.mock(import("@visulima/tui"), async (importOriginal) => {
@@ -33,8 +39,11 @@ vi.mock(import("@visulima/tui"), async (importOriginal) => {
             // Mounted (so the chain started), then torn down while a task is
             // still in flight — the real Ctrl-C shape.
             waitUntilExit: async () => {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 10);
+                await state.started;
+
+                // A later turn than the rejection below, so the task is still in flight when the app ends.
+                setImmediate(() => {
+                    state.release?.();
                 });
 
                 throw new Error("interrupted");
@@ -79,6 +88,8 @@ const settleOrHang = async (promise: Promise<unknown>, ms: number): Promise<unkn
 describe("tuiTasks settlement wait", () => {
     afterEach(() => {
         state.mount = false;
+        state.release = undefined;
+        state.started = undefined;
     });
 
     it("does not hang when the app ends before the task chain starts", async () => {
@@ -124,6 +135,13 @@ describe("tuiTasks settlement wait", () => {
         state.mount = true;
 
         let finished = false;
+        const started = Promise.withResolvers<undefined>();
+        const gate = Promise.withResolvers<undefined>();
+
+        state.started = started.promise;
+        state.release = () => {
+            gate.resolve(undefined);
+        };
 
         const outcome = await asTty(async () =>
             settleOrHang(
@@ -132,9 +150,8 @@ describe("tuiTasks settlement wait", () => {
                         {
                             label: "copy",
                             run: async () => {
-                                await new Promise((resolve) => {
-                                    setTimeout(resolve, 120);
-                                });
+                                started.resolve(undefined);
+                                await gate.promise;
 
                                 finished = true;
                             },

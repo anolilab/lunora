@@ -134,10 +134,14 @@ const postStudioJson = (port: number, path: string, host: string, body: unknown)
  * the proxied upstream request is torn down, which is what the abort test waits
  * on — the conditional address handling lives here rather than inside the test.
  */
-const startHangingWorker = (): Promise<{ close: () => Promise<void>; closed: Promise<void>; url: string }> => {
+const startHangingWorker = (): Promise<{ close: () => Promise<void>; closed: Promise<void>; received: Promise<void>; url: string }> => {
     let markClosed: () => void = () => {};
+    let markReceived: () => void = () => {};
     const closed = new Promise<void>((resolve) => {
         markClosed = resolve;
+    });
+    const received = new Promise<void>((resolve) => {
+        markReceived = resolve;
     });
 
     return new Promise((resolve, reject) => {
@@ -147,6 +151,7 @@ const startHangingWorker = (): Promise<{ close: () => Promise<void>; closed: Pro
             response.on("close", () => {
                 markClosed();
             });
+            markReceived();
         });
 
         server.once("error", reject);
@@ -159,7 +164,7 @@ const startHangingWorker = (): Promise<{ close: () => Promise<void>; closed: Pro
                 return;
             }
 
-            resolve({ close: () => closeServer(server), closed, url: `http://127.0.0.1:${String(address.port)}` });
+            resolve({ close: () => closeServer(server), closed, received, url: `http://127.0.0.1:${String(address.port)}` });
         });
     });
 };
@@ -484,9 +489,8 @@ describe("startStudioServer", () => {
             aborted.on("error", () => {});
             aborted.end();
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 150);
-            });
+            // Abort only once the upstream leg exists, so the proxy has a request to drop.
+            await worker.received;
 
             aborted.destroy();
 
