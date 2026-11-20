@@ -177,11 +177,24 @@ const revertFailedRelease = async (
         // Deploys of one project are not serialized: a newer release may have gone
         // live while this one failed, and putting the older previous release back
         // would undo it. Only the failed release or the one it replaced may be live.
-        const { liveDeploymentId, reprovisioned } = await reprovision(
+        // The previous bundle cannot bind a class only the failed release exports,
+        // so a revert that would drop one leaves the failed release serving instead
+        // of deleting what was written to that class since the cutover.
+        const { liveDeploymentId, reprovisioned, wouldDelete } = await reprovision(
             { deploymentId: previousDeploymentId, key: input.key, organizationId: input.organizationId },
             deps,
-            { liveAmong: [deploymentId, previousDeploymentId] },
+            { keepClassesOf: deploymentId, liveAmong: [deploymentId, previousDeploymentId] },
         );
+
+        if (wouldDelete !== undefined) {
+            write({
+                deploymentId,
+                event: "not_reverted",
+                reason: `reverting would delete the data of class(es) ${wouldDelete.join(", ")}, which only the failed release binds; it stays, deploy a fix forward`,
+            });
+
+            return;
+        }
 
         if (!reprovisioned) {
             write({ deploymentId, event: "not_reverted", reason: "a newer release has gone live since; it stays" });

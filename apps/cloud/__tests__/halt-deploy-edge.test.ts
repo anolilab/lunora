@@ -262,7 +262,11 @@ describe(guardedDriver, () => {
         const halted = new Set<string>();
         const { store } = memoryReleaseStore();
 
-        await store.put("dep_prev", { bundle: btoa("export default { v: 1 }"), manifest: { bindings: [] } });
+        // Bound like the release under test, which the manifest parser gives the `ShardDO` floor.
+        await store.put("dep_prev", {
+            bundle: btoa("export default { v: 1 }"),
+            manifest: { bindings: [{ binding: "SHARD", className: "ShardDO", sqlite: true, type: "durable_object" }] },
+        });
 
         const response = await handleDeployRequest(deployRequest(), {
             backend: backend(),

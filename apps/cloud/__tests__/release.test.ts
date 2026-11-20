@@ -229,6 +229,36 @@ describe("handler: one stable Worker per project", () => {
         expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
     });
 
+    it("leaves a failed release up rather than revert away a class only it binds", async () => {
+        const { deployed, provisioner } = capture();
+        const { store } = memoryReleaseStore();
+
+        await store.put("dep_prev", PREVIOUS);
+
+        const lines = await readLines(
+            await handleDeployRequest(
+                request({
+                    bundle: BUNDLE,
+                    manifest: { bindings: [...PREVIOUS.manifest.bindings, { binding: "ROOMS", className: "Room", sqlite: true, type: "durable_object" }] },
+                    projectId: "proj_1",
+                    scriptName: "app",
+                }),
+                deps(
+                    backendWith({
+                        createDeployment: () => Promise.resolve({ deploymentId: "dep_new", previousDeploymentId: "dep_prev", version: 2 }),
+                    }),
+                    { healthCheck: () => Promise.resolve(false), provisioner, releases: store },
+                ),
+            ),
+        );
+
+        // Traffic reached Room after the cutover; converging the previous release would delete it.
+        expect(deployed.map(({ bundle }) => bundle)).toStrictEqual(["export default { v: 2 }"]);
+        expect(lines).toContainEqual(expect.objectContaining({ deploymentId: "dep_new", event: "not_reverted", reason: expect.stringContaining("Room") }));
+        expect(lines.some((line) => line["event"] === "reverted")).toBe(false);
+        expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
+    });
+
     it("does not re-provision the previous release once the caller refuses the revert", async () => {
         const { deployed, provisioner } = capture();
         const { store } = memoryReleaseStore();

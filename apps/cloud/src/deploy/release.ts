@@ -250,6 +250,13 @@ export const droppedStatefulClasses = (previous: DeployManifest, next: DeployMan
         statefulClassesOf(next).map((bound) => bound.className),
     );
 
+/** The stateful classes retained release `keptId` binds that `next` does not; none when there is no such release. */
+const classesDroppedFrom = async (releases: ReleaseStore, keptId: string | undefined, next: DeployManifest): Promise<string[]> => {
+    const kept = keptId === undefined ? null : await releases.get(keptId);
+
+    return kept ? droppedStatefulClasses(kept.manifest, next) : [];
+};
+
 /**
  * Put a stored release back on the project's stable Worker, with its spec
  * resolved by {@link resolveReleaseSpec}. The admin token is the target
@@ -271,6 +278,15 @@ export const reprovision = async (
         keepClasses?: boolean;
 
         /**
+         * Converge nothing when the release stops binding a stateful class this
+         * other release binds, on a target that drops unbound classes, and resolve
+         * with those classes as `wouldDelete`. A revert passes the failed release:
+         * it was never recorded live, so `keepClasses` cannot see a class it added,
+         * and traffic may have written to that class since the cutover.
+         */
+        keepClassesOf?: string;
+
+        /**
          * Converge only while the alias's live release, if it has one, is one of
          * these. A revert passes the failed release and the one it replaced: any
          * other live release is a newer deploy that already took the Worker.
@@ -278,7 +294,7 @@ export const reprovision = async (
         liveAmong?: ReadonlyArray<string>;
         priority?: number;
     } = {},
-): Promise<{ liveDeploymentId: string | undefined; reprovisioned: boolean }> => {
+): Promise<{ liveDeploymentId: string | undefined; reprovisioned: boolean; wouldDelete?: string[] }> => {
     const { deploymentId, key } = input;
     // Independent reads; `releaseTarget` still authorizes before anything is provisioned.
     const [target, release] = await Promise.all([deps.backend.releaseTarget(input), deps.releases.get(deploymentId)]);
@@ -303,23 +319,28 @@ export const reprovision = async (
         );
     }
 
-    const live =
-        options.keepClasses &&
-        TARGETS[placement.target].dropsUnboundClasses &&
-        target.liveDeploymentId !== undefined &&
-        target.liveDeploymentId !== deploymentId
-            ? await deps.releases.get(target.liveDeploymentId)
-            : null;
+    const dropsUnbound = TARGETS[placement.target].dropsUnboundClasses;
+    const wouldDelete = await classesDroppedFrom(
+        deps.releases,
+        dropsUnbound && options.keepClassesOf !== deploymentId ? options.keepClassesOf : undefined,
+        release.manifest,
+    );
 
-    if (live) {
-        const dropped = droppedStatefulClasses(live.manifest, release.manifest);
+    if (wouldDelete.length > 0) {
+        return { liveDeploymentId: target.liveDeploymentId, reprovisioned: false, wouldDelete };
+    }
 
-        if (dropped.length > 0) {
-            throw new LunoraError(
-                "CONFLICT",
-                `rolling back would delete the data of class(es) ${dropped.join(", ")} (Durable Object storage or Workflow instances), which the target release does not bind; deploy a fix forward instead`,
-            );
-        }
+    const dropped = await classesDroppedFrom(
+        deps.releases,
+        options.keepClasses && dropsUnbound && target.liveDeploymentId !== deploymentId ? target.liveDeploymentId : undefined,
+        release.manifest,
+    );
+
+    if (dropped.length > 0) {
+        throw new LunoraError(
+            "CONFLICT",
+            `rolling back would delete the data of class(es) ${dropped.join(", ")} (Durable Object storage or Workflow instances), which the target release does not bind; deploy a fix forward instead`,
+        );
     }
 
     const bundle = decodeBundle(release.bundle);
