@@ -758,10 +758,21 @@ describe("startCodegenWatch", () => {
             const calls: unknown[] = [];
             const writingSpawner = (): Promise<{ code: number }> => {
                 calls.push(1);
-                writeFileSync(join(workdir, "touched-by-hook.ts"), `// ${String(calls.length)}`, "utf8");
 
                 return Promise.resolve({ code: 0 });
             };
+
+            // The watcher's listener, driven by hand: a real watch reports the hook's write at an unpredictable moment.
+            let emit: ((event: string, filename: string) => void) | undefined;
+
+            vi.mocked(watch).mockImplementationOnce(((_path: string, _options: unknown, listener: (event: string, filename: string) => void) => {
+                emit = listener;
+
+                return { close: () => {} };
+            }) as unknown as typeof watch);
+
+            // Date and timers only: nothing here may wait on real time. Time moves only through advanceTimersByTimeAsync.
+            vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 
             const handle = startCodegenWatch({
                 debounceMs: 0,
@@ -771,9 +782,12 @@ describe("startCodegenWatch", () => {
                 spawner: writingSpawner,
             });
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 400);
-            });
+            await handle.ready;
+
+            // The hook's write reaches the watcher as the hook exits: inside the settle window.
+            emit?.("change", "touched-by-hook.ts");
+            // Past the debounce, short of the 300 ms settle window.
+            await vi.advanceTimersByTimeAsync(250);
 
             // Startup only. Without the settle window this climbs without bound.
             expect(calls).toHaveLength(1);
@@ -795,16 +809,28 @@ describe("startCodegenWatch", () => {
             // forever rather than costing one extra run.
             const workdir = projectWithPostCodegen();
             const calls: unknown[] = [];
+            const hookWrote = Promise.withResolvers<undefined>();
+            const finishHook = Promise.withResolvers<undefined>();
             const slowWritingSpawner = async (): Promise<{ code: number }> => {
                 calls.push(1);
-                writeFileSync(join(workdir, "touched-by-hook.ts"), `// ${String(calls.length)}`, "utf8");
+                hookWrote.resolve(undefined);
 
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 500);
-                });
+                await finishHook.promise;
 
                 return { code: 0 };
             };
+
+            // The watcher's listener, driven by hand: a real watch reports the hook's write at an unpredictable moment.
+            let emit: ((event: string, filename: string) => void) | undefined;
+
+            vi.mocked(watch).mockImplementationOnce(((_path: string, _options: unknown, listener: (event: string, filename: string) => void) => {
+                emit = listener;
+
+                return { close: () => {} };
+            }) as unknown as typeof watch);
+
+            // Date and timers only: nothing here may wait on real time. Time moves only through advanceTimersByTimeAsync.
+            vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 
             const handle = startCodegenWatch({
                 debounceMs: 0,
@@ -818,9 +844,13 @@ describe("startCodegenWatch", () => {
             // leaving the watcher live on a failed assertion hangs the whole run
             // rather than reporting one red test.
             try {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 1500);
-                });
+                await hookWrote.promise;
+                // The hook writes while it is still running, then keeps running.
+                emit?.("change", "touched-by-hook.ts");
+                await vi.advanceTimersByTimeAsync(250);
+                finishHook.resolve(undefined);
+                await handle.ready;
+                await vi.advanceTimersByTimeAsync(250);
 
                 expect(calls).toHaveLength(1);
             } finally {
