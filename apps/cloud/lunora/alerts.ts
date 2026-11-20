@@ -385,9 +385,13 @@ export const markDelivered = internalMutation
         return { delivered: ids.length };
     });
 
+/** Every one of the org's rules on one event target: a single page stops at 1000, and a rule past it never fired. */
+const allEventRules = async (context: MutationContext, organizationId: Id<"organizations">, target: "deploy" | "spend"): Promise<AlertRuleRow[]> =>
+    collectAll<AlertRuleRow>((cursor) => context.db.alertRules.findMany({ cursor, where: { organizationId, target } }));
+
 /** The org's enabled rules on one event target, shaped for the firing helpers. */
 const enabledEventRules = async (context: MutationContext, organizationId: Id<"organizations">, target: "deploy" | "spend"): Promise<EventRule[]> => {
-    const { page } = await context.db.alertRules.findMany({ where: { organizationId, target } });
+    const page = await allEventRules(context, organizationId, target);
 
     return page
         .filter((rule) => rule.enabled)
@@ -589,7 +593,7 @@ const DEFAULT_SPEND_RULE_NAME = "Spend warnings (default)";
  * explicit choice and is left alone.
  */
 const spendRulesFor = async (context: MutationContext, organizationId: Id<"organizations">): Promise<EventRule[]> => {
-    const { page } = await context.db.alertRules.findMany({ where: { organizationId, target: "spend" } });
+    const page = await allEventRules(context, organizationId, "spend");
 
     if (page.length > 0) {
         return page

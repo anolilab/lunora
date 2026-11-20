@@ -27,7 +27,7 @@ const fakeContext = (
 ): { context: MutationContext; insert: typeof insert } => {
     return {
         context: {
-            db: { alertRules: { findMany: () => Promise.resolve({ page: rules }) }, insert },
+            db: { alertRules: { findMany: () => Promise.resolve({ continueCursor: null, isDone: true, page: rules }) }, insert },
             now: 1_700_000_000_000,
         } as unknown as MutationContext,
         insert,
@@ -50,6 +50,23 @@ describe(fireDeployAlerts, () => {
             "alerts",
             expect.objectContaining({ channel: "slack", destination: "https://hooks.slack.com/x", hash: "build:b1", status: "firing", target: "deploy" }),
         );
+    });
+
+    it("fires the rules past the first page of an organization's rules", async () => {
+        const insert = vi.fn<InsertSpy>(() => Promise.resolve("alert1"));
+        const pages: Record<string, { continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }> = {
+            first: { continueCursor: "page2", isDone: false, page: [rule({ _id: "rule1" })] },
+            page2: { continueCursor: null, isDone: true, page: [rule({ _id: "rule2", destination: "https://hooks.slack.com/y" })] },
+        };
+        const context = {
+            db: { alertRules: { findMany: ({ cursor }: { cursor: null | string }) => Promise.resolve(pages[cursor ?? "first"]) }, insert },
+            now: 1_700_000_000_000,
+        } as unknown as MutationContext;
+
+        await expect(
+            fireDeployAlerts(context, "org1" as never, "build:b1", { detail: "x", kind: "build", project: "Acme", reference: "main@abc" }),
+        ).resolves.toBe(2);
+        expect(insert).toHaveBeenCalledWith("alerts", expect.objectContaining({ destination: "https://hooks.slack.com/y" }));
     });
 
     it("skips a disabled rule", async () => {
