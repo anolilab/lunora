@@ -1,3 +1,7 @@
+## @lunora/sql-store [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.237...@lunora/sql-store@1.0.0-alpha.238) (2026-11-20)
+
+- fix(sql-store): read the pre-write snapshot of a global write from the primary (#1632)
+
 ## @lunora/sql-store [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.236...@lunora/sql-store@1.0.0-alpha.237) (2026-11-09)
 
 - feat(cli): apply generated SQL migrations per stage (#1516)
