@@ -2,7 +2,7 @@ import { BoundedCache } from "../../plans/bounded-cache";
 import type { PlanFacts } from "../../plans/plan-facts";
 import { normalizeFacts } from "../../plans/plan-facts";
 import type { PlanResolverOptions } from "../../plans/plan-resolver";
-import { LOOKUP_FAILURE_BACKOFF_MS, PLAN_LOOKUP_TIMEOUT_MS } from "../../plans/plan-resolver";
+import { CUSTOM_DOMAIN_CACHE_TTL_MS, LOOKUP_FAILURE_BACKOFF_MS, PLAN_LOOKUP_TIMEOUT_MS } from "../../plans/plan-resolver";
 import readJson from "../../read-json";
 
 /**
@@ -115,7 +115,7 @@ const toCustomDomainRoute = (data: unknown): CustomDomainRoute | null => {
 export const createCustomDomainResolver = (options: PlanResolverOptions): ((hostname: string) => Promise<CustomDomainRoute | null>) => {
     const fetchImpl = options.fetch ?? fetch;
     const now = options.now ?? Date.now;
-    const ttl = options.ttlMs ?? 60_000;
+    const ttl = options.ttlMs ?? CUSTOM_DOMAIN_CACHE_TTL_MS;
     const timeoutMs = options.lookupTimeoutMs ?? PLAN_LOOKUP_TIMEOUT_MS;
     const cache = new BoundedCache<{ expires: number; route: CustomDomainRoute | null }>();
     let lastFailureAt: number | undefined;

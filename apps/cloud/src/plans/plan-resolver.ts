@@ -85,6 +85,16 @@ export const ALIAS_RECLAIM_COOLDOWN_MS = PLAN_CACHE_TTL_MS + PLAN_STALE_GRACE_MS
  */
 export const PLAN_LOOKUP_TIMEOUT_MS = 5000;
 
+/** How long the dispatcher's isolate cache keeps a custom-domain answer before asking again. */
+export const CUSTOM_DOMAIN_CACHE_TTL_MS = 60_000;
+
+/**
+ * How long a newly added custom domain stays unrouted: the longest a dispatcher may still hold
+ * an answer it read for the hostname's previous owner (a lookup in flight at the removal, then
+ * the TTL from its reply). Routed sooner, a reassigned hostname reaches the old tenant's Worker.
+ */
+export const CUSTOM_DOMAIN_ROUTE_HOLD_MS = PLAN_LOOKUP_TIMEOUT_MS + CUSTOM_DOMAIN_CACHE_TTL_MS;
+
 /**
  * After a failed control-plane lookup, skip further lookups for this long when a store is bound.
  * The backoff is per control plane, not per script: during an outage every script would otherwise

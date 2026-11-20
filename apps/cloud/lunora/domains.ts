@@ -6,6 +6,7 @@ import { domainNotificationDetail } from "../src/domains/check";
 import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
 import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
 import { domainTxtToken, normalizeHostname, TXT_PREFIX } from "../src/domains/verify";
+import { CUSTOM_DOMAIN_ROUTE_HOLD_MS } from "../src/plans/plan-resolver";
 import type { TargetId } from "../src/provision-contract";
 import { storedTarget, TARGETS } from "../src/provision-contract";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
@@ -431,6 +432,13 @@ export const routeForHostname = query
             const domain = page[0];
 
             if (domain?.verifiedAt == null) {
+                return null;
+            }
+
+            // A dispatcher may still route this hostname to its previous owner's Worker from
+            // cache. Answering for the new row before that expires would not replace it, and a
+            // `null` now is cached no longer than that answer would have been.
+            if (context.now - domain.createdAt < CUSTOM_DOMAIN_ROUTE_HOLD_MS) {
                 return null;
             }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { add, addProven, markVerified, remove, routeForHostname } from "../lunora/domains";
 import { domainTxtToken } from "../src/domains/verify";
+import { CUSTOM_DOMAIN_ROUTE_HOLD_MS } from "../src/plans/plan-resolver";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
@@ -198,7 +199,7 @@ describe("domains.markVerified", () => {
 
 describe("domains.routeForHostname", () => {
     const verified = (over: Row = {}): Row => {
-        return { _id: "dom_1", hostname: "app.example.com", organizationId: ORG, projectId: PROJECT, verifiedAt: 1, ...over };
+        return { _id: "dom_1", createdAt: 1, hostname: "app.example.com", organizationId: ORG, projectId: PROJECT, verifiedAt: 1, ...over };
     };
 
     it("answers null for an unverified domain, whatever it points at", async () => {
@@ -218,6 +219,18 @@ describe("domains.routeForHostname", () => {
         await expect(routeForHostname.handler(ctx, { hostname: "  APP.Example.COM " })).resolves.toMatchObject({
             redirectTo: "https://elsewhere.example",
         });
+    });
+
+    it("holds a newly added domain unrouted until a dispatcher's answer for its previous owner has expired", async () => {
+        const addedAt = 1_000_000;
+        const route = async (now: number) =>
+            routeForHostname.handler(
+                makeCtx({ ...world(), domains: [verified({ createdAt: addedAt, redirectTo: "https://elsewhere.example" })] }, { now }).ctx,
+                { hostname: "app.example.com" },
+            );
+
+        await expect(route(addedAt + CUSTOM_DOMAIN_ROUTE_HOLD_MS - 1)).resolves.toBeNull();
+        await expect(route(addedAt + CUSTOM_DOMAIN_ROUTE_HOLD_MS)).resolves.toMatchObject({ redirectTo: "https://elsewhere.example" });
     });
 
     it("answers null for a hostname nobody has claimed", async () => {
