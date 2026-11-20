@@ -1,3 +1,7 @@
+## @lunora/config [1.0.0-alpha.469](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.468...@lunora/config@1.0.0-alpha.469) (2026-11-20)
+
+- feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
+
 ## @lunora/config [1.0.0-alpha.468](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.467...@lunora/config@1.0.0-alpha.468) (2026-11-20)
 
 - feat(cli): run lunora dev on the Node target (#1551) (#1621)

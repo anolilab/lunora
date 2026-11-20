@@ -1,3 +1,7 @@
+## @lunora/queue [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.144...@lunora/queue@1.0.0-alpha.145) (2026-11-20)
+
+- feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
+
 ## @lunora/queue [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.143...@lunora/queue@1.0.0-alpha.144) (2026-11-18)
 
 - Updated dependency @lunora/platform@1.0.0-alpha.81

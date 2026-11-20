@@ -1,3 +1,7 @@
+## @lunora/bindings [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.152...@lunora/bindings@1.0.0-alpha.153) (2026-11-20)
+
+- feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
+
 ## @lunora/bindings [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.151...@lunora/bindings@1.0.0-alpha.152) (2026-11-18)
 
 - Updated dependency @lunora/platform@1.0.0-alpha.81

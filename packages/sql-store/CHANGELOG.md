@@ -1,3 +1,7 @@
+## @lunora/sql-store [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.238...@lunora/sql-store@1.0.0-alpha.239) (2026-11-20)
+
+- feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
+
 ## @lunora/sql-store [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.237...@lunora/sql-store@1.0.0-alpha.238) (2026-11-20)
 
 - fix(sql-store): read the pre-write snapshot of a global write from the primary (#1632)

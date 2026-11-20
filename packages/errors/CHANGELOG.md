@@ -1,3 +1,7 @@
+## @lunora/errors [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.91...@lunora/errors@1.0.0-alpha.92) (2026-11-20)
+
+- feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
+
 ## @lunora/errors [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.90...@lunora/errors@1.0.0-alpha.91) (2026-11-14)
 
 - security(scheduler): sign the timestamp and forwarded identity on dispatch (#1541)

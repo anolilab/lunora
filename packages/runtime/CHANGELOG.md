@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.292...@lunora/runtime@1.0.0-alpha.293) (2026-11-20)
+
+- feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
+
 ## @lunora/runtime [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.291...@lunora/runtime@1.0.0-alpha.292) (2026-11-18)
 
 - Updated dependency @lunora/platform@1.0.0-alpha.81

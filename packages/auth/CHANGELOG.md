@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.267...@lunora/auth@1.0.0-alpha.268) (2026-11-20)
+
+- feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
+
 ## @lunora/auth [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.266...@lunora/auth@1.0.0-alpha.267) (2026-11-16)
 
 - fix(auth): name the user whose session an admin revoked (#1604)

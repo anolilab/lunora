@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.428](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.427...@lunora/codegen@1.0.0-alpha.428) (2026-11-20)
+
+- feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
+
 ## @lunora/codegen [1.0.0-alpha.427](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.426...@lunora/codegen@1.0.0-alpha.427) (2026-11-20)
 
 - feat(platform-node): deliver mail on the Node target (#1551) (#1624)

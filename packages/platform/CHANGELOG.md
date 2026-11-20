@@ -1,3 +1,7 @@
+## @lunora/platform [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.82...@lunora/platform@1.0.0-alpha.83) (2026-11-20)
+
+- feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
+
 ## @lunora/platform [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.81...@lunora/platform@1.0.0-alpha.82) (2026-11-20)
 
 - feat(platform-node): deliver mail on the Node target (#1551) (#1624)
