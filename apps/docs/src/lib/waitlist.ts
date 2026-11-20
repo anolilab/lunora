@@ -7,7 +7,6 @@ import { readWaitlistBody } from "./waitlist-body";
 interface WaitlistDependencies {
     fetcher?: typeof fetch;
     limiter: Pick<RateLimit, "limit">;
-    /** Only the text read of `KVNamespace.get`, whose overloads a test double cannot otherwise satisfy. */
     store: Pick<KVNamespace, "put">;
     turnstileSecret: string;
     /** Resolves after `ms`; injected so tests need not wait out the KV cooldown. */
