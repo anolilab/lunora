@@ -1,7 +1,9 @@
 import { LunoraError } from "@lunora/server";
 
-import type { Doc as Document_ } from "./_generated/dataModel";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
+import type { MemberRole } from "./authz";
 import { assertMember, assertRoleForUser, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -26,6 +28,49 @@ export const roleForUser = internalQuery
     });
 
 type MemberRow = Document_<"members">;
+
+/** Whether `organizationId` has at least `count` owners. */
+const hasOwners = async (context: MutationContext, organizationId: Id<"organizations">, count: number): Promise<boolean> => {
+    const { page } = await context.db.members.findMany({ limit: count, where: { organizationId, role: "owner" } });
+
+    return page.length >= count;
+};
+
+/**
+ * Give owner `memberId` the non-owner `role`, unless that leaves `organizationId`
+ * without an owner, refused as `CONFLICT` with `refusal`.
+ *
+ * The tables are `.global()` (D1): every write commits alone, so a count read
+ * before the write cannot hold. Two owners demoting or removing each other would
+ * both see two owners and both succeed. The owners are therefore read again
+ * AFTER the demotion is written, and a demotion that finds none left is undone
+ * and refused. When racing demotions would take every owner, the last re-read
+ * runs after all of them are written, so it finds an owner only if another one
+ * was already undone: they may all be refused, but never all kept. A Worker dying
+ * between a demotion and its undo leaves the organization ownerless, which
+ * `operatorPromoteOwner` resolves.
+ * @throws {LunoraError} `CONFLICT` when no other owner would remain.
+ */
+const demoteOwner = async (
+    context: MutationContext,
+    organizationId: Id<"organizations">,
+    memberId: Id<"members">,
+    role: Exclude<MemberRole, "owner">,
+    refusal: string,
+): Promise<void> => {
+    // The common refusal, with nothing written.
+    if (!(await hasOwners(context, organizationId, 2))) {
+        throw new LunoraError("CONFLICT", refusal);
+    }
+
+    await context.db.patch("members", memberId, { role });
+
+    if (!(await hasOwners(context, organizationId, 1))) {
+        await context.db.patch("members", memberId, { role: "owner" });
+
+        throw new LunoraError("CONFLICT", refusal);
+    }
+};
 
 /** List an organization's members. Any member may view the roster. */
 export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<MemberRow[]> => {
@@ -53,11 +98,8 @@ export const remove = mutation
                 throw new LunoraError("FORBIDDEN", "only an owner can remove an owner");
             }
 
-            const { page } = await context.db.members.findMany({ where: { organizationId } });
-
-            if (page.filter((member) => member.role === "owner").length <= 1) {
-                throw new LunoraError("CONFLICT", "cannot remove the last owner");
-            }
+            // Viewer, the least access, is what a removal cut short before its delete leaves behind.
+            await demoteOwner(context, organizationId, id, "viewer", "cannot remove the last owner");
         }
 
         await context.db.delete("members", id);
@@ -107,16 +149,10 @@ export const setRole = mutation
             throw new LunoraError("NOT_FOUND", "member not found in this organization");
         }
 
-        if (target.role === "owner" && newRole !== "owner") {
-            const { page } = await context.db.members.findMany({ where: { organizationId } });
-            const owners = page.filter((member) => member.role === "owner");
+        await (target.role === "owner" && newRole !== "owner"
+            ? demoteOwner(context, organizationId, id, newRole, "cannot demote the last owner")
+            : context.db.patch("members", id, { role: newRole }));
 
-            if (owners.length <= 1) {
-                throw new LunoraError("CONFLICT", "cannot demote the last owner");
-            }
-        }
-
-        await context.db.patch("members", id, { role: newRole });
         await context.db.insert("auditLog", {
             action: "member.set-role",
             actorUserId: caller.userId,
