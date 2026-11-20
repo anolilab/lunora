@@ -124,7 +124,7 @@ export const handleHostdRolloutRoute = async (request: Request, environment: Hos
         return jsonError(503, "rollouts need BOX_SESSION, DB and LUNORA_ORIGIN_URL");
     }
 
-    const body = (await request.json().catch(() => null)) as null | RolloutBody;
+    const body: RolloutBody | undefined = await readJsonObject(request);
     const listed: unknown[] | undefined = Array.isArray(body?.boxIds) ? (body.boxIds as unknown[]) : undefined;
     const boxIds = listed?.every((id): id is string => typeof id === "string") ? listed : undefined;
 

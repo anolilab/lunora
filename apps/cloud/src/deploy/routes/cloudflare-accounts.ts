@@ -21,7 +21,7 @@ import { encryptSecret } from "../../secrets/crypto";
 import { inspectAccount, isCloudflareAccountId } from "../../targets/cloudflare-workers/api";
 import { orgAdminEmails } from "../../telemetry/recipients";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
+import { jsonError, readJsonObject, rejected, requireContext } from "./shared";
 
 /** The request body, untrusted. */
 interface ConnectBody {
@@ -39,8 +39,8 @@ const MAX_TOKEN_LENGTH = 512;
 const MAX_LABEL_LENGTH = 128;
 
 /** The body's fields, typed, or `undefined` when one is missing or malformed. */
-const parseBody = (raw: unknown): undefined | { accountId: unknown; id?: string; label: string; organizationId: string; token: string } => {
-    const body = (raw ?? {}) as ConnectBody;
+const parseBody = (raw: ConnectBody | undefined): undefined | { accountId: unknown; id?: string; label: string; organizationId: string; token: string } => {
+    const body = raw ?? {};
     const { id, label, organizationId, token } = body;
     const validToken = typeof token === "string" && token.length > 0 && token.length <= MAX_TOKEN_LENGTH;
     const validLabel = label === undefined || (typeof label === "string" && label.length <= MAX_LABEL_LENGTH);
@@ -59,7 +59,7 @@ export const handleCloudflareAccountConnectRoute = async (request: Request, envi
         return jsonError(500, "SECRET_ENCRYPTION_KEY not configured");
     }
 
-    const body = parseBody(await request.json().catch(() => null));
+    const body = parseBody(await readJsonObject(request));
 
     if (body === undefined) {
         return jsonError(400, "organizationId, accountId and token are required");
@@ -132,7 +132,7 @@ export const handleCloudflareAlertRecipientsRoute = async (
     adminEmails: AdminEmails = defaultAdminEmails,
 ): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as { organizationId?: unknown } | null;
+    const body = await readJsonObject(request);
 
     if (typeof body?.organizationId !== "string") {
         return jsonError(400, "organizationId is required");

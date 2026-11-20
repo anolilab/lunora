@@ -81,7 +81,7 @@ export const handleTenantPlanRoute = async (request: Request, environment: Route
  */
 export const handleTenantRecursionRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as null | { depth?: unknown; scriptName?: unknown };
+    const body = await readJsonObject(request);
 
     if (typeof body?.scriptName !== "string" || body.scriptName === "" || typeof body.depth !== "number") {
         return jsonError(400, "scriptName and depth are required");

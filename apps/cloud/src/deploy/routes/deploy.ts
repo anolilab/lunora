@@ -16,7 +16,7 @@ import { api } from "../../../lunora/_generated/api";
 import { internal } from "../../../lunora/_generated/internal";
 import { captureServerEvent } from "../../analytics/capture";
 import { dispatchBuilds, runBuildStage } from "../../builds/control-plane";
-import type { BuildJob, BuildStage } from "../../builds/runner-job";
+import type { BuildJob } from "../../builds/runner-job";
 import { runtimeColumn, storedRuntime } from "../../project-runtime";
 import type { DeployKind } from "../../provision-contract";
 import type { EncryptedSecret } from "../../secrets/select";
@@ -344,15 +344,22 @@ export const createDeployRoutes = (
          * body is the runner's own.
          */
         handleBuildRunRoute: async (request, environment) => {
-            const body = (await request.json().catch(() => null)) as null | { job?: BuildJob; stage?: BuildStage };
+            const body = await readJsonObject(request);
+            const job: unknown = body?.["job"];
+            const stage: unknown = body?.["stage"];
 
-            if (!body?.job || (body.stage !== "build" && body.stage !== "build-interrupted" && body.stage !== "release" && body.stage !== "interrupted")) {
+            if (
+                typeof job !== "object" ||
+                job === null ||
+                (stage !== "build" && stage !== "build-interrupted" && stage !== "release" && stage !== "interrupted")
+            ) {
                 return jsonError(400, "job and stage are required");
             }
 
             const context = requireContext(environment);
 
-            return Response.json(await runBuildStage({ context, deploy: deployDeps(context, environment, pacer), environment }, body.job, body.stage));
+            // The job is the runner's own, handed back unchanged on an admin-token call; only its shape is checked here.
+            return Response.json(await runBuildStage({ context, deploy: deployDeps(context, environment, pacer), environment }, job as BuildJob, stage));
         },
         handleDeployRoute,
         // POST /v1/deployments/rollback — the CLI's rollback, deploy-key authorized.

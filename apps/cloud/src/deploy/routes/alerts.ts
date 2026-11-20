@@ -18,7 +18,7 @@ import { controlPlaneDatabase } from "../../d1-store";
 import { deliverAlert } from "../../mail/notify";
 import { ORG_ADMINS_DESTINATION, orgAdminEmails } from "../../telemetry/recipients";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
+import { jsonError, readJsonObject, rejected, requireContext } from "./shared";
 
 /** What the route sends with and resolves recipients through; real by default, faked in tests. */
 export interface AlertTestDeps {
@@ -37,7 +37,7 @@ const defaultDeps: AlertTestDeps = {
 
 /** `POST /v1/alerts/test` with `{ organizationId, ruleId }`: `{ ok: true, recipients? }`, or the send's error. */
 export const handleAlertTestRoute = async (request: Request, environment: RouterEnv, deps: AlertTestDeps = defaultDeps): Promise<Response> => {
-    const body = (await request.json().catch(() => null)) as null | { organizationId?: unknown; ruleId?: unknown };
+    const body = await readJsonObject(request);
 
     if (typeof body?.organizationId !== "string" || typeof body.ruleId !== "string") {
         return jsonError(400, "organizationId and ruleId are required");

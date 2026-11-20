@@ -2,7 +2,7 @@ import { internal } from "../../../lunora/_generated/internal";
 import type { EraseUserResult, SoleOwnedOrganization } from "../../../lunora/account";
 import { currentAuth } from "../../auth";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
+import { jsonError, readJsonObject, rejected, requireContext } from "./shared";
 
 /** The slice of better-auth's database adapter the profile read uses. */
 export interface AuthRecordReader {
@@ -106,7 +106,7 @@ export const handleAccountExportRoute = async (request: Request, environment: Ro
  */
 export const handleAccountEraseRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as null | { check?: unknown; operator?: unknown; userId?: unknown };
+    const body = await readJsonObject(request);
 
     if (typeof body?.userId !== "string" || body.userId === "") {
         return jsonError(400, "userId is required");
@@ -172,7 +172,7 @@ export const handleAccountEraseRoute = async (request: Request, environment: Rou
  */
 export const handleOwnerPromoteRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as null | { organizationId?: unknown; userId?: unknown };
+    const body = await readJsonObject(request);
 
     if (typeof body?.organizationId !== "string" || body.organizationId === "" || typeof body.userId !== "string" || body.userId === "") {
         return jsonError(400, "organizationId and userId are required");
