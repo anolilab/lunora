@@ -6,6 +6,7 @@
  * path — without importing any Cloudflare types into `@lunora/mail`.
  */
 import { LunoraError } from "@lunora/errors";
+import { encodeWire } from "@lunora/wire";
 
 import { getAppJurisdiction } from "../../../../shared/app-jurisdiction";
 
@@ -78,8 +79,8 @@ const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: Durable
 interface PostShardRpcOptions {
     /** Admin bearer authorizing the shard RPC. */
     adminToken: string;
-    /** The JSON-serialisable RPC envelope (`{ args, functionPath, shardKey? }`). */
-    envelope: unknown;
+    /** The RPC envelope; `args` is wire-encoded on the way out, the rest is sent as plain JSON. */
+    envelope: { args: unknown; functionPath: string; shardKey?: string };
     /** Diagnostic prefix for failure errors (e.g. the caller + target function). */
     label: string;
     /** Shard the RPC targets. */
@@ -103,7 +104,11 @@ interface PostShardRpcOptions {
 const postShardRpc = async (namespace: ShardNamespaceLike, options: PostShardRpcOptions): Promise<unknown> => {
     const stub = namespace.get(namespace.idFromName(options.shardKey));
     const response = await stub.fetch("https://shard.internal/rpc", {
-        body: JSON.stringify(options.envelope),
+        // The shard wire-decodes `args`, and they carry attacker-controlled mail
+        // content: unencoded, an array shaped like a wire tag (say a `to` list)
+        // would reach the target function as a bigint, Date or bytes. Encoding
+        // escapes such arrays, so the function receives exactly what was sent.
+        body: JSON.stringify({ ...options.envelope, args: encodeWire(options.envelope.args) }),
         headers: {
             authorization: `Bearer ${options.adminToken}`,
             "content-type": "application/json",
