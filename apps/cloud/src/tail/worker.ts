@@ -45,6 +45,48 @@ const trimTrailingSlash = (base: string): string => {
 };
 
 /**
+ * Serialized-body budget per `POST /v1/logs/tail`. The route refuses a body past
+ * 16 MiB whole, before ingesting any batch, so a busy flush is split well under it.
+ */
+const MAX_TAIL_POST_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Group serialized batches into POST bodies of at most {@link MAX_TAIL_POST_BYTES}
+ * UTF-8 bytes, so one oversized flush no longer loses every batch in it. A batch
+ * alone over the budget still goes, on its own: splitting a script's lines further
+ * is `parse.ts`'s job, and the route's cap is twice this budget.
+ */
+const chunkSerializedBatches = (batches: ReadonlyArray<unknown>): string[][] => {
+    const encoder = new TextEncoder();
+    // `{"batches":[` + `]}`.
+    const envelope = 14;
+    const chunks: string[][] = [];
+    let current: string[] = [];
+    let size = envelope;
+
+    for (const batch of batches) {
+        const json = JSON.stringify(batch);
+        // The comma that joins it to the previous batch.
+        const bytes = encoder.encode(json).byteLength + 1;
+
+        if (current.length > 0 && size + bytes > MAX_TAIL_POST_BYTES) {
+            chunks.push(current);
+            current = [];
+            size = envelope;
+        }
+
+        size += bytes;
+        current.push(json);
+    }
+
+    if (current.length > 0) {
+        chunks.push(current);
+    }
+
+    return chunks;
+};
+
+/**
  * Forward one grouped tail batch to the control plane, or do nothing when tail
  * streaming isn't configured. Returns the in-flight send for `waitUntil`, or nothing when there was
  * nothing to send.
@@ -70,32 +112,30 @@ const forwardTailBatches = (events: TailTraceItem[], environment: TailEnv): Prom
     }
 
     const url = `${trimTrailingSlash(base)}/v1/logs/tail`;
-    const init = { body: JSON.stringify({ batches }), headers: { "content-type": "application/json", "x-lunora-tail-secret": secret }, method: "POST" };
+    const headers = { "content-type": "application/json", "x-lunora-tail-secret": secret };
     // A network error, 429 or 5xx means the route stored nothing (it counts a failing batch
     // in `failed` and answers 200), so one more try cannot duplicate lines. A sync `fetch`
     // throw (a malformed URL) lands in the same catch.
-    const send = async (): Promise<Error | Response> => {
+    const send = async (body: string): Promise<Error | Response> => {
         try {
-            return await fetch(url, init);
+            return await fetch(url, { body, headers, method: "POST" });
         } catch (error) {
             return error instanceof Error ? error : new Error(String(error));
         }
     };
     const retryable = (outcome: Error | Response): boolean => outcome instanceof Error || outcome.status === 429 || outcome.status >= 500;
 
-    // Never rejects, so nothing surfaces to (or back-pressures) the tailed tenant
-    // workers. A tail invocation cannot be replayed, so a loss is only written to this
-    // worker's own logs, where an operator can see the ingest is refusing.
-    return (async () => {
-        let outcome = await send();
+    const post = async (chunk: string[]): Promise<void> => {
+        const body = `{"batches":[${chunk.join(",")}]}`;
+        let outcome = await send(body);
 
         if (retryable(outcome)) {
-            outcome = await send();
+            outcome = await send(body);
         }
 
         const lost = (reason: string): void => {
             // eslint-disable-next-line no-console -- the tail worker's own Workers Logs are the only place a lost flush can be seen
-            console.error("[tail]", `log lines of ${String(batches.length)} batches not stored: ${reason}`);
+            console.error("[tail]", `log lines of ${String(chunk.length)} batches not stored: ${reason}`);
         };
 
         if (outcome instanceof Error) {
@@ -114,7 +154,18 @@ const forwardTailBatches = (events: TailTraceItem[], environment: TailEnv): Prom
 
         if (typeof summary?.failed === "number" && summary.failed > 0) {
             // eslint-disable-next-line no-console -- as above
-            console.error("[tail]", `${String(summary.failed)} of ${String(batches.length)} log batches were refused by the ingest`);
+            console.error("[tail]", `${String(summary.failed)} of ${String(chunk.length)} log batches were refused by the ingest`);
+        }
+    };
+
+    // Never rejects, so nothing surfaces to (or back-pressures) the tailed tenant
+    // workers. A tail invocation cannot be replayed, so a loss is only written to this
+    // worker's own logs, where an operator can see the ingest is refusing. The POSTs go
+    // one after another so a busy flush holds one body in flight, not all of them.
+    return (async () => {
+        for (const chunk of chunkSerializedBatches(batches)) {
+            // eslint-disable-next-line no-await-in-loop -- one body in flight at a time bounds the worker's memory and the ingest's load
+            await post(chunk);
         }
     })();
 };

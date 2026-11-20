@@ -72,4 +72,45 @@ describe("the tail worker's flush", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(error).toHaveBeenCalledWith("[tail]", "1 of 1 log batches were refused by the ingest");
     });
+
+    it("splits a flush past the route's body cap into bodies under 8 MiB, each sent on its own", async () => {
+        // Six scripts of about 3 MiB each: one 18 MiB body would be refused whole.
+        const message = "x".repeat(64 * 1024);
+        const line = JSON.stringify({ level: "info", message, source: "lunora", ts: 1, type: "log" });
+        const big = ["a", "b", "c", "d", "e", "f"].map((script) => {
+            return {
+                logs: Array.from({ length: 48 }, () => {
+                    return { message: [line] };
+                }),
+                scriptName: `${script}-v1`,
+            };
+        });
+        const bodies: string[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+            bodies.push(typeof init?.body === "string" ? init.body : "");
+
+            return bodies.length === 1 ? Response.json({ failed: 0, ingested: 2, scripts: 2 }) : new Response("invalid tail secret", { status: 403 });
+        });
+        const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const pending: Promise<unknown>[] = [];
+
+        vi.stubGlobal("fetch", fetchMock);
+        await tailWorker.tail(big, environment, { waitUntil: (promise) => pending.push(promise) });
+        await Promise.all(pending);
+
+        expect(bodies).toHaveLength(3);
+
+        const sent = bodies.flatMap((body) => {
+            expect(new TextEncoder().encode(body).byteLength).toBeLessThanOrEqual(8 * 1024 * 1024);
+
+            return (JSON.parse(body) as { batches: { scriptName: string }[] }).batches.map((batch) => batch.scriptName);
+        });
+
+        expect(sent).toStrictEqual(["a-v1", "b-v1", "c-v1", "d-v1", "e-v1", "f-v1"]);
+        // The stored body is not reported; each refused one is, with its own batch count.
+        expect(error.mock.calls).toStrictEqual([
+            ["[tail]", "log lines of 2 batches not stored: HTTP 403"],
+            ["[tail]", "log lines of 2 batches not stored: HTTP 403"],
+        ]);
+    });
 });
