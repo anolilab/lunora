@@ -183,6 +183,14 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
     private readonly reportBudgets = new WeakMap<SessionSocket, { count: number; minute: number }>();
 
     /**
+     * The frame of each socket that is still being handled. Frames of one socket run one at a
+     * time, in arrival order: each reads the attachment before awaiting D1 and writes it after,
+     * so two interleaved auth frames could both consume one challenge and replay the box's
+     * desired release twice. In memory is enough: a hibernated object has no frame in flight.
+     */
+    private readonly frameQueues = new WeakMap<SessionSocket, Promise<void>>();
+
+    /**
      * The box's WebSocket upgrade (`GET /v1/boxes/connect?box={id}`, forwarded
      * as is). Remembers which box this object is, for the liveness tick.
      */
@@ -204,37 +212,15 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
 
     /** One frame from a box. */
     public override async webSocketMessage(socket: SessionSocket, message: ArrayBuffer | string): Promise<void> {
-        const attachment = attachmentOf(socket);
-        const database = this.database();
+        const previous = this.frameQueues.get(socket) ?? Promise.resolve();
+        const handled = previous.then(async () => this.handleFrame(socket, message));
 
-        // A refused socket's last frames, in flight before the close lands, count for nothing.
-        if (attachment.closed === true) {
-            return;
-        }
+        this.frameQueues.set(
+            socket,
+            handled.catch(() => undefined),
+        );
 
-        if (database === undefined) {
-            refuseSocket(socket, "UNAVAILABLE", "this control plane cannot accept boxes right now");
-
-            return;
-        }
-
-        const now = Date.now();
-        const { attachment: next, effects } = await receiveFrame(attachment, message, now, {
-            loadBox: async (boxId) => sessionBoxOf(await loadBox(database, boxId)),
-        });
-
-        // Refused (a revoke, the liveness tick) while the frame awaited D1: writing `next`
-        // would clear `closed` and make the socket ready again, so the frame is dropped.
-        if (attachmentOf(socket).closed === true) {
-            return;
-        }
-
-        socket.serializeAttachment(next);
-
-        for (const effect of effects) {
-            // eslint-disable-next-line no-await-in-loop -- effects are ordered: a challenge before anything that follows it
-            await this.apply(socket, next, effect, database, now);
-        }
+        await handled;
     }
 
     /** The box's socket closed. */
@@ -494,6 +480,41 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
         }
 
         return new Response(null, { status: 101, webSocket: client });
+    }
+
+    /** One frame, after every earlier frame of its socket. */
+    private async handleFrame(socket: SessionSocket, message: ArrayBuffer | string): Promise<void> {
+        const attachment = attachmentOf(socket);
+        const database = this.database();
+
+        // A refused socket's last frames, in flight before the close lands, count for nothing.
+        if (attachment.closed === true) {
+            return;
+        }
+
+        if (database === undefined) {
+            refuseSocket(socket, "UNAVAILABLE", "this control plane cannot accept boxes right now");
+
+            return;
+        }
+
+        const now = Date.now();
+        const { attachment: next, effects } = await receiveFrame(attachment, message, now, {
+            loadBox: async (boxId) => sessionBoxOf(await loadBox(database, boxId)),
+        });
+
+        // Refused (a revoke, the liveness tick) while the frame awaited D1: writing `next`
+        // would clear `closed` and make the socket ready again, so the frame is dropped.
+        if (attachmentOf(socket).closed === true) {
+            return;
+        }
+
+        socket.serializeAttachment(next);
+
+        for (const effect of effects) {
+            // eslint-disable-next-line no-await-in-loop -- effects are ordered: a challenge before anything that follows it
+            await this.apply(socket, next, effect, database, now);
+        }
     }
 
     private async apply(socket: SessionSocket, attachment: SessionAttachment, effect: SessionEffect, database: ControlPlaneStore, now: number): Promise<void> {

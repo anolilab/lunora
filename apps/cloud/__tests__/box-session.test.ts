@@ -270,6 +270,27 @@ describe("boxSessionDO", () => {
         });
     });
 
+    it("authenticates once when two signed auth frames for one challenge arrive together", async () => {
+        const { key, session, state } = await setup();
+        const socket = fakeSocket(openSession("box_1", Date.now()));
+
+        state.acceptWebSocket(socket);
+        await session.webSocketMessage(socket, helloFrame("box_1"));
+
+        const challenge = socket.received().find((frame) => frame.type === "challenge");
+
+        if (challenge?.type !== "challenge") {
+            throw new Error("no challenge");
+        }
+
+        const auth = await authFrame(key, "box_1", challenge.nonce);
+
+        // Both frames land before either finishes awaiting the box row.
+        await Promise.all([session.webSocketMessage(socket, auth), session.webSocketMessage(socket, auth)]);
+
+        expect(socket.received().filter((frame) => frame.type === "routes")).toHaveLength(1);
+    });
+
     /**
      * Suspension on a box (plan 365): a suspended or over-cap org's aliases are
      * left out of the routing table, so the box stops those fleets (it stops a
