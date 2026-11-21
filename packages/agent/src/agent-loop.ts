@@ -439,16 +439,26 @@ const callKeyOf = (turn: number, callId: string, earlierCallKeys: ReadonlySet<st
     return key;
 };
 
+/** Key one turn's calls in order, each taken into `taken` before the next is keyed, so two calls of a turn never share one. */
+const assignCallKeys = (turn: number, callIds: ReadonlyArray<string>, taken: Set<string>): string[] =>
+    callIds.map((callId) => {
+        const key = callKeyOf(turn, callId, taken);
+
+        taken.add(key);
+
+        return key;
+    });
+
 /** The keys earlier turns' calls were stored under. `steps[turn]` is that turn's memoized decision, so a replay rebuilds the same set. */
 const earlierCallKeysOf = (steps: ReadonlyArray<AgentStepInfo>): Set<string> => {
     const keys = new Set<string>();
 
     for (const [turn, earlier] of steps.entries()) {
-        const turnKeys = earlier.toolCalls.map((earlierCall) => callKeyOf(turn, earlierCall.toolCallId, keys));
-
-        for (const key of turnKeys) {
-            keys.add(key);
-        }
+        assignCallKeys(
+            turn,
+            earlier.toolCalls.map((earlierCall) => earlierCall.toolCallId),
+            keys,
+        );
     }
 
     return keys;
@@ -616,7 +626,7 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
     });
 };
 
-const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number, earlierCallKeys: ReadonlySet<string>): Promise<void> => {
+const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number, callKey: string): Promise<void> => {
     const {
         agent,
         agentName,
@@ -636,7 +646,6 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
         threadKey,
         tools,
     } = turnContext;
-    const callKey = callKeyOf(turn, call.id, earlierCallKeys);
     const stepName = `tool:${call.name}:${callKey}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${callKey}`;
@@ -1580,13 +1589,17 @@ const handleTurn = async (
     // the pending call, and the rows correlate results.
     await persist({ content: decision.text, messageKey: `${instanceId}:assistant:${String(turn)}`, role: "assistant", toolCalls: decision.toolCalls });
 
-    const earlierCallKeys = earlierCallKeysOf(steps);
+    const callKeys = assignCallKeys(
+        turn,
+        decision.toolCalls.map((call) => call.id),
+        earlierCallKeysOf(steps),
+    );
 
     // Tool calls run sequentially: their step names memoize each one
     // independently, so a crash between two calls resumes after the completed one.
-    for (const call of decision.toolCalls) {
+    for (const [index, call] of decision.toolCalls.entries()) {
         // eslint-disable-next-line no-await-in-loop -- sequential durable steps ARE the execution model
-        await runToolCall(turnContext, call, turn, earlierCallKeys);
+        await runToolCall(turnContext, call, turn, callKeys[index] ?? call.id);
     }
 
     await notifyStepFinish(turnContext, { text: decision.text, toolCalls: decision.toolCalls, turn, ...stepUsage });

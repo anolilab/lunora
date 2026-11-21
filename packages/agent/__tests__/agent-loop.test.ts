@@ -2700,6 +2700,33 @@ describe("a tool-call id a later turn reuses", () => {
         expect(journal.waitedNames).toStrictEqual(["approval:2:2:x"]);
     });
 
+    it("keeps a repeated call's slot off a key an earlier call in the same turn took", async () => {
+        expect.assertions(2);
+
+        const runs: string[] = [];
+        const agent = reuseAgent(runs, () => false);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const sameTurn: AgentGenerateResult = {
+            text: "",
+            toolCalls: [
+                { id: "1:x", input: { amount: 10 }, name: "charge" },
+                { id: "x", input: {}, name: "refund" },
+            ],
+        };
+        const generate = scriptedGenerate([toolTurn("x", "echo", {}), sameTurn, finalTurn("done")]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* parked on the refund's approval; never settles */
+        });
+        await parkedOn(paused, journal, "approval:1:1:x");
+
+        expect(runs).toStrictEqual(["echo", "charge"]);
+        expect(journal.waitedNames).toStrictEqual(["approval:1:1:x"]);
+    });
+
     it("gives a first-seen id that equals an earlier repeated call's slot its own slot", async () => {
         expect.assertions(2);
 
