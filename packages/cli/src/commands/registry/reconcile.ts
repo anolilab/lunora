@@ -24,6 +24,9 @@ import type { EntrypointReexport, ReconcileOptions, ReconcileOutcome, RegistryFi
 /** Code files whose `@lunora/*` base imports are rewritten to `lunorash/*` for umbrella projects. */
 const CODE_FILE_RE = /\.[cm]?[jt]sx?$/u;
 
+/** `join` treats `\` as a separator too, so splitting on `/` alone would skip a linked `dir` in `dir\name`. */
+const PATH_SEPARATOR_RE = /[\\/]/u;
+
 /**
  * Read an item's source file, rewriting base `@lunora/*` imports to the
  * `lunorash/*` umbrella subpaths when the target project uses the umbrella and
@@ -46,7 +49,7 @@ const CODE_FILE_RE = /\.[cm]?[jt]sx?$/u;
  * pasted copy of it drifted from this one once already.
  */
 const readItemFile = (itemDirectory: string, file: RegistryFile, useUmbrella: boolean, itemKey: string): string => {
-    const parents = file.from.split("/").slice(0, -1);
+    const parents = file.from.split(PATH_SEPARATOR_RE).slice(0, -1);
 
     for (let depth = 1; depth <= parents.length; depth += 1) {
         const parent = join(itemDirectory, ...parents.slice(0, depth));

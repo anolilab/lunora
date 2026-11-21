@@ -76,10 +76,14 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger, driver: DeployDr
     );
 };
 
-/** The secret keys this project requires on the deployed worker, by source: its packages', and the secret-typed local vars. */
+/**
+ * The secret keys this project requires on the deployed worker, by source: its packages', and the secret-typed local vars.
+ * A named `environment` reads its own `.dev.vars.<name>` as well as the bare file, since `env set --env` declares keys there.
+ */
 const resolveRequiredSecretKeys = async (
     cwd: string,
     cache: DiscoveryCache | undefined,
+    environment?: string,
 ): Promise<{ fromLocal: string[]; fromPackages: string[]; mintableKeys: ReadonlySet<string> }> => {
     let packages: ReadonlyArray<string> = [];
 
@@ -91,23 +95,28 @@ const resolveRequiredSecretKeys = async (
 
     const fromPackages = [...new Set(requiredSecrets(packages).map((entry) => entry.key))];
 
-    let fromLocal: string[] = [];
+    const localFiles = new Set([DEV_VARS_FILE, devVariablesFileFor(environment)].filter((file) => file !== undefined));
+    const fromLocal = new Set<string>();
 
-    try {
-        const devVariablesPath = join(cwd, DEV_VARS_FILE);
+    for (const file of localFiles) {
+        try {
+            const devVariablesPath = join(cwd, file);
 
-        if (existsSync(devVariablesPath)) {
-            // Only secret-typed local vars count as "required secrets" on the worker;
-            // a non-secret var (e.g. a URL) belongs in wrangler.jsonc `vars`, not secrets.
-            fromLocal = parseDevVariableEntries(readFileSync(devVariablesPath, "utf8"))
-                .map((entry) => entry.key)
-                .filter((key) => isSecretKeyName(key));
+            if (existsSync(devVariablesPath)) {
+                // Only secret-typed local vars count as "required secrets" on the worker;
+                // a non-secret var (e.g. a URL) belongs in wrangler.jsonc `vars`, not secrets.
+                for (const { key } of parseDevVariableEntries(readFileSync(devVariablesPath, "utf8"))) {
+                    if (isSecretKeyName(key)) {
+                        fromLocal.add(key);
+                    }
+                }
+            }
+        } catch {
+            // Unreadable file → the keys of the others.
         }
-    } catch {
-        // Unreadable .dev.vars → packages-only.
     }
 
-    return { fromLocal: fromLocal.filter((key) => !fromPackages.includes(key)), fromPackages, mintableKeys: mintableSecretKeysFor(packages) };
+    return { fromLocal: [...fromLocal].filter((key) => !fromPackages.includes(key)), fromPackages, mintableKeys: mintableSecretKeysFor(packages) };
 };
 
 /**
@@ -333,7 +342,7 @@ const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptio
         return isSecretKeyName(key) && isPlaceholderValue(value);
     };
     const describe = (key: string): string => (Object.hasOwn(deployed, key) ? `${key} (empty or a placeholder)` : key);
-    const { fromLocal, fromPackages } = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
+    const { fromLocal, fromPackages } = await resolveRequiredSecretKeys(cwd, options.discoveryCache, options.env);
     const localUnset = fromLocal.filter((key) => isUnset(key));
 
     if (localUnset.length > 0) {
@@ -419,7 +428,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     }
 
     const remoteNames = new Set(remote.names);
-    const { fromLocal, fromPackages, mintableKeys } = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
+    const { fromLocal, fromPackages, mintableKeys } = await resolveRequiredSecretKeys(cwd, options.discoveryCache, options.env);
     const missing = [...fromPackages, ...fromLocal].filter((key) => !remoteNames.has(key));
 
     if (missing.length === 0) {

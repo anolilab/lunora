@@ -168,6 +168,22 @@ describe("registry — refuses to read an item file through a symlink", () => {
         expect(lines.join("\n")).toContain(`refusing to read "dir" — it is a symlink, not a directory`);
     });
 
+    it("registry view refuses a backslash-separated from that reaches through a linked parent directory", async () => {
+        expect.assertions(2);
+
+        writeLinkedParentItem("scratch-marker-backslash\n");
+
+        const manifestPath = join(registryRoot, "baz", "registry.json");
+
+        writeFileSync(manifestPath, readFileSync(manifestPath, "utf8").replace("dir/secret.txt", String.raw`dir\\secret.txt`), "utf8");
+
+        const { lines, logger } = capturingLogger();
+        const result = await runRegistryViewCommand({ cwd: workdir, from: registryRoot, logger, names: ["baz"] });
+
+        expect(result.code).toBe(1);
+        expect(lines.join("\n")).not.toContain("scratch-marker-backslash");
+    });
+
     it("registry add and view refuse an item directory that is itself a link", async () => {
         expect.assertions(5);
 
