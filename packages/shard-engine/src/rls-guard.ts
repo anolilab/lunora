@@ -35,6 +35,22 @@ import type { DatabaseWriterLike, RelatedOptions, RelatedStart, RelationEdge } f
 const RLS_UNWRAP_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-unwrap");
 
 /**
+ * Well-known symbol the guard hangs its relation gate off of, keyed and hidden for
+ * the reasons {@link RLS_UNWRAP_SYMBOL} gives. A policied parent read routes
+ * around the guard to the unwrapped writer, so the relation children that read
+ * loads never reach a gated method; the `rls()` middleware calls `gate` from
+ * its relation read filter for every child table it has no read policy for, and
+ * registers that filter through `trust` so the guard lets it stand in for its own.
+ */
+const RLS_RELATION_GATE_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-relation-gate");
+
+/**
+ * Reads whose args can load relation children (`with`, `_count`) or filter by
+ * them, all through the args' `relationBaseWhere`.
+ */
+const RELATION_READ_METHODS: ReadonlySet<string> = new Set(["findFirst", "findFirstOrThrow", "findMany"]);
+
+/**
  * Thrown when a raw (non-RLS) handler touches a protected table under a
  * `.rls("required")` schema. A `LunoraError` subclass (`code: "RLS_REQUIRED"`,
  * `status: 403`) recognised structurally across packages (via `isLunoraError`) —
@@ -471,14 +487,49 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
     // by the delegated writer.
     const methods = base as unknown as Record<string, ((...args: unknown[]) => unknown) | undefined>;
 
+    // The engine resolves a read's relation children against the unwrapped
+    // writer, so gating the parent table alone would let a `.public()` parent
+    // carry a protected child out. Only the `rls()` middleware's filter, which
+    // gates through {@link RLS_RELATION_GATE_SYMBOL} itself, replaces that gate:
+    // any other value in the args (a handler's own callback, a forwarded `null`)
+    // could answer "no filter" for a protected child.
+    const trustedFilters = new WeakSet<object>();
+
+    const relationGate =
+        (callerFilter: unknown) =>
+        (tableName: string): unknown => {
+            guardTable(tableName);
+
+            return typeof callerFilter === "function" ? (callerFilter as (table: string) => unknown)(tableName) : undefined;
+        };
+
+    const withRelationGate = (rest: unknown[]): unknown[] => {
+        const [args, ...more] = rest;
+
+        // Only a `with` or a `where` can name a relation; anything else passes through untouched.
+        if (args === null || typeof args !== "object" || !("with" in args || "where" in args)) {
+            return rest;
+        }
+
+        const { relationBaseWhere } = args as { relationBaseWhere?: unknown };
+
+        if (typeof relationBaseWhere === "function" && trustedFilters.has(relationBaseWhere)) {
+            return rest;
+        }
+
+        return [{ ...args, relationBaseWhere: relationGate(relationBaseWhere) }, ...more];
+    };
+
     for (const name of LOOP_GATED_METHODS) {
         const method = methods[name];
 
         if (typeof method === "function") {
+            const gateRelations = RELATION_READ_METHODS.has(name);
+
             guarded[name] = (tableName: string, ...rest: unknown[]) => {
                 guardTable(tableName);
 
-                return method.call(base, tableName, ...rest);
+                return method.call(base, tableName, ...(gateRelations ? withRelationGate(rest) : rest));
             };
         }
     }
@@ -511,6 +562,17 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
     // enumerable. Direct property reads (the middleware's own lookup, the test
     // harness's `rawDatabase`) are unaffected.
     Object.defineProperty(guarded, RLS_UNWRAP_SYMBOL, { configurable: true, enumerable: false, value: raw, writable: false });
+    Object.defineProperty(guarded, RLS_RELATION_GATE_SYMBOL, {
+        configurable: true,
+        enumerable: false,
+        value: {
+            gate: guardTable,
+            trust: (filter: object): void => {
+                trustedFilters.add(filter);
+            },
+        },
+        writable: false,
+    });
 
     return guarded as unknown as W;
 };
