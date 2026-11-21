@@ -458,6 +458,17 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect([...runtime.messages.values()].filter((message) => message.role === "tool" && message.toolCallId === "0:call_1")).toHaveLength(1);
     });
 
+    it("names the agent whose run asked on the request, so a supply wakes that agent's workflow", async () => {
+        expect.assertions(1);
+
+        const agent = secretAgent([]);
+        const { host, journal, runtime } = await setup();
+
+        await pauseAt(agent, journal, runtime, scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("done")]));
+
+        expect(host.rows.get("agent_secret_requests")?.[0]?.["agent"]).toBe("support");
+    });
+
     it("holds a request open for less than the host keeps a supplied value, however long approvalTimeout is", async () => {
         expect.assertions(2);
 
