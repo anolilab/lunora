@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -270,6 +270,74 @@ describe("lunora init --here", () => {
         // The hand-edited schema is preserved.
         expect(readFileSync(schemaPath, "utf8")).toBe("// hand edited\n");
         expect(logger.lines.join("\n")).toContain("already present");
+    });
+});
+
+describe("lunora init --here — a failed lunora/ scaffold", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-here-fail-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    /**
+     * A dangling link at `lunora/messages.ts`: `existsSync` reports it missing, so
+     * the scaffold tries to write it, and the write follows the link into a
+     * directory that does not exist — a deterministic write failure that does
+     * not depend on file modes (which root ignores).
+     */
+    const breakFunctionFile = (): string => {
+        const functionPath = join(workdir, "lunora", "messages.ts");
+
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        symlinkSync(join(workdir, "missing-dir", "messages.ts"), functionPath);
+
+        return functionPath;
+    };
+
+    it("exits non-zero, logs the failure and runs neither --add nor --ci", async () => {
+        expect.assertions(5);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+        writeFileSync(join(workdir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+        breakFunctionFile();
+
+        const registryRoot = mkdtempSync(join(tmpdir(), "lunora-empty-registry-"));
+        const logger = capturingLogger();
+        const result = await runInitCommand({ add: "auth", ci: "github", cwd: workdir, inPlace: true, logger, registryFrom: registryRoot });
+
+        rmSync(registryRoot, { force: true, recursive: true });
+
+        expect(result.code).toBe(1);
+        expect(logger.lines.join("\n")).toContain("could not write");
+        expect(logger.lines.join("\n")).toContain("messages.ts");
+        // The empty registry would have logged an "auth" failure had --add run.
+        expect(logger.lines.join("\n")).not.toMatch(/auth/u);
+        expect(existsSync(join(workdir, ".github", "workflows", "deploy.yml"))).toBe(false);
+    });
+
+    it("a re-run after the failure is fixed writes the missing file and leaves schema.ts byte-identical", async () => {
+        expect.assertions(4);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const functionPath = breakFunctionFile();
+        const first = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        expect(first.code).toBe(1);
+
+        const schemaPath = join(workdir, "lunora", "schema.ts");
+        const schemaBefore = readFileSync(schemaPath);
+
+        rmSync(functionPath, { force: true });
+
+        const second = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        expect(second.code).toBe(0);
+        expect(existsSync(functionPath)).toBe(true);
+        expect(readFileSync(schemaPath).equals(schemaBefore)).toBe(true);
     });
 });
 
