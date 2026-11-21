@@ -106,9 +106,14 @@ class TestClientConcurrency(unittest.TestCase):
 
         # Counted through a resend rather than off the registry, so this asserts
         # what the socket would actually carry after a reconnect.
+        # The resend is paced, so each re-sent subscribe is answered to let the next one out.
         resent: list[dict] = []
         client._send = resent.append
         client.resend_subscriptions()
+        answered = 0
+        while answered < len(resent):
+            client.handle_frame({"id": resent[answered]["id"], "type": "ack"})
+            answered += 1
 
         self.assertEqual(len(resent), THREADS * PER_THREAD, "every concurrent subscribe survived with a distinct id")
 
