@@ -1,18 +1,19 @@
 diff --git a/dist/packem_shared/publish-missing-CZK1BpWt.js b/dist/packem_shared/publish-missing-CZK1BpWt.js
-index 60844c7e359020502504bffc77c2b37cc3032928..a46961c47d195246541feb316885b6516380fc71 100644
+index 60844c7e359020502504bffc77c2b37cc3032928..a19146d950cbba6d34081eeb7453d609da8db758 100644
 --- a/dist/packem_shared/publish-missing-CZK1BpWt.js
 +++ b/dist/packem_shared/publish-missing-CZK1BpWt.js
-@@ -1,3 +1,9 @@
+@@ -1,3 +1,10 @@
 +import{readFileSync as lunoraReadFileSync}from"node:fs";
 +// lunora patch: the version step has rewritten package.json on disk (internal dependency ranges
 +// included); the dep graph still holds the manifest read before it, so publishing from it ships
 +// every pre-bump range (anolilab/lunora#1666). Read the versioned manifest back from disk.
-+// A package.json that cannot be read fails the release: falling back would ship the stale ranges again.
-+const lunoraVersionedManifest=(b)=>typeof b.manifestPath==="string"&&b.manifestPath.endsWith("package.json")?JSON.parse(lunoraReadFileSync(b.manifestPath,"utf8")):b.manifest;
++// An npm package (no `ecosystem`) always reads its package.json and fails the release when it
++// cannot: falling back would ship the stale ranges again. Other ecosystems publish no package.json.
++const lunoraVersionedManifest=(b)=>{if(b.ecosystem!==void 0)return b.manifest;if(typeof b.manifestPath!=="string"||!b.manifestPath.endsWith("package.json"))throw new Error(`lunora vis patch: ${b.name} has no package.json manifestPath to publish from`);return JSON.parse(lunoraReadFileSync(b.manifestPath,"utf8"))};
  import{createRequire as q}from"node:module";import{s as D}from"./index--eV4qIz5.js";import{DEFAULT_CHANGES_DIR as O}from"../packem_chunks/DEFAULT_CLEAN_KEEP.js";import{a as X,f as Q}from"../packem_chunks/context.js";import{c as Z,d as x,D as ee}from"../packem_chunks/version-resolver.js";import{createTag as se,pushTags as ae,resolveReleaseSource as re,renderTagPattern as ie,defaultTagFor as te}from"../packem_chunks/git.js";import{createShellRunner as F}from"../packem_chunks/shell-runner.js";import{r as L,b as ne}from"./apply-C6qxfMqZ.js";import{p as oe}from"../packem_chunks/native-addon.js";import{c as ce}from"../packem_chunks/index3.js";import{escapeMarkdown as ge}from"../packem_chunks/security.js";import{VisReleaseError as B}from"./VisReleaseError-DZtgcKf8.js";let K;const z=e=>(K??=q(import.meta.url))(e),V=typeof globalThis<"u"&&typeof globalThis.process<"u"?globalThis.process:process,W=e=>{if(typeof V<"u"&&V.versions&&V.versions.node){const[s,a]=V.versions.node.split(".").map(Number);if(s>22||s===22&&a>=3||s===20&&a>=16)return V.getBuiltinModule(e)}return z(e)},{mkdir:J,writeFile:Y}=W("node:fs/promises"),{resolve:M}=W("node:path"),le=/\{(name|version|previousVersion|date|repo|contributors)\}/g,de=(e,s)=>e.replaceAll(le,(a,n)=>s[n]??""),pe=(e,s={})=>{const a=new Set;for(const g of s.internalAuthors??[]){const d=g.trim().toLowerCase().replace(/^@/,"");d.length>0&&a.add(d)}const n=new Set,c=[];for(const g of e){const d=g.meta?.author;if(d)for(const t of d.split(",")){const l=t.trim();if(!l)continue;const i=l.replace(/^@/,"");if(i.length===0)continue;const r=i.toLowerCase();n.has(r)||a.has(r)||(n.add(r),c.push(ge(l)))}}return c.length===0?"":c.map(g=>`- ${g}`).join(`
  `)},ue=e=>e.length===0?"":`## Related releases
  
-@@ -6,7 +12,7 @@ ${e.map(a=>`- [${a.name}](${a.url})`).join(`
+@@ -6,7 +13,7 @@ ${e.map(a=>`- [${a.name}](${a.url})`).join(`
  
  `).replace(/\s+$/,""),c=[];if(s.header){const g=n(s.header);g.length>0&&c.push(g)}if(c.push(e),s.footer){const g=n(s.footer);g.length>0&&c.push(g)}return c.join(`
  
