@@ -3714,8 +3714,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     const workerContext: WorkerRuntimeContext = {
         assertAgentRunOnDefaultShard,
-        authorizeFanOut: options.authorizeFanOut,
-        authorizeShard: options.authorizeShard,
+        // Getters calling through `options`, as the gates did before they moved out: a callback the
+        // app swaps on its options object takes effect on the next request, and a method that reads
+        // its policy through `this` still gets the options object.
+        get authorizeFanOut() {
+            return options.authorizeFanOut === undefined
+                ? undefined
+                : (identity: ResolvedIdentity | null, table: string, functionPath: string) => options.authorizeFanOut?.(identity, table, functionPath) ?? false;
+        },
+        get authorizeShard() {
+            return options.authorizeShard === undefined
+                ? undefined
+                : (caller: Parameters<NonNullable<WorkerOptions["authorizeShard"]>>[0]) => options.authorizeShard?.(caller) ?? false;
+        },
         defaultShard,
         guardUnauthenticatedShardAccess,
     };
