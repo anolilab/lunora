@@ -131,7 +131,7 @@ describe("dodopayments adapter", () => {
         const result = await adapter.refundPayment({ sessionId: "pay_1" });
 
         // `pending`/`review` settle later via `refund.succeeded` — or not at all, via `refund.failed`,
-        // which carries no transition. The facade holds its ledger back on this flag.
+        // which moves no money. The facade holds its ledger back on this flag.
         expect(result.pending).toBe(true);
         expect(result.state).toBe("captured");
     });
@@ -542,6 +542,20 @@ describe("dodopayments adapter", () => {
         expect(action.type).toBe("payment.refunded");
         expect(action.amount).toBeUndefined();
         expect(action.sessionId).toBe("pay_1");
+    });
+
+    it("reports refund.failed as a failed refund on its payment", async () => {
+        expect.assertions(1);
+
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const payload = JSON.stringify({
+            data: { amount: 2500, currency: "USD", payment_id: "pay_1", refund_id: "ref_1", status: "failed" },
+            type: "refund.failed",
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor("m10", timestamp, sign("m10", timestamp, payload)), payload });
+
+        expect(action).toMatchObject({ refundId: "ref_1", sessionId: "pay_1", type: "payment.refund_failed" });
     });
 
     it("rejects a bad signature", async () => {

@@ -260,6 +260,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 type: "payment.captured",
             };
         }
+        // Moves no money; it only lets a facade refund still pending on this payment be retried.
+        case "refund.failed": {
+            return { ...base, refundId: readString(object, "refund_id"), sessionId: readString(object, "payment_id"), type: "payment.refund_failed" };
+        }
 
         case "subscription.active":
         case "subscription.cancelled":
@@ -306,7 +310,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         }
 
         default: {
-            // payment.processing, refund.failed, other dispute.*, license_key.* — no state transition here.
+            // payment.processing, other dispute.*, license_key.* — no state transition here.
             return { ...base, type: "unhandled" };
         }
     }
@@ -438,8 +442,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             // `refund.failed`). Reflect the refund's real status instead of optimistically claiming
             // "refunded"; the webhook-synced store stays authoritative for the final state. `pending`
             // says so explicitly, so the facade does not have to infer it from the SESSION's state —
-            // it holds its ledger back until `refund.succeeded` lands, because `refund.failed` carries
-            // no transition and would leave an optimistic write over-stating the row for good.
+            // it holds its ledger back until `refund.succeeded` lands, because `refund.failed` reverses
+            // no money and would leave an optimistic write over-stating the row for good.
             const settled = readString(refund, "status") === "succeeded";
             const state: PaymentState = settled ? "refunded" : "captured";
 

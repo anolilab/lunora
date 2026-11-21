@@ -7,7 +7,7 @@
  * that reports `"orphaned"`, which the HTTP layer answers with a 500 for ONE bounded redelivery.
  */
 import { LunoraPaymentError } from "./errors";
-import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
+import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
 import { addMoney, compareMoney, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -125,6 +125,27 @@ const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existi
             await store.releaseEvent(action.provider, key);
         },
     };
+};
+
+/**
+ * Settle the facade's pending-refund marker for the action's session. Any refund event on the session
+ * settles it — the marker is per session because the event cannot name the request that issued it.
+ */
+const releasePendingRefund = async (store: PaymentStore, action: WebhookAction): Promise<void> => {
+    if (action.sessionId && refundNeedsPendingGuard(action.provider)) {
+        await store.releaseEvent(action.provider, pendingRefundKey(action.sessionId));
+    }
+};
+
+/** A failed refund moved no money, so the row stays as it is; it only lets a pending refund be retried. */
+const applyRefundFailed = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
+    if (!action.sessionId) {
+        return { applied: false, reason: "unhandled" };
+    }
+
+    await releasePendingRefund(store, action);
+
+    return { applied: true, reason: "ok" };
 };
 
 /**
@@ -573,6 +594,33 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction, sin
     return transitionSubscription(store, action, existing, targetState, singleSubscriptionPerReference, now);
 };
 
+/** Route a claimed event to the row it changes. A throw here releases the claim, so the provider retries. */
+const applyClaimedAction = async (
+    store: PaymentStore,
+    action: WebhookAction,
+    observer: PaymentObserver | undefined,
+    singleSubscriptionPerReference: boolean,
+): Promise<ApplyResult> => {
+    if (action.type === "payment.refund_failed") {
+        return applyRefundFailed(store, action);
+    }
+
+    const paymentAction = PAYMENT_ACTION_BY_TYPE[action.type];
+
+    if (!paymentAction) {
+        return applySubscription(store, action, singleSubscriptionPerReference);
+    }
+
+    const result = await applyPayment(store, action, paymentAction, observer, singleSubscriptionPerReference);
+
+    // Booked here, or already booked by another writer (`duplicate` from the fold): the refund settled.
+    if (paymentAction === "refund" && (result.applied || result.reason === "duplicate")) {
+        await releasePendingRefund(store, action);
+    }
+
+    return result;
+};
+
 const applyWebhookAction = async (
     store: PaymentStore,
     action: WebhookAction,
@@ -601,14 +649,10 @@ const applyWebhookAction = async (
         return { applied: false, reason: "duplicate" };
     }
 
-    const paymentAction = PAYMENT_ACTION_BY_TYPE[action.type];
-
     let result: ApplyResult;
 
     try {
-        result = paymentAction
-            ? await applyPayment(store, action, paymentAction, observer, singleSubscriptionPerReference)
-            : await applySubscription(store, action, singleSubscriptionPerReference);
+        result = await applyClaimedAction(store, action, observer, singleSubscriptionPerReference);
     } catch (error) {
         // The claim is taken before apply; a genuine store-write failure would otherwise leave the
         // event marked-processed so the provider's retry dedupes to a lost effect. Release the claim

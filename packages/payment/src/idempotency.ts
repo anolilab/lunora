@@ -28,9 +28,12 @@
  * amount, comment, revokeBenefits }`, with no key field and no working per-request option on
  * either SDK, so a retry genuinely issues a second refund. `create-payment.ts`'s `refundPayment`
  * still computes a key and hands it to the adapter; those two adapters have nowhere to put it.
- * The guard is local instead, and provider-agnostic: `refundPayment` records the refunded total
- * on the session row before returning, so the over-refund check rejects the retry without
- * reaching the adapter at all.
+ * The guard is local instead, in two parts. A settled refund is recorded on the session row before
+ * `refundPayment` returns, so the over-refund check rejects the retry without reaching the
+ * adapter. A pending refund is deliberately NOT recorded (no money has moved), so the session
+ * carries a {@link pendingRefundKey} marker instead, claimed before the adapter is called and held
+ * until the provider's `payment.refunded` or `payment.refund_failed` webhook settles it; any
+ * `refundPayment` on that session meanwhile is refused.
  *
  * Un-keyable and non-money-moving, for completeness: Creem `subscriptions.cancel` and
  * `customers.create`; Autumn `billing.update` (the cancel/uncancel pair); Dodo
@@ -64,6 +67,14 @@ const encoder = new TextEncoder();
  * fails closed until somebody checks its ingestion body for a key.
  */
 const KEYED_USAGE_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(["dodopayments", "polar", "stripe"]);
+
+/**
+ * Providers whose `refunds.create` takes no idempotency key (see the module note), so a retry while
+ * a refund is still pending would issue a second one. Stripe is absent because its refund is keyed,
+ * and it maps no refund-failure event that could clear a {@link pendingRefundKey} marker: a guarded
+ * Stripe refund that failed would lock its session for good.
+ */
+const UNKEYED_REFUND_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(["dodopayments", "polar"]);
 
 const sha256Hex = async (value: string): Promise<string> =>
     [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -124,3 +135,18 @@ export const LOCAL_REFUND_CLAIM_TYPE = "marker.local_refund";
  * charging for usage that never happened, which is the worse of the two on a money path.
  */
 export const usageForwardIsIdempotent = (provider: ProviderId): boolean => KEYED_USAGE_PROVIDERS.has(provider);
+
+/** Whether `refundPayment` must hold a {@link pendingRefundKey} marker for `provider`'s refunds. */
+export const refundNeedsPendingGuard = (provider: ProviderId): boolean => UNKEYED_REFUND_PROVIDERS.has(provider);
+
+/**
+ * Marker for a refund on `sessionId` that the provider has accepted but not settled.
+ *
+ * One per session rather than per request: the webhook that settles the refund knows the provider's
+ * refund id but not the outbound key, so a per-request marker could never be cleared. The cost is
+ * that a second, different refund on the session waits until the first settles.
+ */
+export const pendingRefundKey = (sessionId: string): string => `pending-refund:${sessionId}`;
+
+/** Claim `type` recorded for a {@link pendingRefundKey} marker. */
+export const PENDING_REFUND_CLAIM_TYPE = "marker.pending_refund";

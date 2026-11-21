@@ -780,7 +780,7 @@ interface WebhookAction {
 ### `WebhookActionType` (type)
 
 ```ts
-type WebhookActionType = "payment.authorized" | "payment.captured" | "payment.failed" | "payment.refunded" | "subscription.active" | "subscription.canceled" | "subscription.past_due" | "subscription.paused" | "subscription.updated" | "unhandled";
+type WebhookActionType = "payment.authorized" | "payment.captured" | "payment.failed" | "payment.refund_failed" | "payment.refunded" | "subscription.active" | "subscription.canceled" | "subscription.past_due" | "subscription.paused" | "subscription.updated" | "unhandled";
 ```
 
 ### `WebhookHeaders` (interface)
