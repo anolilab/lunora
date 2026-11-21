@@ -4960,6 +4960,14 @@ class LunoraClient {
             return { committed: false, value: undefined as ReturnOf<F> };
         }
 
+        // The sink's decision is awaited, and `close()` may have cleared the queue meanwhile: a
+        // write queued after that would never settle, since nothing flushes a closed client.
+        if (this.closed) {
+            rollbackOptimistic(optimisticRollbacks);
+
+            throw new LunoraError("CLIENT_CLOSED", "LunoraClient closed");
+        }
+
         const value = await new Promise<ReturnOf<F>>((resolve, reject) => {
             const entry: QueuedMutation<ReturnOf<F>> = {
                 ambiguousSend,
@@ -5029,6 +5037,13 @@ class LunoraClient {
             // identity against it for the flush-time check.
             if (entry.id !== undefined) {
                 this.queuedIdentities.set(entry.id, issuingIdentity);
+            }
+
+            // A write that went behind an outbox backlog the sink then declined is queued while
+            // the socket is already open, after the open-time flush: nothing else would send it.
+            // An ambiguous send is queued on an open socket on purpose, to retry on its backoff.
+            if (this.outbox !== undefined && !ambiguousSend && isLiveStatus(this.computeStatus())) {
+                this.flushOfflineQueue(shardKey).catch(() => undefined);
             }
         });
 

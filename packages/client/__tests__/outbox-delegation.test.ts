@@ -303,6 +303,82 @@ describe("lunoraClient outbox delegation", () => {
         client.close();
     });
 
+    it("rejects a declined write when the client closed while the sink was deciding", async () => {
+        expect.assertions(2);
+
+        let decline: (() => void) | undefined;
+        let sinkAsked: () => void = () => {};
+        const asked = new Promise<void>((resolve) => {
+            sinkAsked = resolve;
+        });
+        const client = makeClient({
+            enqueue: async () =>
+                new Promise<void>((_resolve, reject) => {
+                    decline = () => {
+                        reject(new OutboxDeclinedError());
+                    };
+                    sinkAsked();
+                }),
+        });
+
+        const write = client.mutation(fnRef("messages:send"), { text: "x" });
+        const queuedAfterClose = new Promise<"queued">((resolve) => {
+            client.onPendingChange((count) => {
+                if (count > 0) {
+                    resolve("queued");
+                }
+            });
+        });
+
+        await asked;
+        client.close();
+        decline?.();
+
+        const outcome = await Promise.race([
+            write.then(
+                () => "resolved" as const,
+                (error: unknown) => error,
+            ),
+            queuedAfterClose,
+        ]);
+
+        expect(outcome).toBeInstanceOf(Error);
+        expect(client.pendingCount()).toBe(0);
+    });
+
+    it("sends a write the sink declined behind its backlog when the socket is already open", async () => {
+        expect.assertions(2);
+
+        const sent: string[] = [];
+        const client = new LunoraClient({
+            fetch: async (input) => {
+                sent.push(input instanceof Request ? input.url : input.toString());
+
+                return Response.json({ result: "ok" });
+            },
+            offlineQueue: { queueBeforeFirstConnect: true },
+            outbox: {
+                enqueue: async () => {
+                    throw new OutboxDeclinedError();
+                },
+                // A backlog this tab cannot drain: a live write goes behind it, to the sink.
+                pending: () => true,
+            },
+            url: "https://app.example",
+            WebSocket: seedableWebSocket(),
+        });
+
+        client.subscribe(fnRef("nodes:list"), {}, () => {});
+        (sockets.at(-1) as SeedableSocket).open();
+
+        const result = await client.mutation(fnRef("messages:send"), { text: "x" });
+
+        expect(result).toBe("ok");
+        expect(sent).toHaveLength(1);
+
+        client.close();
+    });
+
     it("surfaces an overflow rejection to the caller instead of swallowing it", async () => {
         expect.assertions(1);
 
