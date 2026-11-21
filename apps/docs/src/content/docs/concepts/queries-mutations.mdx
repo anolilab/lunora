@@ -141,7 +141,7 @@ await ctx.db.messages.deleteMany([ids[0]]);
 ### `insertManyUnsafe` — trusted bulk import
 
 For large trusted imports (seed, migration, admin tooling), `ctx.db.insertManyUnsafe`
-writes the whole batch in **one** multi-row `INSERT` and **skips the per-row
+writes the batch as multi-row `INSERT` statements and **skips the per-row
 `.check()` validators and `before`/`after` triggers**. That's the "unsafe": it
 trusts the data and bypasses the integrity pipeline for throughput.
 
@@ -155,6 +155,13 @@ secure-by-default and your table's insert policy apply exactly as for `insertMan
 (there is no RLS-bypassing writer). `allowExplicitId` preserves a supplied `_id`.
 An id that contains a NUL character (U+0000) is refused with `BAD_REQUEST`, on every store.
 Use it only for data you control; reach for `insertMany` for anything user-supplied.
+
+In a mutation a failed batch rolls back whole. In an action there is no surrounding
+transaction: a large batch is written in several statements, so when a later one
+fails (a duplicate `_id`, say) the rows before it stay, fully indexed and broadcast,
+and the call still rejects. A `.global()` table is the exception in both: its rows go
+to D1 one `INSERT` at a time, outside the mutation's transaction, so the rows before
+a failing one stay there either way.
 
 ## `ctx.auth`
 

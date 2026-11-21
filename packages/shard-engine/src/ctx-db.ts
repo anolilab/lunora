@@ -3258,6 +3258,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     });
 
     /**
+     * Companions + write report for rows an `insertManyUnsafe` chunk committed before a later chunk
+     * threw. Each row on its own, failures dropped: one row's companion error must not leave the
+     * rows after it unsynced, nor replace the insert error that stopped the batch, which is the one
+     * the caller has to act on.
+     */
+    const catchUpCommittedRows = async (tableName: string, rows: ReadonlyArray<{ document: Record<string, unknown>; id: string }>): Promise<void> => {
+        for (const { document, id } of rows) {
+            try {
+                syncCompanionsForInsert(tableName, id, document);
+                // Raw hook, not `onWrite`: the batch was metered before the insert.
+                // eslint-disable-next-line no-await-in-loop -- sequential write-hook fan-out, mirrors the single insert
+                await reportWrite({ doc: document, id, op: "insert", table: tableName });
+            } catch {
+                // Dropped: see above.
+            }
+        }
+    };
+
+    /**
      * Reject a `rank()`/`rankPage()` whose partition spans shards. When a table
      * is `.shardBy(field)` and the rankIndex's `partitionBy` does NOT include
      * that shard field, each partition is split across every DO — so this
@@ -4681,41 +4700,63 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 meterWrite(row.document);
             }
 
-            // Multi-row INSERTs — the throughput win over `insertMany`'s N
-            // single-row statements (and the skipped per-row JS pipeline).
-            // Chunked at `INSERT_CHUNK_ROWS` because each row binds three
-            // parameters and the batch cap is 500 rows: one statement over the
-            // whole batch would bind 1,500, and Workerd allows 100.
-            for (let start = 0; start < rows.length; start += INSERT_CHUNK_ROWS) {
-                const valuesSql = dsql.join(
-                    rows.slice(start, start + INSERT_CHUNK_ROWS).map((row) => dsql`(${row.id}, ${row.creationTime}, ${encodeDocJson(row.document)})`),
-                    dsql`, `,
-                );
-
-                // The only write whose text genuinely varies: the `VALUES` list grows
-                // with the chunk, so it is built and rendered per batch rather than
-                // cached per table like the single-row statements.
-                const batch = renderSql(
-                    "sqlite",
-                    dsql`INSERT INTO ${dsql.identifier(tableName)} (id, _creationTime, ${dsql.identifier(DOC_COLUMN)}) VALUES ${valuesSql}`,
-                );
-
-                runWrite(sql, tableName, batch.sql, batch.params);
-            }
-
             // Companions + notifications ARE still maintained per row (shared with
             // the single `insert` via `syncCompanionsForInsert`), so search,
             // aggregates, ranks, CDC, the reactive cache and live subscriptions stay
             // correct — only the validator + trigger pipeline is skipped.
-            for (const { document, id } of rows) {
-                syncCompanionsForInsert(tableName, id, document);
-                // The batch was already charged to the meter BEFORE the insert, so
-                // notify through the raw hook — `onWrite` is the metering wrapper
-                // and would charge every row a second time, halving the effective
-                // ceiling for this path.
-                // eslint-disable-next-line no-await-in-loop -- sequential write-hook fan-out, mirrors the single insert
-                await reportWrite({ doc: document, id, op: "insert", table: tableName });
+            const syncWritten = async (written: typeof rows): Promise<void> => {
+                for (const { document, id } of written) {
+                    syncCompanionsForInsert(tableName, id, document);
+                    // The batch was already charged to the meter BEFORE the insert, so
+                    // notify through the raw hook — `onWrite` is the metering wrapper
+                    // and would charge every row a second time, halving the effective
+                    // ceiling for this path.
+                    // eslint-disable-next-line no-await-in-loop -- sequential write-hook fan-out, mirrors the single insert
+                    await reportWrite({ doc: document, id, op: "insert", table: tableName });
+                }
+            };
+
+            // Leading rows already INSERTed. Outside a transaction (an action) each
+            // chunk is its own commit, so a later chunk throwing leaves these on disk.
+            let written = 0;
+
+            try {
+                // Multi-row INSERTs — the throughput win over `insertMany`'s N
+                // single-row statements (and the skipped per-row JS pipeline).
+                // Chunked at `INSERT_CHUNK_ROWS` because each row binds three
+                // parameters and the batch cap is 500 rows: one statement over the
+                // whole batch would bind 1,500, and Workerd allows 100.
+                for (let start = 0; start < rows.length; start += INSERT_CHUNK_ROWS) {
+                    const chunk = rows.slice(start, start + INSERT_CHUNK_ROWS);
+                    const valuesSql = dsql.join(
+                        chunk.map((row) => dsql`(${row.id}, ${row.creationTime}, ${encodeDocJson(row.document)})`),
+                        dsql`, `,
+                    );
+
+                    // The only write whose text genuinely varies: the `VALUES` list grows
+                    // with the chunk, so it is built and rendered per batch rather than
+                    // cached per table like the single-row statements.
+                    const batch = renderSql(
+                        "sqlite",
+                        dsql`INSERT INTO ${dsql.identifier(tableName)} (id, _creationTime, ${dsql.identifier(DOC_COLUMN)}) VALUES ${valuesSql}`,
+                    );
+
+                    runWrite(sql, tableName, batch.sql, batch.params);
+                    written = start + chunk.length;
+                }
+            } catch (error) {
+                // A committed chunk without its companions would leave the aggregate,
+                // rank and search indexes and every subscriber disagreeing with the
+                // table for good. Inside a transaction the throw rolls every chunk
+                // back, so there is nothing to catch up.
+                if (!inTransaction()) {
+                    await catchUpCommittedRows(tableName, rows.slice(0, written));
+                }
+
+                throw error;
             }
+
+            await syncWritten(rows);
 
             return rows.map((row) => row.id);
         },
