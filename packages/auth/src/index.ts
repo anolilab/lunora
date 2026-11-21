@@ -30,9 +30,10 @@ export type {
     AuthAuditEvent,
     AuthAuditOutcome,
     AuthAuditReader,
+    AuthAuditWriter,
     ReadAuthAuditOptions,
 } from "./audit";
-export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable, readAuthAuditLog } from "./audit";
+export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, createAuthAuditWriter, ensureAuthAuditTable, readAuthAuditLog } from "./audit";
 export type { AuthAuditHookConfig } from "./audit-hooks";
 export { authAuditBeforeHook, authAuditHook, buildAuditEntry, eventForPath, withAuthAudit } from "./audit-hooks";
 export type { AuthDoOptions, AuthDoState } from "./auth-do";
