@@ -1238,6 +1238,149 @@ describe("shardDO subscription re-execution", () => {
         expect(ws.attachment?.subs).toEqual({});
     });
 
+    const perDispatchRefusal = {
+        code: "BAD_REQUEST",
+        error: {
+            code: "BAD_REQUEST",
+            message:
+                'query "cursors:listCursors" runs per-dispatch middleware (rate limit, Turnstile), so it cannot be subscribed to; call it as a one-off query, or move the check to a mutation',
+        },
+        id: "sub-1",
+        type: "error",
+    };
+
+    it("refuses to subscribe a query with per-dispatch middleware, and still serves it as a one-off rpc", async () => {
+        expect.assertions(6);
+
+        // Stands in for the codegen override that reads the registered function's `perDispatch` flag.
+        class PerDispatchShard extends ReexecShard {
+            public rpcCount = 0;
+
+            public override async handleRpc(): Promise<unknown> {
+                this.rpcCount += 1;
+
+                return super.handleRpc();
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- override hook; the registry lookup needs no instance state
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return functionPath === "cursors:listCursors";
+            }
+        }
+
+        const shard = new PerDispatchShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        // Every refresh would re-run the `.use()` chain and charge the
+        // subscriber's limiter (or replay a single-use token), so nothing is
+        // seeded and nothing is registered for a later write to re-run.
+        expect(JSON.parse(ws.sent[0]!)).toEqual(perDispatchRefusal);
+        expect(ws.sent).toHaveLength(1);
+        expect(shard.execCount).toBe(0);
+        expect(ws.attachment).toEqual({ subs: {} });
+
+        const response = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: { roomId: "lobby" }, functionPath: "cursors:listCursors" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        expect(shard.rpcCount).toBe(1);
+    });
+
+    it("refuses a per-dispatch query whose module is not loaded yet, judging it once loaded", async () => {
+        expect.assertions(3);
+
+        // A lazy registry's stub carries no `perDispatch` until `prepareFunction` loads its module.
+        class ColdShard extends ReexecShard {
+            public loaded = false;
+
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return this.loaded && functionPath === "cursors:listCursors";
+            }
+
+            protected override async prepareFunction(): Promise<void> {
+                this.loaded = true;
+            }
+        }
+
+        const shard = new ColdShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual(perDispatchRefusal);
+        expect(shard.execCount).toBe(0);
+        expect(ws.attachment).toEqual({ subs: {} });
+    });
+
+    it("still subscribes a query without per-dispatch middleware", async () => {
+        expect.assertions(2);
+
+        class PerDispatchShard extends ReexecShard {
+            // eslint-disable-next-line class-methods-use-this -- override hook; the registry lookup needs no instance state
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return functionPath === "cursors:limited";
+            }
+        }
+
+        const shard = new PerDispatchShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual({ id: "sub-1", type: "ack" });
+        expect(JSON.parse(ws.sent[1]!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
+    });
+
+    it("drops a subscription whose query gained per-dispatch middleware on the next refresh", async () => {
+        expect.assertions(4);
+
+        // Subscribed while the query was plain; a later deploy added a
+        // `rateLimit(...)` step. Only the refresh sweep can still see this one.
+        class LateLimitShard extends ReexecShard {
+            public limited = false;
+
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return this.limited && functionPath === "cursors:listCursors";
+            }
+        }
+
+        const shard = new LateLimitShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        await subscribe(shard, ws);
+
+        expect(Object.keys(ws.attachment?.subs ?? {})).toEqual(["sub-1"]);
+
+        shard.limited = true;
+        shard.changedTableOnRpc = "cursors";
+
+        const execBefore = shard.execCount;
+
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(execBefore);
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual(perDispatchRefusal);
+        expect(ws.attachment?.subs).toEqual({});
+    });
+
     it("shares the per-socket cap between subscriptions and shapes", async () => {
         expect.assertions(1);
 
