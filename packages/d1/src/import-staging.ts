@@ -186,6 +186,9 @@ const sweep = async (exec: D1Exec, now: number): Promise<void> => {
     ]);
 };
 
+/** Create the session's marker, or push its expiry out from `now` — its params are session, generation, expiry. */
+const EXTEND_LEASE_SQL = `INSERT INTO "${SESSION_TABLE}" (session, state, generation, expires_at) VALUES (?, 'staging', ?, ?) ON CONFLICT (session) DO UPDATE SET expires_at = excluded.expires_at`;
+
 interface SessionRecord {
     generation: string;
     result?: StagedCommitResult;
@@ -251,10 +254,7 @@ const stageGlobalRows = async (
     const staged: Record<string, number> = {};
 
     await runAll(exec, [
-        {
-            params: [args.session, args.generation, now + STAGE_TTL_MS],
-            sql: `INSERT INTO "${SESSION_TABLE}" (session, state, generation, expires_at) VALUES (?, 'staging', ?, ?) ON CONFLICT (session) DO UPDATE SET expires_at = excluded.expires_at`,
-        },
+        { params: [args.session, args.generation, now + STAGE_TTL_MS], sql: EXTEND_LEASE_SQL },
         ...ready.map(({ decoded, id, line, table }) => {
             staged[table] = (staged[table] ?? 0) + 1;
 
@@ -335,6 +335,9 @@ const pruneTable = async (writer: DatabaseWriterLike, exec: D1Exec, session: str
     }
 };
 
+const expiredError = (session: string): GlobalImportStagingError =>
+    new GlobalImportStagingError("IMPORT_SESSION_EXPIRED", `import session "${session}" has no staged .global() rows (expired, or aborted)`);
+
 /** Whether `session` still has a staged row. */
 const holdsStagedRows = async (exec: D1Exec, session: string): Promise<boolean> => {
     const hits = await exec.all(`SELECT 1 FROM "${STAGE_TABLE}" WHERE session = ? LIMIT 1`, [session]);
@@ -366,8 +369,11 @@ const commitStagedGlobalRows = async (
     // A session that staged rows must still hold them: with none left the prune below would empty every scoped
     // table. The marker alone is not proof — a cleanup run without `batch()` can drop the rows and fail before it.
     if (args.staged && (record === undefined || !(await holdsStagedRows(exec, args.session)))) {
-        throw new GlobalImportStagingError("IMPORT_SESSION_EXPIRED", `import session "${args.session}" has no staged .global() rows (expired, or aborted)`);
+        throw expiredError(args.session);
     }
+
+    // Another session's sweep must not take the staged rows while this commit writes and prunes against them.
+    await exec.run(EXTEND_LEASE_SQL, [args.session, args.generation, now + STAGE_TTL_MS]);
 
     const { errors, inserted } = await writeStaged(writer, exec, args.session);
 
@@ -380,6 +386,14 @@ const commitStagedGlobalRows = async (
     const deleted: Record<string, number> = {};
 
     for (const table of args.tables.filter((name) => schema.tables[name]?.shardMode?.kind === "global")) {
+        // A sweep drops all of a session's rows at once, so a session that staged any and now holds none was swept:
+        // pruning against the empty stage would delete every row of the table. A table it staged no row for is meant
+        // to end empty, and is told apart by the session still holding rows of its other tables.
+        // eslint-disable-next-line no-await-in-loop -- re-checked before each table, as a sweep can land between them
+        if (args.staged && !(await holdsStagedRows(exec, args.session))) {
+            throw expiredError(args.session);
+        }
+
         // eslint-disable-next-line no-await-in-loop -- tables are pruned one at a time through the one writer
         deleted[table] = await pruneTable(writer, exec, args.session, table);
     }
