@@ -667,6 +667,44 @@ describe("named admin tokens", () => {
         expect(deleteApiKey).toHaveBeenCalledWith({ apiKeyId: "k1" });
     });
 
+    it("records a named token's auth mutation under the token's name, never its value", async () => {
+        expect.assertions(3);
+
+        const { namespace } = fakeShards();
+        const rows: { actorId?: string; event: string }[] = [];
+        const worker = createBareWorker({
+            adminRevocations: fakeRevocations(),
+            adminToken: ROOT,
+            authAdmin: {
+                banUser: async () => {
+                    return { banned: true, id: "u1" };
+                },
+                listSessions: async () => {
+                    return { rows: [], total: 0 };
+                },
+                listUsers: async () => {
+                    return { rows: [], total: 0 };
+                },
+            },
+            authAuditWriter: {
+                write: async (entry) => {
+                    rows.push(entry);
+                },
+            },
+            functions: REGISTRY,
+            shardDO: namespace,
+        });
+        const created = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "oncall" }), method: "POST" });
+        const { token } = await created.json<{ token: string }>();
+
+        await expect(
+            status(call(worker, `${ORIGIN}/_lunora/admin/auth/users/ban`, token, { body: JSON.stringify({ userId: "u1" }), method: "POST" })),
+        ).resolves.toBe(200);
+
+        expect(rows).toStrictEqual([expect.objectContaining({ actorId: "admin:oncall", event: "admin-user-ban" })]);
+        expect(JSON.stringify(rows)).not.toContain(token);
+    });
+
     it("refuses a scoped create that the store did not keep, and removes the row it wrote", async () => {
         expect.assertions(3);
 

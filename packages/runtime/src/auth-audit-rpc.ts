@@ -72,6 +72,28 @@ interface AuthAuditReader {
     read: (options: ReadAuthAuditQuery) => Promise<AuthAuditEntry[]>;
 }
 
+/** One event to record, structurally mirroring `@lunora/auth`'s `AppendAuthAuditEntry`; the table assigns `seq`. */
+interface AuthAuditWrite {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: AuthAuditOutcome;
+    targetEmail?: string;
+    ts: number;
+    userAgent?: string;
+}
+
+/**
+ * The audit write plane the worker's auth admin routes record their mutations through, into the same trail the
+ * reader serves. The host wires it with `@lunora/auth`'s `createAuthAuditWriter(d1Executor(env.DB))`; omit it and the
+ * admin plane records nothing.
+ */
+interface AuthAuditWriter {
+    write: (entry: AuthAuditWrite) => Promise<void>;
+}
+
 /** Payload of a {@link GET_AUTH_AUDIT_LOG_OP} call: the recorded entries — newest first, or oldest first when the query carried a `sinceSeq` cursor. */
 interface AuthAuditLogResult {
     entries: AuthAuditEntry[];
@@ -172,4 +194,4 @@ const buildGetAuthAuditLog = (deps: AuthAuditRpcDeps): AuthAuditRpcHandler => {
 };
 
 export { buildGetAuthAuditLog, GET_AUTH_AUDIT_LOG_OP };
-export type { AuthAuditEntry, AuthAuditLogResult, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditQuery };
+export type { AuthAuditEntry, AuthAuditLogResult, AuthAuditOutcome, AuthAuditReader, AuthAuditWrite, AuthAuditWriter, ReadAuthAuditQuery };
