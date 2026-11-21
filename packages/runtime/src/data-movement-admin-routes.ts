@@ -121,6 +121,8 @@ interface DataMovementAdminRouteDeps {
     applyGlobals?: (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
     /** Enforce the admin bearer for an endpoint that needs no optional dependency. */
     assertAdmin: (request: Request) => void;
+    /** Enforce the root admin token: moving the auth tables outlives a named token's revocation. */
+    assertRootAdmin: (request: Request) => void;
     /** The worker's default shard, so an empty discovery still reaches the root DO. */
     defaultShardKey: string;
     /** Durable per-shard cursor store backing the continuous export tap; absent → the tap route reports not-configured. */
@@ -132,10 +134,21 @@ interface DataMovementAdminRouteDeps {
     /** The staged replace import (`./import-session`), bound to the worker options. */
     importSession: {
         abort: (headers: Record<string, string>, session: string) => Promise<{ aborted: boolean }>;
-        commit: (headers: Record<string, string>, session: string) => Promise<CommitImportResult>;
+        commit: (headers: Record<string, string>, session: string, assertAuthSectionAllowed: () => void) => Promise<CommitImportResult>;
         /** A replace in one request: stage, then commit (or abort on a refusal). */
-        replace: (request: Request, headers: Record<string, string>, tables: ReadonlyArray<string>) => Promise<ImportResponse>;
-        stage: (request: Request, headers: Record<string, string>, session: string, tables: ReadonlyArray<string>) => Promise<StageImportResult>;
+        replace: (
+            request: Request,
+            headers: Record<string, string>,
+            tables: ReadonlyArray<string>,
+            assertAuthSectionAllowed: () => void,
+        ) => Promise<ImportResponse>;
+        stage: (
+            request: Request,
+            headers: Record<string, string>,
+            session: string,
+            tables: ReadonlyArray<string>,
+            assertAuthSectionAllowed: () => void,
+        ) => Promise<StageImportResult>;
     };
 
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
@@ -160,6 +173,7 @@ interface DataMovementAdminRouteDeps {
         resolveHeaders: () => Promise<Record<string, string>>,
         dryRun: boolean,
         onConflict: "replace" | "skip",
+        assertAuthSectionAllowed: () => void,
     ) => Promise<{
         conflicts: number;
         /** Stored rows removed by `op: "delete"` rows. */
@@ -188,12 +202,18 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         knownTables,
         queryCoordinator: coordinator,
         assertAdmin,
+        assertRootAdmin,
         resolveForwardContext,
         shardDO,
         prepareExportRows,
         streamingImport,
         syncGlobals,
     } = deps;
+
+    // An import learns it carries the auth section only from its body (or, at commit, from the staged manifest).
+    const authSectionGate = (request: Request) => (): void => {
+        assertRootAdmin(request);
+    };
 
     const handleExport = async (request: Request, env: unknown): Promise<Response> => {
         const wrongMethod = methodGuard(request, ["POST"]);
@@ -205,6 +225,15 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         assertAdmin(request);
 
         const body = await parseExportBody(request);
+        // A whole-deployment export carries the default sections (never `auth`,
+        // which must be asked for by name); one that names tables carries none
+        // unless it asks.
+        const requestedSections = body.sections ?? (body.tables === undefined ? DEFAULT_EXPORT_SECTIONS : []);
+
+        // Password hashes and second factors: root-only, refused before any shard is read.
+        if (requestedSections.includes("auth")) {
+            assertRootAdmin(request);
+        }
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
@@ -216,10 +245,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         // worker memory scales with the total shard-local row count — the
         // streaming only keeps the *response* from being buffered.
         const tableRows = await prepareExportRows(forwardedHeaders, body.tables);
-        // A whole-deployment export carries the default sections (never `auth`,
-        // which must be asked for by name); one that names tables carries none
-        // unless it asks.
-        const sections = exportSectionRows(body.sections ?? (body.tables === undefined ? DEFAULT_EXPORT_SECTIONS : []));
+        const sections = exportSectionRows(requestedSections);
         const rows = (async function* ordered(): AsyncGenerator<ExportRow> {
             // The header, when any section is present, is the file's first line.
             if (sections.header) {
@@ -503,12 +529,12 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
         if (session !== undefined) {
-            const staged = await importSession.stage(request, forwardedHeaders, session, replaceTables);
+            const staged = await importSession.stage(request, forwardedHeaders, session, replaceTables, authSectionGate(request));
 
             return Response.json(staged, { status: staged.failed.length > 0 ? 207 : 200 });
         }
 
-        const replaced = await importSession.replace(request, forwardedHeaders, replaceTables);
+        const replaced = await importSession.replace(request, forwardedHeaders, replaceTables, authSectionGate(request));
 
         return Response.json(replaced, { headers: { "content-type": "application/json" }, status: replaced.failed.length > 0 ? 207 : 200 });
     };
@@ -558,6 +584,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             },
             dryRun,
             onConflictParameter,
+            authSectionGate(request),
         );
 
         // A client sends a dry run only to a worker that honours the flag, and an
@@ -606,7 +633,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const session = await readSession(request);
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
-        const result = await importSession.commit(forwardedHeaders, session);
+        const result = await importSession.commit(forwardedHeaders, session, authSectionGate(request));
         // An outcome outside the three is a bug, never a success: 500, not `Response.json`'s default 200.
         const status: number = ({ committed: 200, partial: 502, refused: 409 } as Record<string, number | undefined>)[result.status] ?? 500;
 

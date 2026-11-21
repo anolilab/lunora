@@ -249,11 +249,11 @@ const postImport = async (worker: ReturnType<typeof createWorker>, query: string
         fakeContext,
     );
 
-const postSession = async (worker: ReturnType<typeof createWorker>, action: "abort" | "commit", session: string) =>
+const postSession = async (worker: ReturnType<typeof createWorker>, action: "abort" | "commit", session: string, bearer = ADMIN_TOKEN) =>
     worker.fetch(
         new Request(`https://app.example/_lunora/admin/import/${action}`, {
             body: JSON.stringify({ session }),
-            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
             method: "POST",
         }),
         {},
@@ -748,6 +748,147 @@ describe("admin import — staged replace with an auth row the store refuses", (
         await expect(committed.json()).resolves.toMatchObject({ status: "refused" });
         await expect(texts("c1")).resolves.toStrictEqual(before);
         expect([...stores.auth.get("user")!.keys()]).toStrictEqual(["u-live"]);
+    });
+});
+
+describe("admin import and export — the auth section needs the root admin token", () => {
+    afterEach(closeCluster);
+
+    /** The revocation store a named token needs; nothing is ever revoked here. */
+    const revocations: ShardNamespaceLike = {
+        get: () => {
+            return {
+                fetch: async (request: Request) =>
+                    Response.json(new URL(request.url).pathname === "/latest" ? { latest: null } : { revoked: request.method === "POST" }),
+            };
+        },
+        idFromName: (name) => {
+            return { __name: name };
+        },
+    };
+
+    /** A worker over the seeded cluster with one live auth user, and a named token minted on it. */
+    const namedTokenWorker = async () => {
+        await seed();
+
+        const stores = createStores();
+
+        stores.auth.get("user")!.set("u-live", { id: "u-live" });
+
+        const worker = workerWith({ ...stores.options, adminRevocations: revocations });
+        const created = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/tokens", {
+                body: JSON.stringify({ name: "ci" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+        const { token } = await created.json<{ token: string }>();
+
+        return { authUsers: () => [...stores.auth.get("user")!.keys()], token, worker };
+    };
+
+    const errorCode = async (pending: Promise<Response>): Promise<[number, string | undefined]> => {
+        const response = await pending;
+        const body = await response.json<{ error?: { code?: string } }>();
+
+        return [response.status, body.error?.code];
+    };
+
+    const exportAs = async (worker: ReturnType<typeof createWorker>, bearer: string, body: unknown) =>
+        worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify(body),
+                headers: { authorization: `Bearer ${bearer}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+    const authHeader = { doc: { format: 2, sections: ["auth"] }, table: "$lunora" };
+    const authRow = { doc: { row: { id: "u-planted", role: "admin" }, table: "user" }, table: "$auth" };
+
+    it("refuses a named token's export of the auth section, and keeps its other exports working", async () => {
+        expect.assertions(4);
+
+        const { token, worker } = await namedTokenWorker();
+
+        await expect(errorCode(exportAs(worker, token, { sections: ["auth"] }))).resolves.toStrictEqual([403, "ADMIN_ROOT_REQUIRED"]);
+
+        const named = await exportAs(worker, token, {});
+
+        expect(named.status).toBe(200);
+        await expect(named.text()).resolves.not.toContain('"$auth"');
+
+        const root = await exportAs(worker, ADMIN_TOKEN, { sections: ["auth"] });
+
+        await expect(root.text()).resolves.toContain('"$auth"');
+    });
+
+    it("refuses a named token's append import of auth rows or an auth header, writing nothing", async () => {
+        expect.assertions(6);
+
+        const { authUsers, token, worker } = await namedTokenWorker();
+        const before = await texts("c1");
+
+        await expect(errorCode(postImport(worker, "", [message("m9", "c1", "planted"), authRow], token))).resolves.toStrictEqual([403, "ADMIN_ROOT_REQUIRED"]);
+        await expect(errorCode(postImport(worker, "", [authHeader, message("m9", "c1", "planted")], token))).resolves.toStrictEqual([
+            403,
+            "ADMIN_ROOT_REQUIRED",
+        ]);
+        await expect(texts("c1")).resolves.toStrictEqual(before);
+        expect(authUsers()).toStrictEqual(["u-live"]);
+
+        const named = await postImport(worker, "", [message("m9", "c1", "imported")], token);
+
+        expect(named.status).toBe(200);
+
+        await postImport(worker, "", [authRow], ADMIN_TOKEN);
+
+        expect(authUsers()).toStrictEqual(["u-live", "u-planted"]);
+    });
+
+    it("refuses a named token's replace upload that carries the auth section, staging and clearing nothing", async () => {
+        expect.assertions(6);
+
+        const { authUsers, token, worker } = await namedTokenWorker();
+        const before = await texts("c1");
+
+        await expect(
+            errorCode(postImport(worker, "?mode=replace&tables=messages&stage=named", [authHeader, message("m1", "c1", "as snapshotted")], token)),
+        ).resolves.toStrictEqual([403, "ADMIN_ROOT_REQUIRED"]);
+        expect(stagedRows("c1") + stagedRows(ROOT)).toBe(0);
+        // A header declaring auth with no rows would empty the auth tables at commit.
+        await expect(
+            errorCode(postImport(worker, "?mode=replace&tables=messages", [authHeader, message("m1", "c1", "as snapshotted")], token)),
+        ).resolves.toStrictEqual([403, "ADMIN_ROOT_REQUIRED"]);
+        await expect(texts("c1")).resolves.toStrictEqual(before);
+        expect(authUsers()).toStrictEqual(["u-live"]);
+
+        const named = await postImport(worker, "?mode=replace&tables=messages&stage=tables-only", [message("m1", "c1", "as snapshotted")], token);
+
+        expect(named.status).toBe(200);
+    });
+
+    it("refuses a named token's commit of a session that stages the auth section, even one the root token staged", async () => {
+        expect.assertions(5);
+
+        const { authUsers, token, worker } = await namedTokenWorker();
+        const before = await texts("c1");
+
+        const staged = await postImport(worker, "?mode=replace&tables=messages&stage=rooted", [authHeader, message("m1", "c1", "as snapshotted"), authRow]);
+
+        expect(staged.status).toBe(200);
+        await expect(errorCode(postSession(worker, "commit", "rooted", token))).resolves.toStrictEqual([403, "ADMIN_ROOT_REQUIRED"]);
+        await expect(texts("c1")).resolves.toStrictEqual(before);
+        expect(authUsers()).toStrictEqual(["u-live"]);
+
+        const committed = await postSession(worker, "commit", "rooted");
+
+        await expect(committed.json()).resolves.toMatchObject({ status: "committed" });
     });
 });
 

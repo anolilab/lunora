@@ -4600,8 +4600,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         };
 
     /** A staged import's context: the effective admin token seals its staged chunks, and its global / section halves are audited. */
-    const importSessionContext = (headers: Record<string, string>): ImportSessionContext => {
+    const importSessionContext = (headers: Record<string, string>, assertAuthSectionAllowed: () => void): ImportSessionContext => {
         return {
+            assertAuthSectionAllowed,
             coordinator: queryCoordinator,
             headers,
             namespace: shardDO,
@@ -4613,6 +4614,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
         applyGlobals: options.applyGlobals,
         assertAdmin: assertAdminAuthorized,
+        assertRootAdmin,
         exportCursorStore: options.exportCursorStore,
         exportSinks: options.exportSinks,
         defaultShardKey: defaultShard,
@@ -4628,12 +4630,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         exportSectionRows: (sections) => exportSectionRows(options, sections),
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
         importSession: {
-            abort: async (headers, session) => abortImport(importSessionContext(headers), session),
-            commit: async (headers, session) => commitImport(importSessionContext(headers), session),
-            replace: async (request, headers, tables) => replaceImport(request, importSessionContext(headers), tables),
-            stage: async (request, headers, session, tables) => stageImport(request, importSessionContext(headers), session, tables),
+            // An abort only drops staged rows, so it needs no auth-section check.
+            abort: async (headers, session) =>
+                abortImport(
+                    importSessionContext(headers, () => undefined),
+                    session,
+                ),
+            commit: async (headers, session, assertAuthSectionAllowed) => commitImport(importSessionContext(headers, assertAuthSectionAllowed), session),
+            replace: async (request, headers, tables, assertAuthSectionAllowed) =>
+                replaceImport(request, importSessionContext(headers, assertAuthSectionAllowed), tables),
+            stage: async (request, headers, session, tables, assertAuthSectionAllowed) =>
+                stageImport(request, importSessionContext(headers, assertAuthSectionAllowed), session, tables),
         },
-        streamingImport: async (request, resolveHeaders, dryRun, onConflict) =>
+        streamingImport: async (request, resolveHeaders, dryRun, onConflict, assertAuthSectionAllowed) =>
             // The effective admin token (option or env): restore staging seals its chunks under it. Headers resolve late, at the
             // shard fan-out and again per audit entry, so a slow upload cannot outlive a named token's short-lived shard signal.
             streamingImport(
@@ -4645,6 +4654,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 dryRun,
                 onConflict,
                 async (args) => recordImportAudit(await resolveHeaders())(args),
+                assertAuthSectionAllowed,
             ),
         syncGlobals: options.syncGlobals,
     });

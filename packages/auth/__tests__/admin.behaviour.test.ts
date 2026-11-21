@@ -74,6 +74,44 @@ describe("createAuthAdmin", () => {
         await expect(adminApi.createUser({ email: "dup@example.com", name: "Second" })).rejects.toThrow(/already exists/iu);
     });
 
+    it("lower-cases an email change, so the account is found by the address better-auth looks up", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "alice@old.example", name: "Alice" });
+        const updated = await adminApi.updateUser({ data: { email: "Alice@Example.com" }, userId: user.id });
+        const context = await auth.$context;
+
+        expect(updated.email).toBe("alice@example.com");
+        expect(userRow(user.id)?.["email"]).toBe("alice@example.com");
+        await expect(context.internalAdapter.findUserByEmail("alice@example.com")).resolves.toMatchObject({ user: { id: user.id } });
+    });
+
+    it("refuses an email change to another user's address in any casing, writing nothing", async () => {
+        expect.assertions(3);
+
+        const taken = await adminApi.createUser({ email: "taken@example.com", name: "Taken" });
+        const user = await adminApi.createUser({ email: "mover@example.com", name: "Mover" });
+
+        await expect(adminApi.updateUser({ data: { email: "Taken@Example.com", name: "Renamed" }, userId: user.id })).rejects.toMatchObject({
+            code: "USER_ALREADY_EXISTS",
+        });
+        expect(userRow(user.id)).toMatchObject({ email: "mover@example.com", name: "Mover" });
+        expect(userRow(taken.id)?.["email"]).toBe("taken@example.com");
+    });
+
+    it("lets a user keep its own address in another casing, and leaves an update without an email alone", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "same@example.com", name: "Same" });
+
+        await expect(adminApi.updateUser({ data: { email: "SAME@example.com" }, userId: user.id })).resolves.toMatchObject({ email: "same@example.com" });
+        await expect(adminApi.updateUser({ data: { name: "Renamed" }, userId: user.id })).resolves.toMatchObject({
+            email: "same@example.com",
+            name: "Renamed",
+        });
+        expect(userRow(user.id)).toMatchObject({ email: "same@example.com", name: "Renamed" });
+    });
+
     it("lists users with a total and an email search", async () => {
         expect.assertions(3);
 
