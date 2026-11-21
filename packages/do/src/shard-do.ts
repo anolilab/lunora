@@ -8848,6 +8848,21 @@ abstract class ShardDO {
                 }
             }
 
+            // A lazy registry's stub does not carry `perDispatch` until its module loads, so the
+            // refusal in `subscribe` would wave a cold per-dispatch query through. A failed load is
+            // left to the seed, which reports it on this subscription.
+            if (functionPath !== undefined && !isAdmin) {
+                const requestScope = this.captureRequestScope();
+
+                try {
+                    await this.prepareFunction(functionPath, "subscription");
+                } catch {
+                    // Reported by the seed: see above.
+                } finally {
+                    this.restoreRequestScope(requestScope);
+                }
+            }
+
             const registered = this.readAttachment(ws).subs;
             const isRetry = Object.hasOwn(registered, envelope.id) && isSameSubscription(registered[envelope.id], query);
             const status = this.subscribe(ws, envelope.id, query);
