@@ -126,6 +126,30 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
             expect(page.page.map((row) => row["_id"])).toStrictEqual(["s2", "s3", "s1"]);
             expect(companionRowCount()).toBe(3);
         });
+
+        it("restore replaces an entry a soft-deleted row kept from before that write was refused", async () => {
+            expect.assertions(3);
+
+            const writer = await setup();
+            const rankTable = rankTableName("scores", "by_score");
+
+            // What a write into the deleted row left behind on a shard that ran before the refusal.
+            const kept = harness.sql.exec(`SELECT * FROM ${rankTable} WHERE __id__ = 's2'`).toArray()[0] as Record<string, unknown>;
+            const columns = Object.keys(kept);
+
+            await writer.delete("scores", "s2");
+            harness.sql.exec(
+                `INSERT INTO ${rankTable} (${columns.map((column) => `"${column}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+                ...columns.map((column) => kept[column]),
+            );
+
+            await expect(writer.restore!("scores", "s2")).resolves.toBeUndefined();
+
+            const page = await writer.rankPage("scores", "by_score", {});
+
+            expect(page.page.map((row) => row["_id"] as string).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["s1", "s2", "s3"]);
+            expect(companionRowCount()).toBe(3);
+        });
     });
 
     /**
