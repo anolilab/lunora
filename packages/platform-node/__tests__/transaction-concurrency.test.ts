@@ -95,8 +95,10 @@ describe("createNodeShardHost transaction concurrency", () => {
             host.sql.exec("CREATE TABLE rows_ (id TEXT PRIMARY KEY)");
 
             const gate = createGate();
+            const entered = Promise.withResolvers<undefined>();
             const first = host.transaction(async () => {
                 host.sql.exec("INSERT INTO rows_ (id) VALUES ('A')");
+                entered.resolve(undefined);
 
                 await gate.wait;
 
@@ -109,6 +111,9 @@ describe("createNodeShardHost transaction concurrency", () => {
                 host.sql.exec("INSERT INTO rows_ (id) VALUES ('C')");
             });
 
+            // `first` runs its callback after an await: opened before it is held there, the gate
+            // would let it through and the two would never overlap.
+            await entered.promise;
             gate.open();
 
             await Promise.all([first, second]);
@@ -353,9 +358,11 @@ describe("createNodeShardHost transaction concurrency", () => {
             // call's `COMMIT` publishes the second's rows. A store scoped to a
             // single call's own await chain is what tells the two cases apart.
             const gate = createGate();
+            const entered = Promise.withResolvers<undefined>();
             const overlapping = Promise.all([
                 host.transaction(async () => {
                     host.sql.exec("INSERT INTO rows_ (id) VALUES ('A')");
+                    entered.resolve(undefined);
 
                     await gate.wait;
 
@@ -369,6 +376,8 @@ describe("createNodeShardHost transaction concurrency", () => {
                 }),
             ]);
 
+            // Held open inside the first transaction before the gate opens, so the other two overlap it.
+            await entered.promise;
             gate.open();
             await overlapping;
 
