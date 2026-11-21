@@ -1963,8 +1963,8 @@ and custom `routes` handlers, keep serving.
 
 Creates, lists and revokes named admin tokens. A named token works wherever the
 admin token does, except for root-only operations: token management, admin
-WebSocket sub-tokens, storage signed URLs, `runAs`, point-in-time restore and
-most auth admin writes. Each needs the root `LUNORA_ADMIN_TOKEN`.
+WebSocket sub-tokens, storage signed URLs, `runAs`, point-in-time restore,
+exporting or importing the auth section, and most auth admin writes. Each needs the root `LUNORA_ADMIN_TOKEN`.
 
 ```bash
 lunora admin-token create ci-deploy --expires-days 90   # prints lnat.ci-deploy.<secret> once

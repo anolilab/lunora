@@ -95,7 +95,9 @@ data export/import, migrations, the Studio, scheduled-job admin.
       a revocation needs the root token: managing tokens, admin WebSockets and WS
       sub-tokens (so the Studio's live panels), `pitrRestore`, `runAs`, storage
       signed URLs (so `lunora import` of a blob above the verified-upload cap),
-      the auth jurisdiction copy and purge, every auth admin op except the
+      the auth jurisdiction copy and purge, an export that asks for the
+      `auth` section and an import (or staged-import commit) that carries it,
+      every auth admin op except the
       reads and the ones that only take access away (ban, revoke a session or
       invitation). Named tokens
       require `LUNORA_ADMIN_TOKEN` to be set (the worker signs its hop to the

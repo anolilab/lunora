@@ -13,7 +13,7 @@ import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
 import type { SectionRow } from "./export-sections";
-import { assertSupportedHeader, HEADER_TABLE, importSectionRows, isSectionTable } from "./export-sections";
+import { assertSupportedHeader, carriesAuthSection, HEADER_TABLE, importSectionRows, isSectionTable } from "./export-sections";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
@@ -540,6 +540,7 @@ const streamingImport = async (
     dryRun: boolean,
     onConflict: "replace" | "skip",
     recordAudit: RecordImportAudit,
+    assertAuthSectionAllowed: () => void,
 ): Promise<{
     conflicts: number;
     deleted: number;
@@ -554,6 +555,11 @@ const streamingImport = async (
     const run = importRunOf(request);
 
     const { errors, globalRows, perShard, received, sectionRows } = await bucketImportStream(request, options, defaultShard, undefined);
+
+    // The whole body is read before any plane is written, so a caller refused the auth section leaves nothing behind.
+    if (carriesAuthSection(sectionRows)) {
+        assertAuthSectionAllowed();
+    }
 
     // Refused before the shard fan-out, not per row after it: shard rows would already have been
     // overwritten by the time the global plane said it cannot replace, and that is not undoable.
