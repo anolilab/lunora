@@ -701,6 +701,14 @@ class SchedulerDO {
      */
     private readonly cancelledLeases = new Set<string>();
 
+    /**
+     * The last `enqueuedAt` stamped here. Stamps are kept strictly increasing because `enqueuedAt`
+     * is a record's generation in its dedup key: a reused id scheduled within the millisecond of
+     * its previous job would otherwise be answered from that job's result. In memory is enough —
+     * an evicted instance comes back later than the millisecond it last stamped.
+     */
+    private lastEnqueuedAt = 0;
+
     public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
         this.env = env;
@@ -2030,12 +2038,16 @@ class SchedulerDO {
         // not also cost the old outcome.
         const dropOutcome = body.id === undefined ? undefined : this.state.storage.delete([`${DONE_PREFIX}${id}`, `${REPAIR_PREFIX}${id}`]);
 
+        const enqueuedAt = Math.max(Date.now(), this.lastEnqueuedAt + 1);
+
+        this.lastEnqueuedAt = enqueuedAt;
+
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime
             // despite the type, so the ?? fallback is a real guard.
             // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- parsed wire data can omit args
             args: body.args ?? {},
-            enqueuedAt: Date.now(),
+            enqueuedAt,
             id,
             ...(functionPath === undefined ? {} : { functionPath }),
             ...(instanceName === undefined ? {} : { instanceName }),

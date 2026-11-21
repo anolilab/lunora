@@ -660,4 +660,30 @@ describe("schedulerDO dispatch dedup key", () => {
         expect(second?.dedupKey).toStrictEqual(expect.any(String));
         expect(second?.dedupKey).not.toBe(first?.dedupKey);
     });
+
+    it("gives a reused id's new job its own key when it is scheduled in the same millisecond", async () => {
+        expect.assertions(2);
+
+        const at = 1_700_000_000_000;
+
+        pinClock(at);
+
+        const keys: unknown[] = [];
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            keys.push((JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { dedupKey?: unknown }).dedupKey);
+
+            return new Response(null, { status: 200 });
+        });
+
+        const scheduler = new SchedulerDO(createFakeState(), env);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.first", id: "sync-user", scheduledFor: at }));
+        await scheduler.alarm();
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.second", id: "sync-user", scheduledFor: at }));
+        await scheduler.alarm();
+
+        expect(keys).toHaveLength(2);
+        expect(keys[1]).not.toBe(keys[0]);
+    });
 });
