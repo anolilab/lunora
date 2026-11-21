@@ -156,13 +156,16 @@ describe(jwtIdentityResolver, () => {
     });
 
     it("refuses to build without an audience, or with an empty one", () => {
-        expect.assertions(4);
+        expect.assertions(6);
 
         // @ts-expect-error -- exercising the runtime guard for JS callers and env-derived undefined
         expect(() => jwtIdentityResolver({ issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
         expect(() => jwtIdentityResolver({ audience: "", issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
         expect(() => jwtIdentityResolver({ audience: [], issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
         expect(() => jwtIdentityResolver({ audience: [AUDIENCE, ""], issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
+        // An env var holding only spaces would otherwise build a resolver that rejects every token.
+        expect(() => jwtIdentityResolver({ audience: "  ", issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
+        expect(() => jwtIdentityResolver({ audience: [AUDIENCE, " "], issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
     });
 
     it("accepts only a token minted for the configured audience", async () => {
