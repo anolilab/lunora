@@ -38,10 +38,27 @@ const CODE_FILE_RE = /\.[cm]?[jt]sx?$/u;
  * each file explicitly, so refusing (rather than `init`'s silent skip) is
  * correct here: skipping would silently produce a broken install.
  *
+ * Every directory segment of `file.from` is checked too: `lstatSync` sees only
+ * the last segment, so a linked `dir` in `from: "dir/name"` would otherwise be
+ * read through.
+ *
  * Exported so `registry view` reads item files through the same guard — a
  * pasted copy of it drifted from this one once already.
  */
 const readItemFile = (itemDirectory: string, file: RegistryFile, useUmbrella: boolean, itemKey: string): string => {
+    const parents = file.from.split("/").slice(0, -1);
+
+    for (let depth = 1; depth <= parents.length; depth += 1) {
+        const parent = join(itemDirectory, ...parents.slice(0, depth));
+
+        if (lstatSync(parent).isSymbolicLink()) {
+            throw new LunoraError(
+                "INTERNAL",
+                `registry item "${itemKey}": refusing to read "${relative(itemDirectory, parent)}" — it is a symlink, not a directory`,
+            );
+        }
+    }
+
     const sourcePath = join(itemDirectory, file.from);
 
     if (lstatSync(sourcePath).isSymbolicLink()) {
