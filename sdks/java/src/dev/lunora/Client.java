@@ -59,9 +59,9 @@ public final class Client {
     public static final int RESUBSCRIBE_CONCURRENCY = 3;
 
     /**
-     * How long an unanswered re-subscribe holds its slot before the next one goes out without it.
-     * A slot no reply ever frees would stop every queued re-subscribe until the next reconnect,
-     * which is worse than the burst the pacing avoids.
+     * How long an unanswered re-subscribe holds its slot before the next one goes out without it. A
+     * slot no reply ever frees would stop every queued re-subscribe until the next reconnect, which
+     * is worse than the burst the pacing avoids.
      */
     public static final long RESUBSCRIBE_ACK_TIMEOUT_NANOS = 10_000_000_000L;
 
@@ -1637,11 +1637,11 @@ public final class Client {
     /**
      * Sends what {@link #takeResubscribes} built, with the lock released.
      *
-     * <p>A send that fails means the server never saw that replay or any after it, so their
-     * dropped changes are still unapplied and a later delta must not advance the cursor past them:
-     * their freeze comes back. Off the caller's own resend ({@code raiseErrors} false) the failure
-     * is not raised: an exception out of {@link #handleFrame} ends the socket read loop, and the
-     * dead socket's detach starts the next resend anyway.
+     * <p>A send that fails means the server never saw that replay or any after it, so their dropped
+     * changes are still unapplied and a later delta must not advance the cursor past them: their
+     * freeze comes back. Off the caller's own resend ({@code raiseErrors} false) the failure is not
+     * raised: an exception out of {@link #handleFrame} ends the socket read loop, and the dead
+     * socket's detach starts the next resend anyway.
      */
     private void sendResubscribes(
             FrameSender socket, List<Resubscribe> batch, boolean raiseErrors) {
