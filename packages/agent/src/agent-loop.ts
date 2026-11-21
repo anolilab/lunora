@@ -439,6 +439,7 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
 
     await step.do(`secret:request:${slot}`, async (): Promise<void> => {
         await run(openSecretRef, {
+            agent: turnContext.agentName,
             consumerTool,
             expiresAt: Date.now() + timeoutMs,
             instanceId,

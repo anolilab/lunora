@@ -358,6 +358,12 @@ const agentExtension: SchemaExtension<
             callId: v.optional(v.string()),
             toolName: v.string(),
             updatedAt: v.number(),
+
+            /**
+             * The agent whose run asked, which a supply or decline wakes. A thread keeps the agent it was created for when
+             * another agent continues it, so the thread cannot say. Absent on rows written before it existed.
+             */
+            agent: v.optional(v.string().nullable()),
         })
             // One request per slot per thread; the unique key makes a replayed pause a no-op.
             .index("byThreadCall", ["threadKey", "toolCallId"], { unique: true })
@@ -588,19 +594,22 @@ const openSecretRequestOrThrow = async (database: QueueDatabase, threadKey: stri
 };
 
 /**
- * The thread's agent `sendEvent` handle plus its running instance: the path that
- * wakes a paused secret wait.
+ * The `sendEvent` handle of the agent whose run asked for the secret, plus the thread's running
+ * instance: the path that wakes a paused secret wait. A request written before the row named its
+ * agent falls back to the thread's.
  */
 const secretWaitHandle = (
     context: unknown,
     thread: Record<string, unknown>,
+    request: Record<string, unknown>,
 ): { instanceId: string; sendEvent: (id: string, event: { payload: unknown; type: string }) => Promise<void> } => {
     const { instanceId } = thread;
+    const agentName = typeof request["agent"] === "string" ? request["agent"] : (thread["agent"] as string);
     const { agents } = context as { agents?: Record<string, { sendEvent?: (id: string, event: { payload: unknown; type: string }) => Promise<void> }> };
-    const handle = agents?.[thread["agent"] as string];
+    const handle = agents?.[agentName];
 
     if (typeof instanceId !== "string" || typeof handle?.sendEvent !== "function") {
-        throw new LunoraError("INTERNAL", `@lunora/agent: no ctx.agents["${String(thread["agent"])}"] producer to deliver the secret — run codegen/dev`);
+        throw new LunoraError("INTERNAL", `@lunora/agent: no ctx.agents["${agentName}"] producer to deliver the secret — run codegen/dev`);
     }
 
     return { instanceId, sendEvent: handle.sendEvent };
@@ -1599,7 +1608,7 @@ export const agentComponent = (): AgentComponent => {
             const pending = await pendingSecretRequestForCall(context.db, args.threadKey, thread["instanceId"], args.toolCallId, Date.now());
             const slot = pending["toolCallId"] as string;
             const marker = await pendingSecretMarker(context.db, thread, slot);
-            const handle = secretWaitHandle(context, thread);
+            const handle = secretWaitHandle(context, thread, pending);
             // The owner is the instance the request was selected for, not whatever the row says on a later read.
             const ownerInstanceId = thread["instanceId"] as string;
             const assertStillOwned = (request: Record<string, unknown>): void => {
@@ -1672,7 +1681,7 @@ export const agentComponent = (): AgentComponent => {
             const pending = await pendingSecretRequestForCall(context.db, args.threadKey, thread["instanceId"], args.toolCallId, Date.now());
             const slot = pending["toolCallId"] as string;
             const marker = await pendingSecretMarker(context.db, thread, slot);
-            const handle = secretWaitHandle(context, thread);
+            const handle = secretWaitHandle(context, thread, pending);
             const request = await openSecretRequestOrThrow(context.db, args.threadKey, slot, Date.now());
 
             await context.db.patch(REQUESTS_TABLE, request["_id"] as never, { status: "declined", updatedAt: Date.now() });
@@ -1698,6 +1707,7 @@ export const agentComponent = (): AgentComponent => {
     const agentOpenSecretRequest = asInternal(
         mutation
             .input({
+                agent: v.optional(v.string()),
                 consumerTool: v.string(),
                 expiresAt: v.number(),
                 instanceId: v.string(),
@@ -1713,6 +1723,8 @@ export const agentComponent = (): AgentComponent => {
 
                 if (existing === undefined) {
                     await context.db.insert(REQUESTS_TABLE, {
+                        // eslint-disable-next-line unicorn/no-null -- `null` is the stored form of "no agent named"; the column is nullable
+                        agent: args.agent ?? null,
                         consumerTool: args.consumerTool,
                         createdAt: now,
                         expiresAt: args.expiresAt,
@@ -1742,6 +1754,8 @@ export const agentComponent = (): AgentComponent => {
                 }
 
                 await context.db.patch(REQUESTS_TABLE, existing["_id"] as never, {
+                    // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected
+                    agent: args.agent ?? null,
                     consumerTool: args.consumerTool,
                     createdAt: now,
                     expiresAt: args.expiresAt,
