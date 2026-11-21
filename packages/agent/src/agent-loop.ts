@@ -425,15 +425,33 @@ const secretSlotOf = (turn: number, callId: string): string => `${String(turn)}:
 /**
  * The key an ordinary tool call's steps, wait, event and rows are stored under. A provider can reuse a tool-call id in a
  * later turn of the same run, and keys built from the bare id would hand the later call the earlier one's memoized gate,
- * approval and output. Only a repeated id carries the turn: a first occurrence keeps the bare id, so a run parked across
- * a deploy still finds every step it already recorded under that name.
+ * approval and output. Only a taken id carries the turn: a first occurrence keeps the bare id, so a run parked across
+ * a deploy still finds every step it already recorded under that name. The turn prefix repeats until the key is free,
+ * because a provider id can itself look like a slot (`2:x`).
  */
-const callKeyOf = (turn: number, callId: string, earlierCallIds: ReadonlySet<string>): string => {
-    if (earlierCallIds.has(callId)) {
-        return secretSlotOf(turn, callId);
+const callKeyOf = (turn: number, callId: string, earlierCallKeys: ReadonlySet<string>): string => {
+    let key = callId;
+
+    while (earlierCallKeys.has(key)) {
+        key = secretSlotOf(turn, key);
     }
 
-    return callId;
+    return key;
+};
+
+/** The keys earlier turns' calls were stored under. `steps[turn]` is that turn's memoized decision, so a replay rebuilds the same set. */
+const earlierCallKeysOf = (steps: ReadonlyArray<AgentStepInfo>): Set<string> => {
+    const keys = new Set<string>();
+
+    for (const [turn, earlier] of steps.entries()) {
+        const turnKeys = earlier.toolCalls.map((earlierCall) => callKeyOf(turn, earlierCall.toolCallId, keys));
+
+        for (const key of turnKeys) {
+            keys.add(key);
+        }
+    }
+
+    return keys;
 };
 
 /**
@@ -598,7 +616,7 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
     });
 };
 
-const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number, earlierCallIds: ReadonlySet<string>): Promise<void> => {
+const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number, earlierCallKeys: ReadonlySet<string>): Promise<void> => {
     const {
         agent,
         agentName,
@@ -618,7 +636,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
         threadKey,
         tools,
     } = turnContext;
-    const callKey = callKeyOf(turn, call.id, earlierCallIds);
+    const callKey = callKeyOf(turn, call.id, earlierCallKeys);
     const stepName = `tool:${call.name}:${callKey}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${callKey}`;
@@ -1562,14 +1580,13 @@ const handleTurn = async (
     // the pending call, and the rows correlate results.
     await persist({ content: decision.text, messageKey: `${instanceId}:assistant:${String(turn)}`, role: "assistant", toolCalls: decision.toolCalls });
 
-    // `steps` holds this run's earlier tool turns, rebuilt from the memoized LLM steps, so the set is the same on every replay.
-    const earlierCallIds = new Set(steps.flatMap((earlier) => earlier.toolCalls.map((earlierCall) => earlierCall.toolCallId)));
+    const earlierCallKeys = earlierCallKeysOf(steps);
 
     // Tool calls run sequentially: their step names memoize each one
     // independently, so a crash between two calls resumes after the completed one.
     for (const call of decision.toolCalls) {
         // eslint-disable-next-line no-await-in-loop -- sequential durable steps ARE the execution model
-        await runToolCall(turnContext, call, turn, earlierCallIds);
+        await runToolCall(turnContext, call, turn, earlierCallKeys);
     }
 
     await notifyStepFinish(turnContext, { text: decision.text, toolCalls: decision.toolCalls, turn, ...stepUsage });

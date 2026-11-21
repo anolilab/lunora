@@ -2674,6 +2674,52 @@ describe("a tool-call id a later turn reuses", () => {
         expect(runs).toStrictEqual(["charge"]);
     });
 
+    it("asks for a gated call whose repeated id's slot equals an earlier call's own id", async () => {
+        expect.assertions(2);
+
+        const runs: string[] = [];
+        // `charge` is passed by its predicate, so its gate memo under its key records "no approval needed".
+        const agent = reuseAgent(runs, () => false);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([
+            toolTurn("x", "echo", {}),
+            toolTurn("2:x", "charge", { amount: 10 }),
+            toolTurn("x", "refund", {}),
+            finalTurn("done"),
+        ]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* parked on the refund's approval; never settles */
+        });
+        await parkedOn(paused, journal, "approval:2:2:x");
+
+        expect(runs).toStrictEqual(["echo", "charge"]);
+        expect(journal.waitedNames).toStrictEqual(["approval:2:2:x"]);
+    });
+
+    it("gives a first-seen id that equals an earlier repeated call's slot its own slot", async () => {
+        expect.assertions(2);
+
+        const runs: string[] = [];
+        const agent = reuseAgent(runs);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("x", "echo", { n: 1 }), toolTurn("x", "echo", { n: 2 }), toolTurn("1:x", "refund", {}), finalTurn("done")]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* parked on the refund's approval; never settles */
+        });
+        await parkedOn(paused, journal, "approval:2:1:x");
+
+        expect(journal.waitedNames).toStrictEqual(["approval:2:1:x"]);
+        expect(runs).toStrictEqual(["echo", "echo"]);
+    });
+
     it("runs the same tool again under a reused id and keeps both results, and a replay runs neither again", async () => {
         expect.assertions(5);
 
