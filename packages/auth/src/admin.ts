@@ -1591,7 +1591,18 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
         updateUser: ({ data, userId }) =>
             withContext(async (context_) => {
-                const user = await context_.internalAdapter.updateUser(userId, data);
+                const normalizedEmail = typeof data["email"] === "string" ? data["email"].toLowerCase() : undefined;
+
+                if (normalizedEmail !== undefined) {
+                    // A user keeping its own address in another casing is not a conflict.
+                    const existing = await context_.internalAdapter.findUserByEmail(normalizedEmail);
+
+                    if (existing && existing.user.id !== userId) {
+                        throw new LunoraAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");
+                    }
+                }
+
+                const user = await context_.internalAdapter.updateUser(userId, normalizedEmail === undefined ? data : { ...data, email: normalizedEmail });
 
                 return toUser(user as Record<string, unknown>);
             }),
