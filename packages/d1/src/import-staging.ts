@@ -304,8 +304,18 @@ const writeStaged = async (writer: DatabaseWriterLike, exec: D1Exec, session: st
     }
 };
 
+const expiredError = (session: string): GlobalImportStagingError =>
+    new GlobalImportStagingError("IMPORT_SESSION_EXPIRED", `import session "${session}" has no staged .global() rows (expired, or aborted)`);
+
+/** Whether `session` still has a staged row. */
+const holdsStagedRows = async (exec: D1Exec, session: string): Promise<boolean> => {
+    const hits = await exec.all(`SELECT 1 FROM "${STAGE_TABLE}" WHERE session = ? LIMIT 1`, [session]);
+
+    return hits.length > 0;
+};
+
 /** Hard-delete every row of `table` the session did not stage. An absent table (never written) holds none. */
-const pruneTable = async (writer: DatabaseWriterLike, exec: D1Exec, session: string, table: string): Promise<number> => {
+const pruneTable = async (writer: DatabaseWriterLike, exec: D1Exec, session: string, table: string, staged: boolean): Promise<number> => {
     const present = await exec.all(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, [table]);
 
     if (present.length === 0) {
@@ -315,11 +325,15 @@ const pruneTable = async (writer: DatabaseWriterLike, exec: D1Exec, session: str
     let deleted = 0;
 
     for (;;) {
-        // Each page is re-read after its deletes, so the anti-join never pages over rows it removed.
+        // Each page is re-read after its deletes, so the anti-join never pages over rows it removed. A session that
+        // staged rows proves it still holds them in the same statement: a sweep landing after any separate check
+        // would otherwise turn the anti-join into "every row of the table".
         // eslint-disable-next-line no-await-in-loop -- delete page by page through the one writer
         const doomed = await exec.all(
-            `SELECT "id" FROM ${quoteIdentifier(table)} WHERE "id" NOT IN (SELECT id FROM "${STAGE_TABLE}" WHERE session = ? AND tbl = ?) LIMIT ?`,
-            [session, table, PAGE_ROWS],
+            `SELECT "id" FROM ${quoteIdentifier(table)} WHERE "id" NOT IN (SELECT id FROM "${STAGE_TABLE}" WHERE session = ? AND tbl = ?)${
+                staged ? ` AND EXISTS (SELECT 1 FROM "${STAGE_TABLE}" WHERE session = ?)` : ""
+            } LIMIT ?`,
+            staged ? [session, table, session, PAGE_ROWS] : [session, table, PAGE_ROWS],
         );
 
         for (const { id } of doomed) {
@@ -330,19 +344,15 @@ const pruneTable = async (writer: DatabaseWriterLike, exec: D1Exec, session: str
         deleted += doomed.length;
 
         if (doomed.length < PAGE_ROWS) {
+            // A short page is also what the guard returns once the rows are swept; that prune is not complete.
+            // eslint-disable-next-line no-await-in-loop -- runs once, on the last page
+            if (staged && !(await holdsStagedRows(exec, session))) {
+                throw expiredError(session);
+            }
+
             return deleted;
         }
     }
-};
-
-const expiredError = (session: string): GlobalImportStagingError =>
-    new GlobalImportStagingError("IMPORT_SESSION_EXPIRED", `import session "${session}" has no staged .global() rows (expired, or aborted)`);
-
-/** Whether `session` still has a staged row. */
-const holdsStagedRows = async (exec: D1Exec, session: string): Promise<boolean> => {
-    const hits = await exec.all(`SELECT 1 FROM "${STAGE_TABLE}" WHERE session = ? LIMIT 1`, [session]);
-
-    return hits.length > 0;
 };
 
 /**
@@ -395,7 +405,7 @@ const commitStagedGlobalRows = async (
         }
 
         // eslint-disable-next-line no-await-in-loop -- tables are pruned one at a time through the one writer
-        deleted[table] = await pruneTable(writer, exec, args.session, table);
+        deleted[table] = await pruneTable(writer, exec, args.session, table, args.staged);
     }
 
     const result: StagedCommitResult = { conflicts: 0, deleted, errors: [], inserted };

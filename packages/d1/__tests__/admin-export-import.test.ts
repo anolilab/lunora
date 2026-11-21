@@ -962,6 +962,41 @@ describe("d1 admin export/import globals", () => {
                 await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "v" });
                 await expect(markers("s13")).resolves.not.toContain("committed");
             });
+
+            it("prunes nothing when the sweep lands between the stage re-check and the prune's read", async () => {
+                expect.assertions(2);
+
+                await stageGlobalRows(
+                    harness.exec,
+                    schema,
+                    { generation: "g1", rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }], session: "s15", tables: ["settings"] },
+                    0,
+                );
+
+                let checks = 0;
+                const exec: typeof harness.exec = {
+                    ...harness.exec,
+                    all: async (sql, params) => {
+                        const rows = await harness.exec.all(sql, params);
+
+                        // The second stage probe is the per-table re-check; the other session sweeps right after it.
+                        if (sql.startsWith('SELECT 1 FROM "__lunora_import_stage__"')) {
+                            checks += 1;
+
+                            if (checks === 2) {
+                                await stageGlobalRows(harness.exec, schema, { generation: "g1", rows: [], session: "other", tables: ["settings"] }, 3 * TTL);
+                            }
+                        }
+
+                        return rows;
+                    },
+                };
+
+                await expect(
+                    commitStagedGlobalRows(writer, exec, schema, { generation: "g1", session: "s15", staged: true, tables: ["settings"] }, 1),
+                ).rejects.toMatchObject({ code: "IMPORT_SESSION_EXPIRED" });
+                await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "v" });
+            });
         });
 
         it("sweeps an expired session's rows and marker in one batch, so a failed sweep drops neither", async () => {
