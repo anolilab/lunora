@@ -5,7 +5,6 @@ import type { MetricSeries } from "../src/telemetry/metrics-read";
 import { createMetricsReader, DEFAULT_METRICS_BUCKET_MS, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry/metrics-read";
 import type { Doc as Document_ } from "./_generated/dataModel";
 import { action, internalMutation, mutation, query, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg, assertServicesInKeyProject, assertTelemetryInKeyProject, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
@@ -210,7 +209,7 @@ export const series = query
             },
         );
 
-        let points = rows.map((row) => absentForNull(row));
+        let points = rows;
 
         // The oldest bucket a cut-short read reached holds only some of its points; its average
         // would be wrong, so drop it and keep every bucket shown exact — unless it is the only

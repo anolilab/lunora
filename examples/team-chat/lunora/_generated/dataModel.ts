@@ -27,7 +27,7 @@ export interface Doc_profiles {
     _creationTime: number;
     userId: string;
     name: string;
-    avatarKey?: string | null;
+    avatarKey?: string;
 }
 
 export interface Doc_channels {

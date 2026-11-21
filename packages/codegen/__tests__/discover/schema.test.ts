@@ -361,6 +361,30 @@ describe("discoverSchema", () => {
         expect(emitDataModel(schema)).toContain("location: { lat: number; lng: number };");
     });
 
+    it("types an optional `.global()` column with `| null` only where its validator admits null", () => {
+        expect.assertions(3);
+
+        // The global row decode drops a NULL column unless the validator admits null, and the
+        // optional's own `.nullable()` admits it as much as the inner one's does.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                notes: defineTable({
+                    body: v.optional(v.string()),
+                    outer: v.optional(v.string()).nullable(),
+                    inner: v.optional(v.string().nullable()),
+                }).global(),
+            });
+        `);
+
+        const dataModel = emitDataModel(discoverSchema(project, schemaPath));
+
+        expect(dataModel).toContain("    body?: string;");
+        expect(dataModel).toContain("    outer?: string | null;");
+        expect(dataModel).toContain("    inner?: string | null;");
+    });
+
     it("emits a per-table GeoIndexName union and threads it into the facade", () => {
         expect.assertions(2);
 

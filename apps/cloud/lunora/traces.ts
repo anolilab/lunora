@@ -6,7 +6,6 @@ import type { ObservationSpan } from "../src/telemetry/trace-tree";
 import { foldObservationTraces } from "../src/telemetry/trace-tree";
 import type { Id } from "./_generated/dataModel";
 import { action, query, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
@@ -112,10 +111,7 @@ export const list = query
 
         // Fold every scanned span, then apply the trace-level filters, then cap —
         // filtering after the cap would return fewer than `limit` matching traces.
-        const folded = foldObservationTraces(
-            spans.map((row) => absentForNull(row)),
-            SCAN_LIMIT,
-        );
+        const folded = foldObservationTraces(spans, SCAN_LIMIT);
         const filtered = filterTraces(folded, {
             errorOnly: args.errorOnly,
             from: args.from,
@@ -207,7 +203,7 @@ export const get = query
             where: { organizationId: args.organizationId, traceId: args.traceId },
         });
 
-        return page.map((row) => toSpanView(absentForNull(row)));
+        return page.map((row) => toSpanView(row));
     });
 
 /**

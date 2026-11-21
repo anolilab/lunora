@@ -13,7 +13,6 @@ import { constantTimeEqual } from "../src/security/constant-time-equal";
 import { assertPlacementRef, hostsOf, isCellPlaced, rowReaderOf } from "../src/targets/placement";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg } from "./authz";
 import { claimFirstFreeAlias, pendingTeardown, releaseIdleAliases } from "./deployment-aliases";
 import { servingDeployment } from "./deployments";
@@ -91,8 +90,7 @@ export interface ProjectView {
 }
 
 /** Project one stored row onto the public view, dropping the protection secrets. */
-export const toProjectView = (stored: ProjectRow): ProjectView => {
-    const row = absentForNull(stored);
+export const toProjectView = (row: ProjectRow): ProjectView => {
     const productionAlias = row.activeScriptName ?? row.productionAlias;
 
     return {

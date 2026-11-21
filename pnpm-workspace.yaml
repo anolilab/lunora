@@ -420,6 +420,9 @@ catalogs:
     "@commitlint/cli": ^21.2.4
     "@commitlint/config-conventional": ^21.2.4
     cz-conventional-changelog: ^3.3.0
+    # Exact-pinned: patches/@visulima__vis@6.6.0.patch makes the release publish the manifest the
+    # version step wrote, not the pre-version one with every internal range still at its old
+    # floor (#1666). On a bump, check upstream fixed it, else regenerate the patch.
     "@visulima/vis": 6.6.0
     "@visulima/tabular": 4.1.0
     "@visulima/error": 6.1.0
@@ -1367,6 +1370,7 @@ packageExtensions:
 patchedDependencies:
   '@cloudflare/containers@0.3.7': patches/@cloudflare__containers@0.3.7.patch
   '@cloudflare/workers-types@5.20261004.1': patches/@cloudflare__workers-types@5.20261004.1.patch
+  '@visulima/vis@6.6.0': patches/@visulima__vis@6.6.0.patch
   gray-matter@4.0.3: patches/gray-matter@4.0.3.patch
   recast@0.23.11: patches/recast@0.23.11.patch
 

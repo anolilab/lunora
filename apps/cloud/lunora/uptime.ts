@@ -1,7 +1,6 @@
 import { summarizeUptime } from "../src/uptime/probe";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import { internalMutation, query, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import { assertMember } from "./authz";
 
 /**
@@ -58,7 +57,7 @@ export const summary = query
                     orderBy: [{ createdAt: "desc" }],
                     where: { deploymentId: state.deploymentId, organizationId },
                 });
-                const summarized = summarizeUptime(checkPage.map((row) => absentForNull(row)));
+                const summarized = summarizeUptime(checkPage);
 
                 return {
                     ...(summarized.avgLatencyMs === undefined ? {} : { avgLatencyMs: summarized.avgLatencyMs }),

@@ -11,7 +11,6 @@ import { runtimeColumn, storedRuntime } from "../src/project-runtime";
 import type { DataModel, Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, query, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import { fireDeployAlerts } from "./alerts";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
@@ -275,7 +274,7 @@ const recordProjectPush = async (
 ): Promise<ProjectPushResult> => {
     const { now } = context;
     const { branch, changes, commitSha, fromFork, installationId, pullRequest, trigger } = push;
-    const { rootDirectory, watchPaths, workspacePackages } = absentForNull(project);
+    const { rootDirectory, watchPaths, workspacePackages } = project;
     const runtime = storedRuntime(project.runtime);
     const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, runtime, trigger });
 

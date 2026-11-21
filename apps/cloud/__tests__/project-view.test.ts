@@ -15,16 +15,15 @@ import { toProjectView } from "../lunora/projects";
  * these tests name the secret columns explicitly.
  */
 describe(toProjectView, () => {
-    const row = {
+    const unprotectedRow = {
         _creationTime: 1_700_000_000_000,
         _id: "prj_1" as never,
         createdAt: 1_700_000_000_000,
         name: "Web",
         organizationId: "org_1" as never,
-        previewPasswordHash: "5e884898da280471",
-        previewPasswordSalt: "a1b2c3",
         slug: "web",
     };
+    const row = { ...unprotectedRow, previewPasswordHash: "5e884898da280471", previewPasswordSalt: "a1b2c3" };
 
     it("never carries the preview password hash or salt onto the wire", () => {
         const view = toProjectView(row);
@@ -37,7 +36,7 @@ describe(toProjectView, () => {
 
     it("reports protection as a boolean the dashboard can render", () => {
         expect(toProjectView(row).previewProtected).toBe(true);
-        expect(toProjectView({ ...row, previewPasswordHash: null, previewPasswordSalt: null }).previewProtected).toBe(false);
+        expect(toProjectView(unprotectedRow).previewProtected).toBe(false);
     });
 
     it("keeps the fields the dashboard actually needs", () => {
@@ -54,9 +53,9 @@ describe(toProjectView, () => {
     });
 
     it("reports the deploy target, defaulting a row from before targets to cloudflare-wfp", () => {
-        expect(toProjectView({ ...row, target: null }).target).toBe("cloudflare-wfp");
+        expect(toProjectView(row).target).toBe("cloudflare-wfp");
         expect(toProjectView({ ...row, placementRef: "box_1" as never, target: "celld-vps" })).toMatchObject({ placementRef: "box_1", target: "celld-vps" });
-        expect(toProjectView({ ...row, placementRef: null })).not.toHaveProperty("placementRef");
+        expect(toProjectView(row)).not.toHaveProperty("placementRef");
     });
 
     it("omits optional fields rather than emitting undefined", () => {
@@ -67,10 +66,10 @@ describe(toProjectView, () => {
         expect(toProjectView(row)).not.toHaveProperty("framework");
     });
 
-    it("carries the recorded workspace packages for the build settings preview, and drops a SQL NULL", () => {
+    it("carries the recorded workspace packages for the build settings preview, and omits them when unset", () => {
         const workspacePackages = { builtAt: 1, paths: ["packages/ui"], rootDirectory: "apps/web" };
 
         expect(toProjectView({ ...row, workspacePackages }).workspacePackages).toStrictEqual(workspacePackages);
-        expect(toProjectView({ ...row, workspacePackages: null })).not.toHaveProperty("workspacePackages");
+        expect(toProjectView(row)).not.toHaveProperty("workspacePackages");
     });
 });

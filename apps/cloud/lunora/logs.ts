@@ -5,7 +5,6 @@ import { admitTailLines, TAIL_LOG_LIMITS } from "../src/tail/ingest-budget";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import { assertMember, assertTelemetryInKeyProject, authorizeTelemetryKey } from "./authz";
 import { servingDeployment } from "./deployments";
 import { rateLimit } from "./guards";
@@ -126,9 +125,7 @@ export const insertLines = async (context: MutationContext, organizationId: Id<"
 };
 
 /** Project a stored row to the dashboard view (drop `_id`/`organizationId`/`scriptName`). */
-const toView = (stored: TenantLogRow): TenantLogView => {
-    const row = absentForNull(stored);
-
+const toView = (row: TenantLogRow): TenantLogView => {
     return {
         createdAt: row.createdAt,
         fields: row.fields,
