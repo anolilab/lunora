@@ -557,8 +557,14 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction, sin
     // payment has since failed. Drop anything older than the last event applied to this row.
     if (existing && isStaleSubscriptionEvent(existing, action)) {
         const filled = fillBlankSubscription(existing, action);
+        // Guarded on the revision read above: a newer event that landed since owns the state, and this whole-row write would
+        // put the old one back. A rejected fill is dropped; the next event on the row can still fill it.
+        const written =
+            filled === existing
+                ? undefined
+                : await storeSubscription(store, singleSubscriptionPerReference, existing, { ...filled, updatedAt: now }, { ifRevision: existing.revision });
 
-        if (filled !== existing && (await storeSubscription(store, singleSubscriptionPerReference, existing, { ...filled, updatedAt: now })) === "refused") {
+        if (written === "refused") {
             return { applied: false, reason: "duplicate_subscription" };
         }
 

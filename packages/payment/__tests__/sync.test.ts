@@ -6,7 +6,7 @@ import { money } from "../src/money";
 import type { PaymentObserver } from "../src/observability";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
-import type { PaymentSession, WebhookAction } from "../src/types";
+import type { PaymentSession, ProviderId, WebhookAction } from "../src/types";
 
 const captureEvent = (eventId: string): WebhookAction => {
     return {
@@ -333,6 +333,37 @@ describe("applyWebhookAction", () => {
         });
         expect(hasActivePrice(stored ? [stored] : [], "price_pro")).toBe(true);
         expect(hasActivePrice(stored ? [stored] : [], "price_addon")).toBe(true);
+    });
+
+    it("leaves a newer state standing when it lands between a stale event's read and its price fill", async () => {
+        expect.assertions(2);
+
+        /** Runs `onRead` once, right after a read, as a webhook landing while the stale event is in flight would. */
+        class RacingStore extends MemoryPaymentStore {
+            public onRead: (() => Promise<unknown>) | undefined;
+
+            public override async getSubscription(provider: ProviderId, id: string): ReturnType<MemoryPaymentStore["getSubscription"]> {
+                const row = await super.getSubscription(provider, id);
+                const hook = this.onRead;
+
+                this.onRead = undefined;
+                await hook?.();
+
+                return row;
+            }
+        }
+
+        const store = new RacingStore();
+        const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+
+        await applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 10_000, type: "subscription.active" });
+
+        store.onRead = async () => applyWebhookAction(store, { ...event, eventId: "e3", occurredAt: 11_000, type: "subscription.past_due" });
+
+        await applyWebhookAction(store, { ...event, eventId: "e2", occurredAt: 9000, priceId: "price_pro", type: "subscription.updated" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 11_000, state: "past_due" });
+        expect(hasActivePrice([(await store.getSubscription("stripe", "sub_1"))!], "price_pro")).toBe(false);
     });
 
     it("keeps a priced row's price when a stale event names a different one", async () => {
