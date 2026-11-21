@@ -93,6 +93,14 @@ socket calls `attach_socket(send, context=None)`, which sends `connect` (with th
 optional connection `context`) and then joins the whisper topics; it does not resend
 subscriptions, so call `resend_subscriptions()` after it when you need them.
 
+`resend_subscriptions()` sends at most three query subscriptions at once, as the
+reference client does, so a reconnect does not land every query on the shard in one
+burst. Each of the rest goes out when `handle_frame` sees a frame for one already sent,
+or once one has gone unanswered for 10 s: `next_subscription_retry_at()` includes that
+deadline, and `retry_due_subscriptions()` at or after it sends the next. `connect_and_run`
+arms that timer itself; a caller with its own socket feeds every frame to `handle_frame`
+and pulls `retry_due_subscriptions()` on the deadline. Shape subscriptions all go out at once.
+
 The server refuses a credential by closing the socket. `on_token_expired(listener)`
 runs when that happens: a 4001 always, a `TOKEN_EXPIRED` error frame always, and a
 4003 once per credential. Refresh the credential in the listener and assign
