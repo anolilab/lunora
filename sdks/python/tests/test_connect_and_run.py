@@ -1027,6 +1027,27 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)
 
+    async def test_a_closed_socket_leaves_no_resubscribe_watchdog_behind(self):
+        """A pending watchdog dies with its socket, so it cannot arm timers against the next one's slots."""
+
+        socket = _FakeSocket()
+        self._install(socket)
+        clock = _FakeClock()
+        patcher = unittest.mock.patch("lunora.client.time", types.SimpleNamespace(monotonic=clock.monotonic))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client._call_later = clock.call_later
+        client.subscribe("messages:list", {"channel": "c0"}, lambda _value: None)
+
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: RESUBSCRIBE_ACK_TIMEOUT in clock.delays)
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+        self.assertTrue(all(handle.cancelled for _deadline, _callback, handle in clock.timers))
+
     async def test_a_slow_error_callback_does_not_postpone_the_retry(self):
         """The retry fires at the deadline the error frame recorded, not a full hint after its callbacks return."""
 

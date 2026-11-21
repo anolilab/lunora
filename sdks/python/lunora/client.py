@@ -1133,8 +1133,11 @@ class LunoraClient:
                 # Its frame will never be answered now, so the slot it holds goes to the next one.
                 batch = self._take_resubscribes(time.monotonic()) if self._resubscribe_slots.pop(sub_id, None) is not None else []
             if sender is not None:
-                sender(build_unsubscribe_frame(sub_id))
-                self._send_resubscribes(sender, batch, raise_errors=False)
+                # The batch holds slots this call claimed: a failed unsubscribe write must not strand it.
+                try:
+                    sender(build_unsubscribe_frame(sub_id))
+                finally:
+                    self._send_resubscribes(sender, batch, raise_errors=False)
 
         return unsubscribe
 
@@ -1314,6 +1317,13 @@ class LunoraClient:
                 for unsent, _frame, was_poisoned in batch[sent:]:
                     if was_poisoned:
                         unsent.poisoned = True
+                # Still this socket's: the unsent ones go back to the front of the line and give up
+                # their slots, or nothing would ever send them on a socket that stays open.
+                if self._send is sender:
+                    unsent_ids = [unsent.id for unsent, _frame, _was_poisoned in batch[sent:]]
+                    for sub_id in unsent_ids:
+                        self._resubscribe_slots.pop(sub_id, None)
+                    self._resubscribe_queue[:0] = [sub_id for sub_id in unsent_ids if sub_id in self._subs]
             if raise_errors or not isinstance(error, Exception):
                 raise
             _log.exception("lunora: resubscribe send failed")
@@ -1382,7 +1392,9 @@ class LunoraClient:
         with self._lock:
             for sub_id in [sub_id for sub_id, deadline in self._resubscribe_slots.items() if deadline <= current]:
                 del self._resubscribe_slots[sub_id]
-            batch = self._take_resubscribes(current)
+            # Dated from now, not the deadline a late timer was armed for, or the new slots would
+            # already be (nearly) expired and the window would not pace anything.
+            batch = self._take_resubscribes(max(current, time.monotonic()))
         self._send_resubscribes(sender, batch, raise_errors=True)
         return len(frames) + len(batch)
 
@@ -1896,10 +1908,16 @@ class LunoraClient:
                     await socket.send(json.dumps(await outbox.get()))
 
             # One timer per paced re-subscribe deadline, so a frame the server never answers
-            # frees its slot without waiting for another frame to arrive.
+            # frees its slot without waiting for another frame to arrive. The handles are kept so
+            # the timers die with this socket: left running, one would arm more for the next
+            # socket's slots.
             watchdogs: set = set()
+            watchdog_handles: list = []
+            watchdogs_alive = {"value": True}
 
             def resubscribe_timed_out(deadline: float) -> None:
+                if not watchdogs_alive["value"]:
+                    return
                 self.retry_due_subscriptions(deadline)
                 arm_resubscribe_watchdogs()
 
@@ -1908,7 +1926,14 @@ class LunoraClient:
                     deadlines = [deadline for deadline in self._resubscribe_slots.values() if deadline not in watchdogs]
                 for deadline in deadlines:
                     watchdogs.add(deadline)
-                    (self._call_later or loop.call_later)(max(0.0, deadline - time.monotonic()), partial(resubscribe_timed_out, deadline))
+                    watchdog_handles.append(
+                        (self._call_later or loop.call_later)(max(0.0, deadline - time.monotonic()), partial(resubscribe_timed_out, deadline))
+                    )
+
+            def stop_resubscribe_watchdogs() -> None:
+                watchdogs_alive["value"] = False
+                for handle in watchdog_handles:
+                    handle.cancel()
 
             async def read_inbound() -> None:
                 async for raw in socket:
@@ -2012,6 +2037,7 @@ class LunoraClient:
                 self.resend_subscriptions()
             except BaseException:
                 # The reader and writer tasks do not exist yet, so only the sender needs undoing.
+                stop_resubscribe_watchdogs()
                 self.detach_socket()
                 raise
             arm_resubscribe_watchdogs()
@@ -2060,6 +2086,7 @@ class LunoraClient:
                 retry["alive"] = False
                 if retry["timer"] is not None:
                     retry["timer"].cancel()
+                stop_resubscribe_watchdogs()
                 # A background flush still waiting on its post is ended with the
                 # socket; its drained writes go back on the queue for the
                 # reconnect, or are settled if the client closed.

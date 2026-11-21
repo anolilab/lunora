@@ -12,6 +12,7 @@ import os
 import sys
 import time
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -137,6 +138,62 @@ class TestResubscribePacing(unittest.TestCase):
         client.handle_frame({"id": "sub_1", "type": "ack"})
         late = next(frame for frame in sent if frame.get("id") == "sub_4")
         self.assertNotIn("sinceSeq", late["query"], "the new identity must not resume the old one's position")
+
+    def test_a_failed_send_puts_the_unsent_ones_back_in_line(self):
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client.attach_socket(lambda _frame: None)
+        for index in range(SUBSCRIPTIONS):
+            client.subscribe("messages:list", {"channel": f"c{index}"}, lambda _value: None)
+        sent: list = []
+        broken = {"once": True}
+
+        def flaky(frame: dict) -> None:
+            if frame.get("id") == "sub_2" and broken["once"]:
+                broken["once"] = False
+                raise ConnectionError("write failed")
+            sent.append(frame)
+
+        client.attach_socket(flaky)
+        sent.clear()
+        with self.assertRaises(ConnectionError):
+            client.resend_subscriptions()
+
+        answered = 0
+        while answered < len(_subscribes(sent)):
+            client.handle_frame({"id": _subscribes(sent)[answered], "type": "ack"})
+            answered += 1
+
+        self.assertEqual(sorted(set(_subscribes(sent))), sorted(f"sub_{index + 1}" for index in range(SUBSCRIPTIONS)))
+
+    def test_a_failed_unsubscribe_write_still_sends_the_batch_it_freed(self):
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client.attach_socket(lambda _frame: None)
+        unsubscribes = [client.subscribe("messages:list", {"channel": f"c{index}"}, lambda _value: None) for index in range(5)]
+        sent: list = []
+
+        def refuses_unsubscribe(frame: dict) -> None:
+            if frame.get("type") == "unsubscribe":
+                raise ConnectionError("write failed")
+            sent.append(frame)
+
+        client.attach_socket(refuses_unsubscribe)
+        sent.clear()
+        client.resend_subscriptions()
+
+        with self.assertRaises(ConnectionError):
+            unsubscribes[0]()
+
+        self.assertIn("sub_4", _subscribes(sent))
+
+    def test_a_late_watchdog_dates_the_next_slots_from_when_it_ran(self):
+        client, _sent = _reconnected()
+        deadline = client.next_subscription_retry_at()
+        late = deadline + 5.0
+
+        with unittest.mock.patch("lunora.client.time.monotonic", return_value=late):
+            client.retry_due_subscriptions(deadline)
+
+        self.assertGreaterEqual(client.next_subscription_retry_at(), late + RESUBSCRIBE_ACK_TIMEOUT)
 
     def test_shape_subscriptions_are_not_paced(self):
         client = LunoraClient("https://app.example", client_id="client-test")
