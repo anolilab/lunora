@@ -126,6 +126,15 @@ const resolveRequiredSecretKeys = async (
  * `secret put` fails — `minted` still holds whatever succeeded before that,
  * because those values are equally unrecoverable if discarded.
  *
+ * When a failed `secret bulk` preceded that failure, `minted` is every
+ * pending key and `uncertain` names the ones the per-key loop never confirmed:
+ * the bulk call is one request whose non-zero exit does not prove nothing was
+ * applied (a committed request whose response was lost exits non-zero too), so
+ * any of them may be live with its value. Recording a value that was never
+ * applied is harmless — the next deploy builds its missing list from the remote
+ * secret names alone, so a key still missing is minted fresh and its stale
+ * record replaced.
+ *
  * Deliberately does NOT reuse an existing local `.dev.vars` value for a
  * missing key, even a non-placeholder one — an earlier version of this
  * function did, on the theory that a real local value needs no fresh
@@ -142,7 +151,7 @@ const pushMintableSecrets = async (
     options: DeployCommandOptions,
     keys: ReadonlyArray<string>,
     driver: DeployDriver,
-): Promise<{ minted: ReadonlyArray<{ key: string; value: string }>; ok: boolean }> => {
+): Promise<{ minted: ReadonlyArray<{ key: string; value: string }>; ok: boolean; uncertain: ReadonlyArray<string> }> => {
     const { logger } = options;
     const spawner = options.spawner ?? defaultSpawner;
     const manager = detectPackageManager(cwd);
@@ -153,13 +162,14 @@ const pushMintableSecrets = async (
     if (secretPut === undefined) {
         logger.error(`deploy target "${driver.id}" has no secret store; cannot push secrets`);
 
-        return { minted: [], ok: false };
+        return { minted: [], ok: false, uncertain: [] };
     }
 
     const pending = keys.map((key) => {
         return { key, value: generateSecretValue() };
     });
     const secretBulk = driver.toolchain?.secretBulk;
+    let bulkFailed = false;
 
     // One `wrangler secret bulk` instead of K spawns. A failure falls through to
     // the per-key loop below (same values — a put is idempotent), which is what
@@ -178,15 +188,16 @@ const pushMintableSecrets = async (
                 logger.success(`generated + pushed ${key}`);
             }
 
-            return { minted: pending, ok: true };
+            return { minted: pending, ok: true, uncertain: [] };
         }
 
+        bulkFailed = true;
         logger.warn(`bulk secret push failed (exit ${String(bulkResult.code)}); retrying one key at a time`);
     }
 
     const minted: { key: string; value: string }[] = [];
 
-    for (const { key, value } of pending) {
+    for (const [index, { key, value }] of pending.entries()) {
         const secretCommand = secretPut({ environment: options.env, key, temporary: options.temporary });
         const exec = toolchainExecArgs(manager, secretCommand);
 
@@ -200,7 +211,11 @@ const pushMintableSecrets = async (
                 `failed to push secret ${key} (exit ${String(pushResult.code)}); set it manually with \`wrangler secret put ${key}${environmentFlag}\`.`,
             );
 
-            return { minted, ok: false };
+            if (bulkFailed) {
+                return { minted: pending, ok: false, uncertain: pending.slice(index).map((entry) => entry.key) };
+            }
+
+            return { minted, ok: false, uncertain: [] };
         }
 
         minted.push({ key, value });
@@ -210,7 +225,7 @@ const pushMintableSecrets = async (
         logger.success(`generated + pushed ${key}`);
     }
 
-    return { minted, ok: true };
+    return { minted, ok: true, uncertain: [] };
 };
 
 /**
@@ -342,6 +357,24 @@ const checkVariablesForSecrets = async (cwd: string, options: DeployCommandOptio
     };
 };
 
+/** The abort for a failed mint push, naming the keys a failed bulk request may still have set. */
+const failedPushOutcome = (logger: Logger, uncertain: ReadonlyArray<string>, mintedSecretsFile: string | undefined): MissingSecretsOutcome => {
+    if (uncertain.length === 0) {
+        return { error: "failed to push required secret(s) — set them manually and re-deploy", mintedSecretsFile };
+    }
+
+    logger.warn(
+        `${uncertain.join(", ")}: the failed bulk push may already have set these on the target — their values are recorded ` +
+            `${mintedSecretsFile === undefined ? "nowhere (see above)" : `in ${mintedSecretsFile}`} in case it did. The next deploy re-checks the target ` +
+            `and replaces the record of any that are still missing with a fresh value.`,
+    );
+
+    return {
+        error: `failed to push required secret(s); ${uncertain.join(", ")} may or may not be set on the target — re-deploy to converge`,
+        mintedSecretsFile,
+    };
+};
+
 /**
  * Before a live deploy, detect required secrets that are NOT yet set on the
  * target worker and resolve them. INTERACTIVE: offer to generate + push the
@@ -424,7 +457,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         // deploy anyway, shipping a worker still missing the secret it just
         // failed to set — the exact outcome the non-interactive branch above
         // refuses to risk.
-        const { minted, ok } = await pushMintableSecrets(cwd, options, mintable, driver);
+        const { minted, ok, uncertain } = await pushMintableSecrets(cwd, options, mintable, driver);
 
         // Persist whatever WAS minted even on a partial failure — a pushed
         // secret this function doesn't record is permanently lost (Cloudflare
@@ -435,7 +468,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         const mintedSecretsFile = persistMintedSecrets(cwd, options, minted);
 
         if (!ok) {
-            return { error: "failed to push required secret(s) — set them manually and re-deploy", mintedSecretsFile };
+            return failedPushOutcome(logger, uncertain, mintedSecretsFile);
         }
 
         return { mintedSecretsFile };
