@@ -109,8 +109,10 @@ const WHOLE_MINOR_UNITS = /^-?\d+$/;
  * string that is not a whole number is refused rather than scaled: Dodo does not document the
  * dispute amount's unit, and choosing between `"25.00"` meaning 25 and meaning 2500 is a 100x error
  * on a funds reversal. Returning `undefined` leaves the action with no amount, which `sync.ts`
- * records as a FULL reversal with the money untouched — loud and fail-closed — rather than writing a
- * confidently wrong figure into the ledger.
+ * cannot book: it acknowledges the event without touching the session and reports it as
+ * `invalid_refund_amount` (the `webhook.applied` observer event carries that reason). The session
+ * stays `captured`, and reconcile does not repair it because `paymentFromDodo` sums only
+ * `refunds[]`, so that observer reason is the only trace of the lost dispute.
  */
 const readMinorUnits = (object: Record<string, unknown>, key: string): bigint | undefined => {
     const value = object[key];
