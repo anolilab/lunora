@@ -237,7 +237,15 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             // customer never received — and, because the refunded total then equals what was asked
             // for, the facade's over-refund guard rejects every later attempt to actually issue it.
             // Wait for `succeeded`; `refund.updated` is what carries the pending → succeeded step.
-            if (readString(object, "status") !== "succeeded") {
+            const status = readString(object, "status");
+
+            // A terminal failure moves no money, but it is the only signal that lets a facade refund
+            // still pending on this order be retried.
+            if (status === "failed" || status === "canceled") {
+                return { ...base, refundId: readString(object, "id"), sessionId: readString(object, "order_id"), type: "payment.refund_failed" };
+            }
+
+            if (status !== "succeeded") {
                 return { ...base, type: "unhandled" };
             }
 

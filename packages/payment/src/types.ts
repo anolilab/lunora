@@ -405,6 +405,7 @@ export type WebhookActionType =
     | "payment.authorized"
     | "payment.captured"
     | "payment.failed"
+    | "payment.refund_failed"
     | "payment.refunded"
     | "subscription.active"
     | "subscription.canceled"
@@ -467,9 +468,10 @@ export interface WebhookAction {
     readonly referenceId?: string;
 
     /**
-     * Provider id of the refund this event reports (refund actions only). Carries the per-refund
-     * identity the sync layer matches against the marker `refundPayment` left behind, so a second
-     * facade refund of the same amount is not mistaken for the first one's confirmation.
+     * Provider id of the refund this event reports (`payment.refunded`, `payment.refund_failed`).
+     * Carries the per-refund identity the sync layer matches against the marker `refundPayment`
+     * left behind, so a second facade refund of the same amount is not mistaken for the first one's
+     * confirmation.
      */
     readonly refundId?: string;
     readonly sessionId?: string;

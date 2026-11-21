@@ -229,7 +229,9 @@ const checkoutSessionAction = ({ base, currency, object }: StripeEvent): Webhook
 
     if (readString(object, "mode") === "subscription") {
         // Fail closed to a non-entitling `subscription.updated` (a no-op metadata patch); the
-        // authoritative active state still arrives via `customer.subscription.*`.
+        // authoritative active state still arrives via `customer.subscription.*`. The session carries
+        // no price: that also arrives on `customer.subscription.*`, and `sync.ts` fills it into a
+        // priceless row even when those events are stamped before this one and so arrive stale.
         return {
             ...base,
             customerId: readString(object, "customer"),

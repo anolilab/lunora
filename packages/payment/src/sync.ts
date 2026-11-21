@@ -7,7 +7,7 @@
  * that reports `"orphaned"`, which the HTTP layer answers with a 500 for ONE bounded redelivery.
  */
 import { LunoraPaymentError } from "./errors";
-import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
+import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
 import { addMoney, compareMoney, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -125,6 +125,27 @@ const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existi
             await store.releaseEvent(action.provider, key);
         },
     };
+};
+
+/**
+ * Settle the facade's pending-refund marker for the action's session. Any refund event on the session
+ * settles it — the marker is per session because the event cannot name the request that issued it.
+ */
+const releasePendingRefund = async (store: PaymentStore, action: WebhookAction): Promise<void> => {
+    if (action.sessionId && refundNeedsPendingGuard(action.provider)) {
+        await store.releaseEvent(action.provider, pendingRefundKey(action.sessionId));
+    }
+};
+
+/** A failed refund moved no money, so the row stays as it is; it only lets a pending refund be retried. */
+const applyRefundFailed = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
+    if (!action.sessionId) {
+        return { applied: false, reason: "unhandled" };
+    }
+
+    await releasePendingRefund(store, action);
+
+    return { applied: true, reason: "ok" };
 };
 
 /**
@@ -427,6 +448,37 @@ const isStaleSubscriptionEvent = (existing: Subscription, action: WebhookAction)
     return target !== undefined && ENTITLING_STATES.has(target) && !ENTITLING_STATES.has(existing.state);
 };
 
+/**
+ * What a stale event may still contribute: the owner and the price a row was created without, never
+ * its state or `lastEventAt`. A Stripe subscription-mode checkout creates the row with no price, and
+ * the `customer.subscription.*` events that carry it are often stamped earlier, so without this the
+ * row matches no plan until the next renewal. A priceless row's quantity and period start are
+ * creation defaults, not provider data, so they come along with the price. Returns `existing`
+ * itself when there is nothing to fill.
+ */
+const fillBlankSubscription = (existing: Subscription, action: WebhookAction): Subscription => {
+    const referenceId = ownerOf(existing.referenceId, action.referenceId);
+    const priced = existing.priceId === "" && Boolean(action.priceId);
+
+    if (referenceId === existing.referenceId && !priced) {
+        return existing;
+    }
+
+    if (!priced) {
+        return { ...existing, referenceId };
+    }
+
+    return {
+        ...existing,
+        currentPeriodEnd: existing.currentPeriodEnd ?? action.currentPeriodEnd,
+        currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
+        priceId: action.priceId ?? existing.priceId,
+        priceIds: existing.priceIds ?? action.priceIds,
+        quantity: action.quantity ?? existing.quantity,
+        referenceId,
+    };
+};
+
 /** Create the row for a subscription the store has not seen: the checkout's owner, if it arrived first, and the opt-in duplicate check. */
 const createSubscription = async (
     store: PaymentStore,
@@ -504,13 +556,15 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction, sin
     // `past_due → active` is a legal edge, so a late `active` would re-entitle a customer whose
     // payment has since failed. Drop anything older than the last event applied to this row.
     if (existing && isStaleSubscriptionEvent(existing, action)) {
-        // Its state is stale, but the owner it names still fills a blank row.
-        const referenceId = ownerOf(existing.referenceId, action.referenceId);
+        const filled = fillBlankSubscription(existing, action);
+        // Guarded on the revision read above: a newer event that landed since owns the state, and this whole-row write would
+        // put the old one back. A rejected fill is dropped; the next event on the row can still fill it.
+        const written =
+            filled === existing
+                ? undefined
+                : await storeSubscription(store, singleSubscriptionPerReference, existing, { ...filled, updatedAt: now }, { ifRevision: existing.revision });
 
-        if (
-            referenceId !== existing.referenceId &&
-            (await storeSubscription(store, singleSubscriptionPerReference, existing, { ...existing, referenceId, updatedAt: now })) === "refused"
-        ) {
+        if (written === "refused") {
             return { applied: false, reason: "duplicate_subscription" };
         }
 
@@ -546,6 +600,33 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction, sin
     return transitionSubscription(store, action, existing, targetState, singleSubscriptionPerReference, now);
 };
 
+/** Route a claimed event to the row it changes. A throw here releases the claim, so the provider retries. */
+const applyClaimedAction = async (
+    store: PaymentStore,
+    action: WebhookAction,
+    observer: PaymentObserver | undefined,
+    singleSubscriptionPerReference: boolean,
+): Promise<ApplyResult> => {
+    if (action.type === "payment.refund_failed") {
+        return applyRefundFailed(store, action);
+    }
+
+    const paymentAction = PAYMENT_ACTION_BY_TYPE[action.type];
+
+    if (!paymentAction) {
+        return applySubscription(store, action, singleSubscriptionPerReference);
+    }
+
+    const result = await applyPayment(store, action, paymentAction, observer, singleSubscriptionPerReference);
+
+    // Booked here, or already booked by another writer (`duplicate` from the fold): the refund settled.
+    if (paymentAction === "refund" && (result.applied || result.reason === "duplicate")) {
+        await releasePendingRefund(store, action);
+    }
+
+    return result;
+};
+
 const applyWebhookAction = async (
     store: PaymentStore,
     action: WebhookAction,
@@ -574,14 +655,10 @@ const applyWebhookAction = async (
         return { applied: false, reason: "duplicate" };
     }
 
-    const paymentAction = PAYMENT_ACTION_BY_TYPE[action.type];
-
     let result: ApplyResult;
 
     try {
-        result = paymentAction
-            ? await applyPayment(store, action, paymentAction, observer, singleSubscriptionPerReference)
-            : await applySubscription(store, action, singleSubscriptionPerReference);
+        result = await applyClaimedAction(store, action, observer, singleSubscriptionPerReference);
     } catch (error) {
         // The claim is taken before apply; a genuine store-write failure would otherwise leave the
         // event marked-processed so the provider's retry dedupes to a lost effect. Release the claim

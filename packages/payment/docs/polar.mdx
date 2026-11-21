@@ -308,7 +308,7 @@ Set or generate the **signing secret** and store it as `POLAR_WEBHOOK_SECRET`.
 <Step>
 
 Subscribe to the events you need: at minimum `order.paid`, `refund.created`,
-and the `subscription.*` family (see the table below).
+`refund.updated`, and the `subscription.*` family (see the table below).
 
 </Step>
 </Steps>
@@ -388,6 +388,7 @@ The adapter translates these Polar events into normalized transitions:
 | ------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `order.created`, `order.paid`                                             | `payment.captured`                                            | `order.created` maps only when the order's `status` is already paid, otherwise it is `unhandled` until `order.paid`. Amount from `total_amount` (falls back to `amount`); currency from `currency`. |
 | `refund.created`, `refund.updated`                                        | `payment.refunded` (delta)                                    | Only once `status` is `succeeded`. `amount + tax_amount` (tax-inclusive, like the capture); `sessionId` from `order_id`.                                                                            |
+| `refund.created`, `refund.updated` (status `failed` / `canceled`)         | `payment.refund_failed`                                       | Moves no money and changes no row; it releases the hold `refundPayment` keeps on an order while its refund is pending.                                                                              |
 | `subscription.created`, `subscription.active`                             | `subscription.active`                                         | Routed by the subscription's `status` field.                                                                                                                                                        |
 | `subscription.updated`, `.paused`, `.resumed`, `.past_due`, `.uncanceled` | `subscription.active` / `.past_due` / `.paused` / `.canceled` | Derived from `status`; an unrecognized `status` fails closed to `subscription.past_due`.                                                                                                            |
 | `subscription.canceled`                                                   | derived from `status`                                         | Status-driven.                                                                                                                                                                                      |
@@ -427,6 +428,12 @@ await ctx.payments.refundPayment({ sessionId: orderId, amount: money(500n, "USD"
     Refund through `ctx.payments.refundPayment`. Polar's [Create Refund](https://polar.sh/docs/api-reference/refunds/create) accepts no idempotency key, so
     nothing on the wire dedupes a retry: the facade's local refund ledger is the only thing that stops a repeated call from moving the money twice. It also
     authorizes the caller and rejects an over-refund before anything is issued.
+</Callout>
+
+<Callout type="info">
+    Polar can answer a refund as `pending`. A pending refund is not booked, so while it is pending the order is held: any further `refundPayment` on it — a
+    retry or a different amount — raises `INVALID_TRANSITION` ("a refund on this session is still pending; retry once it settles") without calling Polar. The
+    hold is released when `refund.updated` reports the refund `succeeded` (booked) or `failed` / `canceled`, so subscribe to `refund.updated`.
 </Callout>
 
 ## Billing portal

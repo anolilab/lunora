@@ -131,7 +131,7 @@ describe("dodopayments adapter", () => {
         const result = await adapter.refundPayment({ sessionId: "pay_1" });
 
         // `pending`/`review` settle later via `refund.succeeded` — or not at all, via `refund.failed`,
-        // which carries no transition. The facade holds its ledger back on this flag.
+        // which moves no money. The facade holds its ledger back on this flag.
         expect(result.pending).toBe(true);
         expect(result.state).toBe("captured");
     });
@@ -527,7 +527,7 @@ describe("dodopayments adapter", () => {
         expect(action.sessionId).toBe("pay_1");
     });
 
-    it("refuses to scale a non-integer dispute amount rather than guess its unit", async () => {
+    it("carries no amount for a non-integer dispute amount rather than guess its unit", async () => {
         expect.assertions(3);
 
         const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
@@ -537,11 +537,25 @@ describe("dodopayments adapter", () => {
 
         // Reading "25.00" as 25 minor units understates the reversal 100x; reading it as 2500
         // overstates it 100x if Dodo ever sends integer minor units in that shape. Carry no amount:
-        // `sync.ts` then records a FULL reversal with the money untouched, which is loud and
-        // fail-closed, instead of writing a confidently wrong figure to the ledger.
+        // `sync.ts` then leaves the session untouched and reports `invalid_refund_amount`, instead
+        // of writing a confidently wrong figure to the ledger.
         expect(action.type).toBe("payment.refunded");
         expect(action.amount).toBeUndefined();
         expect(action.sessionId).toBe("pay_1");
+    });
+
+    it("reports refund.failed as a failed refund on its payment", async () => {
+        expect.assertions(1);
+
+        const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const payload = JSON.stringify({
+            data: { amount: 2500, currency: "USD", payment_id: "pay_1", refund_id: "ref_1", status: "failed" },
+            type: "refund.failed",
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor("m10", timestamp, sign("m10", timestamp, payload)), payload });
+
+        expect(action).toMatchObject({ refundId: "ref_1", sessionId: "pay_1", type: "payment.refund_failed" });
     });
 
     it("rejects a bad signature", async () => {

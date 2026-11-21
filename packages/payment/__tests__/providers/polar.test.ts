@@ -925,6 +925,21 @@ describe("polar adapter", () => {
         expect(action.type).toBe("unhandled");
     });
 
+    it.each([
+        ["refund.created", "failed"],
+        ["refund.updated", "failed"],
+        ["refund.updated", "canceled"],
+    ] as const)("reports a %s with status %s as a failed refund on its order", async (type, status) => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({ data: { amount: 300, currency: "usd", id: "ref_1", order_id: "ord_1", status }, type });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("evt_fail", timestamp, sign("evt_fail", timestamp, payload)), payload });
+
+        expect(action).toMatchObject({ refundId: "ref_1", sessionId: "ord_1", type: "payment.refund_failed" });
+    });
+
     it("books the refund on the refund.updated that settles it (regression)", async () => {
         expect.assertions(3);
 
