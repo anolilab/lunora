@@ -3188,7 +3188,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const existing = decodeRow(definition, snapshot);
 
         if (!existing || snapshot === undefined) {
-            throw new LunoraError("INTERNAL", `document not found: ${id}`);
+            throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
         }
 
         // Atomic field operators resolve against THIS read; the version check below
@@ -4228,13 +4228,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const tableName = await resolveGlobalTable(table);
 
             if (!tableName) {
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             // Each attempt reads the RAW stored row alongside the decoded `existing`: the raw values
@@ -4326,7 +4326,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const snapshot = tableName === undefined ? undefined : await rawRow(tableName, id);
 
             if (!tableName || snapshot === undefined) {
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const definition = schema.tables[tableName];
@@ -4846,13 +4846,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const tableName = await resolveGlobalTable(table);
 
             if (!tableName) {
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             // Always snapshot the RAW stored row — it seeds the optimistic-
@@ -4863,7 +4863,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const snapshot = await rawRow(tableName, id);
 
             if (snapshot === undefined) {
-                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+                throw new LunoraError("NOT_FOUND", `document not found: ${id}`);
             }
 
             const needsPrevious =

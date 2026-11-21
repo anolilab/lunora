@@ -335,25 +335,28 @@ describe("orchestrateRankPage — cursor continuation", () => {
     });
 });
 
+/** Shard "b" always 500s; every other shard serves a1(10), a2(20). */
+const failingShardBStub = (shardKey: string) => {
+    return {
+        async fetch(request: Request): Promise<Response> {
+            if (shardKey === "b") {
+                return Response.json({ error: "boom" }, { status: 500 });
+            }
+
+            const body: { args: Record<string, unknown> } = await request.json();
+            const take = Number(body.args["take"] ?? 100);
+            const rows = [row("", [10], "a1"), row("", [20], "a2")].slice(0, take);
+
+            return Response.json({ result: { hasMore: false, rows } }, { status: 200 });
+        },
+    };
+};
+
 describe("orchestrateRankPage — failures and request forwarding", () => {
     it("marks the result partial and still pages surviving shards when one shard fails", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
-        const stubFor = (shardKey: string) => {
-            return {
-                async fetch(request: Request): Promise<Response> {
-                    if (shardKey === "b") {
-                        return Response.json({ error: "boom" }, { status: 500 });
-                    }
-
-                    const body: { args: Record<string, unknown> } = await request.json();
-                    const take = Number(body.args["take"] ?? 100);
-                    const rows = [row("", [10], "a1"), row("", [20], "a2")].slice(0, take);
-
-                    return Response.json({ result: { hasMore: false, rows } }, { status: 200 });
-                },
-            };
-        };
+        const stubFor = failingShardBStub;
         const namespace: ShardNamespaceLike = {
             get: (id) => stubFor((id as { __name: string }).__name),
             getByName: (name) => stubFor(name),
@@ -369,6 +372,82 @@ describe("orchestrateRankPage — failures and request forwarding", () => {
         expect(result.failed).toBe(1);
         expect(result.ok).toBe(1);
         expect(ids(result)).toEqual(["a1", "a2"]);
+        expect(result.isDone).toBe(false);
+    });
+
+    it("is not done when a never-paged shard fails on the first page", async () => {
+        expect.assertions(3);
+
+        const stubFor = failingShardBStub;
+        const namespace: ShardNamespaceLike = {
+            get: (id) => stubFor((id as { __name: string }).__name),
+            getByName: (name) => stubFor(name),
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a", "b"] }) });
+
+        const result = await coordinator.orchestrateRankPage(namespace, { index: "lb", table: "scores", take: 100 });
+
+        expect(result.isDone).toBe(false);
+        expect(typeof result.continueCursor).toBe("string");
+        expect(result.partial).toBe(true);
+    });
+
+    it("delivers a recovered never-paged shard's rows on a later page", async () => {
+        expect.assertions(8);
+
+        const bCalls = { count: 0 };
+        const stubFor = (shardKey: string) => {
+            return {
+                async fetch(request: Request): Promise<Response> {
+                    const body: { args: Record<string, unknown> } = await request.json();
+
+                    if (shardKey === "b") {
+                        bCalls.count += 1;
+
+                        if (bCalls.count === 1) {
+                            return Response.json({ error: "boom" }, { status: 500 });
+                        }
+
+                        return Response.json({ result: { directions: ["asc"], hasMore: false, rows: [row("", [15], "b1")] } }, { status: 200 });
+                    }
+
+                    const rows = [row("", [10], "a1"), row("", [20], "a2")];
+                    const after = body.args["after"] as RankPageRow["key"] | undefined;
+                    const startAt = after ? rows.findIndex((r) => compareKey(r.key, after, ["asc"]) > 0) : 0;
+                    const slice = startAt === -1 ? [] : rows.slice(startAt);
+
+                    return Response.json({ result: { directions: ["asc"], hasMore: false, rows: slice } }, { status: 200 });
+                },
+            };
+        };
+        const namespace: ShardNamespaceLike = {
+            get: (id) => stubFor((id as { __name: string }).__name),
+            getByName: (name) => stubFor(name),
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a", "b"] }) });
+
+        const page1 = await coordinator.orchestrateRankPage(namespace, { index: "lb", table: "scores", take: 10 });
+
+        expect(ids(page1)).toEqual(["a1", "a2"]);
+        expect(page1.isDone).toBe(false);
+
+        const page2 = await coordinator.orchestrateRankPage(namespace, { cursor: page1.continueCursor, index: "lb", table: "scores", take: 10 });
+
+        expect(ids(page2)).toEqual(["b1"]);
+        expect(page2.isDone).toBe(true);
+        expect(page2.continueCursor).toBeNull();
+        expect(page2.partial).toBe(false);
+
+        const all = [...ids(page1), ...ids(page2)];
+
+        expect(new Set(all).size).toBe(all.length);
+        expect(all).toHaveLength(3);
     });
 
     it("forwards table, index, take, partitionKey and the admin headers to each shard", async () => {
