@@ -322,7 +322,7 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
         const audience: unknown = options.audience;
         const audiences = Array.isArray(audience) ? audience : [audience];
 
-        if (audience !== false && (audiences.length === 0 || audiences.some((entry) => nonEmpty(entry) === undefined))) {
+        if (audience !== false && (audiences.length === 0 || audiences.some((entry) => typeof entry !== "string" || entry.trim() === ""))) {
             throw fail(
                 `${name}: set \`audience\` to the value your provider puts in \`aud\`, or pass \`audience: false\` if it issues none and another claim binds the token to this app`,
             );
