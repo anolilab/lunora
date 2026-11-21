@@ -1,6 +1,6 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import type { Accessor } from "solid-js";
-import { createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
@@ -108,7 +108,9 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         }
     };
 
-    const resolveRoom: Accessor<string> = typeof roomId === "function" ? roomId : () => roomId;
+    // Memoised: Solid 1.x's `on` re-runs on every dependency notification, so an accessor that
+    // re-computes the same room string would otherwise leave and rejoin the room.
+    const resolveRoom: Accessor<string> = typeof roomId === "function" ? createMemo(roomId) : () => roomId;
 
     // Re-runs per room: the previous room's interval, listener, connection context and subscription
     // are torn down before the next room is armed. Effects do not run during SSR, which keeps

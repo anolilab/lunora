@@ -438,4 +438,38 @@ describe("createPresence (Solid)", () => {
 
         expect(captured!.present()).toStrictEqual(["bob"]);
     });
+
+    it("keeps the room armed when the room id accessor re-runs to the same value", async () => {
+        expect.assertions(3);
+
+        const fake = createPresenceFakeClient();
+        const [org, setOrg] = createSignal({ id: "acme" });
+        let captured: ReturnType<typeof createPresence> | undefined;
+
+        render(
+            () => {
+                captured = createPresence(() => `${org().id}:lobby`, {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 60_000,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        fake.push("presence:listPresent", { roomId: "acme:lobby" }, ["alice"]);
+
+        // A new object with the same id: the accessor re-runs, the room string does not change.
+        setOrg({ id: "acme" });
+        await flushAsync();
+
+        expect(fake.subscribeCalls).toHaveLength(1);
+        expect(fake.connectionContextHolders).toHaveLength(1);
+        expect(captured!.present()).toStrictEqual(["alice"]);
+    });
 });
