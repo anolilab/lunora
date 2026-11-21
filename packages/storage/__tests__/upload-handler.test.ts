@@ -657,6 +657,133 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         });
     });
 
+    describe("upload ownership, enforced by the gate the docs show", () => {
+        /**
+         * The gate from the file-storage guide: anyone signed in may create an
+         * upload, every later request must name an upload the caller owns, and
+         * a create that names other uploads (TUS `Upload-Concat: final;…`) is
+         * refused, since the bundled client never sends one.
+         */
+        const ownedRoute = (protocol: "chunked-rest" | "tus", storage = new MemoryStorage({ path: "/upload" })) => {
+            const owners = new Map<string, string>();
+            const route = createUploadHandler({
+                authorize: ({ method, request, url }) => {
+                    const user = request.headers.get("x-user");
+
+                    if (user === null) {
+                        return false;
+                    }
+
+                    if (method === "POST") {
+                        return !request.headers.has("upload-concat");
+                    }
+
+                    return owners.get(uploadId(url.href)) === user;
+                },
+                protocol,
+                storage,
+            });
+
+            return {
+                fetch: async (request: Request): Promise<Response> => {
+                    const response = await route.fetch(request);
+                    const location = response.headers.get("location");
+
+                    if (request.method === "POST" && response.ok && location !== null) {
+                        owners.set(uploadId(new URL(location, request.url).href), request.headers.get("x-user") ?? "");
+                    }
+
+                    return response;
+                },
+            };
+        };
+
+        /** The same route, as the caller `user` reaches it. */
+        const as = (route: { fetch: (request: Request) => Promise<Response> }, user: string) => {
+            return {
+                fetch: async (request: Request): Promise<Response> => {
+                    const headers = new Headers(request.headers);
+
+                    headers.set("x-user", user);
+
+                    return route.fetch(new Request(request, { headers }));
+                },
+            };
+        };
+
+        it("refuses another caller's TUS PATCH, HEAD and DELETE (403), and still serves the creator", async () => {
+            expect.hasAssertions();
+
+            const route = ownedRoute("tus");
+            const alice = tusDriver(as(route, "alice"));
+            const bob = tusDriver(as(route, "bob"));
+            const location = await alice.create(8);
+
+            const bobPatch = await bob.patch(location, 0, new Uint8Array(4).fill(9));
+            const bobHead = await bob.head(location);
+            const bobDelete = await bob.delete(location);
+
+            // 403, the same answer as for an id that does not exist, so a refusal does not say the upload is there.
+            expect([bobPatch.status, bobHead.status, bobDelete.status]).toStrictEqual([403, 403, 403]);
+
+            const bobMissing = await bob.head(`${ENDPOINT}/does-not-exist`);
+
+            expect(bobMissing.status).toBe(403);
+
+            const alicePatch = await alice.patch(location, 0, new Uint8Array(4).fill(1));
+
+            expect(alicePatch.status).toBe(204);
+            // Bob's PATCH wrote nothing: the offset is Alice's 4 bytes.
+            await expect(alice.offset(location)).resolves.toBe(4);
+
+            const aliceDelete = await alice.delete(location);
+
+            expect(aliceDelete.status).toBe(204);
+        });
+
+        it("refuses another caller's chunked-REST PATCH and HEAD (403), and still serves the creator", async () => {
+            expect.hasAssertions();
+
+            const route = ownedRoute("chunked-rest");
+            const alice = chunkedRest(as(route, "alice"));
+            const bob = chunkedRest(as(route, "bob"));
+            const location = await alice.create(4);
+
+            const bobPatch = await bob.patch(location, 0, new Uint8Array(4).fill(9));
+            const bobHead = await bob.head(location);
+
+            expect([bobPatch.status, bobHead.status]).toStrictEqual([403, 403]);
+
+            const alicePatch = await alice.patch(location, 0, new Uint8Array(4).fill(1));
+
+            expect(alicePatch.ok).toBe(true);
+
+            const aliceHead = await alice.head(location);
+
+            expect(aliceHead.ok).toBe(true);
+        });
+
+        it("refuses a TUS create that concatenates another caller's finished partial upload (403)", async () => {
+            expect.hasAssertions();
+
+            const storage = new MemoryStorage({ path: "/upload" });
+            // Alice's partial, written over the same storage: the gate above refuses partial creates too.
+            const seed = tusDriver(createUploadHandler({ silent: true, storage }));
+            const partial = await seed.create(4, {}, { "Upload-Concat": "partial" });
+
+            const seeded = await seed.patch(partial, 0, new Uint8Array(4).fill(1));
+
+            expect(seeded.status).toBe(204);
+
+            const bob = as(ownedRoute("tus", storage), "bob");
+            const concatenated = await bob.fetch(
+                new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Concat": `final;${new URL(partial).pathname}` }, method: "POST" }),
+            );
+
+            expect(concatenated.status).toBe(403);
+        });
+    });
+
     describe("default-open authorize warning", () => {
         afterEach(() => {
             vi.restoreAllMocks();
