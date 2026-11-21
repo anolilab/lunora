@@ -660,3 +660,97 @@ describe("createWorkpool", () => {
         await expect(pool.enqueue(fnRef, {}, { delayMs: -1 })).rejects.toThrow(/delayMs/);
     });
 });
+
+/** Every kick is declined `in-progress`: the record's first attempt is still running on the shard. */
+class DecliningScheduler extends SchedulerDO {
+    public dispatched: string[] = [];
+
+    /** When set, `/cancel` lands for the record while its declined attempt is settling. */
+    public cancelMidAttempt = false;
+
+    protected override async dispatch(record: ScheduleRecord): Promise<"in-progress"> {
+        this.dispatched.push(record.id);
+
+        if (this.cancelMidAttempt) {
+            await this.fetch(post("/cancel", { id: record.id }));
+        }
+
+        return "in-progress";
+    }
+}
+
+const poolIds = (state: ReturnType<typeof createFakeState>, pool: string): string[] | undefined =>
+    (state.storageMap.get(`pool:${pool}`) as { inFlightIds?: string[] } | undefined)?.inFlightIds;
+
+describe("schedulerDO — a slot held by a still-running attempt", () => {
+    it("lets a record that already holds a slot re-fire on a full pool without taking a second one", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const [id] = await enqueuePool(scheduler, "p", 1, 1);
+
+        // Its earlier attempt still holds the only slot (declined, first attempt's receiver gone).
+        state.storageMap.set("pool:p", { inFlight: 1, inFlightIds: [id], maxConcurrency: 1 });
+
+        await scheduler.alarm();
+
+        // Backpressured by its own slot it could never re-fire, and nothing else would release it.
+        expect(scheduler.dispatched.map((record) => record.id)).toStrictEqual([id]);
+        expect(poolIds(state, "p")).toStrictEqual([id]);
+    });
+
+    it("releases the slot a pending record holds when it is cancelled, and leaves other holders alone", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const held = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 2, pool: "p", scheduledFor: Date.now() + 60_000 })),
+        );
+        const queued = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 2, pool: "p", scheduledFor: Date.now() + 60_000 })),
+        );
+
+        state.storageMap.set("pool:p", { inFlight: 2, inFlightIds: [held, "running-elsewhere"], maxConcurrency: 2 });
+
+        // A job that holds no slot frees nothing; one re-armed after a decline frees its own.
+        await scheduler.fetch(post("/cancel", { id: queued }));
+
+        expect(poolIds(state, "p")).toStrictEqual([held, "running-elsewhere"]);
+
+        await scheduler.fetch(post("/cancel", { id: held }));
+
+        expect(poolIds(state, "p")).toStrictEqual(["running-elsewhere"]);
+    });
+
+    it("keeps the slot when the kick is declined in-progress, and re-arms the job", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new DecliningScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const [id] = await enqueuePool(scheduler, "p", 2, 1);
+
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toStrictEqual([id]);
+        // The first attempt is still running and its completion is still coming: the slot stays counted.
+        expect(poolIds(state, "p")).toStrictEqual([id]);
+        expect(state.storageMap.has(`id:${String(id)}`)).toBe(true);
+    });
+
+    it("releases a declined attempt's slot when the job is cancelled while it settles", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new DecliningScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const [id] = await enqueuePool(scheduler, "p", 2, 1);
+
+        scheduler.cancelMidAttempt = true;
+        await scheduler.alarm();
+
+        // Cancelled, so no re-fire will come back for it: this is the slot's last release.
+        expect(scheduler.dispatched).toStrictEqual([id]);
+        expect(poolIds(state, "p")).toStrictEqual([]);
+    });
+});

@@ -14,6 +14,7 @@ import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch
 import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { collectPages } from "../../../shared/collect-pages";
 import { DEDUP_KEY_GRAMMAR_MESSAGE, isDedupKey } from "../../../shared/dedup-key";
+import { DISPATCH_DECLINED_HEADER } from "../../../shared/dispatch-claim";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
 import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
@@ -4182,7 +4183,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * that slot for the lifetime of the pool. At the default `maxConcurrency: 1`
      * one leak wedges the pool permanently, with every later job re-arming the
      * alarm every 1000 ms and never running. Every early return from a dispatch
-     * that reserved a slot must reach this call.
+     * that reserved a slot must reach this call — except a claim decline, whose
+     * slot belongs to the attempt still running (see {@link handleSchedulerDispatch}).
      */
     const releasePoolSlot = async (candidate: { id?: unknown; instanceName?: unknown; pool?: unknown }): Promise<void> => {
         const pool = typeof candidate.pool === "string" && candidate.pool.length > 0 ? candidate.pool : undefined;
@@ -4350,6 +4352,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             request.headers.get("traceparent") ?? undefined,
             scheduledFor,
         );
+
+        // A claim decline (the header only the shard's claim path sets) means this record's first
+        // attempt is still running: its own dispatch releases the slot when it settles, or the
+        // scheduler's next re-fire of the record does if that one was cut off. Releasing here
+        // would let another pooled job run beside it past `maxConcurrency`.
+        if (response.status === 409 && response.headers.get(DISPATCH_DECLINED_HEADER) === "1") {
+            return response;
+        }
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it. Best-effort only in that a failure can't fail this dispatch — a
