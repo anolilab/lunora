@@ -7,7 +7,7 @@
  * sees it — this runs the real engine.
  */
 import type { Middleware, Policy } from "@lunora/server";
-import { definePolicies, definePolicy, defineSchema, defineTable, initLunora, rls, v } from "@lunora/server";
+import { definePolicies, definePolicy, defineSchema, defineTable, initLunora, mask, rls, v } from "@lunora/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lunoraTest } from "../src/index";
@@ -25,7 +25,7 @@ const schema = defineSchema({
         .relations((r) => {
             return { secrets: r.many("secrets", { field: "auditId" }) };
         }),
-    notices: defineTable({ text: v.string() })
+    notices: defineTable({ score: v.number(), text: v.string() })
         .public()
         .relations((r) => {
             return { secrets: r.many("secrets", { field: "noticeId" }) };
@@ -52,6 +52,53 @@ const postsWith = (withInput: Record<string, unknown>) =>
 /** No `rls()` at all: the guard admits the `.public()` parent, and the child must still be refused. */
 const noticesWithSecrets = query.query(async ({ ctx }) => (ctx.db as unknown as { findMany: FindMany }).findMany("notices", { with: { secrets: true } }));
 
+/** The analytical reads; the builder's nominal `ctx.db` type does not list them. */
+interface Analytical {
+    aggregate: (table: string, options: Record<string, unknown>) => Promise<unknown>;
+    count: (table: string, whereOrArgs?: Record<string, unknown>) => Promise<number>;
+    groupBy: (table: string, options: Record<string, unknown>) => Promise<unknown>;
+}
+
+type AnalyticalRead = (database: Analytical, table: string, where: Record<string, unknown>) => Promise<unknown>;
+
+const analyticalReads: ReadonlyArray<[string, AnalyticalRead]> = [
+    ["count with a bare where", async (database, table, where) => database.count(table, where)],
+    ["count with an options bag", async (database, table, where) => database.count(table, { where })],
+    ["count with a caller baseWhere", async (database, table, where) => database.count(table, { baseWhere: where })],
+    ["aggregate", async (database, table, where) => database.aggregate(table, { field: "score", op: "sum", where })],
+    ["aggregate op count", async (database, table, where) => database.aggregate(table, { op: "count", where })],
+    ["aggregate with a caller baseWhere", async (database, table, where) => database.aggregate(table, { baseWhere: where, field: "score", op: "sum" })],
+    ["groupBy", async (database, table, where) => database.groupBy(table, { by: ["text"], where })],
+];
+
+const relationPredicates: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ["some", { secrets: { some: { body: "s" } } }],
+    ["every", { secrets: { every: { body: "s" } } }],
+    ["none", { secrets: { none: { body: "s" } } }],
+];
+
+const analyticalCases = analyticalReads.flatMap(([readName, read]) =>
+    relationPredicates.map(([predicateName, where]) => [`${readName} / ${predicateName}`, read, where] as const),
+);
+
+/** A `.public()` parent with no `rls()` step, so only the guard stands between the read and the child. */
+const unguardedAnalytical = (read: AnalyticalRead, where: Record<string, unknown>) =>
+    query.query(async ({ ctx }) => read(ctx.db as unknown as Analytical, "notices", where));
+
+/** The parent behind an `rls()` read policy, so the middleware's relation filter carries the read. */
+const policiedAnalytical = (read: AnalyticalRead, where: Record<string, unknown>) =>
+    query.use(rlsForTest(definePolicies([readPosts]))).query(async ({ ctx }) => read(ctx.db as unknown as Analytical, "posts", where));
+
+/**
+ * `mask()` ahead of `rls()`: the mask republishes `ctx.db` by spread, so the
+ * `rls()` step below it sees the mask wrapper rather than the guarded writer.
+ */
+const maskedThenPolicied = <T>(read: (database: Analytical & { findMany: FindMany }) => Promise<T>) =>
+    query
+        .use(mask({ audit: { note: "redact" } }) as unknown as Middleware<any, any>)
+        .use(rlsForTest(definePolicies([readPosts])))
+        .query(async ({ ctx }) => read(ctx.db as unknown as Analytical & { findMany: FindMany }));
+
 /** No `rls()`, and the caller hands in its own relation filter: it must not stand in for the middleware's. */
 const noticesWithFilter = (relationBaseWhere: unknown) =>
     query.query(async ({ ctx }) => (ctx.db as unknown as { findMany: FindMany }).findMany("notices", { relationBaseWhere, with: { secrets: true } }));
@@ -76,7 +123,7 @@ const seeded = async (): Promise<ReturnType<typeof lunoraTest>> => {
         };
 
         await database.insert("posts", { _id: "p1", title: "t" }, { allowExplicitId: true });
-        await database.insert("notices", { _id: "n1", text: "n" }, { allowExplicitId: true });
+        await database.insert("notices", { _id: "n1", score: 1, text: "n" }, { allowExplicitId: true });
         await database.insert("audit", { _id: "a1", note: "a", postId: "p1" }, { allowExplicitId: true });
         await database.insert("secrets", { auditId: "a1", body: "s", noticeId: "n1", postId: "p1" });
     });
@@ -148,5 +195,101 @@ describe("lunoraTest — relation reads of a protected table without a read poli
         const { page } = await t.query(postsWith({ audit: true }), {});
 
         expect(page.map((post) => (post["audit"] as Record<string, unknown>[]).map((row) => row["_id"]))).toStrictEqual([["a1"]]);
+    });
+
+    it.each(analyticalCases)("refuses a relation predicate on the protected child in %s of a .public() parent without rls()", async (_name, read, where) => {
+        expect.assertions(1);
+
+        const t = await seeded();
+
+        await expect(t.query(unguardedAnalytical(read, where), {})).rejects.toMatchObject({ code: "RLS_REQUIRED", table: "secrets" });
+    });
+
+    it.each(analyticalCases)("refuses a relation predicate on the protected child in %s of a policied parent", async (_name, read, where) => {
+        expect.assertions(1);
+
+        const t = await seeded();
+
+        await expect(t.query(policiedAnalytical(read, where), {})).rejects.toMatchObject({ code: "RLS_REQUIRED", table: "secrets" });
+    });
+
+    it.each([
+        [
+            "count",
+            async (database: Analytical, relationBaseWhere: unknown) =>
+                database.count("notices", { relationBaseWhere, where: { secrets: { some: { body: "s" } } } }),
+        ],
+        [
+            "aggregate",
+            async (database: Analytical, relationBaseWhere: unknown) =>
+                database.aggregate("notices", { field: "score", op: "sum", relationBaseWhere, where: { secrets: { some: { body: "s" } } } }),
+        ],
+        [
+            "groupBy",
+            async (database: Analytical, relationBaseWhere: unknown) =>
+                database.groupBy("notices", { by: ["text"], relationBaseWhere, where: { secrets: { some: { body: "s" } } } }),
+        ],
+    ] as const)("refuses a relation predicate on the protected child in %s when the caller supplies its own relation filter", async (_name, read) => {
+        expect.assertions(2);
+
+        const t = await seeded();
+
+        for (const relationBaseWhere of [() => undefined, null]) {
+            // eslint-disable-next-line no-await-in-loop -- one harness, the two filters checked in turn
+            await expect(
+                t.query(
+                    query.query(async ({ ctx }) => read(ctx.db as unknown as Analytical, relationBaseWhere)),
+                    {},
+                ),
+            ).rejects.toMatchObject({
+                code: "RLS_REQUIRED",
+                table: "secrets",
+            });
+        }
+    });
+
+    it("still counts a .public() parent by a relation predicate on a .public() child", async () => {
+        expect.assertions(1);
+
+        const t = await seeded();
+
+        await expect(
+            t.query(
+                policiedAnalytical(async (database, _table, where) => database.count("posts", where), { audit: { some: { note: "a" } } }),
+                {},
+            ),
+        ).resolves.toBe(1);
+    });
+
+    it("refuses the protected child of a .public() parent when mask() runs ahead of rls()", async () => {
+        expect.assertions(1);
+
+        const t = await seeded();
+
+        await expect(
+            t.query(
+                maskedThenPolicied(async (database) => database.findMany("notices", { with: { secrets: true } })),
+                {},
+            ),
+        ).rejects.toMatchObject({
+            code: "RLS_REQUIRED",
+            table: "secrets",
+        });
+    });
+
+    it("refuses a relation predicate on the protected child when mask() runs ahead of rls()", async () => {
+        expect.assertions(1);
+
+        const t = await seeded();
+
+        await expect(
+            t.query(
+                maskedThenPolicied(async (database) => database.count("notices", { secrets: { some: {} } })),
+                {},
+            ),
+        ).rejects.toMatchObject({
+            code: "RLS_REQUIRED",
+            table: "secrets",
+        });
     });
 });
