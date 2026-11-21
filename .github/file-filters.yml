@@ -83,6 +83,9 @@ frontend_lintable:
     # job that catches it. Checker, job and this file listed per the rule above.
     - "**/project.json"
     - "scripts/check-project-json-targets.js"
+    # The file-level eslint-disable guard runs in the eslint job; its baseline matches no glob above.
+    - "scripts/check-file-level-eslint-disable.js"
+    - "scripts/file-level-eslint-disable.baseline.json"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
     - "pnpm-lock.yaml"
