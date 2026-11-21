@@ -488,39 +488,51 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
                     // `meta.idempotencyKey`.
                     const mutationId = `${idempotencyKey}:${String(mutationIndex)}`;
 
-                    try {
-                        // Re-checked per mutation, not once per transaction: a batched
-                        // transaction awaits between its writes, which is exactly where a
-                        // `setAuthToken` can slip in. Inside the try so the drop reaches
-                        // `onWriteRejected` instead of rolling the row back in silence.
-                        const send = async (replayCredential: ReplayCredential): Promise<unknown> =>
-                            // `shardKey` routes the write to the DO the collection's `list`
-                            // subscription reads. The server derives no shard from args, so
-                            // omitting it lands a `.shardBy()`'d collection's writes in the
-                            // default shard — committed, ack'd, and invisible to the reader.
-                            client.mutation(insert.mutation, insert.toArgs(row), {
-                                mutationId,
-                                // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
-                                // `null` pins "composed with no baseline"; omitting the
-                                // option entirely would sample the current cursor instead.
-                                // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
-                                replayBaseline: unrouted ? null : (meta?.baselineSeq ?? null),
-                                // Sent with the bearer the verdict judged; under a cookie
-                                // session the worker also refuses the write if the cookie
-                                // now belongs to someone else.
-                                replayCredential,
-                                shardKey: unrouted ? scopedShardKey(definition.scopeBy as string, row, "the queued row") : meta?.shardKey,
-                            });
+                    // `shardKey` routes the write to the DO the collection's `list`
+                    // subscription reads. The server derives no shard from args, so
+                    // omitting it lands a `.shardBy()`'d collection's writes in the
+                    // default shard — committed, ack'd, and invisible to the reader.
+                    const shardKey = unrouted ? scopedShardKey(definition.scopeBy as string, row, "the queued row") : meta?.shardKey;
 
-                        // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
-                        await replayHoldingCredential(mutationId, meta, send);
+                    try {
+                        if (meta?.oneShot) {
+                            // Runs in the tick the action composed it, so the baseline the
+                            // client samples now is the composing one, and the write is free
+                            // to wait in the client's own queue while offline.
+                            // eslint-disable-next-line no-await-in-loop -- sequential keeps the transaction's writes in order
+                            await runOutboxMutation(async () => client.mutation(insert.mutation, insert.toArgs(row), { mutationId, shardKey }));
+                        } else {
+                            // Re-checked per mutation, not once per transaction: a batched
+                            // transaction awaits between its writes, which is exactly where a
+                            // `setAuthToken` can slip in. Inside the try so the drop reaches
+                            // `onWriteRejected` instead of rolling the row back in silence.
+                            const send = async (replayCredential: ReplayCredential): Promise<unknown> =>
+                                client.mutation(insert.mutation, insert.toArgs(row), {
+                                    mutationId,
+                                    // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
+                                    // `null` pins "composed with no baseline"; omitting the
+                                    // option entirely would sample the current cursor instead.
+                                    // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
+                                    replayBaseline: unrouted ? null : (meta?.baselineSeq ?? null),
+                                    // Sent with the bearer the verdict judged; under a cookie
+                                    // session the worker also refuses the write if the cookie
+                                    // now belongs to someone else.
+                                    replayCredential,
+                                    shardKey,
+                                });
+
+                            // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
+                            await replayHoldingCredential(mutationId, meta, send);
+                        }
                     } catch (error) {
                         // A permanent rejection: the executor will roll the optimistic
                         // row back. Report it on the aggregate channel so a
                         // fire-and-forget caller still learns the write was dropped, then
                         // rethrow so the rollback proceeds. Transient errors retry, so
-                        // only a terminal verdict is reported.
-                        const terminal = settleFailure(mutationId, error);
+                        // only a terminal verdict is reported — except in a one-shot
+                        // transaction, which nothing retries: its row is rolled back
+                        // either way, so any failure is reported.
+                        const terminal = settleFailure(mutationId, error) ?? (meta?.oneShot ? toNonRetriable(error) : undefined);
 
                         if (terminal !== undefined) {
                             reportWriteRejected(options, { code: (terminal as Error & { code?: string }).code, collection: name, error: terminal, row });
@@ -675,6 +687,8 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
             const metadata: WriteProvenance = {
                 baselineSeq: client.currentBaseline(shardKey),
                 identity: client.currentIdentity(),
+                // Read in the same tick as `createOfflineTransaction`, which branches on it.
+                ...(executor.isOfflineEnabled ? {} : { oneShot: true }),
                 shardKey,
             };
             const offline = executor.createOfflineTransaction({ autoCommit: false, metadata, mutationFnName: name });

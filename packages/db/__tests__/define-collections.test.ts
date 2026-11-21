@@ -243,16 +243,16 @@ describe(defineCollections, () => {
         // write also carries a stable `mutationId` (the executor's idempotency key)
         // so the server dedupes a committed-but-unacked retry at the transport
         // layer, not only by the app's manual `id`-arg dedup.
-        // `replayBaseline: null` pins "composed with no baseline" — this fixture's
-        // client carries no subscription cursor. Omitting the option would instead
-        // let the replay sample whatever cursor the client had reached by then.
+        // No replay options: this fixture has no storage, so the executor runs
+        // online-only and the write's one run is the write itself, sent fresh (the
+        // client may queue it), not a replay of a stored one.
         // `shardKey: "c1"` — a `scopeBy` collection's row lives in the shard its
         // scoped column names, so the write goes there, not to the default shard.
         expect(mutation).toHaveBeenCalledWith(
             messagesSend,
             { channelId: "c1", id, text: "hi" },
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- fixture id from a mocked runtime
-            { mutationId: expect.any(String), replayBaseline: null, replayCredential: { judged: null }, shardKey: "c1" },
+            { mutationId: expect.any(String), shardKey: "c1" },
         );
     });
 

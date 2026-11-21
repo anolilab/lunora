@@ -228,7 +228,10 @@ const db = defineCollections(client, defs, {
 
 `onStorageFailure` is the collection-layer counterpart to the standalone client's
 `offlineQueue.onPersistenceError`; `onLeadershipChange(isLeader)` is also
-available (informational: only the leader tab drains the outbox).
+available (informational: only the leader tab stores and drains the outbox). A
+write made in another tab, or before leadership is settled, goes through the
+client's built-in offline queue instead; see
+[Multiple tabs](/docs/concepts/offline-first#multiple-tabs).
 
 This is the same durable-outbox and reconciliation model `@lunora/client`
 exposes directly. If you want offline reads and writes without adopting the

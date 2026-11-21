@@ -1,5 +1,5 @@
 import type { OutboxMutation, OutboxSink } from "@lunora/client";
-import { isAuthReplayFailure } from "@lunora/client";
+import { isAuthReplayFailure, OutboxDeclinedError } from "@lunora/client";
 import type { Collection } from "@tanstack/db";
 import { createCollection, safeRandomUUID } from "@tanstack/db";
 import type { OnlineDetector } from "@tanstack/offline-transactions";
@@ -79,6 +79,14 @@ interface WriteProvenance extends Record<string, unknown> {
 
     /** Issuing identity fingerprint; a replay drops the write when it no longer matches. */
     identity: string | null;
+
+    /**
+     * Set on a write the executor will run once and never store (this tab does
+     * not lead the outbox, or leadership is not settled yet). Never persisted,
+     * because such a transaction never is. Its one run is the write itself, not a
+     * replay, so it is sent as a fresh write the client may queue.
+     */
+    oneShot?: true;
     /** Captured, not re-read at replay: a queued write follows the shard it was made against even if the app reboots pointed at another. */
     shardKey?: string;
 }
@@ -112,6 +120,9 @@ interface OutboxExecutor {
         mutationFnName: string;
     }) => OutboxTransaction;
     getPendingCount: () => number;
+    /** Whether `createOfflineTransaction` hands out a stored, retried transaction (this tab leads the outbox) or one that runs once, unstored. */
+    readonly isOfflineEnabled: boolean;
+    waitForInit: () => Promise<void>;
 }
 
 /**
@@ -255,7 +266,21 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
          */
         pending: (): boolean => executor.getPendingCount() > 0,
 
-        enqueue(mutation: OutboxMutation): Promise<void> {
+        async enqueue(mutation: OutboxMutation): Promise<void> {
+            // Leadership is only known once the executor has started. Until then,
+            // and in a tab that does not lead, the executor would run the write
+            // once, unstored, and lose it to the first transient failure: decline
+            // it, and the client keeps it in its own queue. No await from here to
+            // `createOfflineTransaction`, which branches on the same flag.
+            const started = await executor.waitForInit().then(
+                () => true,
+                () => false,
+            );
+
+            if (!started || !executor.isOfflineEnabled) {
+                throw new OutboxDeclinedError();
+            }
+
             // Cap: reject at capacity before persisting, so an already-queued
             // durable write is never silently lost. Mirrors `OfflineQueue` and the
             // `OutboxSink` contract (`OFFLINE_QUEUE_OVERFLOW`).
@@ -264,7 +289,7 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
 
                 error.code = "OFFLINE_QUEUE_OVERFLOW";
 
-                return Promise.reject(error);
+                throw error;
             }
 
             // Held in memory (not in `metadata`, which is serialized): the replay
@@ -334,8 +359,6 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
                     error: new Error(`offline write could not be stored: ${error instanceof Error ? error.message : String(error)}`, { cause: error }),
                 });
             });
-
-            return Promise.resolve();
         },
     };
 };

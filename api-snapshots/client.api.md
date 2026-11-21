@@ -899,6 +899,14 @@ interface OptimisticMessage {
 type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Args) => void;
 ```
 
+### `OutboxDeclinedError` (class)
+
+```ts
+class OutboxDeclinedError extends Error {
+    constructor(message?: string);
+}
+```
+
 ### `OutboxMutation` (interface)
 
 ```ts

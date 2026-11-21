@@ -1490,6 +1490,87 @@ describe("durable replay while the connection is down", () => {
         vi.unstubAllGlobals();
     });
 
+    /** A real client with a held socket; `messages:send` RPCs are recorded in `sent`. */
+    const offlineClient = (
+        options: { failSends?: boolean; outbox?: () => ReturnType<typeof createExecutorOutboxSink>; queueBeforeFirstConnect?: boolean } = {},
+    ) => {
+        const sent: unknown[] = [];
+        const client = new LunoraClient({
+            fetch: async (input, init) => {
+                if (input !== RPC_URL) {
+                    return new Response("{}", { status: 404 });
+                }
+
+                const { args, functionPath } = JSON.parse(init?.body as string) as { args: { text?: string }; functionPath: string };
+
+                if (functionPath === "messages:send") {
+                    if (options.failSends) {
+                        throw new TypeError("Failed to fetch");
+                    }
+
+                    sent.push(args.text);
+                }
+
+                return Response.json({ result: "ok" });
+            },
+            offlineQueue: { queueBeforeFirstConnect: options.queueBeforeFirstConnect ?? true },
+            ...(options.outbox === undefined
+                ? {}
+                : {
+                      outbox: {
+                          enqueue: async (mutation: OutboxMutation) =>
+                              (options.outbox as () => ReturnType<typeof createExecutorOutboxSink>)().enqueue(mutation),
+                          pending: () => options.outbox?.().pending?.() ?? false,
+                      },
+                  }),
+            url: "https://app.example",
+            WebSocket: heldWebSocket(),
+        });
+
+        clients.push(client);
+        client.setAuthToken("token-a", "user-a");
+
+        return { client, sent };
+    };
+
+    /** A data layer with one insert-bound collection whose writes call `messages:send`. */
+    const notesDatabase = (client: LunoraClient, options?: Parameters<typeof defineCollections>[2]) => {
+        const database = defineCollections(
+            client,
+            {
+                notes: {
+                    insert: {
+                        mutation: ref("messages:send"),
+                        optimistic: (input: { text: string }, id) => {
+                            return { _id: id, text: input.text };
+                        },
+                        toArgs: (row) => {
+                            return { text: row.text };
+                        },
+                    },
+                    list: ref("messages:list"),
+                },
+            },
+            options,
+        ) as unknown as { actions: { notes: (input: { text: string }) => { id: string } }; executor: OfflineExecutor; pendingCount: () => number };
+
+        executors.push(database.executor);
+
+        return database;
+    };
+
+    const awaitInit = async (executor: OfflineExecutor): Promise<void> => {
+        const init = executor.waitForInit();
+
+        await vi.advanceTimersByTimeAsync(0);
+        await init;
+    };
+
+    /** A leader that already holds the outbox, so the next data layer in this profile is a follower. */
+    const startLeader = async (): Promise<void> => {
+        await awaitInit(notesDatabase(offlineClient().client).executor);
+    };
+
     // The executor retries on a one-second tick and believes it is always online,
     // so it replays while the device is offline. Such a replay must fail and be
     // retried in place, never be handed back to the outbox as a new write behind
@@ -1558,6 +1639,8 @@ describe("durable replay while the connection is down", () => {
         sink = createExecutorOutboxSink(database.executor);
         client.subscribe(ref("messages:list"), {} as never, () => undefined);
 
+        const mutation = vi.spyOn(client, "mutation");
+
         database.actions.notes({ text: "first" });
         database.actions.notes({ text: "second" });
         await vi.advanceTimersByTimeAsync(0);
@@ -1581,7 +1664,110 @@ describe("durable replay while the connection is down", () => {
 
         expect(sent).toStrictEqual(["first", "second"]);
         expect(requeued).not.toHaveBeenCalled();
+        // A stored write is replayed: pinned baseline and the judged credential.
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ replayBaseline: null });
+        expect(mutation.mock.calls[0]?.[2]).toHaveProperty("replayCredential");
         expect(database.pendingCount()).toBe(0);
         expect(rejected).not.toHaveBeenCalled();
+    });
+
+    // Only the leader tab's executor stores writes; a follower's hands out a
+    // transaction that runs once, unstored. A write made there while offline
+    // must still be kept and sent, never shown as saved and dropped.
+    it("keeps a follower tab's offline insert in the client's queue and sends it once on reconnect", async () => {
+        await startLeader();
+
+        const { client, sent } = offlineClient();
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const follower = notesDatabase(client, { onWriteRejected: rejected });
+
+        await awaitInit(follower.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        expect(follower.executor.isOfflineEnabled).toBe(false);
+
+        follower.actions.notes({ text: "from a follower" });
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        expect(client.pendingCount()).toBe(1);
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual(["from a follower"]);
+        expect(client.pendingCount()).toBe(0);
+        expect(rejected).not.toHaveBeenCalled();
+    });
+
+    it("keeps an insert made before leader election finishes, and sends it once", async () => {
+        const { client, sent } = offlineClient();
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const database = notesDatabase(client, { onWriteRejected: rejected });
+
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+        database.actions.notes({ text: "before election" });
+        await awaitInit(database.executor);
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(database.executor.isOfflineEnabled).toBe(true);
+        expect(sent).toStrictEqual([]);
+        expect(client.pendingCount()).toBe(1);
+        await expect(database.executor.peekOutbox()).resolves.toStrictEqual([]);
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual(["before election"]);
+        expect(rejected).not.toHaveBeenCalled();
+    });
+
+    // The sink cannot store a write on a follower, so it declines it, and the
+    // client keeps the write in its own queue instead.
+    it("keeps a follower tab's raw offline write in the client's queue when the outbox is wired", async () => {
+        await startLeader();
+
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const { client, sent } = offlineClient({ outbox: () => sink as ReturnType<typeof createExecutorOutboxSink> });
+        const follower = defineCollections(client, {});
+
+        executors.push(follower.executor);
+        await awaitInit(follower.executor);
+        sink = createExecutorOutboxSink(follower.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        // Held by the client's queue, so it settles only once the write is sent.
+        const queued = client.mutation(ref("messages:send"), { text: "raw from a follower" } as never);
+
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        expect(client.pendingCount()).toBe(1);
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        await expect(queued).resolves.toBe("ok");
+        expect(sent).toStrictEqual(["raw from a follower"]);
+        expect(follower.pendingCount()).toBe(0);
+    });
+
+    // A transaction the executor will not store is never retried, so a failure it
+    // cannot recover from on its own is reported rather than dropped in silence.
+    it("reports a follower's insert that could not be sent or queued", async () => {
+        await startLeader();
+
+        const { client, sent } = offlineClient({ failSends: true, queueBeforeFirstConnect: false });
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const follower = notesDatabase(client, { onWriteRejected: rejected });
+
+        await awaitInit(follower.executor);
+
+        follower.actions.notes({ text: "lost?" });
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        expect(rejected).toHaveBeenCalledTimes(1);
+        expect(rejected.mock.calls[0]?.[0]).toMatchObject({ collection: "notes", row: { text: "lost?" } });
     });
 });

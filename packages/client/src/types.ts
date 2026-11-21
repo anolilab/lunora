@@ -297,7 +297,9 @@ export interface OutboxSink {
     /**
      * Persist and schedule a write for replay. Rejects with an
      * `OFFLINE_QUEUE_OVERFLOW`-coded error when the sink's cap is exceeded, so
-     * the caller can surface back-pressure to the issuing mutation.
+     * the caller can surface back-pressure to the issuing mutation, and with an
+     * `OutboxDeclinedError` when it cannot store the write durably right now, in
+     * which case the client keeps the write in its built-in offline queue.
      */
     enqueue: (mutation: OutboxMutation) => Promise<void>;
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { LunoraClient } from "../src/lunora-client";
+import OutboxDeclinedError from "../src/outbox-declined-error";
 import type { FunctionReference, OutboxMutation, OutboxSink } from "../src/types";
 
 /**
@@ -250,6 +251,54 @@ describe("lunoraClient outbox delegation", () => {
 
         expect(clientIds[0]).toBe("client-old");
         expect(clientIds[1]).toBe("client-new");
+
+        client.close();
+    });
+
+    // `@lunora/db`'s sink declines a write it cannot store in this tab (it does
+    // not lead the outbox). The write must not be dropped or reported as failed:
+    // the client keeps it in its own queue, with its predicted value on screen.
+    it("keeps a write the sink declines in the built-in queue, optimistic value and all", async () => {
+        expect.assertions(3);
+
+        const declined: OutboxMutation[] = [];
+        const client = new LunoraClient({
+            offlineQueue: { queueBeforeFirstConnect: true },
+            outbox: {
+                enqueue: async (mutation) => {
+                    declined.push(mutation);
+
+                    throw new OutboxDeclinedError();
+                },
+            },
+            url: "https://app.example",
+            WebSocket: seedableWebSocket(),
+        });
+        const received: unknown[] = [];
+
+        client.subscribe(fnRef("counter:get"), {}, (value) => received.push(value));
+
+        const socket = sockets.at(-1) as SeedableSocket;
+
+        socket.open();
+        socket.receive({ delta: 1, id: subscriptionId(socket), type: "delta" });
+        socket.triggerClose();
+
+        const inQueue = new Promise<void>((resolve) => {
+            client.onPendingChange((count) => {
+                if (count > 0) {
+                    resolve();
+                }
+            });
+        });
+        const queued = client.mutation(fnRef("counter:get"), {}, { optimistic: (current) => (current as number) + 1 });
+
+        queued.catch(() => undefined);
+        await inQueue;
+
+        expect(client.pendingCount()).toBe(1);
+        expect(declined).toHaveLength(1);
+        expect(received).toEqual([1, 2]);
 
         client.close();
     });
