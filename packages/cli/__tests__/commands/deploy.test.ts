@@ -2619,10 +2619,52 @@ export const ${exportName} = defineMigration({
                 spawner,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).not.toBe(0);
             expect(calls).toHaveLength(1);
-            expect(errors.some((line) => line.includes("no migration was run"))).toBe(true);
+            // The SQL files ran before discovery, so only the data migrations are said not to have run.
+            expect(errors.some((line) => line.includes("no data migration was run"))).toBe(true);
             expect(urls.some((url) => url.endsWith("/_lunora/migrate"))).toBe(false);
+        });
+
+        it("--migrate exits with the usage code when a migration id is not a string literal", async () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "lunora", "migrations.ts"),
+                `import { defineMigration } from "@lunora/server";
+
+const id = "backfill-names";
+
+export const backfillNames = defineMigration({
+    id,
+    table: "users",
+    up: (doc) => doc,
+});
+`,
+                "utf8",
+            );
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+            const fetchStub: StreamingFetchLike = () =>
+                Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify({ status: "ok" })) } as Response);
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                fetchImpl: fetchStub,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                skipCodegen: true,
+                spawner,
+            });
+
+            // The project's own source is wrong: the usage bucket, not a generic failure.
+            expect(result.code).toBe(EXIT_CODE.USAGE);
         });
 
         it("--migrate succeeds with nothing to run when there is no lunora/ directory", async () => {

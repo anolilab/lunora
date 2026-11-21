@@ -10,7 +10,7 @@ import { Project } from "ts-morph";
 
 import { autoLinkFromDeployOutput, parseDeployedUrl } from "../../util/auto-link";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
-import { EXIT_CODE } from "../../util/exit-code";
+import { EXIT_CODE, exitCodeForError } from "../../util/exit-code";
 import { HEALTH_PATH, HEALTH_READY_PATH, probeHealth } from "../../util/health-probe";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import type { SpawnDescriptor } from "../../util/spawn";
@@ -78,9 +78,9 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
 
         // The worker is already live: failing here is what keeps a pipeline from reading new code on
         // unmigrated data as a successful deploy-and-migrate.
-        options.logger.error(`--migrate: could not discover migrations (${message}); no migration was run`);
+        options.logger.error(`--migrate: could not discover migrations (${message}); no data migration was run`);
 
-        return 1;
+        return exitCodeForError(error);
     }
 
     if (migrations.length === 0) {
