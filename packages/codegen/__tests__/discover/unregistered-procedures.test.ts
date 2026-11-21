@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import discoverFunctions from "../../src/discover/functions";
 import discoverUnregisteredProcedures from "../../src/discover/unregistered-procedures";
 import type { FunctionIR } from "../../src/ir";
 
@@ -47,6 +48,8 @@ export type RegisteredLifecycleHook<Moment extends LifecycleEventKind = Lifecycl
 };
 export type RegisteredReactor = RegisteredFunction<Record<string, never>, { digest: string }, "mutation"> & { readonly lifecycle: "reactor" };
 export declare const onConnect: (handler: () => Promise<void>) => RegisteredLifecycleHook<"connect">;
+export type RegisteredWhisperAuthorizer = RegisteredFunction<Record<string, never>, boolean, "query"> & { readonly lifecycle: "whisper" };
+export declare const onWhisper: (handler: () => Promise<boolean>) => RegisteredWhisperAuthorizer;
 export declare const onQueryChange: <T>(select: () => Promise<T>, handler: (context: unknown, result: T) => Promise<void>) => RegisteredReactor;
 export interface RegisteredMutator { readonly __lunoraMutator: true }
 export interface RegisteredShape { readonly table: string }
@@ -191,6 +194,26 @@ let project: Project;
 const write = (name: string, source: string): void => {
     writeFileSync(join(workdir, "lunora", name), source, "utf8");
 };
+
+/** Write a module outside `lunora/` — shared app code a `lunora/` file may re-export. */
+const writeOutside = (relative: string, source: string): void => {
+    const full = join(workdir, relative);
+
+    mkdirSync(full.slice(0, Math.max(0, full.lastIndexOf("/"))), { recursive: true });
+    writeFileSync(full, source, "utf8");
+};
+
+/**
+ * An authorizer and a query kept in shared app code, outside `lunora/`. They import the
+ * real package name, served from a local `node_modules` with {@link SERVER}, because
+ * discovery only classifies a call imported from the Lunora surface: the re-export tests
+ * feed discovery's own result to the lint, so the drop they assert is the real one.
+ */
+const SHARED_AUTH = `import { onWhisper, query } from "@lunora/server";
+
+export const gate = onWhisper(async () => false);
+export const listed = query.input({}).query(async () => "x");
+`;
 
 /**
  * Load every fixture file into the Project. This pass deliberately only reads
@@ -450,5 +473,84 @@ export const viaFactory = makeQuery();
         load("srv.d.ts", "workflows.ts");
 
         expect(run(REGISTERED, { byName: ["nightly"] }).map((entry) => entry.name)).not.toContain("procedure_not_registered");
+    });
+
+    it("fails the build for a whisper authorizer re-exported into lunora/ from outside it, in both shapes", () => {
+        expect.assertions(7);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        write("reexport.ts", `export { gate } from "../src/auth/whisper";\n`);
+        write("relay.ts", `import { gate } from "../src/auth/whisper";\n\nexport { gate };\n`);
+        load("reexport.ts", "relay.ts");
+
+        // What discovery makes of it: nothing. No whisper hook reaches the manifest, and an
+        // empty manifest is allow-all — so the lint is the only thing standing between this
+        // project and every topic open to every socket.
+        const discovered = discoverFunctions(project, join(workdir, "lunora"));
+
+        expect(discovered.filter((entry) => entry.lifecycle === "whisper")).toStrictEqual([]);
+
+        const findings = run(discovered).filter((finding) => finding.name === "procedure_not_registered");
+
+        expect(findings.map((finding) => [finding.metadata["filePath"], finding.metadata["exportName"], finding.level])).toStrictEqual([
+            ["reexport", "gate", "ERROR"],
+            ["relay", "gate", "ERROR"],
+        ]);
+        expect(findings[0]?.detail).toContain("RegisteredWhisperAuthorizer");
+        expect(findings[0]?.detail).toContain("src/auth/whisper.ts");
+        expect(findings[1]?.detail).toContain("src/auth/whisper.ts");
+        expect(findings[0]?.remediation).toContain("export const gate = onWhisper(handler)");
+        expect(findings[0]?.remediation).toContain("under `lunora/`");
+    });
+
+    it("warns, without blocking, for an ordinary query re-exported into lunora/ from outside it", () => {
+        expect.assertions(2);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        write("reexport.ts", `export { listed } from "../src/auth/whisper";\n`);
+        write("relay.ts", `import { listed } from "../src/auth/whisper";\n\nexport { listed };\n`);
+        load("reexport.ts", "relay.ts");
+
+        const discovered = discoverFunctions(project, join(workdir, "lunora"));
+
+        // Discovery is unchanged: a re-exported query stays out of `api.ts`.
+        expect(discovered.map((entry) => entry.exportName)).toStrictEqual([]);
+        expect(
+            run(discovered)
+                .filter((finding) => finding.name === "procedure_not_registered")
+                .map((finding) => [finding.metadata["filePath"], finding.metadata["exportName"], finding.level]),
+        ).toStrictEqual([
+            ["reexport", "listed", "WARN"],
+            ["relay", "listed", "WARN"],
+        ]);
+    });
+
+    it("stays silent for an authorizer re-exported from the lunora/ file that registers it", () => {
+        expect.assertions(2);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        write("whisper.ts", `import { onWhisper } from "@lunora/server";\n\nexport const gate = onWhisper(async () => false);\n`);
+        write("index.ts", `export { gate } from "./whisper";\n`);
+        write("relay.ts", `import { gate } from "./whisper";\n\nexport { gate as guard };\n`);
+        load("whisper.ts", "index.ts", "relay.ts");
+
+        const discovered = discoverFunctions(project, join(workdir, "lunora"));
+
+        // `whisper.ts` registers it; the aggregating re-exports are what the registry docs
+        // recommend, and blocking the build on them would be a false alarm.
+        expect(discovered.map((entry) => `${entry.filePath}:${entry.exportName}`)).toContain("whisper:gate");
+        expect(run(discovered).filter((finding) => finding.name === "procedure_not_registered")).toStrictEqual([]);
+    });
+
+    it("blocks the build for a factory-produced whisper authorizer", () => {
+        expect.assertions(1);
+
+        write("srv.d.ts", SERVER);
+        write("whisper.ts", `import { onWhisper } from "./srv";\n\nconst make = () => onWhisper(async () => false);\n\nexport const gate = make();\n`);
+        load("srv.d.ts", "whisper.ts");
+
+        expect(run([]).find((finding) => finding.metadata["exportName"] === "gate")?.level).toBe("ERROR");
     });
 });
