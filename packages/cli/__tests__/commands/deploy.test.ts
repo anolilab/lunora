@@ -2581,7 +2581,7 @@ export const backfillNames = defineMigration({
         });
 
         it("--migrate fails after the deploy when migration discovery throws, and runs no migration", async () => {
-            expect.assertions(4);
+            expect.assertions(5);
 
             // Two declarations sharing one id: discovery rejects the project rather than pick one.
             const duplicate = (exportName: string): string => `import { defineMigration } from "@lunora/server";
@@ -2619,7 +2619,10 @@ export const ${exportName} = defineMigration({
                 spawner,
             });
 
-            expect(result.code).not.toBe(0);
+            // codegen throws a duplicate id as a plain Error, not a LunoraError, so it maps to no narrower bucket.
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
+            // The reason travels in the result too, so `--format json` carries it.
+            expect(result.error).toContain("Duplicate migration id");
             expect(calls).toHaveLength(1);
             // The SQL files ran before discovery, so only the data migrations are said not to have run.
             expect(errors.some((line) => line.includes("no data migration was run"))).toBe(true);
