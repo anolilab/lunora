@@ -1138,6 +1138,62 @@ describe("approval resolution", () => {
         await expect(callMutation(functions.agentApprovalGrants, ctx, { key: "t-1" })).resolves.toStrictEqual([]);
     });
 
+    it.each(["approve", "reject"] as const)("refuses a plain %s after the marker's deadline: the run already rejected the call", async (decision) => {
+        expect.assertions(4);
+
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+        const { agents, sent } = fakeAgents();
+        const ctx = { ...owner.ctx, agents };
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", owner: "user-a" });
+        await callMutation(functions.agentAppendMessage, ctx, {
+            approvalAgent: "support",
+            content: 'Awaiting approval to run tool "charge".',
+            expiresAt: Date.now() - 1,
+            messageKey: "wf-1:approval:call_1",
+            role: "tool",
+            status: "awaiting_approval",
+            threadKey: "t-1",
+            toolCallId: "call_1",
+            toolName: "charge",
+        });
+
+        const refused = callMutation(functions.agentResolveApproval, ctx, { decision, instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" });
+
+        await expect(refused).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(refused).rejects.toThrow("has timed out");
+
+        expect(sent).toStrictEqual([]);
+        expect((owner.rows.get("agent_messages") ?? []).filter((row) => row["status"] === "awaiting_approval")).toHaveLength(1);
+    });
+
+    it("lets a plain approve resolve a legacy marker with no deadline", async () => {
+        expect.assertions(2);
+
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+        const { agents, sent } = fakeAgents();
+        const ctx = { ...owner.ctx, agents };
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", owner: "user-a" });
+        await callMutation(functions.agentAppendMessage, ctx, {
+            approvalAgent: "support",
+            content: 'Awaiting approval to run tool "charge".',
+            messageKey: "wf-1:approval:call_1",
+            role: "tool",
+            status: "awaiting_approval",
+            threadKey: "t-1",
+            toolCallId: "call_1",
+            toolName: "charge",
+        });
+
+        await expect(
+            callMutation(functions.agentResolveApproval, ctx, { decision: "approve", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
+        ).resolves.toStrictEqual({ resolved: true });
+        expect(sent.map((entry) => entry.event.type)).toStrictEqual(["agent-approval:call_1"]);
+    });
+
     it("refuses a reject on a call that was already decided: no event, and a later approve_for_thread leaves no grant", async () => {
         const { functions } = agentComponent();
         const owner = fakeDatabase({ userId: "user-a" });

@@ -395,38 +395,44 @@ const { mutation, query } = initLunora.dataModel().create();
 type QueueDatabase = DatabaseWriter;
 
 /**
- * Record a thread-scoped approval grant for the tool of the call awaiting approval
- * right now. The tool name comes from the stored marker row, never from the
- * client, so an approve cannot grant a tool the paused run did not ask for. With
- * no pending marker (already decided, timed out, or a stale instance) there is
- * nothing to grant, and the decision is refused before the run is woken.
+ * The pending approval marker a decision answers, refused unless the call is still awaiting one. Every decision goes
+ * through here before anything is written or sent, so only the first decision on a call counts and none is reported
+ * as resolved once the run has stopped waiting. Mutations run one at a time, so the read is decisive.
  */
-const grantApprovalForThread = async (database: QueueDatabase, threadKey: string, agent: string, instanceId: string, toolCallId: string): Promise<void> => {
+const pendingApprovalMarker = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<Record<string, unknown>> => {
     const marker = await database
         .query(MESSAGES_TABLE)
         .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
         .first();
 
     if (marker?.["status"] !== "awaiting_approval") {
-        throw new LunoraError("CONFLICT", `@lunora/agent: no pending approval for tool call "${toolCallId}" to grant for thread "${threadKey}"`);
+        throw new LunoraError("CONFLICT", `@lunora/agent: no pending approval for tool call "${toolCallId}" on thread "${threadKey}" to decide`);
     }
 
     // A timeout ends the wait without running any mutation, so the marker can still read
     // "awaiting_approval" after the run has already rejected the call. The deadline is the only
-    // thing that closes that window.
-    // A marker with no deadline (one written before deadlines were recorded) cannot show its window is still open,
-    // so it grants nothing: every marker this code writes carries one.
+    // thing that closes that window, for a reject as much as an approve: the run will not hear either.
     const { expiresAt } = marker;
 
-    if (typeof expiresAt !== "number") {
-        throw new LunoraError(
-            "CONFLICT",
-            `@lunora/agent: the approval for tool call "${toolCallId}" on thread "${threadKey}" has no recorded deadline, so it cannot be granted for the thread`,
-        );
+    if (typeof expiresAt === "number" && Date.now() >= expiresAt) {
+        throw new LunoraError("CONFLICT", `@lunora/agent: the approval for tool call "${toolCallId}" on thread "${threadKey}" has timed out`);
     }
 
-    if (Date.now() >= expiresAt) {
-        throw new LunoraError("CONFLICT", `@lunora/agent: the approval for tool call "${toolCallId}" on thread "${threadKey}" has timed out`);
+    return marker;
+};
+
+/**
+ * Record a thread-scoped approval grant for the tool of the pending marker. The tool name comes from the stored
+ * marker row, never from the client, so an approve cannot grant a tool the paused run did not ask for.
+ */
+const grantApprovalForThread = async (database: QueueDatabase, threadKey: string, agent: string, marker: Record<string, unknown>): Promise<void> => {
+    // A marker with no deadline (one written before deadlines were recorded) cannot show its window is still open,
+    // so it grants nothing: every marker this code writes carries one.
+    if (typeof marker["expiresAt"] !== "number") {
+        throw new LunoraError(
+            "CONFLICT",
+            `@lunora/agent: the approval for tool call "${String(marker["toolCallId"])}" on thread "${threadKey}" has no recorded deadline, so it cannot be granted for the thread`,
+        );
     }
 
     const toolName = marker["toolName"] as string;
@@ -437,41 +443,6 @@ const grantApprovalForThread = async (database: QueueDatabase, threadKey: string
 
     if (!existing) {
         await database.insert(GRANTS_TABLE, { agent, createdAt: Date.now(), threadKey, toolName });
-    }
-};
-
-/**
- * The agent that owns a call's pending approval, or `undefined` when the call has no pending marker or the marker names no agent.
- * The agent is the one whose run wrote the marker, which need not be the agent a reused thread was created for. Mutations run one at
- * a time, so a read is decisive.
- */
-const pendingApprovalAgent = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<string | undefined> => {
-    const marker = await database
-        .query(MESSAGES_TABLE)
-        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
-        .first();
-
-    if (marker?.["status"] !== "awaiting_approval") {
-        return undefined;
-    }
-
-    const agent = marker["approvalAgent"];
-
-    return typeof agent === "string" ? agent : undefined;
-};
-
-/**
- * Retire the pending approval marker in the mutation that decides it. The loop only deletes the marker after its wait
- * resolves, so until then a second decision on the same call would still find it pending and could record a grant.
- */
-const retireApprovalMarker = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<void> => {
-    const marker = await database
-        .query(MESSAGES_TABLE)
-        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
-        .first();
-
-    if (marker?.["status"] === "awaiting_approval") {
-        await database.delete(MESSAGES_TABLE, marker["_id"] as never);
     }
 };
 
@@ -1525,12 +1496,11 @@ export const agentComponent = (): AgentComponent => {
                 throw new LunoraError("FORBIDDEN", `@lunora/agent: instance "${args.instanceId}" does not own thread "${args.threadKey}"`);
             }
 
+            const marker = await pendingApprovalMarker(context.db, args.threadKey, args.instanceId, args.toolCallId);
             // The agent that owns the pending call, not the thread's creator: a reused thread keeps the agent it was created for.
-            const agentName = await pendingApprovalAgent(context.db, args.threadKey, args.instanceId, args.toolCallId);
+            const agentName = marker["approvalAgent"];
 
-            // Only the first decision on a call counts. A call with no pending marker was already decided, so this
-            // one is refused before a grant is written or an event is sent, a reject included.
-            if (agentName === undefined) {
+            if (typeof agentName !== "string") {
                 throw new LunoraError(
                     "CONFLICT",
                     `@lunora/agent: no pending approval for tool call "${args.toolCallId}" on thread "${args.threadKey}" to decide`,
@@ -1552,10 +1522,12 @@ export const agentComponent = (): AgentComponent => {
                 // thread is readable by anyone who knows its key, which is fine for a one-off
                 // approve or reject but not for skipping the gate on every later call.
                 ownedSecretThread(thread, context.auth, "grant a lasting approval for a tool");
-                await grantApprovalForThread(context.db, args.threadKey, agentName, args.instanceId, args.toolCallId);
+                await grantApprovalForThread(context.db, args.threadKey, agentName, marker);
             }
 
-            await retireApprovalMarker(context.db, args.threadKey, args.instanceId, args.toolCallId);
+            // Retired in the mutation that decides it: the loop only deletes the marker after its wait resolves, so
+            // until then a second decision on the same call would still find it pending.
+            await context.db.delete(MESSAGES_TABLE, marker["_id"] as never);
 
             await handle.sendEvent(args.instanceId, {
                 payload: {
