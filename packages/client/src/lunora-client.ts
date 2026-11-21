@@ -399,6 +399,18 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     replayBaseline?: null | number;
 
     /**
+     * The client id a durable replay was queued under, sent in place of this
+     * client's own. An anonymous caller's server-side dedup rows are keyed by
+     * client id, and a client constructed without a stable `clientId` mints a
+     * new one per session: a write that committed before a reload but was never
+     * acknowledged would otherwise run again under the new id. The built-in
+     * offline queue does the same with the id it persisted beside each write.
+     *
+     * Omit for normal calls, which send this client's own id.
+     */
+    replayClientId?: string;
+
+    /**
      * The credential a durable replay was judged under — the one
      * {@link LunoraClient.replayIdentityVerdict} returns with a `"match"`. The
      * request is sent with exactly the bearer that verdict was judged against,
@@ -4634,6 +4646,7 @@ class LunoraClient {
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
                 baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
+                clientId: options.replayClientId,
                 ...replay?.flags,
                 mutationId,
                 onCommitCursor: (cursor) => {
@@ -4857,8 +4870,11 @@ class LunoraClient {
                     functionPath: function_.__lunoraRef,
                     // The caller's own `mutationId` when it passed one (an
                     // `importRows` chunk): its replay must dedup against the key a
-                    // resumed run sends again, not a per-session counter.
-                    idempotencyKey: callerMutationId ?? `${this.clientId}:${String(outboxMutationId)}`,
+                    // resumed run sends again. Otherwise a random suffix, never the
+                    // counter: a stable `clientId` comes back after every reload and
+                    // in every tab, and the counter restarts at 1 each time, so a new
+                    // write would be answered from an old one's cached result.
+                    idempotencyKey: callerMutationId ?? `${this.clientId}:${nextId()}`,
                     identity: issuingIdentity,
                     mutationId: outboxMutationId,
                     // The only signal that can take this write's predicted value

@@ -180,7 +180,7 @@ describe("lunoraClient outbox delegation", () => {
     });
 
     it("delegates an offline write to the outbox sink, stamped with clientId + monotonic mutationId", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const { enqueued, sink } = recordingSink();
         const client = makeClient(sink, "client-fixed");
@@ -197,13 +197,61 @@ describe("lunoraClient outbox delegation", () => {
             baselineSeq: undefined,
             clientId: "client-fixed",
             functionPath: "messages:send",
-            idempotencyKey: "client-fixed:1",
+            idempotencyKey: expect.stringMatching(/^client-fixed:/u),
             identity: null,
             mutationId: 1,
             shardKey: "room-1",
         });
-        // Monotonic per-client mutation id, and the idempotency key pairs it with clientId.
-        expect(enqueued[1]).toMatchObject({ idempotencyKey: "client-fixed:2", mutationId: 2, shardKey: undefined });
+        expect(enqueued[1]).toMatchObject({ idempotencyKey: expect.stringMatching(/^client-fixed:/u), mutationId: 2, shardKey: undefined });
+        expect(enqueued[1]?.idempotencyKey).not.toBe(enqueued[0]?.idempotencyKey);
+    });
+
+    // A `@lunora/db` app passes a stable `clientId`, so the same id comes back after
+    // every reload and in every tab. The server answers a repeated key from its
+    // cache for a day: a key that recurs with the id makes a new write a no-op.
+    it("gives each outbox write a key no other client instance with the same clientId reuses", async () => {
+        expect.assertions(3);
+
+        const first = recordingSink();
+        const second = recordingSink();
+
+        await makeClient(first.sink, "client-stable").mutation(fnRef("messages:send"), { text: "before reload" });
+        await makeClient(second.sink, "client-stable").mutation(fnRef("messages:send"), { text: "after reload" });
+
+        expect(first.enqueued[0]?.mutationId).toBe(second.enqueued[0]?.mutationId);
+        expect(second.enqueued[0]?.idempotencyKey).toMatch(/^client-stable:/u);
+        expect(second.enqueued[0]?.idempotencyKey).not.toBe(first.enqueued[0]?.idempotencyKey);
+    });
+
+    // An anonymous caller's dedup rows are keyed by client id, and a client built
+    // without a stable one mints a new id per session.
+    it("sends a durable replay under the client id it was queued with, not its own", async () => {
+        expect.assertions(2);
+
+        const clientIds: (string | null)[] = [];
+        const client = new LunoraClient({
+            clientId: "client-new",
+            fetch: async (_input, init) => {
+                clientIds.push(new Headers(init?.headers).get("x-lunora-client-id"));
+
+                return Response.json({ result: null });
+            },
+            offlineQueue: { queueBeforeFirstConnect: true },
+            outbox: recordingSink().sink,
+            url: "https://app.example",
+            WebSocket: seedableWebSocket(),
+        });
+
+        client.subscribe(fnRef("nodes:list"), {}, () => {});
+        (sockets.at(-1) as SeedableSocket).open();
+
+        await client.mutation(fnRef("messages:send"), { text: "x" }, { mutationId: "client-old:k", replayBaseline: null, replayClientId: "client-old" });
+        await client.mutation(fnRef("messages:send"), { text: "y" }, { mutationId: "live" });
+
+        expect(clientIds[0]).toBe("client-old");
+        expect(clientIds[1]).toBe("client-new");
+
+        client.close();
     });
 
     it("surfaces an overflow rejection to the caller instead of swallowing it", async () => {

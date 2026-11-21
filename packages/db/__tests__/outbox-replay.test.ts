@@ -213,12 +213,30 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: null, replayCredential: { judged: "user-a" }, shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: null, replayClientId: "c1", replayCredential: { judged: "user-a" }, shardKey: "room-7" },
         );
 
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
         });
+    });
+
+    // An anonymous caller's dedup rows are keyed by client id. A write queued under
+    // one session's id and replayed after a reload must be sent under that id, or a
+    // write that committed but was never acknowledged runs a second time.
+    it("replays a raw offline write under the client id it was queued with, not the replaying client's", async () => {
+        const { client, mutation } = makeClient();
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        await createExecutorOutboxSink(database.executor).enqueue(outboxWrite({ clientId: "old", idempotencyKey: "old:k" }));
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ mutationId: "old:k", replayClientId: "old" });
     });
 
     // The write's CDC baseline has to survive the executor round-trip. By the time
@@ -243,7 +261,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: 10, replayCredential: { judged: "user-a" }, shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: 10, replayClientId: "c1", replayCredential: { judged: "user-a" }, shardKey: "room-7" },
         );
     });
 
@@ -428,12 +446,14 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation.mock.calls[0]?.[2]).toStrictEqual({
             mutationId: "c1:1",
             replayBaseline: null,
+            replayClientId: "c1",
             replayCredential: { judged: "user-a" },
             shardKey: undefined,
         });
         expect(mutation.mock.calls[1]?.[2]).toStrictEqual({
             mutationId: "c1:1",
             replayBaseline: null,
+            replayClientId: "c1",
             replayCredential: { judged: "user-a" },
             shardKey: undefined,
         });

@@ -254,14 +254,15 @@ export interface OutboxMutation {
      */
     baselineSeq?: number;
 
-    /** Stable per-client id; pairs with {@link OutboxMutation.mutationId} as `idempotencyKey`. */
+    /** The id of the client that queued the write; its replay is sent under it, not under the replaying client's. */
     clientId: string;
     functionPath: string;
 
     /**
-     * `${clientId}:${mutationId}`, or the caller's own `mutationId` when it passed
+     * `${clientId}:${randomId}`, or the caller's own `mutationId` when it passed
      * one (an `importRows` chunk) — sent as `x-lunora-mutation-id` so a replay is
-     * server-idempotent.
+     * server-idempotent. Random rather than counted: a stable `clientId` recurs
+     * across reloads and tabs, and a counted key would recur with it.
      */
     idempotencyKey: string;
     /** Issuing identity fingerprint (`null` = signed out); drives the sink's identity guard. */
@@ -444,8 +445,8 @@ export interface LunoraClientOptions {
      * Stable per-client id backing the custom-mutator watermark. Sent on the
      * `connect` envelope (so the server can scope this client's
      * `__client_watermark`) and stamped onto every {@link OutboxMutation} the
-     * {@link LunoraClientOptions.outbox} sink persists, where it pairs with the
-     * monotonic mutation id to form the idempotency key. The `@lunora/db` path
+     * {@link LunoraClientOptions.outbox} sink persists, where it prefixes the
+     * idempotency key and names the client a replay is sent as. The `@lunora/db` path
      * persists a stable id alongside the outbox and passes it here; omit for the
      * standalone client, which generates an ephemeral per-session id.
      */

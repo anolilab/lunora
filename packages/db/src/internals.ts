@@ -88,7 +88,7 @@ interface OutboxMutationMetadata extends WriteProvenance {
     args: Record<string, unknown>;
     clientId: string;
     functionPath: string;
-    /** Stable `${clientId}:${mutationId}` replay key; passed back as the mutation id so a committed-but-unacked replay is server-idempotent. */
+    /** Unique-per-write replay key (see `OutboxMutation.idempotencyKey`); passed back as the mutation id so a committed-but-unacked replay is server-idempotent. */
     idempotencyKey: string;
     mutationId: number;
 }

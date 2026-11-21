@@ -554,6 +554,9 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
                     // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
                     // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
                     replayBaseline: meta.baselineSeq ?? null,
+                    // The id the write was queued under: an anonymous caller's dedup
+                    // rows are keyed by it, and a per-session id changes on reload.
+                    replayClientId: meta.clientId,
                     // Sent with the bearer the verdict above judged; under a cookie
                     // session the worker also refuses the write if the cookie now
                     // belongs to someone else.

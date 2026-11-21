@@ -771,6 +771,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
     replayBaseline?: null | number;
+    replayClientId?: string;
     replayCredential?: ReplayCredential;
     shardKey?: string;
     signal?: AbortSignal;
