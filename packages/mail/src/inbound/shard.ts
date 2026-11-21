@@ -108,7 +108,8 @@ const postShardRpc = async (namespace: ShardNamespaceLike, options: PostShardRpc
         // content: unencoded, an array shaped like a wire tag (say a `to` list)
         // would reach the target function as a bigint, Date or bytes. Encoding
         // escapes such arrays, so the function receives exactly what was sent.
-        body: JSON.stringify({ ...options.envelope, args: encodeWire(options.envelope.args) }),
+        // Absent args stay absent: the shard reads a missing `args` as `{}`, but an encoded `undefined` as no object.
+        body: JSON.stringify({ ...options.envelope, args: options.envelope.args === undefined ? undefined : encodeWire(options.envelope.args) }),
         headers: {
             authorization: `Bearer ${options.adminToken}`,
             "content-type": "application/json",

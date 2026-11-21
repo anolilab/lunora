@@ -445,6 +445,27 @@ describe("dispatchToLunoraFunction", () => {
         expect(args).toStrictEqual(forged);
     });
 
+    it("leaves `args` off when a resolver returns nothing, so the shard reads it as no arguments", async () => {
+        expect.assertions(1);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        await dispatchToLunoraFunction({ functionPath: "inbound:onEmail", resolveArgs: () => undefined, shard })(fixture, {
+            ctx: undefined,
+            env: { LUNORA_ADMIN_TOKEN: "secret" },
+            message: fakeMessage(),
+        });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+
+        expect(JSON.parse(init.body)).not.toHaveProperty("args");
+    });
+
     /**
      * Mirrors the generated shard's `handleRpc` visibility gate: an `internal`
      * target answers `FUNCTION_NOT_FOUND` unless the dispatch is marked system
