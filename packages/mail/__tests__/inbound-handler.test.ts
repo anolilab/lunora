@@ -1,3 +1,4 @@
+import { decodeWire, WIRE_TAG } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ForwardableEmailMessageLike } from "../src/inbound/handler";
@@ -418,6 +419,51 @@ describe("dispatchToLunoraFunction", () => {
 
         expect(envelope).toMatchObject({ functionPath: "inbound:onEmail", shardKey: "__root__" });
         expect(envelope.args).toMatchObject({ from: "alice@example.com", subject: "Hi" });
+    });
+
+    it("wire-encodes the args, so a tag-shaped address list reaches the function as the strings it was", async () => {
+        expect.assertions(2);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+        const forged: InboundEmail = { ...fixture, to: [WIRE_TAG, "bigint", "1"] };
+
+        await dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard })(forged, {
+            ctx: undefined,
+            env: { LUNORA_ADMIN_TOKEN: "secret" },
+            message: fakeMessage(),
+        });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+        const args = decodeWire((JSON.parse(init.body) as { args: unknown }).args) as InboundEmail;
+
+        expect(args.to).toStrictEqual([WIRE_TAG, "bigint", "1"]);
+        expect(args).toStrictEqual(forged);
+    });
+
+    it("leaves `args` off when a resolver returns nothing, so the shard reads it as no arguments", async () => {
+        expect.assertions(1);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        await dispatchToLunoraFunction({ functionPath: "inbound:onEmail", resolveArgs: () => undefined, shard })(fixture, {
+            ctx: undefined,
+            env: { LUNORA_ADMIN_TOKEN: "secret" },
+            message: fakeMessage(),
+        });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+
+        expect(JSON.parse(init.body)).not.toHaveProperty("args");
     });
 
     /**
