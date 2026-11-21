@@ -1,0 +1,170 @@
+[
+    {
+        "file": "packages/agent/__tests__/telemetry/tool-execution.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/ai/__tests__/lazy-gateway.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/ai/__tests__/rag-primitives.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/cli/__tests__/commands/data-transfer.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/cli/__tests__/commands/dev.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/cli/__tests__/commands/mcp-serve.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/cli/__tests__/util/tui-tasks-settle.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/auth-identity-subject.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/baseline-cursor.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/cookie-session-identity.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/cross-tab-session-change.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/cross-tab.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/http-stream.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/identity-gate-windows.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/live-stream.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/read-cache-bearer-seed.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/container/__tests__/client-exec.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/db/__tests__/scoped-mutators.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
+        "file": "packages/do/__tests__/shard-do.durable-stream.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/do/__tests__/shard-do.idempotency.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
+        "file": "packages/do/__tests__/shard-do.room.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/do/__tests__/shard-do.stream.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/do/__tests__/shard-do.write-hook-after-commit.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/do/__tests__/tracing.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/do/__tests__/vector-backfill.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/platform-node/__tests__/node-http-server.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
+        "file": "packages/platform-node/__tests__/websocket-upgrade.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
+        "file": "packages/platform/__tests__/reference-host-transaction.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/react/__tests__/client-swap.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/react/__tests__/paginated-core-gc.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/react/__tests__/use-mutation.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/replica/__tests__/runtime-edges.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
+        "file": "packages/replica/__tests__/sync-events.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/runtime/__tests__/query-coordinator.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/shard-engine/__tests__/relay-hub.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
+        "file": "packages/studio/__tests__/app/platform-capability-gate.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/studio/__tests__/features/advisors/insights-panel.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/studio/__tests__/features/data/data-browser.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/studio/__tests__/features/database/pitr-panel.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/studio/__tests__/features/permissions/permissions-playground.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/studio/__tests__/features/storage/use-file-browser.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/studio/__tests__/features/workflows/workflow-instances.test.tsx",
+        "reason": "pending conversion"
+    }
+]

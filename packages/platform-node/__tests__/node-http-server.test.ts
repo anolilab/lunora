@@ -72,11 +72,15 @@ describe("createNodeHttpServer", () => {
 
         let cancelled = false;
         const pendingFetch: { resolve?: (response: Response) => void } = {};
+        const serverSawClose = Promise.withResolvers<undefined>();
 
         const server = await listen(
-            () =>
+            (incoming) =>
                 new Promise<Response>((resolve) => {
                     pendingFetch.resolve = resolve;
+                    incoming.signal.addEventListener("abort", () => {
+                        serverSawClose.resolve(undefined);
+                    });
                 }),
         );
 
@@ -89,9 +93,7 @@ describe("createNodeHttpServer", () => {
 
         // Disconnect while fetch is still pending: the close has already happened when the response shows up.
         controller.abort();
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 100);
-        });
+        await serverSawClose.promise;
 
         pendingFetch.resolve?.(
             new Response(

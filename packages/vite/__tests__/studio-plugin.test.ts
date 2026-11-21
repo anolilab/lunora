@@ -287,6 +287,11 @@ describe("studioPlugin", () => {
         expect((end.mock.calls[0] as [string])[0]).toContain(PROJECT_ROOT_TOKEN);
 
         const edit = makeResponse();
+        const answered = Promise.withResolvers<undefined>();
+
+        edit.end.mockImplementation(() => {
+            answered.resolve(undefined);
+        });
 
         middleware(
             {
@@ -300,9 +305,7 @@ describe("studioPlugin", () => {
         );
 
         // The handler answers asynchronously (it reads the request body first).
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 10);
-        });
+        await answered.promise;
 
         expect((edit.end.mock.calls[0] as [string])[0]).not.toContain("no-schema-file");
     });

@@ -65,20 +65,16 @@ class TestShardDO extends ShardDO {
     }
 }
 
-/** Resolve once `predicate` holds, polling briefly. Throws if it never does. */
+/** Resolve once `predicate` holds. Throws if it never does. */
 const waitFor = async (predicate: () => boolean): Promise<void> => {
-    for (let index = 0; index < 200; index += 1) {
-        if (predicate()) {
-            return;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- polling loop must wait between checks
-        await new Promise((resolve) => {
-            setTimeout(resolve, 10);
-        });
-    }
-
-    throw new Error("waitFor: predicate never became true");
+    await vi.waitFor(
+        () => {
+            if (!predicate()) {
+                throw new Error("waitFor: predicate never became true");
+            }
+        },
+        { interval: 10, timeout: 2000 },
+    );
 };
 
 /** The `ws://` URL for a path on the listener. */
@@ -419,16 +415,11 @@ describe("node upgrade lifecycle", () => {
         });
     };
 
-    const sleep = async (ms: number): Promise<void> => {
-        await new Promise((resolve) => {
-            setTimeout(resolve, ms);
-        });
-    };
-
     it("aborts a pending upgrade when the client resets the connection during the handshake", async () => {
         expect.assertions(2);
 
         let upgradeSignal: AbortSignal | undefined;
+        const refusalHandedOver = Promise.withResolvers<undefined>();
         const server = await createNodeHttpServer({
             fetch: (request) => {
                 if (request.headers.get("upgrade") !== "websocket") {
@@ -441,6 +432,7 @@ describe("node upgrade lifecycle", () => {
                 return new Promise<Response>((resolve) => {
                     request.signal.addEventListener("abort", () => {
                         resolve(new Response("nope", { status: 401 }));
+                        refusalHandedOver.resolve(undefined);
                     });
                 });
             },
@@ -451,8 +443,11 @@ describe("node upgrade lifecycle", () => {
         await waitFor(() => upgradeSignal !== undefined);
         client.resetAndDestroy();
         await waitFor(() => upgradeSignal?.aborted === true);
-        // Give the refusal write time to reach the dead socket: a missing error listener would end the process here.
-        await sleep(50);
+        await refusalHandedOver.promise;
+        // One loop turn lets the refusal write reach the dead socket: a missing error listener would end the process here.
+        await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+        });
 
         expect(upgradeSignal?.aborted).toBe(true);
 

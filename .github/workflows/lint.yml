@@ -89,6 +89,10 @@
             - "name": "Check project.json target shapes"
               "run": "pnpm run lint:project-json"
 
+            # Unit tests wait on a milestone, never on a clock; the baseline is the worklist of files still to convert.
+            - "name": "Check tests do not wait on the real clock"
+              "run": "pnpm run lint:test-clock"
+
             - "name": "Build affected packages"
               "run": "pnpm run build:affected:packages"
 
