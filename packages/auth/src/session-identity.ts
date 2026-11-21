@@ -130,6 +130,30 @@ const forwardedClaims = (user: SessionLike["user"], claims: ReadonlyArray<string
 };
 
 /**
+ * Whether the `admin()` plugin's ban is in force. better-auth enforces a ban only
+ * when a session row is created, so an API key (which never creates one) outlives
+ * it unless the resolver checks too. A cookie-cached session carries the pre-ban
+ * user, so this check cannot see the ban until the cookie cache lapses. A lapsed
+ * `banExpires` reads as not banned, matching the plugin.
+ */
+const isBanned = (user: SessionLike["user"], now: number): boolean => {
+    if (user["banned"] !== true) {
+        return false;
+    }
+
+    const expires = user["banExpires"];
+
+    if (expires === null || expires === undefined) {
+        return true;
+    }
+
+    const expiresAtMs = expires instanceof Date ? expires.getTime() : new Date(expires as number | string).getTime();
+
+    // An unreadable expiry must not lift a ban.
+    return Number.isNaN(expiresAtMs) || expiresAtMs > now;
+};
+
+/**
  * Reduce a better-auth session to the Lunora identity, taking `orgId` / `teamId`
  * from the session as-is. Unverified: {@link resolveSessionIdentity} is what the
  * wirings call.
@@ -139,7 +163,7 @@ const forwardedClaims = (user: SessionLike["user"], claims: ReadonlyArray<string
 const identityFromSession = (session: SessionLike | null | undefined, claims: ReadonlyArray<string> = []): SessionIdentity | null => {
     const userId = nonEmpty(session?.user.id);
 
-    if (session === null || session === undefined || userId === undefined) {
+    if (session === null || session === undefined || userId === undefined || isBanned(session.user, Date.now())) {
         // eslint-disable-next-line unicorn/no-null -- `null` is the resolver contract's anonymous sentinel
         return null;
     }

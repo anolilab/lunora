@@ -1269,11 +1269,23 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 return toUser(user as Record<string, unknown>);
             }),
 
-        // Deletes the row directly, like the other admin ops. That revokes the key only
-        // while the `apikey` table is the store, the default `storage: "database"`. Under
-        // secondary storage better-auth keeps keys elsewhere and this does not reach them.
+        // Never report a revoke that left a verifying copy behind: with secondary storage the
+        // plugin may serve the key from a cache this row delete cannot name, so refuse instead.
         deleteApiKey: ({ apiKeyId }) =>
             withContext(async (context_) => {
+                if (context_.secondaryStorage !== undefined) {
+                    throw new LunoraAuthAdminError(
+                        "api keys are held in secondary storage; revoke through better-auth's api-key endpoint",
+                        "API_KEY_STORAGE_UNSUPPORTED",
+                    );
+                }
+
+                const existing = await context_.adapter.findOne({ model: "apikey", where: [{ field: "id", value: apiKeyId }] });
+
+                if (existing === null) {
+                    throw new LunoraAuthAdminError("api key not found", "API_KEY_NOT_FOUND");
+                }
+
                 await context_.adapter.delete({ model: "apikey", where: [{ field: "id", value: apiKeyId }] });
             }),
 

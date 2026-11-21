@@ -83,6 +83,44 @@ describe("createAuthAdmin API keys", () => {
         await expect(adminApi.listApiKeys({ userId: "alice" })).resolves.toHaveLength(1);
     });
 
+    it("refuses an unknown key id", async () => {
+        expect.assertions(2);
+
+        const database = seedDatabase();
+        const adminApi = buildAdmin(database);
+
+        database["apikey"]?.push(keyRow("k1", "alice"));
+
+        await expect(adminApi.deleteApiKey({ apiKeyId: "nope" })).rejects.toMatchObject({ code: "API_KEY_NOT_FOUND" });
+        expect((database["apikey"] ?? []).map((row) => (row as { id: string }).id)).toStrictEqual(["k1"]);
+    });
+
+    it("refuses to revoke when secondary storage is configured, and deletes nothing", async () => {
+        expect.assertions(2);
+
+        const database = seedDatabase();
+        const adminApi = createAuthAdmin(
+            createAuth({
+                baseURL: "http://localhost",
+                database: memoryAdapter(database),
+                plugins: [apiKey()],
+                secondaryStorage: {
+                    delete: async () => undefined,
+                    get: async () => null,
+                    getAndDelete: async () => null,
+                    increment: async () => 1,
+                    set: async () => undefined,
+                },
+                secret: SECRET,
+            }),
+        );
+
+        database["apikey"]?.push(keyRow("k1", "alice"));
+
+        await expect(adminApi.deleteApiKey({ apiKeyId: "k1" })).rejects.toMatchObject({ code: "API_KEY_STORAGE_UNSUPPORTED" });
+        expect((database["apikey"] ?? []).map((row) => (row as { id: string }).id)).toStrictEqual(["k1"]);
+    });
+
     it("cascades removeUser over the user's keys, keyed by referenceId", async () => {
         expect.assertions(2);
 
