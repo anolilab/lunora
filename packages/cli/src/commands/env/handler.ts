@@ -23,6 +23,7 @@ import {
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
+import { devVariablesFileFor, ensureDevVariablesIgnored } from "../../util/dev-variables-file";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
@@ -38,13 +39,16 @@ interface EnvCommandOptions {
     cwd?: string;
 
     /**
-     * Cloudflare environment name for `push`/`diff` (`wrangler … --env <name>`).
-     * `prod` is a boolean-only alias for `env: "production"` kept for backward
-     * compatibility — when both are set, `env` wins.
+     * Named Cloudflare environment (`wrangler … --env <name>`). Every subcommand
+     * then reads and writes `.dev.vars.<name>` instead of the bare `.dev.vars`.
+     * `prod` is a boolean-only alias for `env: "production"` — when both are
+     * set, `env` wins.
      */
     env?: string;
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
+    /** For `push`/`diff` with a named environment: use the bare `.dev.vars` instead of `.dev.vars.<name>`. */
+    fromDevVars?: boolean;
     /** Required for `set`. Required (positional) for `get`/`unset`. */
     key?: string;
     logger: Logger;
@@ -143,26 +147,37 @@ const loadDevVariables = (devVariablesPath: string): Map<string, ParsedLine> => 
 
 interface EnvContext {
     cwd: string;
+    /** The file this run reads and writes, relative to `cwd` — for messages. */
+    devVariablesFile: string;
     devVariablesPath: string;
+    /** The resolved `--env`/`--prod` target; `undefined` is the default environment. */
+    environment: string | undefined;
     logger: Logger;
     options: EnvCommandOptions;
 }
 
 /**
- * The Cloudflare environment `push`/`diff` should target: the explicit
+ * The Cloudflare environment the run targets: the explicit
  * `--env <name>` wins; `--prod` is kept as a boolean-only alias for
  * `--env production`; otherwise `undefined` (top-level config).
  */
 const resolveEnvironment = (options: EnvCommandOptions): string | undefined => options.env ?? (options.prod === true ? "production" : undefined);
 
+/** A named environment's file holds deployed secrets; keep it out of git before the first write. */
+const ignoreNamedEnvironmentFile = (context: EnvContext): void => {
+    if (context.devVariablesFile !== DEV_VARS_FILE) {
+        ensureDevVariablesIgnored(context.cwd, context.logger);
+    }
+};
+
 const runEnvList = (context: EnvContext): EnvCommandResult => {
     const map = loadDevVariables(context.devVariablesPath);
     // Names only, matching the redaction the pretty rendering applies: `list`
     // enumerates what is set, `get <KEY>` is how a value is asked for.
-    const data: EnvCommandData = { file: DEV_VARS_FILE, keys: [...map.keys()], subcommand: "list" };
+    const data: EnvCommandData = { file: context.devVariablesFile, keys: [...map.keys()], subcommand: "list" };
 
     if (map.size === 0) {
-        context.logger.info(`${DEV_VARS_FILE}: (empty)`);
+        context.logger.info(`${context.devVariablesFile}: (empty)`);
 
         return { code: 0, data, descriptors: [] };
     }
@@ -175,7 +190,7 @@ const runEnvList = (context: EnvContext): EnvCommandResult => {
 };
 
 const runEnvGet = (context: EnvContext): EnvCommandResult => {
-    const { devVariablesPath, logger, options } = context;
+    const { devVariablesFile, devVariablesPath, logger, options } = context;
 
     if (!options.key) {
         logger.error("env get requires a key. Usage: lunora env get <KEY>");
@@ -186,7 +201,7 @@ const runEnvGet = (context: EnvContext): EnvCommandResult => {
     const entry = loadDevVariables(devVariablesPath).get(options.key);
 
     if (!entry) {
-        logger.error(`env: ${options.key} is not set in ${DEV_VARS_FILE}`);
+        logger.error(`env: ${options.key} is not set in ${devVariablesFile}`);
 
         return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
     }
@@ -201,7 +216,7 @@ const runEnvGet = (context: EnvContext): EnvCommandResult => {
 };
 
 const runEnvSet = (context: EnvContext): EnvCommandResult => {
-    const { devVariablesPath, logger, options } = context;
+    const { devVariablesFile, devVariablesPath, logger, options } = context;
 
     if (!options.key) {
         logger.error("env set requires a key. Usage: lunora env set <KEY> <VALUE>");
@@ -240,16 +255,18 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
         return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
+    ignoreNamedEnvironmentFile(context);
+
     const raw = readDevVariablesRaw(devVariablesPath);
 
     writeDevVariablesFileAtomically(devVariablesPath, upsertDevVariableLine(raw, options.key, options.value));
-    logger.success(`env: set ${options.key} (${redact(options.value)}) in ${DEV_VARS_FILE}`);
+    logger.success(`env: set ${options.key} (${redact(options.value)}) in ${devVariablesFile}`);
 
     return { code: 0, data: { key: options.key, subcommand: "set" }, descriptors: [] };
 };
 
 const runEnvUnset = (context: EnvContext): EnvCommandResult => {
-    const { devVariablesPath, logger, options } = context;
+    const { devVariablesFile, devVariablesPath, logger, options } = context;
 
     if (!options.key) {
         logger.error("env unset requires a key. Usage: lunora env unset <KEY>");
@@ -266,19 +283,31 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
     const raw = readDevVariablesRaw(devVariablesPath);
 
     if (!parseDevVariables(raw).has(options.key)) {
-        logger.warn(`env: ${options.key} was not set in ${DEV_VARS_FILE}`);
+        logger.warn(`env: ${options.key} was not set in ${devVariablesFile}`);
 
         return { code: 0, data: { key: options.key, removed: false, subcommand: "unset" }, descriptors: [] };
     }
 
     writeDevVariablesFileAtomically(devVariablesPath, removeDevVariableLine(raw, options.key));
-    logger.success(`env: unset ${options.key} in ${DEV_VARS_FILE}`);
+    logger.success(`env: unset ${options.key} in ${devVariablesFile}`);
 
     return { code: 0, data: { key: options.key, removed: true, subcommand: "unset" }, descriptors: [] };
 };
 
+const resolveSecretSources = async (cwd: string): Promise<ReadonlyArray<string>> => {
+    try {
+        return secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) }));
+    } catch {
+        // Scan failure → fall back to the core secrets alone.
+        return [];
+    }
+};
+
+/** The keys deploy mints rather than ever taking from a local file — the same set `deploy`'s secrets gate uses. */
+const resolveMintableKeySet = async (context: EnvContext): Promise<ReadonlySet<string>> => mintableSecretKeysFor(await resolveSecretSources(context.cwd));
+
 const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
-    const { devVariablesPath, logger, options } = context;
+    const { devVariablesFile, devVariablesPath, environment, logger, options } = context;
 
     if (!options.yes) {
         logger.error("env push uploads secrets to Cloudflare. Re-run with --yes to confirm.");
@@ -286,12 +315,25 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
         return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
+    // The bare file is local dev's: pushing it to a named environment would
+    // overwrite the secrets deploy minted there (recorded in this same
+    // `.dev.vars.<name>`) with the developer's local values.
+    if (environment !== undefined && options.fromDevVars !== true && !existsSync(devVariablesPath)) {
+        logger.error(
+            `env push --env ${environment}: ${devVariablesFile} does not exist. A named environment is pushed from its own file, never from ${DEV_VARS_FILE}, ` +
+                `so local dev values cannot overwrite its secrets. Create it with \`lunora env set --env ${environment} <KEY> <VALUE>\` ` +
+                `(or \`lunora env generate --set --env ${environment}\`), or pass --from-dev-vars to push ${DEV_VARS_FILE} to it.`,
+        );
+
+        return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
+    }
+
     const map = loadDevVariables(devVariablesPath);
 
     if (map.size === 0) {
-        logger.warn(`${DEV_VARS_FILE}: nothing to push (empty)`);
+        logger.warn(`${devVariablesFile}: nothing to push (empty)`);
 
-        return { code: 0, data: { pushed: [], subcommand: "push", target: resolveEnvironment(options) }, descriptors: [] };
+        return { code: 0, data: { pushed: [], subcommand: "push", target: environment }, descriptors: [] };
     }
 
     const placeholders = [...map.values()].filter((entry) => isPlaceholderValue(entry.value)).map((entry) => entry.key);
@@ -305,11 +347,27 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
         return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
+    if (options.fromDevVars === true) {
+        // Deploy never promotes a local value for a key it can mint: a shared dev
+        // secret would become the one protecting the named environment.
+        const mintable = await resolveMintableKeySet(context);
+        const refused = [...map.keys()].filter((key) => mintable.has(key));
+
+        if (refused.length > 0) {
+            logger.error(
+                `env push --from-dev-vars: refusing to push the local ${refused.join(", ")} to --env ${String(environment)} — ` +
+                    `a generated secret must not reuse the dev value. Remove it from ${DEV_VARS_FILE}, or set it in ${String(devVariablesFileFor(environment))} ` +
+                    `with \`lunora env generate --set --env ${String(environment)}\` and push that file instead.`,
+            );
+
+            return { code: EXIT_CODE.USAGE, descriptors: [] };
+        }
+    }
+
     const spawner = options.spawner ?? defaultSpawner;
     const cwd = options.cwd ?? process.cwd();
     const manager = detectPackageManager(cwd);
     const descriptors: SpawnDescriptor[] = [];
-    const environment = resolveEnvironment(options);
     // The toolchain is the target's, not always wrangler's — resolving from the
     // project keeps a non-default target from shelling out to the wrong CLI.
     const driver = resolveDeployDriver(resolveProjectTarget(cwd));
@@ -358,7 +416,7 @@ const fetchRemoteSecretNames = (context: EnvContext): Promise<ListRemoteSecretsR
 
     return lister({
         cwd: context.cwd,
-        env: resolveEnvironment(context.options),
+        env: context.environment,
         temporary: context.options.temporary,
     });
 };
@@ -369,7 +427,7 @@ const fetchRemoteSecretNames = (context: EnvContext): Promise<ListRemoteSecretsR
  * and in both. Informational — always exits 0.
  */
 const runEnvDiff = async (context: EnvContext): Promise<EnvCommandResult> => {
-    const { devVariablesPath, logger } = context;
+    const { devVariablesFile, devVariablesPath, logger } = context;
     const remote = await fetchRemoteSecretNames(context);
 
     if (!remote.ok) {
@@ -385,11 +443,11 @@ const runEnvDiff = async (context: EnvContext): Promise<EnvCommandResult> => {
     const both = [...localKeys].filter((key) => remoteKeys.has(key)).toSorted((a, b) => a.localeCompare(b));
 
     for (const key of localOnly) {
-        logger.info(`local only (run \`lunora env push\`): ${key}`);
+        logger.info(`local only (run \`lunora env push --yes${context.environment === undefined ? "" : ` --env ${context.environment}`}\`): ${key}`);
     }
 
     for (const key of remoteOnly) {
-        logger.info(`remote only (in Cloudflare, not ${DEV_VARS_FILE}): ${key}`);
+        logger.info(`remote only (in Cloudflare, not ${devVariablesFile}): ${key}`);
     }
 
     logger.info(`in both: ${String(both.length)} secret(s)`);
@@ -408,7 +466,7 @@ const runEnvDiff = async (context: EnvContext): Promise<EnvCommandResult> => {
  * non-zero when anything is actionable, so it can gate CI / a pre-dev check.
  */
 const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
-    const { cwd, devVariablesPath, logger } = context;
+    const { cwd, devVariablesFile, devVariablesPath, environment, logger } = context;
     const examplePath = join(cwd, DEV_VARS_EXAMPLE_FILE);
 
     if (!existsSync(examplePath)) {
@@ -421,7 +479,11 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
     const current = loadDevVariables(devVariablesPath);
 
     if (!existsSync(devVariablesPath)) {
-        logger.error(`env doctor: ${DEV_VARS_FILE} is missing. Run \`lunora dev\` to scaffold it, or \`lunora env set <KEY> <VALUE>\`.`);
+        logger.error(
+            environment === undefined
+                ? `env doctor: ${DEV_VARS_FILE} is missing. Run \`lunora dev\` to scaffold it, or \`lunora env set <KEY> <VALUE>\`.`
+                : `env doctor: ${devVariablesFile} is missing. Create it with \`lunora env set --env ${environment} <KEY> <VALUE>\`.`,
+        );
         logger.info(`expected (from ${DEV_VARS_EXAMPLE_FILE}): ${exampleKeys.join(", ")}`);
 
         return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
@@ -433,7 +495,7 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
     const extra = [...current.keys()].filter((key) => !exampleKeySet.has(key));
 
     for (const key of missing) {
-        logger.error(`missing: ${key} is in ${DEV_VARS_EXAMPLE_FILE} but not ${DEV_VARS_FILE}`);
+        logger.error(`missing: ${key} is in ${DEV_VARS_EXAMPLE_FILE} but not ${devVariablesFile}`);
     }
 
     for (const key of placeholders) {
@@ -448,7 +510,7 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
     const data: EnvCommandData = { extra, missing, ok, placeholders, subcommand: "doctor" };
 
     if (ok) {
-        logger.success(`env doctor: ${DEV_VARS_FILE} looks good (${String(current.size)} var(s)).`);
+        logger.success(`env doctor: ${devVariablesFile} looks good (${String(current.size)} var(s)).`);
 
         return { code: 0, data, descriptors: [] };
     }
@@ -465,14 +527,7 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
  * are excluded — they can't be minted. Binding inference is best-effort.
  */
 const resolveMintableKeys = async (context: EnvContext): Promise<string[]> => {
-    let packages: ReadonlyArray<string> = [];
-
-    try {
-        packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: context.cwd, schemaDir: resolveSchemaDirectory(context.cwd) }));
-    } catch {
-        // Scan failure → fall back to the core secret + whatever is already local.
-    }
-
+    const packages = await resolveSecretSources(context.cwd);
     const mintable = mintableSecretKeysFor(packages);
     const fromPackages = requiredSecrets(packages)
         .map((entry) => entry.key)
@@ -528,6 +583,8 @@ const writeGeneratedSecrets = (context: EnvContext, generated: ReadonlyArray<{ k
         logger.warn(`env generate --set: left ${live.join(", ")} untouched (already set) — re-run with --yes to rotate them too`);
     }
 
+    ignoreNamedEnvironmentFile(context);
+
     let raw = readDevVariablesRaw(devVariablesPath);
 
     for (const entry of writable) {
@@ -535,7 +592,7 @@ const writeGeneratedSecrets = (context: EnvContext, generated: ReadonlyArray<{ k
     }
 
     writeDevVariablesFileAtomically(devVariablesPath, raw);
-    logger.success(`env: generated ${String(writable.length)} secret(s) into ${DEV_VARS_FILE}: ${writable.map((entry) => entry.key).join(", ")}`);
+    logger.success(`env: generated ${String(writable.length)} secret(s) into ${context.devVariablesFile}: ${writable.map((entry) => entry.key).join(", ")}`);
 
     // Key names only. The values went into `.dev.vars`; echoing them back on
     // stdout would hand a fresh admin bearer to every CI log and pipe consumer,
@@ -633,9 +690,28 @@ const dispatchEnvSubcommand = async (context: EnvContext): Promise<EnvCommandRes
 
 const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
+    const environment = resolveEnvironment(options);
+
+    if (options.fromDevVars === true && (environment === undefined || (options.subcommand !== "push" && options.subcommand !== "diff"))) {
+        options.logger.error("env: --from-dev-vars applies only to `push`/`diff` with --env <name> or --prod");
+
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
+    }
+
+    const namedFile = devVariablesFileFor(environment);
+
+    if (namedFile === undefined) {
+        options.logger.error(`env: --env "${String(environment)}" must be a plain name ([A-Za-z0-9_-]) — it names the .dev.vars.<name> file`);
+
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
+    }
+
+    const devVariablesFile = options.fromDevVars === true ? DEV_VARS_FILE : namedFile;
     const context: EnvContext = {
         cwd,
-        devVariablesPath: join(cwd, DEV_VARS_FILE),
+        devVariablesFile,
+        devVariablesPath: join(cwd, devVariablesFile),
+        environment,
         // In json mode every human line moves to stderr so stdout carries only
         // the result document.
         logger: options.logger,
@@ -665,6 +741,7 @@ const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions, EnvCommand
         cwd,
         env: options.env,
         format,
+        fromDevVars: options.fromDevVars === true,
         key: argument[1],
         logger,
         prod: options.prod === true,

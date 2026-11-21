@@ -443,7 +443,7 @@ describe("lunora env", () => {
 
             const { logger } = recordingLogger();
 
-            writeFileSync(join(workdir, ".dev.vars"), "OK=1\n", "utf8");
+            writeFileSync(join(workdir, ".dev.vars.production"), "OK=1\n", "utf8");
 
             const { calls, spawner } = createRecordingSpawner();
 
@@ -458,7 +458,7 @@ describe("lunora env", () => {
 
             const { logger } = recordingLogger();
 
-            writeFileSync(join(workdir, ".dev.vars"), "OK=1\n", "utf8");
+            writeFileSync(join(workdir, ".dev.vars.staging"), "OK=1\n", "utf8");
 
             const { calls, spawner } = createRecordingSpawner();
 
@@ -469,17 +469,20 @@ describe("lunora env", () => {
         });
 
         it("push --env wins over --prod when both are set", async () => {
-            expect.assertions(1);
+            expect.assertions(3);
 
             const { logger } = recordingLogger();
 
-            writeFileSync(join(workdir, ".dev.vars"), "OK=1\n", "utf8");
+            writeFileSync(join(workdir, ".dev.vars.staging"), "STAGING_KEY=1\n", "utf8");
+            writeFileSync(join(workdir, ".dev.vars.production"), "PRODUCTION_KEY=1\n", "utf8");
 
             const { calls, spawner } = createRecordingSpawner();
 
             await runEnvCommand({ cwd: workdir, env: "staging", logger, prod: true, spawner, subcommand: "push", yes: true });
 
+            expect(calls).toHaveLength(1);
             expect(calls[0]?.descriptor.args).toContain("staging");
+            expect(calls[0]?.descriptor.args).toContain("STAGING_KEY");
         });
 
         it("push --temporary adds --temporary to each secret put", async () => {
@@ -523,6 +526,136 @@ describe("lunora env", () => {
             expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
             expect(recorded.errors.join("\n")).toContain("invalid key");
+        });
+    });
+
+    describe("a named environment uses its own .dev.vars.<name>", () => {
+        it("push --env production refuses the bare .dev.vars, names the file and spawns nothing", async () => {
+            expect.assertions(5);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'LUNORA_ADMIN_TOKEN="local-dev-token"\n', "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, env: "production", logger, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
+            expect(calls).toHaveLength(0);
+            expect(recorded.errors.join("\n")).toContain(".dev.vars.production");
+            expect(recorded.errors.join("\n")).toContain("--from-dev-vars");
+            expect(recorded.errors.join("\n")).toContain("env set --env production");
+        });
+
+        it("push --prod pushes the keys of .dev.vars.production and none from the bare file", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'DEV_ONLY="dev-value"\n', "utf8");
+            writeFileSync(join(workdir, ".dev.vars.production"), 'PROD_ONLY="prod-value"\n', "utf8");
+
+            const { logger } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, logger, prod: true, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(0);
+            expect(calls.map((call) => call.descriptor.args.join(" "))).toStrictEqual(["exec wrangler secret put PROD_ONLY --env production"]);
+            expect(calls[0]?.descriptor.input).toBe("prod-value");
+            expect(result.data).toStrictEqual({ pushed: ["PROD_ONLY"], subcommand: "push", target: "production" });
+        });
+
+        it("push --from-dev-vars pushes the bare file to a named environment", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'RESEND_API_KEY="re_live"\n', "utf8");
+
+            const { logger } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", fromDevVars: true, logger, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(0);
+            expect(calls.map((call) => call.descriptor.args.join(" "))).toStrictEqual(["exec wrangler secret put RESEND_API_KEY --env staging"]);
+            expect(calls[0]?.descriptor.input).toBe("re_live");
+        });
+
+        it("push --from-dev-vars still refuses a key deploy always mints fresh, and pushes nothing", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'RESEND_API_KEY="re_live"\nLUNORA_ADMIN_TOKEN="devtoken"\n', "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, fromDevVars: true, logger, prod: true, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(calls).toHaveLength(0);
+            expect(recorded.errors.join("\n")).toContain("LUNORA_ADMIN_TOKEN");
+        });
+
+        it("--from-dev-vars without a named environment is a usage error", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'RESEND_API_KEY="re_live"\n', "utf8");
+
+            const { logger } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, fromDevVars: true, logger, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(calls).toHaveLength(0);
+        });
+
+        it("refuses an environment name that is not a plain filename fragment", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "../escape", key: "FOO", logger, subcommand: "set", value: "bar" });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(existsSync(join(workdir, "..", "escape"))).toBe(false);
+        });
+
+        it("set --env staging writes .dev.vars.staging, leaves .dev.vars alone and git-ignores the sibling", async () => {
+            expect.assertions(4);
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", key: "FOO", logger, subcommand: "set", value: "bar" });
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(workdir, ".dev.vars.staging"), "utf8")).toContain("FOO=");
+            expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
+            expect(readFileSync(join(workdir, ".gitignore"), "utf8")).toContain(".dev.vars.*");
+        });
+
+        it("generate --set --prod writes .dev.vars.production, the file push --prod reads", async () => {
+            expect.assertions(3);
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, key: "AUTH_SECRET", logger, prod: true, set: true, subcommand: "generate" });
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(workdir, ".dev.vars.production"), "utf8")).toMatch(/AUTH_SECRET="?[a-f0-9]{64}/u);
+            expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
+        });
+
+        it("list and diff --env staging read .dev.vars.staging", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'DEV_ONLY="x"\n', "utf8");
+            writeFileSync(join(workdir, ".dev.vars.staging"), 'STAGING_ONLY="y"\n', "utf8");
+
+            const { logger } = recordingLogger();
+            const list = await runEnvCommand({ cwd: workdir, env: "staging", logger, subcommand: "list" });
+            const diff = await runEnvCommand({
+                cwd: workdir,
+                env: "staging",
+                logger,
+                secretLister: async () => {
+                    return { names: [], ok: true };
+                },
+                subcommand: "diff",
+            });
+
+            expect(list.data).toStrictEqual({ file: ".dev.vars.staging", keys: ["STAGING_ONLY"], subcommand: "list" });
+            expect(diff.data).toStrictEqual({ both: [], localOnly: ["STAGING_ONLY"], remoteOnly: [], subcommand: "diff" });
         });
     });
 

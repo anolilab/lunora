@@ -8,7 +8,6 @@ import { existsSync, readFileSync } from "node:fs";
 import type { DeployDriver, DiscoveryCache } from "@lunora/config";
 import {
     DEV_VARS_FILE,
-    ensureGitignoreEntries,
     generateSecretValue,
     inferLunoraBindings,
     isPlaceholderValue,
@@ -24,6 +23,7 @@ import { join } from "@visulima/path";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
+import { devVariablesFileFor, ensureDevVariablesIgnored } from "../../util/dev-variables-file";
 import type { Logger } from "../../util/logger";
 import { defaultSpawner } from "../../util/spawn";
 import { createTuiConfirm } from "../../util/tui-prompts";
@@ -214,57 +214,6 @@ const pushMintableSecrets = async (
 };
 
 /**
- * Plain-identifier check before `options.env` is spliced into a filename
- * (`.dev.vars.<env>`) — defense-in-depth; a `--env <name>` naming no
- * declared `wrangler.jsonc` environment is already blocked earlier in the
- * deploy pipeline (`validateWrangler`), so this should be unreachable in
- * practice.
- */
-const SAFE_ENV_NAME = /^[\w-]+$/u;
-
-/**
- * The `.gitignore` lines that cover every `.dev.vars`-shaped file this command
- * can write. `.dev.vars` alone is an exact-name pattern and does not match the
- * `.dev.vars.<env>` sibling; the negation keeps a checked-in
- * `.dev.vars.example` visible. Same set the `lunora init` overlay writes.
- *
- * ORDER IS LOAD-BEARING: git is last-match-wins, so the negation only works
- * while it sits below every pattern that would otherwise catch the example file.
- */
-const DEV_VARS_IGNORE_PATTERNS = [".dev.vars", ".dev.vars.*", "!.dev.vars.example"];
-
-/**
- * Make sure the project's `.gitignore` covers the `.dev.vars`-shaped file this
- * deploy is about to write a freshly minted PRODUCTION secret into.
- *
- * git's `.dev.vars` pattern matches that exact name and nothing else, so the
- * `.dev.vars.<env>` sibling an `--env` deploy writes was untracked but NOT
- * ignored: the next `git add -A` commits a live admin token / auth secret. Every
- * scaffolded project ships the bare pattern only, and a project not scaffolded
- * by `lunora init` ships whatever its author wrote — so the guard belongs here,
- * at the one place a secret value ever reaches the disk, rather than in each
- * template. The append itself is {@link ensureGitignoreEntries}, shared with the
- * celld projections; it is a no-op once present.
- *
- * Best-effort: a `.gitignore` that cannot be written (read-only checkout, no
- * git at all) must not cost the user the only recoverable copy of a write-only
- * secret, so it warns and lets the write proceed.
- */
-const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
-    try {
-        const missing = ensureGitignoreEntries(cwd, DEV_VARS_IGNORE_PATTERNS);
-
-        if (missing.length > 0) {
-            logger.info(`.gitignore: added ${missing.join(", ")} so the recorded secret cannot be committed`);
-        }
-    } catch (error) {
-        logger.warn(
-            `could not update .gitignore (${error instanceof Error ? error.message : String(error)}) — add \`${DEV_VARS_IGNORE_PATTERNS.join("` and `")}\` by hand before committing.`,
-        );
-    }
-};
-
-/**
  * Fold newly-minted secret values into the right `.dev.vars`-shaped file, via
  * the same surgical upsert `env generate --set` uses, written atomically and
  * owner-only (`writeDevVariablesFileAtomically`, matching `@lunora/config`'s
@@ -276,7 +225,7 @@ const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
  *
  * Which file depends on `options.env`:
  * - No explicit `--env`: the deploy targets the account's one default environment — the same one `.dev.vars`/`lunora dev`/a plain `lunora env push` already treat as authoritative — so the minted value goes into `.dev.vars` itself, same as `env set`/`env generate --set` would.
- * - An explicit `--env <name>`: a DIFFERENT, named environment. Writing that secret into the bare, environment-agnostic `.dev.vars` would silently share it with local dev and with a later no-`--env` `env push` — the exact cross-environment leak an `--env`-scoped deploy is supposed to avoid. So it goes into a sibling `.dev.vars.<name>` instead, after {@link ensureDevVariablesIgnored} has made that filename un-committable. No other command reads `.dev.vars.<name>` today — it exists purely as this deploy's own recoverable record of a value `wrangler secret put` can never return; open it by hand to retrieve the value.
+ * - An explicit `--env <name>`: a DIFFERENT, named environment. Writing that secret into the bare, environment-agnostic `.dev.vars` would silently share it with local dev and with a later no-`--env` `env push` — the exact cross-environment leak an `--env`-scoped deploy is supposed to avoid. So it goes into a sibling `.dev.vars.<name>` instead ({@link devVariablesFileFor}), after {@link ensureDevVariablesIgnored} has made that filename un-committable. It is the same file `lunora env … --env <name>` reads and writes, so a later `env push --env <name>` re-pushes the recorded value rather than the local dev one.
  *
  * Returns the (relative) filename written, or `undefined` when nothing was
  * recorded — the caller threads this through the deploy result so the
@@ -291,15 +240,15 @@ const persistMintedSecrets = (cwd: string, options: DeployCommandOptions, minted
 
     const keys = minted.map((entry) => entry.key).join(", ");
 
-    if (options.env !== undefined && !SAFE_ENV_NAME.test(options.env)) {
+    const targetFile = devVariablesFileFor(options.env);
+
+    if (targetFile === undefined) {
         options.logger.warn(
-            `${keys}: minted and pushed for --env ${options.env}, but "${options.env}" isn't a safe filename fragment — the value could not be recorded. Capture it manually if you need it again.`,
+            `${keys}: minted and pushed for --env ${String(options.env)}, but "${String(options.env)}" isn't a safe filename fragment — the value could not be recorded. Capture it manually if you need it again.`,
         );
 
         return undefined;
     }
-
-    const targetFile = options.env === undefined ? DEV_VARS_FILE : `${DEV_VARS_FILE}.${options.env}`;
 
     ensureDevVariablesIgnored(cwd, options.logger);
 
@@ -451,7 +400,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
             error:
                 `missing required secret(s) on the deploy target: ${missing.join(", ")}. ` +
                 `Set them with \`wrangler secret put <KEY>${environmentFlag}\` ` +
-                `(or \`lunora env generate --set\` then \`lunora env push --yes${environmentFlag}\`), then re-deploy.`,
+                `(or \`lunora env generate --set${environmentFlag}\` then \`lunora env push --yes${environmentFlag}\`), then re-deploy.`,
         };
     }
 
@@ -494,7 +443,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
 
     logger.warn(
         `${String(mintable.length)} required secret(s) not set on the target: ${mintable.join(", ")}. ` +
-            `Generate + push with \`lunora env generate --set\` then \`lunora env push --yes${environmentFlag}\`.`,
+            `Generate + push with \`lunora env generate --set${environmentFlag}\` then \`lunora env push --yes${environmentFlag}\`.`,
     );
 
     return {};
