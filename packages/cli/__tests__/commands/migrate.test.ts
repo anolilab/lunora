@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -419,6 +419,30 @@ export const schema = defineSchema({
 
             expect(third.code).toBe(0);
             expect(readFileSync(third.migrationFile, "utf8")).toContain("ALTER TABLE");
+        });
+
+        it("never writes the snapshot through a link planted at a temporary-file path", () => {
+            expect.assertions(2);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({ email: v.string() }).global(),
+});
+`,
+            );
+
+            const target = join(workdir, "outside.txt");
+
+            writeFileSync(target, "untouched\n", "utf8");
+            mkdirSync(join(workdir, "lunora", "migrations"), { recursive: true });
+            symlinkSync(target, join(workdir, "lunora", "migrations", ".snapshot.json.tmp"));
+
+            const result = runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(target, "utf8")).toBe("untouched\n");
         });
 
         it("leaves no temporary snapshot file behind", () => {

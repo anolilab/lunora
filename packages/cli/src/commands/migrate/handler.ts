@@ -29,6 +29,7 @@
  * snapshot it writes alongside is what makes the next diff see a dropped table
  * at all.
  */
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -185,6 +186,11 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
         writeFileSync(migrationFile, body, { encoding: "utf8", flag: "wx" });
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+            // Only EEXIST means the file was someone else's: any other error came after (or instead
+            // of) this run's exclusive create, so a partial file left here would be applied as-is
+            // and could never be rewritten.
+            rmSync(migrationFile, { force: true });
+
             throw error;
         }
 
@@ -197,10 +203,12 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
 
     // Temp file + rename so a crash cannot leave a torn snapshot; on failure the migration file is
     // removed so the retry diffs against the old snapshot instead of emitting the same diff twice.
-    const temporarySnapshotPath = `${snapshotPath}.tmp`;
+    // A per-run name created with "wx" never follows a link planted in the project, and two runs
+    // never rename each other's file into place.
+    const temporarySnapshotPath = `${snapshotPath}.${randomUUID()}.tmp`;
 
     try {
-        writeFileSync(temporarySnapshotPath, `${JSON.stringify(nextSnapshot, undefined, 4)}\n`, "utf8");
+        writeFileSync(temporarySnapshotPath, `${JSON.stringify(nextSnapshot, undefined, 4)}\n`, { encoding: "utf8", flag: "wx" });
         renameSync(temporarySnapshotPath, snapshotPath);
     } catch (error: unknown) {
         rmSync(migrationFile, { force: true });
