@@ -427,6 +427,37 @@ const isStaleSubscriptionEvent = (existing: Subscription, action: WebhookAction)
     return target !== undefined && ENTITLING_STATES.has(target) && !ENTITLING_STATES.has(existing.state);
 };
 
+/**
+ * What a stale event may still contribute: the owner and the price a row was created without, never
+ * its state or `lastEventAt`. A Stripe subscription-mode checkout creates the row with no price, and
+ * the `customer.subscription.*` events that carry it are often stamped earlier, so without this the
+ * row matches no plan until the next renewal. A priceless row's quantity and period start are
+ * creation defaults, not provider data, so they come along with the price. Returns `existing`
+ * itself when there is nothing to fill.
+ */
+const fillBlankSubscription = (existing: Subscription, action: WebhookAction): Subscription => {
+    const referenceId = ownerOf(existing.referenceId, action.referenceId);
+    const priced = existing.priceId === "" && Boolean(action.priceId);
+
+    if (referenceId === existing.referenceId && !priced) {
+        return existing;
+    }
+
+    if (!priced) {
+        return { ...existing, referenceId };
+    }
+
+    return {
+        ...existing,
+        currentPeriodEnd: existing.currentPeriodEnd ?? action.currentPeriodEnd,
+        currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
+        priceId: action.priceId ?? existing.priceId,
+        priceIds: existing.priceIds ?? action.priceIds,
+        quantity: action.quantity ?? existing.quantity,
+        referenceId,
+    };
+};
+
 /** Create the row for a subscription the store has not seen: the checkout's owner, if it arrived first, and the opt-in duplicate check. */
 const createSubscription = async (
     store: PaymentStore,
@@ -504,13 +535,9 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction, sin
     // `past_due → active` is a legal edge, so a late `active` would re-entitle a customer whose
     // payment has since failed. Drop anything older than the last event applied to this row.
     if (existing && isStaleSubscriptionEvent(existing, action)) {
-        // Its state is stale, but the owner it names still fills a blank row.
-        const referenceId = ownerOf(existing.referenceId, action.referenceId);
+        const filled = fillBlankSubscription(existing, action);
 
-        if (
-            referenceId !== existing.referenceId &&
-            (await storeSubscription(store, singleSubscriptionPerReference, existing, { ...existing, referenceId, updatedAt: now })) === "refused"
-        ) {
+        if (filled !== existing && (await storeSubscription(store, singleSubscriptionPerReference, existing, { ...filled, updatedAt: now })) === "refused") {
             return { applied: false, reason: "duplicate_subscription" };
         }
 
