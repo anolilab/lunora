@@ -71,7 +71,14 @@ a view this client does not hold — its base checkpoint, or the poke's epoch,
 differs from the shape's — re-seeds instead: the view is emptied, its checkpoint
 and epoch cleared, `onRows` told `[]`, and a cold `shape_subscribe` sent.
 `resendSubscriptions()` re-subscribes everything after a reconnect — queries and
-shape views alike — carrying each one's resume cursor or checkpoint.
+shape views alike — carrying each one's resume cursor or checkpoint. It sends at most
+three query subscriptions at once, as the reference client does, so a reconnect does not
+land every query on the shard in one burst. Each of the rest goes out when `handleFrame`
+sees a frame for one already sent, or once one has gone unanswered for 10 s:
+`nextSubscriptionRetryAt` includes that deadline, and `retryDueSubscriptions(now:)` at or
+after it sends the next. Feed every frame to `handleFrame` and pull
+`retryDueSubscriptions(now:)` on that deadline (a retry hint on a subscription error arms the
+same one). Shape subscriptions all go out at once.
 `attachSocket(_:context:)` sends `connect` as the first frame of every open: the client
 id, `context` when one is given, and `token` from `sessionToken` when one is set. Do not
 send `connect` yourself. A caller that still does opens the socket with two. A deployment
@@ -128,7 +135,7 @@ while !Task.isCancelled {
         client.attachSocket { frame in
             do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }
         }
-        client.resendSubscriptions()
+        client.resendSubscriptions() // paced: schedule retryDueSubscriptions() at nextSubscriptionRetryAt
         let report = client.flushOfflineQueue(shardKey: shard)
         if !report.requeued.isEmpty || report.retryAfterMs != nil {
             flushRetry = Task {

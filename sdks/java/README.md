@@ -64,6 +64,14 @@ the view is emptied (its `onRows` told `[]`), its checkpoint and epoch cleared,
 and a cold `shape_subscribe` sent at once so the server re-seeds it.
 `client.close()` also ends every open `watch`.
 
+`resendSubscriptions()` sends at most three query subscriptions at once, as the
+reference client does, so a reconnect does not land every query on the shard in one
+burst. Each of the rest goes out when `handleFrame` sees a frame for one already sent,
+or once one has gone unanswered for 10 s: `nextSubscriptionRetryAtNanos()` includes that
+deadline, and `retryDueSubscriptions()` at or after it sends the next. Feed every frame
+to `handleFrame` and pull `retryDueSubscriptions()` on that deadline (a retry hint on a
+subscription error arms the same one). Shape subscriptions all go out at once.
+
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
 (`handleFrame` returns the frame's type):
 
@@ -77,7 +85,7 @@ while (!Thread.currentThread().isInterrupted()) {
     try (Socket socket = connect()) { // your socket library
         // attachSocket sends connect before it attaches the sender, so a subscribe on another thread cannot write ahead of it.
         client.attachSocket(frame -> socket.send(Json.write(frame)), null);
-        client.resendSubscriptions();
+        client.resendSubscriptions(); // paced: schedule retryDueSubscriptions() at nextSubscriptionRetryAtNanos()
         var report = client.flushOfflineQueue(shard);
         if (!report.requeued.isEmpty() || report.retryAfterMs != null) {
             // Requeued writes never stop the read loop: retry on a daemon thread, stopped below.
