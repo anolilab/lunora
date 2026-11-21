@@ -154,6 +154,30 @@ const createOutboxCarrier = (): Collection<Row, string> =>
         },
     });
 
+/**
+ * Executor → its `onWriteRejected` route, for a write the sink handed over but the
+ * executor never stored. Registered by `defineCollections`, which owns the option.
+ */
+const outboxUnstoredReporters = new WeakMap<OutboxExecutor, (event: { collection: string; error: Error }) => void>();
+
+/**
+ * The metadata of every raw write whose replay handler has started. The executor
+ * runs the handler only after it has stored the write, so a commit that fails for
+ * a write NOT in here failed to store it. Keyed by the metadata object itself (the
+ * executor hands the handler the one the sink created), so it dies with the write.
+ */
+const outboxReplaysStarted = new WeakSet<object>();
+
+/** Record that a raw write reached its replay handler (called by `defineCollections`). */
+const noteOutboxReplayStarted = (metadata: OutboxMutationMetadata): void => {
+    outboxReplaysStarted.add(metadata);
+};
+
+/** Associate an executor with the reporter for writes it failed to store (called by `defineCollections`). */
+const registerOutboxUnstoredReporter = (executor: OutboxExecutor, report: (event: { collection: string; error: Error }) => void): void => {
+    outboxUnstoredReporters.set(executor, report);
+};
+
 /** Associate an executor with its transport carrier (called by `defineCollections`). */
 const registerOutboxCarrier = (executor: OutboxExecutor, carrier: Collection<Row, string>): void => {
     outboxCarriers.set(executor, carrier);
@@ -293,10 +317,23 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
 
             // Commit explicitly (not via `autoCommit`, whose upstream failure
             // handler rethrows inside its own .catch — every terminal verdict
-            // would surface as an unhandled rejection) and swallow the outcome:
-            // retries are the executor's job and permanent drops are reported
-            // through the replay handler / `onWriteRejected`, not this promise.
-            transaction.commit?.().catch(() => undefined);
+            // would surface as an unhandled rejection). A failure of a write that
+            // was STORED is swallowed: retries are the executor's job, and a
+            // permanent drop is reported by the replay handler. A write the
+            // executor failed to store (storage quota at write time) never reaches
+            // that handler and nothing retries it, while the client has already
+            // shown it as saved — so it is rolled back and reported here.
+            transaction.commit?.().catch((error: unknown) => {
+                if (outboxReplaysStarted.has(metadata)) {
+                    return;
+                }
+
+                takeOutboxRejection(mutation.idempotencyKey)?.();
+                outboxUnstoredReporters.get(executor)?.({
+                    collection: mutation.functionPath,
+                    error: new Error(`offline write could not be stored: ${error instanceof Error ? error.message : String(error)}`, { cause: error }),
+                });
+            });
 
             return Promise.resolve();
         },
@@ -521,8 +558,10 @@ export {
     createOptimisticOnlineDetector,
     createOutboxCarrier,
     makeDiffEmit,
+    noteOutboxReplayStarted,
     OUTBOX_MUTATION_FN_NAME,
     registerOutboxCarrier,
+    registerOutboxUnstoredReporter,
     runOutboxMutation,
     takeOutboxRejection,
     terminalVerdict,

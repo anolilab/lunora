@@ -18,6 +18,7 @@ import {
     defineCollections as collectionsDefineCollections,
     lunoraCollectionOptions as collectionsLunoraCollectionOptions,
 } from "../src/collections";
+import { takeOutboxRejection } from "../src/internals";
 import { bindMutators as mutatorsBindMutators, defineMutator as mutatorsDefineMutator } from "../src/mutators";
 
 /** A fake `FunctionReference` — the binding only forwards it to the client. */
@@ -28,6 +29,7 @@ const temporaryList = ref("temp:list");
 const temporarySend = ref("temp:send");
 
 const DROPPED_RE = /dropped/u;
+const UNSTORED_RE = /^offline write could not be stored/u;
 
 /**
  * An in-memory `localStorage` shim. Without it Node has no storage and the
@@ -220,6 +222,84 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
         });
+    });
+
+    // A write the executor failed to store never reaches the replay handler, so
+    // nothing would retry or report it, while the client already showed it saved.
+    it("rolls back and reports a raw write the outbox could not store", async () => {
+        const { client, mutation } = makeClient();
+        let reported!: (event: WriteRejectedEvent) => void;
+        const rejection = new Promise<WriteRejectedEvent>((resolve) => {
+            reported = resolve;
+        });
+        const onWriteRejected = vi.fn<(event: WriteRejectedEvent) => void>((event) => {
+            reported(event);
+        });
+        const rolledBack = vi.fn<() => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        // How the executor's commit fails when storing the write throws (storage
+        // quota at write time): before the replay handler ever runs. Stood in for
+        // because the real store failure also leaves an internal promise of the
+        // executor's rejected with nothing awaiting it.
+        vi.spyOn(database.executor, "createOfflineTransaction").mockImplementationOnce(
+            () =>
+                ({
+                    commit: async () => {
+                        throw new Error("Storage quota exceeded");
+                    },
+                    mutate: () => undefined,
+                }) as never,
+        );
+
+        await createExecutorOutboxSink(database.executor).enqueue(outboxWrite({ onRejected: rolledBack }));
+
+        const event = await rejection;
+
+        expect(event.collection).toBe("messages:send");
+        expect(event.code).toBeUndefined();
+        expect(event.error.message).toMatch(UNSTORED_RE);
+        expect(onWriteRejected).toHaveBeenCalledTimes(1);
+        expect(rolledBack).toHaveBeenCalledTimes(1);
+        expect(takeOutboxRejection("c1:1")).toBeUndefined();
+        expect(mutation).not.toHaveBeenCalled();
+    });
+
+    it("reports a stored write the server rejects once, not again as unstored", async () => {
+        let attempts = 0;
+        const { client, mutation } = makeClient({
+            mutation: async () => {
+                attempts += 1;
+
+                if (attempts === 1) {
+                    throw Object.assign(new Error("nope"), { code: "FORBIDDEN" });
+                }
+
+                return "ok";
+            },
+        });
+        const onWriteRejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const rolledBack = vi.fn<() => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ onRejected: rolledBack }));
+        // Runs only after the first write's verdict has fully settled: the executor is FIFO.
+        await sink.enqueue(outboxWrite({ idempotencyKey: "c1:2" }));
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(2);
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        expect(onWriteRejected).toHaveBeenCalledTimes(1);
+        expect(onWriteRejected.mock.calls[0]?.[0].code).toBe("FORBIDDEN");
+        expect(rolledBack).toHaveBeenCalledTimes(1);
     });
 
     // An anonymous caller's dedup rows are keyed by client id. A write queued under

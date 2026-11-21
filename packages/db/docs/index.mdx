@@ -214,6 +214,9 @@ const db = defineCollections(client, defs, {
         // here too, with `code: "UNKNOWN_MUTATION_FN"`. So does one queued under a
         // user who is no longer signed in — identity is the trust boundary, so it
         // is dropped rather than replayed under whoever holds the bearer now.
+        // And so does a raw `client.mutation` write the outbox could not store
+        // (storage quota at write time): no `code`, its function path as
+        // `collection`, and its predicted value is taken back off the screen.
     },
     onStorageFailure: ({ code, message }) => {
         // The durable outbox couldn't persist (IndexedDB blocked in private mode,

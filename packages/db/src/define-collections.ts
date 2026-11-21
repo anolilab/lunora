@@ -11,8 +11,10 @@ import {
     assertSecureRandom,
     createOptimisticOnlineDetector,
     createOutboxCarrier,
+    noteOutboxReplayStarted,
     OUTBOX_MUTATION_FN_NAME,
     registerOutboxCarrier,
+    registerOutboxUnstoredReporter,
     runOutboxMutation,
     takeOutboxRejection,
     terminalVerdict,
@@ -297,8 +299,11 @@ interface DefineCollectionsOptions {
     /**
      * Invoked as a queued write is permanently dropped: a coded application error
      * from the server (validation, RLS denial, conflict, surfaced as a
-     * `NonRetriableError`), OR a write whose target collection no longer exists —
-     * removed/renamed in a deploy (`code: "UNKNOWN_MUTATION_FN"`). This is the
+     * `NonRetriableError`), a write whose target collection no longer exists —
+     * removed/renamed in a deploy (`code: "UNKNOWN_MUTATION_FN"`), OR a raw
+     * `client.mutation` write the outbox could not store (storage quota at write
+     * time; no `code`, an error message starting "offline write could not be
+     * stored", and `collection` set to the function path). This is the
      * aggregate, fire-and-forget-safe channel: unlike awaiting the per-action
      * `transaction` returned by `actions[name](...)`, it fires even when the caller
      * never retained that handle, so a UI can surface "couldn't save" instead of a
@@ -544,6 +549,9 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
             return;
         }
 
+        // The executor stored the write before running this; see `noteOutboxReplayStarted`.
+        noteOutboxReplayStarted(meta);
+
         try {
             // Replay under the *original* idempotency key (not a fresh one), so a
             // committed-but-unacked write that the executor retries is deduped by the
@@ -630,6 +638,9 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
     // Let `createExecutorOutboxSink(executor)` find the carrier when it persists
     // a raw `client.mutation` offline write through this executor.
     registerOutboxCarrier(executor, outboxCarrier);
+    registerOutboxUnstoredReporter(executor, (event) => {
+        reportWriteRejected(options, event);
+    });
 
     const actions: Record<string, (input: unknown) => { id: string; transaction: Transaction }> = {};
 
