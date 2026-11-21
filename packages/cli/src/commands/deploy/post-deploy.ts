@@ -10,7 +10,7 @@ import { Project } from "ts-morph";
 
 import { autoLinkFromDeployOutput, parseDeployedUrl } from "../../util/auto-link";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
-import { EXIT_CODE } from "../../util/exit-code";
+import { EXIT_CODE, exitCodeForError } from "../../util/exit-code";
 import { HEALTH_PATH, HEALTH_READY_PATH, probeHealth } from "../../util/health-probe";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import type { SpawnDescriptor } from "../../util/spawn";
@@ -60,11 +60,11 @@ const runPostDeploySqlMigrations = async (options: DeployCommandOptions, cwd: st
  * Running `up` unconditionally and relying on worker idempotency is simpler,
  * auditable, and safe.
  */
-const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
+const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<{ code: number; error?: string }> => {
     const sqlCode = await runPostDeploySqlMigrations(options, cwd);
 
     if (sqlCode !== 0) {
-        return sqlCode;
+        return { code: sqlCode };
     }
 
     const project = new Project({ skipAddingFilesFromTsConfig: true });
@@ -76,15 +76,20 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        options.logger.warn(`--migrate: could not discover migrations (${message}); skipping`);
+        // The worker is already live: failing here is what keeps a pipeline from reading new code on
+        // unmigrated data as a successful deploy-and-migrate.
+        const reason = `--migrate: could not discover migrations (${message}); no data migration was run`;
 
-        return 0;
+        options.logger.error(reason);
+
+        // Carried in the result as well as logged, so `--format json` reports why it failed.
+        return { code: exitCodeForError(error), error: reason };
     }
 
     if (migrations.length === 0) {
         options.logger.info("--migrate: no data migrations declared in lunora/");
 
-        return 0;
+        return { code: 0 };
     }
 
     options.logger.info(`--migrate: running ${String(migrations.length)} migration(s) against deployed worker`);
@@ -113,13 +118,13 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
         if (migrateResult.code !== 0) {
             options.logger.error(`--migrate: migration "${migration.id}" failed — see output above`);
 
-            return migrateResult.code;
+            return { code: migrateResult.code };
         }
 
         options.logger.success(`--migrate: "${migration.id}" applied`);
     }
 
-    return 0;
+    return { code: 0 };
 };
 
 /**
@@ -252,7 +257,7 @@ const finalizeSuccessfulDeploy = async (
         await provisionVectorMetadataIndexes(options, cwd);
     }
 
-    const migrateCode = options.migrate ? await runPostDeployMigrations(options, cwd) : 0;
+    const { code: migrateCode, error } = options.migrate ? await runPostDeployMigrations(options, cwd) : { code: 0 };
 
     // Only advance the committed baseline when deploy AND its migrations
     // succeeded; a failed migration leaves the gate measuring against the
@@ -261,7 +266,7 @@ const finalizeSuccessfulDeploy = async (
         reblessSchemaBaseline?.();
     }
 
-    return { code: migrateCode, descriptor, mintedSecretsFile, validation };
+    return { code: migrateCode, descriptor, ...(error === undefined ? {} : { error }), mintedSecretsFile, validation };
 };
 
 interface CompleteDeployInputs {
