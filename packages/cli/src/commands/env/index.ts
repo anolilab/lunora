@@ -11,6 +11,7 @@ const envCommand: Command = {
         ["lunora env generate", "Generate strong values for the project's secrets (print KEY=value)"],
         ["lunora env generate AUTH_SECRET --set", "Generate one secret and write it to .dev.vars"],
         ["lunora env push --yes", "Upload secrets to Cloudflare"],
+        ["lunora env push --yes --env staging", "Upload .dev.vars.staging to the staging environment"],
         ["lunora env diff", "Compare local .dev.vars keys against Cloudflare"],
         ["lunora env diff --format json", "Same, as a single JSON document on stdout"],
     ],
@@ -21,8 +22,18 @@ const envCommand: Command = {
         }),
     name: "env",
     options: [
-        { description: "Target this Cloudflare environment for `push`/`diff` (passes --env <name> to wrangler)", name: "env", type: String },
+        {
+            description:
+                "Target this Cloudflare environment (passes --env <name> to wrangler); every subcommand reads and writes .dev.vars.<name> instead of .dev.vars",
+            name: "env",
+            type: String,
+        },
         { description: "Alias for --env production", name: "prod", type: Boolean },
+        {
+            description: "For `push`/`diff` with --env/--prod — use .dev.vars instead of .dev.vars.<name> (keys deploy generates are still refused)",
+            name: "from-dev-vars",
+            type: Boolean,
+        },
         OUTPUT_FORMAT_OPTION,
         { description: "For `generate` — write the generated secrets into .dev.vars instead of printing them", name: "set", type: Boolean },
         {
@@ -40,6 +51,7 @@ export { envCommand };
 export type EnvOptions = CreateOptions<{
     env: string | undefined;
     format: string | undefined;
+    "from-dev-vars": boolean | undefined;
     prod: boolean | undefined;
     set: boolean | undefined;
     temporary: boolean | undefined;
