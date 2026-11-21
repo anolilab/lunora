@@ -245,6 +245,10 @@ export const authorize = onWhisper(async (ctx, event) => {
 });
 ```
 
+Define the authorizer in a file under `lunora/`. One kept in shared code and only
+re-exported from `lunora/` is never registered, so codegen fails the build
+(`procedure_not_registered`) rather than leave the topics open.
+
 It is a **query**, so `ctx.db` is RLS-scoped to the connecting user and the check
 cannot write. Only a literal `true` allows: any other return value — or a throw —
 denies, and multiple exports are AND-ed. Declaring one governs every topic on the
