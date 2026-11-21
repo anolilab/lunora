@@ -51,6 +51,7 @@ export type { MutatorHandle, MutatorRunnerSinks, MutatorTransaction } from "./mu
 export { createMutatorRunner } from "./mutator-runner";
 export type { QueuedMutation } from "./offline-queue";
 export { OfflineQueue } from "./offline-queue";
+export { default as OutboxDeclinedError } from "./outbox-declined-error";
 export type { IndexedDbPersistenceOptions } from "./persistence";
 export { createIndexedDbPersistence, createInMemoryPersistence } from "./persistence";
 export { preloadedQueryResult, preloadQuery } from "./preload";

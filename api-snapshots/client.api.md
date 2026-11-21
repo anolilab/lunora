@@ -771,6 +771,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
     replayBaseline?: null | number;
+    replayClientId?: string;
     replayCredential?: ReplayCredential;
     shardKey?: string;
     signal?: AbortSignal;
@@ -896,6 +897,14 @@ interface OptimisticMessage {
 
 ```ts
 type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Args) => void;
+```
+
+### `OutboxDeclinedError` (class)
+
+```ts
+class OutboxDeclinedError extends Error {
+    constructor(message?: string);
+}
 ```
 
 ### `OutboxMutation` (interface)

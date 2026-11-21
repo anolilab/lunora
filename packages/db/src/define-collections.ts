@@ -11,8 +11,10 @@ import {
     assertSecureRandom,
     createOptimisticOnlineDetector,
     createOutboxCarrier,
+    noteOutboxReplayStarted,
     OUTBOX_MUTATION_FN_NAME,
     registerOutboxCarrier,
+    registerOutboxUnstoredReporter,
     runOutboxMutation,
     takeOutboxRejection,
     terminalVerdict,
@@ -297,8 +299,11 @@ interface DefineCollectionsOptions {
     /**
      * Invoked as a queued write is permanently dropped: a coded application error
      * from the server (validation, RLS denial, conflict, surfaced as a
-     * `NonRetriableError`), OR a write whose target collection no longer exists —
-     * removed/renamed in a deploy (`code: "UNKNOWN_MUTATION_FN"`). This is the
+     * `NonRetriableError`), a write whose target collection no longer exists —
+     * removed/renamed in a deploy (`code: "UNKNOWN_MUTATION_FN"`), OR a raw
+     * `client.mutation` write the outbox could not store (storage quota at write
+     * time; no `code`, an error message starting "offline write could not be
+     * stored", and `collection` set to the function path). This is the
      * aggregate, fire-and-forget-safe channel: unlike awaiting the per-action
      * `transaction` returned by `actions[name](...)`, it fires even when the caller
      * never retained that handle, so a UI can surface "couldn't save" instead of a
@@ -483,39 +488,51 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
                     // `meta.idempotencyKey`.
                     const mutationId = `${idempotencyKey}:${String(mutationIndex)}`;
 
-                    try {
-                        // Re-checked per mutation, not once per transaction: a batched
-                        // transaction awaits between its writes, which is exactly where a
-                        // `setAuthToken` can slip in. Inside the try so the drop reaches
-                        // `onWriteRejected` instead of rolling the row back in silence.
-                        const send = async (replayCredential: ReplayCredential): Promise<unknown> =>
-                            // `shardKey` routes the write to the DO the collection's `list`
-                            // subscription reads. The server derives no shard from args, so
-                            // omitting it lands a `.shardBy()`'d collection's writes in the
-                            // default shard — committed, ack'd, and invisible to the reader.
-                            client.mutation(insert.mutation, insert.toArgs(row), {
-                                mutationId,
-                                // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
-                                // `null` pins "composed with no baseline"; omitting the
-                                // option entirely would sample the current cursor instead.
-                                // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
-                                replayBaseline: unrouted ? null : (meta?.baselineSeq ?? null),
-                                // Sent with the bearer the verdict judged; under a cookie
-                                // session the worker also refuses the write if the cookie
-                                // now belongs to someone else.
-                                replayCredential,
-                                shardKey: unrouted ? scopedShardKey(definition.scopeBy as string, row, "the queued row") : meta?.shardKey,
-                            });
+                    // `shardKey` routes the write to the DO the collection's `list`
+                    // subscription reads. The server derives no shard from args, so
+                    // omitting it lands a `.shardBy()`'d collection's writes in the
+                    // default shard — committed, ack'd, and invisible to the reader.
+                    const shardKey = unrouted ? scopedShardKey(definition.scopeBy as string, row, "the queued row") : meta?.shardKey;
 
-                        // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
-                        await replayHoldingCredential(mutationId, meta, send);
+                    try {
+                        if (meta?.oneShot) {
+                            // Runs in the tick the action composed it, so the baseline the
+                            // client samples now is the composing one, and the write is free
+                            // to wait in the client's own queue while offline.
+                            // eslint-disable-next-line no-await-in-loop -- sequential keeps the transaction's writes in order
+                            await runOutboxMutation(async () => client.mutation(insert.mutation, insert.toArgs(row), { mutationId, shardKey }));
+                        } else {
+                            // Re-checked per mutation, not once per transaction: a batched
+                            // transaction awaits between its writes, which is exactly where a
+                            // `setAuthToken` can slip in. Inside the try so the drop reaches
+                            // `onWriteRejected` instead of rolling the row back in silence.
+                            const send = async (replayCredential: ReplayCredential): Promise<unknown> =>
+                                client.mutation(insert.mutation, insert.toArgs(row), {
+                                    mutationId,
+                                    // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
+                                    // `null` pins "composed with no baseline"; omitting the
+                                    // option entirely would sample the current cursor instead.
+                                    // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
+                                    replayBaseline: unrouted ? null : (meta?.baselineSeq ?? null),
+                                    // Sent with the bearer the verdict judged; under a cookie
+                                    // session the worker also refuses the write if the cookie
+                                    // now belongs to someone else.
+                                    replayCredential,
+                                    shardKey,
+                                });
+
+                            // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
+                            await replayHoldingCredential(mutationId, meta, send);
+                        }
                     } catch (error) {
                         // A permanent rejection: the executor will roll the optimistic
                         // row back. Report it on the aggregate channel so a
                         // fire-and-forget caller still learns the write was dropped, then
                         // rethrow so the rollback proceeds. Transient errors retry, so
-                        // only a terminal verdict is reported.
-                        const terminal = settleFailure(mutationId, error);
+                        // only a terminal verdict is reported — except in a one-shot
+                        // transaction, which nothing retries: its row is rolled back
+                        // either way, so any failure is reported.
+                        const terminal = settleFailure(mutationId, error) ?? (meta?.oneShot ? toNonRetriable(error) : undefined);
 
                         if (terminal !== undefined) {
                             reportWriteRejected(options, { code: (terminal as Error & { code?: string }).code, collection: name, error: terminal, row });
@@ -544,6 +561,9 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
             return;
         }
 
+        // The executor stored the write before running this; see `noteOutboxReplayStarted`.
+        noteOutboxReplayStarted(meta);
+
         try {
             // Replay under the *original* idempotency key (not a fresh one), so a
             // committed-but-unacked write that the executor retries is deduped by the
@@ -554,6 +574,9 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
                     // Pinned, never re-sampled — see `WriteProvenance.baselineSeq`.
                     // eslint-disable-next-line unicorn/no-null -- `null` is the documented "pin no baseline" sentinel; `undefined` means "sample now"
                     replayBaseline: meta.baselineSeq ?? null,
+                    // The id the write was queued under: an anonymous caller's dedup
+                    // rows are keyed by it, and a per-session id changes on reload.
+                    replayClientId: meta.clientId,
                     // Sent with the bearer the verdict above judged; under a cookie
                     // session the worker also refuses the write if the cookie now
                     // belongs to someone else.
@@ -627,6 +650,9 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
     // Let `createExecutorOutboxSink(executor)` find the carrier when it persists
     // a raw `client.mutation` offline write through this executor.
     registerOutboxCarrier(executor, outboxCarrier);
+    registerOutboxUnstoredReporter(executor, (event) => {
+        reportWriteRejected(options, event);
+    });
 
     const actions: Record<string, (input: unknown) => { id: string; transaction: Transaction }> = {};
 
@@ -661,6 +687,8 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
             const metadata: WriteProvenance = {
                 baselineSeq: client.currentBaseline(shardKey),
                 identity: client.currentIdentity(),
+                // Read in the same tick as `createOfflineTransaction`, which branches on it.
+                ...(executor.isOfflineEnabled ? {} : { oneShot: true }),
                 shardKey,
             };
             const offline = executor.createOfflineTransaction({ autoCommit: false, metadata, mutationFnName: name });

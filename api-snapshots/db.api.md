@@ -292,6 +292,8 @@ interface OutboxExecutor {
         mutationFnName: string;
     }) => OutboxTransaction;
     getPendingCount: () => number;
+    readonly isOfflineEnabled: boolean;
+    waitForInit: () => Promise<void>;
 }
 ```
 
@@ -658,6 +660,7 @@ interface ShapeSource {
 interface WriteProvenance extends Record<string, unknown> {
     baselineSeq?: number;
     identity: string | null;
+    oneShot?: true;
     shardKey?: string;
 }
 ```

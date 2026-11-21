@@ -56,6 +56,7 @@ import {
     rollbackOptimistic,
     withDeferredNotifications,
 } from "./optimistic-layers";
+import OutboxDeclinedError from "./outbox-declined-error";
 import isStaleVersion from "./persisted-version";
 import { resolvePersistenceAdapter } from "./persistence";
 import { createPollingFallback, withinPollTimeout } from "./polling-fallback";
@@ -399,6 +400,18 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     replayBaseline?: null | number;
 
     /**
+     * The client id a durable replay was queued under, sent in place of this
+     * client's own. An anonymous caller's server-side dedup rows are keyed by
+     * client id, and a client constructed without a stable `clientId` mints a
+     * new one per session: a write that committed before a reload but was never
+     * acknowledged would otherwise run again under the new id. The built-in
+     * offline queue does the same with the id it persisted beside each write.
+     *
+     * Omit for normal calls, which send this client's own id.
+     */
+    replayClientId?: string;
+
+    /**
      * The credential a durable replay was judged under — the one
      * {@link LunoraClient.replayIdentityVerdict} returns with a `"match"`. The
      * request is sent with exactly the bearer that verdict was judged against,
@@ -574,6 +587,13 @@ const offlineNotQueuedError = (functionPath: string, cause?: unknown): LunoraErr
         cause,
         hint: OFFLINE_NOT_QUEUED_HINT,
     });
+
+/**
+ * A durable replay refused because the connection is down. Deliberately code-less,
+ * with no HTTP status in its fixed message: the outbox retries an error without a
+ * `code` and drops one that has one, or whose message names 400/401/403/422.
+ */
+const durableReplayNotSentError = (): Error => new Error("LunoraClient: the connection is not live, so the durable replay was not sent; it stays queued");
 
 /**
  * A request that failed on the wire: fetch rejects with a `TypeError`, and the args
@@ -4592,12 +4612,12 @@ class LunoraClient {
         // last-writer-wins silently resurrects the older value. So while the
         // durable path still holds anything for this shard, go behind it.
         //
-        // The durable path's OWN replay is the exception: it re-enters here
-        // carrying `replayBaseline` (every durable replay pins one), is already
-        // persisted, and re-queueing it would loop it back into the queue it is
-        // draining. A caller-supplied `mutationId` alone is not a replay:
-        // `importRows` and app code pass one for idempotency, and those writes
-        // must still go behind the queue.
+        // The durable path's OWN replay is the exception to this and to the two
+        // offline gates below: it re-enters here carrying `replayBaseline` (every
+        // durable replay pins one), is already persisted, and re-queueing it would
+        // loop it back into the queue it is draining. A caller-supplied
+        // `mutationId` alone is not a replay: `importRows` and app code pass one
+        // for idempotency, and those writes must still go behind the queue.
         //
         // With a durable outbox this is process-wide, not per shard: the sink
         // reports only its total depth. Over-inclusion costs a write a trip
@@ -4627,6 +4647,16 @@ class LunoraClient {
         // user code that can drop the shard, so the gate is read again here.
         this.refuseOnlineOnlyWhenDown(function_.__lunoraRef, options, optimisticRollbacks);
 
+        // A durable replay that finds the connection down or reconnecting fails
+        // instead: queued again, it would be persisted as a NEW write behind newer
+        // ones while the outbox counted the original as committed, losing its FIFO
+        // place and its rollback handle. The outbox keeps the original and retries.
+        if (options.replayBaseline !== undefined && (socketDown || midReconnect)) {
+            rollbackOptimistic(optimisticRollbacks);
+
+            throw durableReplayNotSentError();
+        }
+
         if (socketDown || midReconnect || queuedAhead) {
             return enqueue();
         }
@@ -4637,6 +4667,7 @@ class LunoraClient {
             const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
                 baselineSeq: composedBaselineSeq,
                 captureBookmark: true,
+                clientId: options.replayClientId,
                 ...replay?.flags,
                 mutationId,
                 onCommitCursor: (cursor) => {
@@ -4816,6 +4847,65 @@ class LunoraClient {
     }
 
     /**
+     * Hand a write to the durable outbox. `false` when the sink declined it
+     * (`OutboxDeclinedError`: it cannot store it durably in this tab right now),
+     * leaving the write, and its optimistic layers, for the built-in queue.
+     */
+    private async delegateToOutbox(
+        outbox: OutboxSink,
+        functionPath: string,
+        argsRecord: Record<string, unknown>,
+        shardKey: string | undefined,
+        baselineSeq: number | undefined,
+        optimisticRollbacks: (() => void)[],
+        callerMutationId: string | undefined,
+        issuingIdentity: string | null,
+    ): Promise<boolean> {
+        this.outboxMutationCounter += 1;
+        const outboxMutationId = this.outboxMutationCounter;
+
+        try {
+            await outbox.enqueue({
+                args: argsRecord,
+                // The view the caller composed against, handed over so the sink
+                // can replay it verbatim — see `OutboxMutation.baselineSeq`.
+                baselineSeq,
+                clientId: this.clientId,
+                functionPath,
+                // The caller's own `mutationId` when it passed one (an
+                // `importRows` chunk): its replay must dedup against the key a
+                // resumed run sends again. Otherwise a random suffix, never the
+                // counter: a stable `clientId` comes back after every reload and
+                // in every tab, and the counter restarts at 1 each time, so a new
+                // write would be answered from an old one's cached result.
+                idempotencyKey: callerMutationId ?? `${this.clientId}:${nextId()}`,
+                identity: issuingIdentity,
+                mutationId: outboxMutationId,
+                // The only signal that can take this write's predicted value
+                // back off the screen: the caller's drop leaves it displayed, and
+                // the permanent verdict is reached out of band, in the sink's
+                // replay. Omitted when there is nothing to roll back.
+                ...(optimisticRollbacks.length > 0 && {
+                    onRejected: () => {
+                        rollbackOptimistic(optimisticRollbacks);
+                    },
+                }),
+                shardKey,
+            });
+        } catch (error) {
+            if (error instanceof OutboxDeclinedError) {
+                return false;
+            }
+
+            rollbackOptimistic(optimisticRollbacks);
+
+            throw error instanceof Error ? error : new Error(String(error));
+        }
+
+        return true;
+    }
+
+    /**
      * Persist a mutation that can't go out on the wire right now (offline, or
      * mid-reconnect after a prior connect). The optimistic update has already
      * been applied by `mutation`; this only chooses the durable write path and
@@ -4823,7 +4913,8 @@ class LunoraClient {
      *
      * Two paths: when an `outbox` sink is wired (the `@lunora/db` executor) it
      * owns persistence + at-least-once replay, so we delegate and return
-     * optimistically (confirmation rides the synced view). Otherwise the
+     * optimistically (confirmation rides the synced view). Otherwise, or when the
+     * sink declines the write (it cannot store it in this tab right now), the
      * built-in `OfflineQueue` resolves/rejects the returned promise on replay.
      */
     private async enqueueOfflineMutation<F extends FunctionReference>(
@@ -4846,52 +4937,38 @@ class LunoraClient {
         // in since must not inherit it as their own.
         const issuingIdentity = replayStamp === undefined ? this.identityFingerprint() : replayStamp;
 
-        if (this.outbox) {
-            this.outboxMutationCounter += 1;
-            const outboxMutationId = this.outboxMutationCounter;
-
-            try {
-                await this.outbox.enqueue({
-                    args: argsRecord,
-                    // The view the caller composed against, handed over so the sink
-                    // can replay it verbatim — see `OutboxMutation.baselineSeq`.
-                    baselineSeq,
-                    clientId: this.clientId,
-                    functionPath: function_.__lunoraRef,
-                    // The caller's own `mutationId` when it passed one (an
-                    // `importRows` chunk): its replay must dedup against the key a
-                    // resumed run sends again, not a per-session counter.
-                    idempotencyKey: callerMutationId ?? `${this.clientId}:${String(outboxMutationId)}`,
-                    identity: issuingIdentity,
-                    mutationId: outboxMutationId,
-                    // The only signal that can take this write's predicted value
-                    // back off the screen: the drop below leaves it displayed, and
-                    // the permanent verdict is reached out of band, in the sink's
-                    // replay. Omitted when there is nothing to roll back.
-                    ...(optimisticRollbacks.length > 0 && {
-                        onRejected: () => {
-                            rollbackOptimistic(optimisticRollbacks);
-                        },
-                    }),
-                    shardKey,
-                });
-            } catch (error) {
-                rollbackOptimistic(optimisticRollbacks);
-
-                throw error instanceof Error ? error : new Error(String(error));
-            }
-
+        if (
+            this.outbox &&
+            (await this.delegateToOutbox(
+                this.outbox,
+                function_.__lunoraRef,
+                argsRecord,
+                shardKey,
+                baselineSeq,
+                optimisticRollbacks,
+                callerMutationId,
+                issuingIdentity,
+            ))
+        ) {
             // The unified outbox (a `@lunora/db` app) manages its own optimistic
             // overlays via the checkpoint watermark; a raw per-call optimistic layer
             // can't be cursor-confirmed through this path, so drop it now (confirm
             // with no cursor) rather than leak it onto every later frame. The value
             // stays on screen, as it should for a durably queued write — the
-            // `onRejected` handle above is what removes it if the replay dies.
+            // `onRejected` handle is what removes it if the replay dies.
             for (const confirm of optimisticConfirms) {
                 confirm(undefined);
             }
 
             return { committed: false, value: undefined as ReturnOf<F> };
+        }
+
+        // The sink's decision is awaited, and `close()` may have cleared the queue meanwhile: a
+        // write queued after that would never settle, since nothing flushes a closed client.
+        if (this.closed) {
+            rollbackOptimistic(optimisticRollbacks);
+
+            throw new LunoraError("CLIENT_CLOSED", "LunoraClient closed");
         }
 
         const value = await new Promise<ReturnOf<F>>((resolve, reject) => {
@@ -4964,6 +5041,13 @@ class LunoraClient {
             if (entry.id !== undefined) {
                 this.queuedIdentities.set(entry.id, issuingIdentity);
             }
+
+            // A write that went behind an outbox backlog the sink then declined is queued while
+            // the socket is already open, after the open-time flush: nothing else would send it.
+            // An ambiguous send is queued on an open socket on purpose, to retry on its backoff.
+            if (this.outbox !== undefined && !ambiguousSend && isLiveStatus(this.computeStatus())) {
+                this.flushOfflineQueue(shardKey).catch(() => undefined);
+            }
         });
 
         return { committed: true, value };
@@ -4974,21 +5058,18 @@ class LunoraClient {
      * replay? Drives the FIFO gate in {@link mutation}: a live write must never
      * overtake one that is queued (or held) ahead of it.
      *
-     * Whichever durable path is wired answers: the built-in {@link OfflineQueue}
+     * Both durable paths answer: the built-in {@link OfflineQueue}
      * knows its entries' shard keys, while an {@link OutboxSink} reports only a
      * process-wide depth (the executor's pending count is not shard-scoped) —
      * over-inclusion there costs a write a trip through the outbox it could have
      * skipped, which is the same trip the writes ahead of it are taking anyway.
-     * A sink that reports nothing keeps the previous behaviour.
+     * The built-in queue is asked even with a sink wired, because a write the
+     * sink declined waits there.
      */
     private hasPendingWriteAhead(shardKey: string | undefined): boolean {
-        if (this.outbox) {
-            return this.outbox.pending?.() ?? false;
-        }
-
         const key = connectionKey(shardKey);
 
-        return this.offlineQueue.hasPending((item) => connectionKey(item.shardKey) === key);
+        return (this.outbox?.pending?.() ?? false) || this.offlineQueue.hasPending((item) => connectionKey(item.shardKey) === key);
     }
 
     /**
