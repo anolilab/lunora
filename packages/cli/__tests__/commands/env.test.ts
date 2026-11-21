@@ -636,6 +636,37 @@ describe("lunora env", () => {
             expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
         });
 
+        it("diff --from-dev-vars suggests a push of the same bare file", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'DEV_ONLY="x"\n', "utf8");
+
+            const { logger, recorded } = recordingLogger();
+
+            await runEnvCommand({
+                cwd: workdir,
+                env: "staging",
+                fromDevVars: true,
+                logger,
+                secretLister: async () => {
+                    return { names: [], ok: true };
+                },
+                subcommand: "diff",
+            });
+
+            expect(recorded.infos.join("\n")).toContain("lunora env push --yes --env staging --from-dev-vars");
+        });
+
+        it("refuses --env example, whose .dev.vars.example file is kept visible to git", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "example", key: "AUTH_SECRET", logger, subcommand: "set", value: "s3cret" });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(existsSync(join(workdir, ".dev.vars.example"))).toBe(false);
+        });
+
         it("list and diff --env staging read .dev.vars.staging", async () => {
             expect.assertions(2);
 

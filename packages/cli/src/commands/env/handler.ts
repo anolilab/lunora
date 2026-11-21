@@ -443,7 +443,9 @@ const runEnvDiff = async (context: EnvContext): Promise<EnvCommandResult> => {
     const both = [...localKeys].filter((key) => remoteKeys.has(key)).toSorted((a, b) => a.localeCompare(b));
 
     for (const key of localOnly) {
-        logger.info(`local only (run \`lunora env push --yes${context.environment === undefined ? "" : ` --env ${context.environment}`}\`): ${key}`);
+        logger.info(
+            `local only (run \`lunora env push --yes${context.environment === undefined ? "" : ` --env ${context.environment}`}${context.options.fromDevVars === true ? " --from-dev-vars" : ""}\`): ${key}`,
+        );
     }
 
     for (const key of remoteOnly) {
@@ -701,7 +703,9 @@ const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResu
     const namedFile = devVariablesFileFor(environment);
 
     if (namedFile === undefined) {
-        options.logger.error(`env: --env "${String(environment)}" must be a plain name ([A-Za-z0-9_-]) — it names the .dev.vars.<name> file`);
+        options.logger.error(
+            `env: --env "${String(environment)}" must be a plain name ([A-Za-z0-9_-]) other than \`example\` — it names the .dev.vars.<name> file`,
+        );
 
         return { code: EXIT_CODE.USAGE, descriptors: [] };
     }

@@ -3457,6 +3457,28 @@ export default defineNotify({ fcm: ${fcmValue}, webPush: (env) => webPushFromEnv
                 expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: FCM_SERVICE_ACCOUNT\./u);
             });
 
+            it("a staging deploy requires a secret-typed key declared only in .dev.vars.staging", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("staging"), "utf8");
+                writeFileSync(join(workdir, ".dev.vars.staging"), 'STRIPE_API_KEY="x"\n', "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "staging",
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: [...DEPLOYED_WITHOUT_FCM_KEYS, "FCM_SERVICE_ACCOUNT", "FCM_PROJECT_ID"], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: STRIPE_API_KEY\./u);
+            });
+
             it("a staging deploy's missing-secret remediation names --env staging, not --prod", async () => {
                 expect.assertions(2);
 
