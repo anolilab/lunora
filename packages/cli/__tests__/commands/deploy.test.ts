@@ -3065,6 +3065,86 @@ export const backfillNames = defineMigration({
                 expect(puts.every((call) => /^[a-f0-9]{64}$/u.test(call.descriptor.input ?? ""))).toBe(true);
             });
 
+            it("records every key a failed bulk push carried when the per-key retry also stops, naming the uncertain ones", async () => {
+                expect.assertions(6);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="local"\n', "utf8");
+
+                const calls: RecordedSpawn[] = [];
+                let puts = 0;
+                // Bulk fails, the first put lands, the second fails — as when auth
+                // expires mid-retry after a bulk request whose outcome is unknown.
+                const spawner: Spawner = (descriptor) => {
+                    calls.push({ descriptor });
+
+                    if (descriptor.args.includes("bulk")) {
+                        return Promise.resolve({ code: 1 });
+                    }
+
+                    if (descriptor.args.join(" ").includes("secret put")) {
+                        puts += 1;
+
+                        return Promise.resolve({ code: puts === 2 ? 1 : 0 });
+                    }
+
+                    return Promise.resolve({ code: 0 });
+                };
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                const bulkBody = JSON.parse(calls.find((call) => call.descriptor.args.includes("bulk"))?.descriptor.input ?? "{}") as Record<string, string>;
+                const recorded = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+                expect(result.code).not.toBe(0);
+                expect(Object.keys(bulkBody).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["AUTH_SECRET", "LUNORA_ADMIN_TOKEN"]);
+                expect(recorded).toContain(`LUNORA_ADMIN_TOKEN="${bulkBody.LUNORA_ADMIN_TOKEN ?? "missing"}"`);
+                // The key whose put failed may still be live from the bulk request: its value is recorded too.
+                expect(recorded).toContain(`AUTH_SECRET="${bulkBody.AUTH_SECRET ?? "missing"}"`);
+                expect(warns.join("\n")).toMatch(/AUTH_SECRET: the failed bulk push may already have set/u);
+                expect(warns.join("\n")).not.toMatch(/LUNORA_ADMIN_TOKEN[^\n]*may already have set/u);
+            });
+
+            it("a re-deploy after an uncertain bulk push keeps the record of a key the target has and re-mints one it lacks", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const adminLine = `LUNORA_ADMIN_TOKEN="${"a".repeat(64)}"`;
+                const staleAuthLine = `AUTH_SECRET="${"b".repeat(64)}"`;
+
+                writeFileSync(join(workdir, ".dev.vars"), `${adminLine}\n${staleAuthLine}\n`, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    // The bulk request did set the admin token; AUTH_SECRET never reached the target.
+                    secretLister: () => Promise.resolve({ names: [...REGISTRY_SECRET_DEPLOYED, "LUNORA_ADMIN_TOKEN"], ok: true }),
+                    spawner,
+                });
+
+                const secretCalls = calls.filter((call) => /secret (?:put|bulk)/u.test(call.descriptor.args.join(" ")));
+                const recorded = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+                expect(result.code).toBe(0);
+                expect(secretCalls.map((call) => call.descriptor.args.join(" "))).toStrictEqual(["exec wrangler secret put AUTH_SECRET"]);
+                expect(recorded).toContain(adminLine);
+                expect(recorded).toContain(`AUTH_SECRET="${secretCalls[0]?.descriptor.input ?? "missing"}"`);
+            });
+
             it("scans the project once per deploy: each discovery result is computed a single time", async () => {
                 expect.assertions(3);
 
@@ -3375,6 +3455,28 @@ export default defineNotify({ fcm: ${fcmValue}, webPush: (env) => webPushFromEnv
 
                 expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: FCM_SERVICE_ACCOUNT\./u);
+            });
+
+            it("a staging deploy requires a secret-typed key declared only in .dev.vars.staging", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("staging"), "utf8");
+                writeFileSync(join(workdir, ".dev.vars.staging"), 'STRIPE_API_KEY="x"\n', "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "staging",
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: [...DEPLOYED_WITHOUT_FCM_KEYS, "FCM_SERVICE_ACCOUNT", "FCM_PROJECT_ID"], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: STRIPE_API_KEY\./u);
             });
 
             it("a staging deploy's missing-secret remediation names --env staging, not --prod", async () => {

@@ -1732,7 +1732,8 @@ lunora env unset FOO         # remove a key
 lunora env generate          # generate strong values for the project's secrets
 lunora env generate AUTH_SECRET --set  # generate one and write it into .dev.vars
 lunora env push              # upload to Cloudflare (prompts unless --yes)
-lunora env push --prod --yes # push to the production environment
+lunora env push --prod --yes # push .dev.vars.production to the production environment
+lunora env set --env staging FOO bar  # write .dev.vars.staging
 lunora env diff              # compare local .dev.vars keys against Cloudflare
 lunora env doctor            # validate .dev.vars against .dev.vars.example
 ```
@@ -1749,6 +1750,13 @@ add `--yes`.
 and reports which keys are local-only (need a `push`), remote-only, or in both.
 Cloudflare never returns secret **values** (they are write-only), so `diff`
 compares names, not values. Pass `--prod` to target the production environment.
+
+`--env <name>` (or `--prod`) switches every subcommand from `.dev.vars` to
+`.dev.vars.<name>` — the file `lunora deploy --env <name>` records generated
+secrets in — so a named environment is never pushed your local dev values.
+`push` fails when that file is missing; `--from-dev-vars` pushes the bare
+`.dev.vars` instead, but still refuses the keys Lunora generates
+(`LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`, …).
 
 ### `lunora export` / `lunora import`
 

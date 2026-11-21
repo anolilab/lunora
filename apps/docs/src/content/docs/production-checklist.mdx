@@ -47,8 +47,8 @@ Cloudflare Worker secrets, set per environment. `wrangler deploy` never pushes
 [Deployment → Secrets](/docs/deployment#secrets).
 
 - [ ] Every key in `.dev.vars.example` has a production value:
-      `wrangler secret put NAME --env production`, or push in bulk with
-      `lunora env push --prod`.
+      `wrangler secret put NAME --env production`, or push in bulk from
+      `.dev.vars.production` with `lunora env push --prod --yes`.
 - [ ] `LUNORA_RELAY_SECRET` is set on the Worker and on every Durable Object
       namespace whenever you run more than one shard, read replicas, an
       `EventLogDO`, or a shard registry. It signs the internal control channel

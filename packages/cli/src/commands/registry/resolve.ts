@@ -2,7 +2,7 @@
  * Resolving registry items/roots — the `--source` safety gate and the giget
  * fetch/staging layer shared by `add`, `list`, and `view`.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { LunoraError } from "@lunora/errors";
@@ -158,6 +158,12 @@ const resolveItemDirectory = async (
 
         if (!existsSync(directory)) {
             throw new LunoraError("INTERNAL", `registry item not found in local source: ${directory}`);
+        }
+
+        // A linked item directory would have its manifest and every declared
+        // file read from wherever the link points, past readItemFile's guard.
+        if (lstatSync(directory).isSymbolicLink()) {
+            throw new LunoraError("INTERNAL", `registry item "${name}": refusing to read "${name}" — it is a symlink, not a directory`);
         }
 
         return { cleanup: () => {}, directory };
