@@ -207,7 +207,11 @@ code.
 The gate has two jobs. On `POST` it decides who may start an upload. On every
 other method it must check that the upload in the URL belongs to the caller,
 because anyone who learns an upload's id could otherwise append to it, or cancel
-it. So record the owner when the upload is created. In an
+it. So record the owner when the upload is created. A TUS `POST` can also name
+other uploads: `Upload-Concat: final;<url> <url>` builds a new upload from
+finished partial ones, so a caller who knows another caller's partial upload
+could take its bytes into an upload of their own. The bundled client never
+sends `Upload-Concat`, so refuse a `POST` that carries it. In an
 [HTTP action](/docs/concepts/http-endpoints) the caller is already resolved on
 `ctx.auth`:
 
@@ -240,7 +244,8 @@ const upload = httpAction(async (ctx, request) => {
         maxFileSize: 2048 * MiB, // 2 GiB, the ceiling for any upload
         // Lower it per upload from the type the client declares.
         maxFileSizeFor: ({ contentType }) => (contentType.startsWith("image/") ? 10 * MiB : undefined),
-        authorize: async ({ method, url }) => method === "POST" || (await ctx.runQuery(internal.uploads.isOwner, { uploadId: uploadId(url), userId })),
+        authorize: async ({ method, request, url }) =>
+            method === "POST" ? !request.headers.has("upload-concat") : await ctx.runQuery(internal.uploads.isOwner, { uploadId: uploadId(url), userId }),
     });
     const response = await handler.fetch(request);
 
@@ -266,7 +271,9 @@ export default app;
 `internal.uploads.claim` and `internal.uploads.isOwner` are your own
 [internal functions](/docs/concepts/internal-functions) over an `uploads` table:
 one inserts `{ uploadId, userId }`, the other reports whether that row exists.
-The same table is where you check ownership before you serve the file.
+The same table is where you check ownership before you serve the file. On a
+`"chunked-rest"` route a `PUT` creates a file too, under a name the client
+picks: treat it like `POST` in the gate and claim the name once it succeeds.
 
 An upload's progress lives in the bucket, not in the Worker: one small state
 object per upload under `_lunora/uploads/`, written with conditional puts, so a

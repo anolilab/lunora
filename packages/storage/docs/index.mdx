@@ -398,6 +398,32 @@ A request carrying a method-override header (`X-HTTP-Method-Override`,
 The handler is also built with `allowMethodOverride: false`. Send each request
 with its real method; the bundled client does.
 
+The handler does not record who created an upload: binding an upload to its
+creator is `authorize`'s job, and it sees the upload id in `url`. On a create
+(`POST`, and the chunked-REST `PUT`) decide who may upload; on every other
+request check that the id in the URL belongs to the caller, or anyone who learns
+an id can append to the upload, read its offset, or cancel it. Refuse a TUS
+`POST` carrying `Upload-Concat` too: `final;<url> …` builds a new upload from
+finished partial ones named in the header, not the URL, and the bundled client
+never sends it. Record the owner from the create's `Location`, after the
+handler answers:
+
+```ts
+const handler = createUploadHandler({
+    storage,
+    authorize: async ({ method, request, url }) => (method === "POST" ? !request.headers.has("upload-concat") : await isOwner(uploadIdFrom(url), userId)),
+});
+const response = await handler.fetch(request);
+const location = response.headers.get("location");
+
+if (request.method === "POST" && response.ok && location !== null) {
+    await claim(uploadIdFrom(new URL(location, request.url)), userId);
+}
+```
+
+[File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
+has the full HTTP action, with `isOwner` and `claim` as internal functions.
+
 A `HEAD`, `PATCH` or TUS `DELETE` answers only for an upload the route
 created: an id without upload state is a `404`, whatever object the bucket
 holds under that key
