@@ -391,7 +391,7 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
 export const linkCreditsAccount = internalMutation
     .input({ creditsAccountId: v.string(), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { creditsAccountId, organizationId } }): Promise<void> => {
-        const organization = (await context.db.get("organizations", organizationId)) as null | (OrganizationRow & { creditsAccountId?: string });
+        const organization = await context.db.get("organizations", organizationId);
 
         if (!organization || organization.creditsAccountId != null) {
             return;
