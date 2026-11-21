@@ -85,6 +85,7 @@ type AuthAuditEvent =
     | "org-invitation-cancel"
     | "org-invitation-create"
     | "org-invitation-reject"
+    | "org-member-add"
     | "org-member-leave"
     | "org-member-remove"
     | "org-member-role-change"
@@ -121,6 +122,9 @@ type AuthAuditEvent =
     | "sign-in-initiated"
     | "sign-out"
     | "sign-up"
+    // The worker's admin plane managing an invite-only deployment's sign-up allow-list; the address is `targetEmail`.
+    | "sign-up-invitation-create"
+    | "sign-up-invitation-revoke"
     | "sso-provider-delete"
     | "sso-provider-register"
     | "sso-provider-update"
@@ -225,17 +229,19 @@ interface ReadAuthAuditOptions {
 const AUDIT_REDACT_RULES = [...standardRules, ...piiRules];
 
 /**
- * Detail keys that carry an identifier the hooks copied from a request, allow-listed by name. Value-based redaction
+ * Detail keys that carry an identifier the hooks or the worker's admin plane copied from a request, allow-listed by name. Value-based redaction
  * would replace a numeric id (a five-digit user id reads as a phone or code), so these keys skip it. Credentials and
  * emails never reach these keys: the hooks copy only the id fields named here.
  */
 const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
+    "accountId",
     "clientId",
     "consentId",
     "invitationId",
     "keyId",
     "memberId",
     "organizationId",
+    "passkeyId",
     "providerId",
     "resourceIdentifier",
     "role",
@@ -245,6 +251,7 @@ const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
     "scimUserId",
     "targetUserId",
     "teamId",
+    "teamMemberId",
 ]);
 
 /**
@@ -561,5 +568,36 @@ const createAuthAuditReader = (executor: SqlExecutor): AuthAuditReader => {
     };
 };
 
-export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable, readAuthAuditLog };
-export type { AppendAuthAuditEntry, AppendAuthAuditOptions, AuthAuditEntry, AuthAuditEvent, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditOptions };
+/**
+ * The audit write plane the runtime's `authAuditWriter` option accepts. The worker's admin plane calls
+ * better-auth's adapter directly, so its operations never pass through {@link appendAuthAuditEntry}'s
+ * better-auth hook; the admin routes record them through this instead.
+ */
+interface AuthAuditWriter {
+    write: (entry: AppendAuthAuditEntry) => Promise<void>;
+}
+
+/**
+ * Build the writer the runtime's `authAuditWriter` option accepts, closing over the auth D1 `executor`
+ * so admin-plane rows land in the same `__lunora_auth_audit__` table the hook writes, with the same
+ * `detail` redaction.
+ */
+const createAuthAuditWriter = (executor: SqlExecutor): AuthAuditWriter => {
+    return {
+        write: async (entry) => {
+            await appendAuthAuditEntry(executor, entry);
+        },
+    };
+};
+
+export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, createAuthAuditWriter, ensureAuthAuditTable, readAuthAuditLog };
+export type {
+    AppendAuthAuditEntry,
+    AppendAuthAuditOptions,
+    AuthAuditEntry,
+    AuthAuditEvent,
+    AuthAuditOutcome,
+    AuthAuditReader,
+    AuthAuditWriter,
+    ReadAuthAuditOptions,
+};

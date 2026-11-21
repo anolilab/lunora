@@ -4,7 +4,7 @@
 // `import { … } from "@lunora/auth"` elsewhere in the app initialise the whole barrel at startup.
 export { lunoraD1Adapter } from "./adapter";
 export { createAuthAdmin } from "./admin";
-export { createAuthAuditReader } from "./audit";
+export { createAuthAuditReader, createAuthAuditWriter } from "./audit";
 export { createAuth } from "./create-auth";
 export { authCredentialColumns, authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "./data-port";
 export { authDiscoveryPathsFor, handleAuthDiscoveryRequest } from "./discovery";
