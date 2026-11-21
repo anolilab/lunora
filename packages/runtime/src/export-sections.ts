@@ -916,10 +916,22 @@ const importSectionRows = async (options: WorkerOptions, rows: ReadonlyArray<Sec
 /** Is this a section's pseudo-table (vs. a schema table)? */
 const isSectionTable = (table: string): boolean => SECTION_TABLES.has(table);
 
+/**
+ * Does an import body move the auth tables? An `$auth` record does, and so does a
+ * header that declares the section without one: a replace then empties them.
+ */
+const carriesAuthSection = (rows: ReadonlyArray<SectionRow>): boolean =>
+    rows.some(
+        (row) =>
+            row.table === AUTH_TABLE ||
+            (row.table === HEADER_TABLE && Array.isArray(row.doc["sections"]) && (row.doc["sections"] as unknown[]).includes("auth")),
+    );
+
 export type { AuthDataPort, ExportSection, SectionRow, StorageRecord };
 export {
     assertSupportedHeader,
     AUTH_TABLE,
+    carriesAuthSection,
     DEFAULT_EXPORT_SECTIONS,
     EXPORT_FORMAT_VERSION,
     EXPORT_SECTIONS,

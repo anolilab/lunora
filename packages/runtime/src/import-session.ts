@@ -64,6 +64,7 @@ import type { ImportManifest, ImportStepResult } from "@lunora/shard-engine";
 
 import type { WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
+import { carriesAuthSection } from "./export-sections";
 import type { ReplaceSection, SessionRef, StagedSectionRow } from "./import-session-sections";
 import {
     commitSection,
@@ -82,6 +83,8 @@ import type { ShardNamespaceLike } from "./resolve-shard";
 
 /** Everything a session call needs: the worker's options, its coordinator, the pinned namespace, the forwarded admin headers and the audit sink. */
 interface ImportSessionContext {
+    /** Throws unless this request may move the auth tables (the root admin token only). */
+    assertAuthSectionAllowed: () => void;
     coordinator: QueryCoordinator;
     headers: Record<string, string>;
     namespace: ShardNamespaceLike;
@@ -301,6 +304,11 @@ const stageImport = async (request: Request, context: ImportSessionContext, sess
     }
 
     const bucket = await bucketImportStream(request, options, defaultShard, new Set(tables));
+
+    // Before the manifest is opened, so a refused batch stages nothing.
+    if (carriesAuthSection(bucket.sectionRows)) {
+        context.assertAuthSectionAllowed();
+    }
     const calls = new Map<string, { doc: Record<string, unknown>; line: number; table: string }[]>();
 
     for (const batch of bucket.perShard.values()) {
@@ -648,6 +656,11 @@ const commitImport = async (context: ImportSessionContext, session: string): Pro
 
     if (manifest === undefined) {
         throw sessionError("IMPORT_SESSION_NOT_FOUND", `import session "${session}" does not exist or has expired`);
+    }
+
+    // The commit body names only the session, and whoever staged it may hold more authority than whoever commits it.
+    if (manifest.sections.includes("auth")) {
+        context.assertAuthSectionAllowed();
     }
 
     if (manifest.state === "committed") {
