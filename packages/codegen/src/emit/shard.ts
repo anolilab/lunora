@@ -856,6 +856,10 @@ ${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
         protected override isPaidFunction(functionPath: string): boolean {
             return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
         }
+
+        protected override isPerDispatchFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.perDispatch === true;
+        }
 `;
     const prepareFunctionOverride = lazyFunctions
         ? `

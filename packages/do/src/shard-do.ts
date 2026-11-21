@@ -1800,6 +1800,16 @@ const paidSocketRefusal = (functionPath: string, verb: "streamed" | "subscribed"
     `paid (\`.x402\`) function "${functionPath}" cannot be ${verb}; call it individually over /_lunora/rpc`;
 
 /**
+ * The refusal a query with per-dispatch middleware (`rateLimit(...)`, Turnstile)
+ * gets on `subscribe`. A live query re-runs its whole `.use()` chain on the seed
+ * and on every refresh, including refreshes caused by someone else's write, so
+ * each one would charge the subscriber's limiter budget or replay a single-use
+ * token. Shared by the `subscribe` gate and the refresh sweep.
+ */
+const perDispatchSubscriptionRefusal = (functionPath: string): string =>
+    `query "${functionPath}" runs per-dispatch middleware (rate limit, Turnstile), so it cannot be subscribed to; call it as a one-off query, or move the check to a mutation`;
+
+/**
  * What the client is told when a socket cannot take another registration.
  *
  * Both refusals name the limit AND a way around it. An app only ever meets one
@@ -6413,6 +6423,19 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether `functionPath`'s `.use()` chain carries a per-dispatch middleware
+     * (`perDispatch` on the registered function). `subscribe` refuses such a
+     * query: a live query re-runs the chain on every refresh, and the effect —
+     * limiter budget, a single-use token — must happen once per request. The
+     * base class has no function registry, so the default is `false`; the
+     * codegen-generated subclass answers from `LUNORA_FUNCTIONS`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isPerDispatchFunction(_functionPath: string): boolean {
+        return false;
+    }
+
+    /**
      * The argument names of `functionPath` whose validators carry a `v.sensitive`
      * marker. The request log replaces them before anything is persisted, logged or
      * shipped, so a marked value survives neither the durable row nor a dev
@@ -6507,12 +6530,15 @@ abstract class ShardDO {
      * serialize. We never throw out of this path — the WS hibernation API
      * treats a thrown `webSocketMessage` as a fatal-channel error.
      *
-     * The `paid` refusal sits here rather than at the envelope so every
-     * registration path — not only the `subscribe` frame — goes through it.
+     * The `paid` and `per_dispatch` refusals sit here rather than at the
+     * envelope so every registration path — not only the `subscribe` frame —
+     * goes through them.
      */
-    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many" {
-        if (query.functionPath !== undefined && this.isPaidFunction(query.functionPath)) {
-            return "paid";
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "per_dispatch" | "serialize_failed" | "too_many" {
+        const refusal = query.functionPath === undefined ? undefined : this.liveQueryRefusal(query.functionPath);
+
+        if (refusal !== undefined) {
+            return refusal.status;
         }
 
         const attachment = this.readAttachmentCopy(ws);
@@ -8832,6 +8858,7 @@ abstract class ShardDO {
                 // subscription (seed + every poke) cannot be.
                 const { code, message: errorMessage } = {
                     paid: { code: "BAD_REQUEST", message: paidSocketRefusal(String(functionPath), "subscribed") },
+                    per_dispatch: { code: "BAD_REQUEST", message: perDispatchSubscriptionRefusal(String(functionPath)) },
                     serialize_failed: {
                         code: "SUBSCRIPTION_PERSIST_FAILED",
                         message: subscriptionRefusal("size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
@@ -9812,6 +9839,19 @@ abstract class ShardDO {
         this.currentRequestTrace = scope.trace;
         this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
+    }
+
+    /** Why `functionPath` may not be held as a live subscription, or `undefined` when it may; shared by `subscribe` and the refresh sweep. */
+    private liveQueryRefusal(functionPath: string): { message: string; status: "paid" | "per_dispatch" } | undefined {
+        if (this.isPaidFunction(functionPath)) {
+            return { message: paidSocketRefusal(functionPath, "subscribed"), status: "paid" };
+        }
+
+        if (this.isPerDispatchFunction(functionPath)) {
+            return { message: perDispatchSubscriptionRefusal(functionPath), status: "per_dispatch" };
+        }
+
+        return undefined;
     }
 
     /**
@@ -15118,14 +15158,18 @@ abstract class ShardDO {
 
                 const { functionPath } = query;
 
-                // A subscription registered BEFORE the procedure was paywalled
-                // is still sitting in this socket's hibernated attachment, and
-                // the registration-time gate in `subscribe` can no longer see
-                // it. Without this it keeps being re-run and pushed on every
-                // write for the life of the socket — the paid result, free.
-                if (this.isPaidFunction(functionPath)) {
+                // A subscription registered BEFORE the procedure was paywalled,
+                // or gained a `rateLimit(...)` / Turnstile step, is still sitting
+                // in this socket's hibernated attachment, and the
+                // registration-time gate in `subscribe` can no longer see it.
+                // Without this it keeps being re-run on every write for the life
+                // of the socket — the paid result served free, or the
+                // subscriber charged for writes it did not make.
+                const refusal = this.liveQueryRefusal(functionPath);
+
+                if (refusal !== undefined) {
                     this.unsubscribe(ws, subId);
-                    this.sendSubscriptionError(ws, subId, "BAD_REQUEST", paidSocketRefusal(functionPath, "subscribed"));
+                    this.sendSubscriptionError(ws, subId, "BAD_REQUEST", refusal.message);
 
                     continue;
                 }

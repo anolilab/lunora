@@ -86,6 +86,18 @@ describe("emitShard — reactive cache wiring", () => {
         );
     });
 
+    it("overrides isPerDispatchFunction against the generated registry", () => {
+        expect.assertions(1);
+
+        // The base answers `false`, so without this override a `.use(rateLimit(...))`
+        // query subscribed over the WebSocket re-runs its chain on every refresh and
+        // charges the subscriber for writes it did not make.
+        expect(emitShard({ schema: { tables: [], vectorIndexes: [] } })).toContain(
+            // eslint-disable-next-line no-secrets/no-secrets -- false positive: generated-code text asserted verbatim, not a credential
+            "protected override isPerDispatchFunction(functionPath: string): boolean {\n            return LUNORA_FUNCTIONS[functionPath]?.perDispatch === true;",
+        );
+    });
+
     it("does not wrap handleRpc dispatch in runCachedQuery — the base /rpc path already does", () => {
         expect.assertions(1);
 
