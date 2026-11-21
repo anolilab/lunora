@@ -18,6 +18,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { normalizeCountArgument } from "./aggregate-sql";
 import { findRelated } from "./relation-graph";
 import type { DatabaseWriterLike, RelatedOptions, RelatedStart, RelationEdge } from "./schema-types";
 
@@ -46,9 +47,10 @@ const RLS_RELATION_GATE_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-relation-g
 
 /**
  * Reads whose args can load relation children (`with`, `_count`) or filter by
- * them, all through the args' `relationBaseWhere`.
+ * them, all through the args' `relationBaseWhere`. `count` is gated separately
+ * because its argument may be a bare `where` rather than an options bag.
  */
-const RELATION_READ_METHODS: ReadonlySet<string> = new Set(["findFirst", "findFirstOrThrow", "findMany"]);
+const RELATION_READ_METHODS: ReadonlySet<string> = new Set(["aggregate", "findFirst", "findFirstOrThrow", "findMany", "groupBy"]);
 
 /**
  * Thrown when a raw (non-RLS) handler touches a protected table under a
@@ -506,8 +508,8 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
     const withRelationGate = (rest: unknown[]): unknown[] => {
         const [args, ...more] = rest;
 
-        // Only a `with` or a `where` can name a relation; anything else passes through untouched.
-        if (args === null || typeof args !== "object" || !("with" in args || "where" in args)) {
+        // Only a `with` or a filter can name a relation; anything else passes through untouched.
+        if (args === null || typeof args !== "object" || !("with" in args || "where" in args || "baseWhere" in args)) {
             return rest;
         }
 
@@ -520,16 +522,42 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
         return [{ ...args, relationBaseWhere: relationGate(relationBaseWhere) }, ...more];
     };
 
+    // Normalized the way the writer will read it, so a bare `where` becomes the
+    // options bag that can carry the gate.
+    const withCountRelationGate = (rest: unknown[]): unknown[] => {
+        const [whereOrArgs, ...more] = rest;
+
+        if (whereOrArgs === undefined) {
+            return rest;
+        }
+
+        const countArgs = normalizeCountArgument(whereOrArgs as Parameters<typeof normalizeCountArgument>[0]);
+
+        if (countArgs.relationBaseWhere !== undefined || (countArgs.where === undefined && countArgs.baseWhere === undefined)) {
+            return rest;
+        }
+
+        return [{ ...countArgs, relationBaseWhere: relationGate(undefined) }, ...more];
+    };
+
+    const gateRelationsFor = (name: string): ((rest: unknown[]) => unknown[]) | undefined => {
+        if (name === "count") {
+            return withCountRelationGate;
+        }
+
+        return RELATION_READ_METHODS.has(name) ? withRelationGate : undefined;
+    };
+
     for (const name of LOOP_GATED_METHODS) {
         const method = methods[name];
 
         if (typeof method === "function") {
-            const gateRelations = RELATION_READ_METHODS.has(name);
+            const gateRelations = gateRelationsFor(name);
 
             guarded[name] = (tableName: string, ...rest: unknown[]) => {
                 guardTable(tableName);
 
-                return method.call(base, tableName, ...(gateRelations ? withRelationGate(rest) : rest));
+                return method.call(base, tableName, ...(gateRelations ? gateRelations(rest) : rest));
             };
         }
     }
