@@ -1377,8 +1377,13 @@ public final class Client {
             }
 
             if (current != null) {
-                current.send(buildUnsubscribeFrame(id));
-                sendResubscribes(current, batch, false);
+                // The batch holds slots this call claimed: a failed unsubscribe write must not
+                // strand it.
+                try {
+                    current.send(buildUnsubscribeFrame(id));
+                } finally {
+                    sendResubscribes(current, batch, false);
+                }
             }
         };
     }
@@ -1657,9 +1662,25 @@ public final class Client {
             }
         } catch (RuntimeException failure) {
             synchronized (lock) {
-                for (Resubscribe unsent : batch.subList(sent, batch.size())) {
-                    if (unsent.wasPoisoned()) {
-                        unsent.subscription().poisoned = true;
+                // A replaced socket's resend owns these now: its replay must not be refrozen, and
+                // its queue is not this one's to refill.
+                if (sender == socket) {
+                    List<Resubscribe> unsent = batch.subList(sent, batch.size());
+
+                    for (Resubscribe entry : unsent) {
+                        if (entry.wasPoisoned()) {
+                            entry.subscription().poisoned = true;
+                        }
+
+                        resubscribeSlots.remove(entry.id());
+                    }
+
+                    // Back to the front of the line, in order, or nothing would ever send them on
+                    // a socket that stays open.
+                    for (int index = unsent.size() - 1; index >= 0; index--) {
+                        if (subscriptions.containsKey(unsent.get(index).id())) {
+                            resubscribeQueue.addFirst(unsent.get(index).id());
+                        }
                     }
                 }
             }
@@ -1690,7 +1711,7 @@ public final class Client {
     }
 
     /**
-     * Re-subscribes every query whose retry hint/ has come due at {@link System#nanoTime}, and
+     * Re-subscribes every query whose retry hint has come due at {@link System#nanoTime}, and
      * returns how many frames it sent. Nothing is sent, and nothing is dropped, while no socket is
      * attached. The caller arms its own timer for {@link #nextSubscriptionRetryAtNanos}.
      *
@@ -1792,8 +1813,14 @@ public final class Client {
         List<Resubscribe> batch;
 
         synchronized (lock) {
-            resubscribeSlots.values().removeIf(deadline -> deadline - nowNanos <= 0);
-            batch = takeResubscribes(nowNanos);
+            // A socket attached while the frames above were written has its own pacing, which this
+            // run must neither expire nor drain onto the socket it captured.
+            if (sender == socket) {
+                resubscribeSlots.values().removeIf(deadline -> deadline - nowNanos <= 0);
+                batch = takeResubscribes(nowNanos);
+            } else {
+                batch = List.of();
+            }
         }
 
         sendResubscribes(socket, batch, true);

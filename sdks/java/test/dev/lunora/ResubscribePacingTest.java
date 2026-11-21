@@ -28,6 +28,9 @@ final class ResubscribePacingTest {
         reconnectMidDrainStartsAFreshWindow();
         queuedOneCarriesTheCursorItHasWhenItGoesOut();
         failedPacedSendFromAFrameDoesNotThrow();
+        failedSendPutsTheUnsentOnesBackInLine();
+        failedUnsubscribeWriteStillSendsTheBatchItFreed();
+        retryAcrossASocketSwapLeavesTheNewQueueAlone();
         shapeSubscriptionsAreNotPaced();
     }
 
@@ -265,6 +268,127 @@ final class ResubscribePacingTest {
         }
 
         check(!threw, "a paced send that fails must not escape the frame handler");
+    }
+
+    private static void failedSendPutsTheUnsentOnesBackInLine() {
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {}, null);
+
+        for (int index = 0; index < SUBSCRIPTIONS; index++) {
+            subscribeTo(client, index);
+        }
+
+        List<Map<String, Object>> sent = new ArrayList<>();
+        boolean[] broken = {true};
+
+        client.attachSocket(
+                frame -> {
+                    if ("sub_2".equals(frame.get("id")) && broken[0]) {
+                        broken[0] = false;
+
+                        throw new IllegalStateException("write failed");
+                    }
+
+                    sent.add(frame);
+                },
+                null);
+        sent.clear();
+
+        boolean threw = false;
+
+        try {
+            client.resendSubscriptions();
+        } catch (IllegalStateException expected) {
+            threw = true;
+        }
+
+        check(threw, "the caller's own resend reports the failed write");
+
+        for (int answered = 0; answered < subscribes(sent).size(); answered++) {
+            client.handleFrame(ack(subscribes(sent).get(answered)));
+        }
+
+        check(
+                new HashSet<>(subscribes(sent)).size() == SUBSCRIPTIONS,
+                "every subscription must still go out after a failed write, got "
+                        + subscribes(sent));
+    }
+
+    private static void failedUnsubscribeWriteStillSendsTheBatchItFreed() {
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {}, null);
+
+        List<Runnable> unsubscribes = new ArrayList<>();
+
+        for (int index = 0; index < 5; index++) {
+            unsubscribes.add(subscribeTo(client, index));
+        }
+
+        List<Map<String, Object>> sent = new ArrayList<>();
+
+        client.attachSocket(
+                frame -> {
+                    if ("unsubscribe".equals(frame.get("type"))) {
+                        throw new IllegalStateException("write failed");
+                    }
+
+                    sent.add(frame);
+                },
+                null);
+        sent.clear();
+        client.resendSubscriptions();
+
+        try {
+            unsubscribes.get(0).run();
+        } catch (IllegalStateException expected) {
+            // The unsubscribe write itself is the caller's to see.
+        }
+
+        check(
+                subscribes(sent).contains("sub_4"),
+                "the batch a failed unsubscribe freed must still go out, got " + subscribes(sent));
+    }
+
+    private static void retryAcrossASocketSwapLeavesTheNewQueueAlone() {
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {}, null);
+
+        for (int index = 0; index < 5; index++) {
+            subscribeTo(client, index);
+        }
+
+        List<Map<String, Object>> old = new ArrayList<>();
+        List<Map<String, Object>> fresh = new ArrayList<>();
+        boolean[] swapped = {false};
+
+        // The socket is replaced while the retry's own frame is being written to the old one.
+        client.attachSocket(
+                frame -> {
+                    old.add(frame);
+
+                    if ("sub_5".equals(frame.get("id")) && !swapped[0]) {
+                        swapped[0] = true;
+                        client.detachSocket(null, null);
+                        client.attachSocket(fresh::add, null);
+                        client.resendSubscriptions();
+                    }
+                },
+                null);
+        client.resendSubscriptions();
+        client.handleFrame(
+                "{\"error\":{\"code\":\"OVERLOADED\",\"message\":\"busy\",\"retryAfterMs\":0},"
+                        + "\"id\":\"sub_5\",\"type\":\"error\"}");
+
+        client.retryDueSubscriptions(System.nanoTime() + 2 * Client.RESUBSCRIBE_ACK_TIMEOUT_NANOS);
+
+        check(swapped[0], "the retry must have reached the old socket");
+        check(
+                !subscribes(old).contains("sub_4"),
+                "the new socket's queue must not be drained onto the old one, got "
+                        + subscribes(old));
     }
 
     private static void shapeSubscriptionsAreNotPaced() {
