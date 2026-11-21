@@ -89,6 +89,37 @@ describe("createWorker — workpool slot release", () => {
         expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
     });
 
+    it("keeps the slot when the shard declines the dispatch in-progress, but not on a handler's own 409", async () => {
+        expect.assertions(4);
+
+        const answers = [
+            // The claim path's decline: the record's first attempt is still running, and its completion is still coming.
+            Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "running" } }, { headers: { "x-lunora-dispatch-declined": "1" }, status: 409 }),
+            // A handler that threw the same code itself: a real failure, so the slot is freed.
+            Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "nested" } }, { status: 409 }),
+        ];
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return { fetch: async () => answers.shift() ?? Response.json({ result: null }) };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO });
+
+        const declined = await dispatch(worker, { args: {}, functionPath: "jobs:sync", id: "job-busy", pool: "sync" });
+
+        expect(declined.status).toBe(409);
+        expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(0);
+
+        const failed = await dispatch(worker, { args: {}, functionPath: "jobs:sync", id: "job-busy", pool: "sync" });
+
+        expect(failed.status).toBe(409);
+        expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
+    });
+
     it("does not call /complete for a non-pooled job", async () => {
         expect.assertions(1);
 

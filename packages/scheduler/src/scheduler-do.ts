@@ -1314,7 +1314,8 @@ class SchedulerDO {
      * apply the workpool concurrency gate, dispatch, and settle the result.
      * A saturated pool re-arms the job (backpressure, no attempt charged); a
      * free slot is reserved durably before dispatch and released immediately if
-     * the kick fails (success holds it until the runtime reports completion).
+     * the kick fails (success holds it until the runtime reports completion, and
+     * an in-progress decline holds it for the attempt still running).
      * Success clears the `id:`/`retry:` rows; failure routes to
      * {@link recordRetry}. Pool state is read FRESH from storage per record (see
      * {@link reservePoolSlot}) and never held across the dispatch() await, so a
@@ -1340,8 +1341,13 @@ class SchedulerDO {
         const outcome = await this.dispatch(record);
         const ok = outcome === true;
         const poolName = record.pool;
+        // A decline means the record's first attempt is still running, and that attempt's own
+        // completion releases the slot (or, if its receiver was cut off, this record's next
+        // re-fire does). Freeing it now would let another job take it while that attempt runs
+        // past `maxConcurrency`. A record cancelled meanwhile will not re-fire, so it is freed.
+        const declined = outcome === "in-progress" && !this.cancelledLeases.has(record.id);
 
-        if (!ok && poolName !== undefined) {
+        if (!ok && !declined && poolName !== undefined) {
             // The kick itself failed: no completion callback is coming, so free
             // the reserved slot immediately. recordRetry() then re-arms the job.
             // Re-load the pool row FRESH from storage rather than reusing a copy
@@ -1440,6 +1446,15 @@ class SchedulerDO {
         const reserved = await this.withPoolLock(async () => {
             const pool = await this.loadPool(poolName);
 
+            // Re-entry before the cap: a record still holding its slot (an earlier attempt was
+            // declined in-progress, and that slot is kept until the attempt settles) counts
+            // against the cap itself, so checking the cap first would backpressure its own
+            // re-fire forever — and that re-fire is what releases the slot when the first
+            // attempt's receiver never reports back.
+            if (pool.inFlightIds?.includes(record.id) === true) {
+                return true;
+            }
+
             if (pool.inFlight >= pool.maxConcurrency) {
                 return false;
             }
@@ -1451,10 +1466,7 @@ class SchedulerDO {
             // can't over-release.
             const ids: string[] = pool.inFlightIds ?? [];
 
-            if (!ids.includes(record.id)) {
-                ids.push(record.id);
-            }
-
+            ids.push(record.id);
             pool.inFlightIds = ids;
             pool.inFlight = ids.length;
             await this.savePool(poolName, pool);
@@ -1720,6 +1732,26 @@ class SchedulerDO {
 
         // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; emit via console so the host captures dead-letter parks
         console.warn(`@lunora/scheduler: job "${record.id}" (${record.functionPath ?? record.workflow ?? "unknown"}) parked in dead-letter ${reason}`);
+    }
+
+    /**
+     * Release `record`'s slot if it holds one. Only the id set can say so: a row persisted before
+     * `inFlightIds` existed is left alone, since a blind decrement there could free another job's slot.
+     */
+    private async releaseHeldSlot(record: ScheduleRecord): Promise<void> {
+        const poolName = record.pool;
+
+        if (poolName === undefined) {
+            return;
+        }
+
+        await this.withPoolLock(async () => {
+            const pool = await this.loadPool(poolName);
+
+            if (pool.inFlightIds?.includes(record.id) === true) {
+                await this.savePool(poolName, SchedulerDO.releaseSlot(pool, record.id));
+            }
+        });
     }
 
     /** Read the durable `pool:<name>` row, defaulting to a fresh `inFlight: 0` pool. */
@@ -2073,18 +2105,22 @@ class SchedulerDO {
             return SchedulerDO.json({ cancelled: false });
         }
 
+        // Read before removeRecord(), which does not touch the lease map but marks the record cancelled.
+        const inFlightHere = this.activeLeases.has(record.id);
+
         await this.removeRecord(record);
         // The cancel already took effect; a failed outcome write costs only the history row.
         await this.writeTerminal(record, "canceled").catch(() => undefined);
         await this.sweepTerminal().catch(() => undefined);
-        // NOTE: cancel never releases a pool slot. A queued job holds none; a
-        // job whose dispatch is in flight (its header survives until the kick
-        // returns) keeps its slot until drainRecord() releases it on a failed
-        // kick or /complete does on success — and removeRecord() has marked it in
-        // `cancelledLeases`, so neither outcome re-arms it. (A dispatched-but-
-        // never-completed job's slot is freed only by /complete; a pool slot has
-        // no expiry — unlike the dispatch claim, see DISPATCH_LEASE_MS — and that
-        // is a known limitation.)
+
+        // A pending record can still hold a slot: one kept after an in-progress decline, whose
+        // next re-fire was going to be its release. Cancelled, it never re-fires, so release it
+        // here. A record whose dispatch is in flight on this instance is left to drainRecord(),
+        // which sees the outcome: a kick that went through keeps the slot until /complete.
+        if (!inFlightHere) {
+            await this.releaseHeldSlot(record);
+        }
+
         await this.rescheduleAlarm();
         await this.broadcastChange();
 
