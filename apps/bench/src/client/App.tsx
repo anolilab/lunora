@@ -1,6 +1,6 @@
-import { useMutation, useQuery } from "@lunora/react";
+import { useLunora, useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
 import type { Id } from "../../lunora/_generated/dataModel";
@@ -209,16 +209,39 @@ const CreateOrganization = (): ReactElement => {
 const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId: string }): ReactElement => {
     // Every org-scoped call names the tenant's shard; `authorizeShard` refuses any other.
     const shard = { shardKey: organizationId };
-    const tasks = useQuery(api.tasks.list, {}, shard);
+    const client = useLunora();
+    const [tasks, setTasks] = useState<Awaited<ReturnType<typeof client.query<typeof api.tasks.list>>> | undefined>(undefined);
+    // Bumped after each write so the list is fetched again.
+    const [listVersion, setListVersion] = useState(0);
     const { mutate: create } = useMutation(api.tasks.create);
     const { mutate: update } = useMutation(api.tasks.update);
     const [error, setError] = useState<string | undefined>(undefined);
+
+    // A one-off query, not `useQuery`: `tasks.list` is an `orgQuery`, whose
+    // `rateLimit` step makes the shard refuse a live subscription to it.
+    useEffect(() => {
+        const controller = new AbortController();
+
+        client
+            .query(api.tasks.list, {}, { shardKey: organizationId, signal: controller.signal })
+            .then(setTasks)
+            .catch((error_: unknown) => {
+                if (!controller.signal.aborted) {
+                    setError(error_ instanceof Error ? error_.message : "The tasks could not be loaded. Try again.");
+                }
+            });
+
+        return () => {
+            controller.abort();
+        };
+    }, [client, organizationId, listVersion]);
 
     // `mutate` rejects when the write is refused; without the catch the failure would vanish.
     const submit = async (form: FormData): Promise<void> => {
         try {
             await create({ labels: [], title: field(form, "title") }, shard);
             setError(undefined);
+            setListVersion((version) => version + 1);
         } catch (error_) {
             setError(error_ instanceof Error ? error_.message : "The task could not be created. Try again.");
         }
@@ -228,6 +251,7 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
         try {
             await update({ id, status: "done" }, shard);
             setError(undefined);
+            setListVersion((version) => version + 1);
         } catch (error_) {
             setError(error_ instanceof Error ? error_.message : "The task could not be updated. Try again.");
         }
