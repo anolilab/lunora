@@ -24,7 +24,15 @@
         "reason": "pending conversion"
     },
     {
+        "file": "packages/cli/__tests__/util/tui-tasks-settle.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
         "file": "packages/client/__tests__/auth-identity-subject.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/baseline-cursor.test.ts",
         "reason": "pending conversion"
     },
     {
@@ -33,6 +41,10 @@
     },
     {
         "file": "packages/client/__tests__/cross-tab-session-change.test.ts",
+        "reason": "pending conversion"
+    },
+    {
+        "file": "packages/client/__tests__/cross-tab.test.ts",
         "reason": "pending conversion"
     },
     {
@@ -56,8 +68,16 @@
         "reason": "pending conversion"
     },
     {
+        "file": "packages/db/__tests__/scoped-mutators.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
         "file": "packages/do/__tests__/shard-do.durable-stream.test.ts",
         "reason": "pending conversion"
+    },
+    {
+        "file": "packages/do/__tests__/shard-do.idempotency.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
     },
     {
         "file": "packages/do/__tests__/shard-do.room.test.ts",
@@ -80,6 +100,14 @@
         "reason": "pending conversion"
     },
     {
+        "file": "packages/platform-node/__tests__/node-http-server.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
+        "file": "packages/platform-node/__tests__/websocket-upgrade.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
+    },
+    {
         "file": "packages/platform/__tests__/reference-host-transaction.test.ts",
         "reason": "pending conversion"
     },
@@ -88,8 +116,16 @@
         "reason": "pending conversion"
     },
     {
+        "file": "packages/react/__tests__/paginated-core-gc.test.tsx",
+        "reason": "pending conversion"
+    },
+    {
         "file": "packages/react/__tests__/use-mutation.test.tsx",
         "reason": "pending conversion"
+    },
+    {
+        "file": "packages/replica/__tests__/runtime-edges.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
     },
     {
         "file": "packages/replica/__tests__/sync-events.test.ts",
@@ -98,6 +134,10 @@
     {
         "file": "packages/runtime/__tests__/query-coordinator.test.ts",
         "reason": "pending conversion"
+    },
+    {
+        "file": "packages/shard-engine/__tests__/relay-hub.test.ts",
+        "reason": "a real-clock timeout sentinel in a race, pending conversion"
     },
     {
         "file": "packages/studio/__tests__/app/platform-capability-gate.test.tsx",

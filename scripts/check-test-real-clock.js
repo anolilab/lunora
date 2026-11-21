@@ -20,10 +20,14 @@ import { fileURLToPath } from "node:url";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const baselinePath = join(rootDir, "scripts", "test-real-clock.baseline.json");
 
-const PATTERNS = [/sleep\([0-9]{2,}\)/u, /setTimeout\((?:resolve|r), [0-9]{2,}\)/u];
+// A delay of two or more digits, `_` separators allowed (lint requires them from five digits up),
+// or a named one (a `settle(ms = 25)` helper); a third argument passes a value to resolve with.
+const DELAY = String.raw`(?:[0-9]{2}[0-9_]*|[A-Za-z_$][\w$]*)`;
+const PATTERNS = [new RegExp(String.raw`sleep\([0-9]{2}[0-9_]*\)`, "u"), new RegExp(String.raw`setTimeout\((?:resolve|r), ${DELAY}[,)]`, "u")];
 const TEST_FILE = /\.test\.tsx?$/u;
+const SKIPPED_DIRS = new Set(["dist", "node_modules", "workerd"]);
 
-/** Every test file under `dir`, skipping the `workerd` suites (they run in a real runtime where a clock is the point). */
+/** Every test file under `dir`, skipping the `workerd` suites (they run in a real runtime where a clock is the point) and build output. */
 const walk = (dir) => {
     const found = [];
 
@@ -31,7 +35,7 @@ const walk = (dir) => {
         const path = join(dir, entry.name);
 
         if (entry.isDirectory()) {
-            if (entry.name !== "workerd" && entry.name !== "node_modules") {
+            if (!SKIPPED_DIRS.has(entry.name)) {
                 found.push(...walk(path));
             }
         } else if (TEST_FILE.test(entry.name)) {
@@ -44,25 +48,19 @@ const walk = (dir) => {
 
 const flagged = new Set();
 
-for (const pkg of readdirSync(join(rootDir, "packages"), { withFileTypes: true })) {
-    if (!pkg.isDirectory()) {
-        continue;
-    }
+// Whole package and app trees: a test kept beside its source (`src/x.test.ts`) is a test too.
+for (const parent of ["apps", "packages"]) {
+    for (const entry of readdirSync(join(rootDir, parent), { withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
 
-    let files = [];
+        for (const path of walk(join(rootDir, parent, entry.name))) {
+            const source = readFileSync(path, "utf8");
 
-    try {
-        files = walk(join(rootDir, "packages", pkg.name, "__tests__"));
-    } catch {
-        // A package without a `__tests__` directory has nothing to check.
-        continue;
-    }
-
-    for (const path of files) {
-        const source = readFileSync(path, "utf8");
-
-        if (PATTERNS.some((pattern) => pattern.test(source))) {
-            flagged.add(relative(rootDir, path).split("\\").join("/"));
+            if (PATTERNS.some((pattern) => pattern.test(source))) {
+                flagged.add(relative(rootDir, path).split("\\").join("/"));
+            }
         }
     }
 }
@@ -73,7 +71,7 @@ const problems = [];
 for (const file of [...flagged].sort()) {
     if (!baseline.has(file)) {
         problems.push(
-            `${file}: waits on the real clock. Wait on a milestone or inject the clock instead (see plans/544-tests-wait-on-milestones.md); if it truly cannot, add it to scripts/test-real-clock.baseline.json with a reason.`,
+            `${file}: waits on the real clock. Wait on a milestone or inject the clock instead (see "Tests wait on a milestone, never on a clock" in AGENTS.md); if it truly cannot, add it to scripts/test-real-clock.baseline.json with a reason.`,
         );
     }
 }
