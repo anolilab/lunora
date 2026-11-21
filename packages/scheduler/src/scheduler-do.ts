@@ -578,6 +578,15 @@ class SchedulerDO {
     }
 
     /**
+     * `<id>-<enqueuedAt>`: `-` keeps it inside the workflow engine's instance-id grammar
+     * (`^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`), and a 64-char id plus a millisecond stamp stays well
+     * under its 100-char ceiling. A row without a usable `enqueuedAt` keeps the bare id.
+     */
+    private static dedupKey(record: ScheduleRecord): string {
+        return Number.isSafeInteger(record.enqueuedAt) && record.enqueuedAt > 0 ? `${record.id}-${String(record.enqueuedAt)}` : record.id;
+    }
+
+    /**
      * Idempotently release the slot held by `jobId`, returning the updated
      * {@link PoolState} (pure — the caller persists it). A duplicate release for
      * an id that no longer holds a slot is a no-op, so an at-least-once
@@ -950,6 +959,12 @@ class SchedulerDO {
 
         const body = JSON.stringify({
             args: record.args,
+            // The receiver's replay-dedup key (shard mutation id, workflow instance id). The record
+            // id alone is not enough: it is free again once its job settles, and the shard keeps a
+            // dedup row for a day, so a job scheduled under a reused id would be answered from the
+            // previous job's result. `enqueuedAt` is stamped once per scheduling and carried through
+            // every retry, so a re-fire of this record still collapses onto its first attempt.
+            dedupKey: SchedulerDO.dedupKey(record),
             functionPath: record.functionPath,
             id: record.id,
             // Echoed so the receiver can call back the SAME DO instance.
@@ -1009,8 +1024,8 @@ class SchedulerDO {
             // Success is an explicit 2xx only. A 404 (receiver route missing),
             // any other 4xx, or a 5xx is NOT treated as done — the caller
             // (alarm()) keeps the record and routes it through recordRetry()
-            // rather than deleting it. A re-fire is deduplicated by the record
-            // id: the receiver spends it as the shard's replay-dedup
+            // rather than deleting it. A re-fire is deduplicated by `dedupKey`:
+            // the receiver spends it as the shard's replay-dedup
             // `mutationId` for a function target and as the WORKFLOW INSTANCE id
             // for a `workflow` target. Retry-after-failure is the easy case —
             // this attempt is over before the next begins, so the dedup row (or
@@ -2778,7 +2793,7 @@ class SchedulerDO {
      * older build — where nothing was dispatched and firing immediately is
      * exactly right.
      *
-     * The dispatch is deduplicated by the record id, which the receiver spends
+     * The dispatch is deduplicated by the record's `dedupKey`, which the receiver spends
      * as `x-lunora-mutation-id` for a function target and as the workflow
      * INSTANCE id for a `workflow` target. A mutation's dedup read runs inside
      * the shard's single-writer gate, so a mutation is exactly-once even under a
