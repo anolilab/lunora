@@ -24,7 +24,10 @@ import { defineConfig } from "vitest/config";
  * imports `vitest/suite` and reads the benches from that vitest copy, so a package
  * that resolves a different vitest (`@lunora/vite`, on Vite 8, gets its own peer
  * variant) must pass the plugin from its own config, or every bench fails in
- * CodSpeed CI with "fn is not a function".
+ * CodSpeed CI with "fn is not a function". Passing it does not help when only an
+ * optional peer of vitest splits the variant (a package pinning another
+ * `@noble/hashes` than jsdom's): pnpm still dedupes the plugin to the root
+ * variant, so align the pin with the root graph instead.
  */
 export const getBenchConfig = (options: ViteUserConfig = {}, codspeed: () => unknown = codspeedPlugin) =>
     defineConfig({
