@@ -161,6 +161,10 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     }
 
     const errorStore = writable<SubscriptionError | undefined>();
+    let torndown = false;
+    // `teardown` stops the live subscription even while a consumer is still subscribed to `present`;
+    // otherwise a later room change would open a fresh one for a destroyed handle.
+    let stopPresentRoom: (() => void) | undefined;
 
     // Subscribe to the live present-list; expose as a Readable store. Also
     // gated: `readable`'s start callback only runs once the store gets its
@@ -168,11 +172,11 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     // during `renderToString` WOULD trigger it — so guard it too rather than
     // open a live WS subscription server-side.
     const present = readable<ReturnOf<L> | undefined>(undefined, (set) => {
-        if (!isBrowser()) {
+        if (!isBrowser() || torndown) {
             return undefined;
         }
 
-        return subscribeReactiveArgs(roomId, (room) => {
+        const stop = subscribeReactiveArgs(roomId, (room) => {
             // A room change must not show the previous room's members or error under the new one.
             set(undefined);
             errorStore.set(undefined);
@@ -205,9 +209,19 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
                 unsubscribe();
             };
         });
-    });
+        let stopped = false;
+        const stopOnce = (): void => {
+            if (!stopped) {
+                stopped = true;
+                stopPresentRoom = undefined;
+                stop();
+            }
+        };
 
-    let torndown = false;
+        stopPresentRoom = stopOnce;
+
+        return stopOnce;
+    });
 
     const teardown = (): void => {
         // Idempotent: the auto-wired `onDestroy` below and a manual
@@ -220,6 +234,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         torndown = true;
         mounted = false;
         stopRoomWiring?.();
+        stopPresentRoom?.();
     };
 
     // Auto-teardown on component destruction so a consumer who forgets

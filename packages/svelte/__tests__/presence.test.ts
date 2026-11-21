@@ -508,4 +508,21 @@ describe("presence (Svelte)", () => {
 
         expect(fake.currentConnectionContext()).toBeUndefined();
     });
+
+    it("teardown stops the room subscription even while present is still subscribed", () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const room = writable("a");
+        const handle = presence(fake.client, room, { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+        const stopPresent = handle.present.subscribe(() => {});
+
+        handle.teardown();
+        room.set("b");
+
+        expect(fake.subscribeCalls.map((call) => call.args)).toStrictEqual([{ roomId: "a" }]);
+        expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true]);
+
+        stopPresent();
+    });
 });
