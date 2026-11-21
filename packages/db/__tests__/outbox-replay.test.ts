@@ -1,3 +1,4 @@
+import type { OutboxMutation } from "@lunora/client";
 import { LunoraClient } from "@lunora/client";
 import type { OfflineExecutor } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1343,5 +1344,164 @@ describe("durable outbox replay credential", () => {
             expect(rolledBack).toHaveBeenCalledTimes(1);
             expect(database.pendingCount()).toBe(0);
         });
+    });
+});
+
+describe("durable replay while the connection is down", () => {
+    const RPC_URL = "https://app.example/_lunora/rpc";
+    const sockets: { open: () => void }[] = [];
+    const clients: LunoraClient[] = [];
+
+    /** A socket that stays `connecting` until the test opens it. */
+    const heldWebSocket = (): typeof WebSocket => {
+        class WS {
+            public readyState = 0;
+
+            private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
+
+            public constructor() {
+                sockets.push({
+                    open: () => {
+                        this.readyState = 1;
+
+                        for (const listener of this.listeners.get("open") ?? []) {
+                            listener();
+                        }
+                    },
+                });
+            }
+
+            public addEventListener(type: string, listener: (event?: unknown) => void): void {
+                this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+            }
+
+            public close(): void {
+                this.readyState = 3;
+            }
+
+            public removeEventListener(type: string): void {
+                this.listeners.delete(type);
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- writes under test ride HTTP, not the socket
+            public send(): void {}
+        }
+
+        return WS as unknown as typeof WebSocket;
+    };
+
+    beforeEach(() => {
+        vi.stubGlobal("localStorage", memoryLocalStorage());
+        vi.stubGlobal("window", globalThis);
+        vi.stubGlobal("navigator", { locks: memoryWebLocks() });
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        for (const executor of executors.splice(0)) {
+            executor.dispose();
+        }
+
+        for (const client of clients.splice(0)) {
+            client.close();
+        }
+
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+    });
+
+    // The executor retries on a one-second tick and believes it is always online,
+    // so it replays while the device is offline. Such a replay must fail and be
+    // retried in place, never be handed back to the outbox as a new write behind
+    // newer ones.
+    it("keeps the original entries, in order, until the socket is back, then commits each once", async () => {
+        const sent: unknown[] = [];
+        const requeued = vi.fn<(mutation: OutboxMutation) => void>();
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const client = new LunoraClient({
+            fetch: async (input, init) => {
+                if (input !== RPC_URL) {
+                    return new Response("{}", { status: 404 });
+                }
+
+                const { args, functionPath } = JSON.parse(init?.body as string) as { args: { text?: string }; functionPath: string };
+
+                if (functionPath === "messages:send") {
+                    sent.push(args.text);
+                }
+
+                return Response.json({ result: "ok" });
+            },
+            offlineQueue: { queueBeforeFirstConnect: true },
+            outbox: {
+                enqueue: async (mutation) => {
+                    requeued(mutation);
+
+                    return (sink as NonNullable<typeof sink>).enqueue(mutation);
+                },
+                pending: () => sink?.pending?.() ?? false,
+            },
+            url: "https://app.example",
+            WebSocket: heldWebSocket(),
+        });
+
+        clients.push(client);
+        client.setAuthToken("token-a", "user-a");
+
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const database = defineCollections(
+            client,
+            {
+                notes: {
+                    insert: {
+                        mutation: ref("messages:send"),
+                        optimistic: (input: { text: string }, id) => {
+                            return { _id: id, text: input.text };
+                        },
+                        toArgs: (row) => {
+                            return { text: row.text };
+                        },
+                    },
+                    list: ref("messages:list"),
+                },
+            },
+            { onWriteRejected: rejected },
+        ) as unknown as { actions: { notes: (input: { text: string }) => unknown }; executor: OfflineExecutor; pendingCount: () => number };
+
+        executors.push(database.executor);
+
+        const ready = database.executor.waitForInit();
+
+        await vi.advanceTimersByTimeAsync(0);
+        await ready;
+
+        sink = createExecutorOutboxSink(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        database.actions.notes({ text: "first" });
+        database.actions.notes({ text: "second" });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const outboxIds = async (): Promise<string[]> => {
+            const transactions = await database.executor.peekOutbox();
+
+            return transactions.map((transaction) => transaction.id);
+        };
+        const queued = await outboxIds();
+
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(queued).toHaveLength(2);
+        expect(requeued).not.toHaveBeenCalled();
+        await expect(outboxIds()).resolves.toStrictEqual(queued);
+        expect(sent).toStrictEqual([]);
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual(["first", "second"]);
+        expect(requeued).not.toHaveBeenCalled();
+        expect(database.pendingCount()).toBe(0);
+        expect(rejected).not.toHaveBeenCalled();
     });
 });

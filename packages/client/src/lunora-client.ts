@@ -588,6 +588,13 @@ const offlineNotQueuedError = (functionPath: string, cause?: unknown): LunoraErr
     });
 
 /**
+ * A durable replay refused because the connection is down. Deliberately code-less,
+ * with no HTTP status in its fixed message: the outbox retries an error without a
+ * `code` and drops one that has one, or whose message names 400/401/403/422.
+ */
+const durableReplayNotSentError = (): Error => new Error("LunoraClient: the connection is not live, so the durable replay was not sent; it stays queued");
+
+/**
  * A request that failed on the wire: fetch rejects with a `TypeError`, and the args
  * encode, so the codec did not reject them. Anything else is the server's answer.
  */
@@ -4601,12 +4608,12 @@ class LunoraClient {
         // last-writer-wins silently resurrects the older value. So while the
         // durable path still holds anything for this shard, go behind it.
         //
-        // The durable path's OWN replay is the exception: it re-enters here
-        // carrying `replayBaseline` (every durable replay pins one), is already
-        // persisted, and re-queueing it would loop it back into the queue it is
-        // draining. A caller-supplied `mutationId` alone is not a replay:
-        // `importRows` and app code pass one for idempotency, and those writes
-        // must still go behind the queue.
+        // The durable path's OWN replay is the exception to this and to the two
+        // offline gates below: it re-enters here carrying `replayBaseline` (every
+        // durable replay pins one), is already persisted, and re-queueing it would
+        // loop it back into the queue it is draining. A caller-supplied
+        // `mutationId` alone is not a replay: `importRows` and app code pass one
+        // for idempotency, and those writes must still go behind the queue.
         //
         // With a durable outbox this is process-wide, not per shard: the sink
         // reports only its total depth. Over-inclusion costs a write a trip
@@ -4635,6 +4642,16 @@ class LunoraClient {
         // The early refusal ran before the optimistic updates above, and those are
         // user code that can drop the shard, so the gate is read again here.
         this.refuseOnlineOnlyWhenDown(function_.__lunoraRef, options, optimisticRollbacks);
+
+        // A durable replay that finds the connection down or reconnecting fails
+        // instead: queued again, it would be persisted as a NEW write behind newer
+        // ones while the outbox counted the original as committed, losing its FIFO
+        // place and its rollback handle. The outbox keeps the original and retries.
+        if (options.replayBaseline !== undefined && (socketDown || midReconnect)) {
+            rollbackOptimistic(optimisticRollbacks);
+
+            throw durableReplayNotSentError();
+        }
 
         if (socketDown || midReconnect || queuedAhead) {
             return enqueue();

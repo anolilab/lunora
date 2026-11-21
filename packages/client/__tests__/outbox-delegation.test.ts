@@ -331,27 +331,55 @@ describe("lunoraClient outbox delegation", () => {
         expect(fetches).toBe(0);
     });
 
-    // A durable replay that lands on a dropped socket goes back into the outbox.
-    // It was judged as the user who queued it, so that is who it stays stamped as:
-    // re-stamping it with whoever signed in since would make that user's session
-    // replay it as their own.
-    it("re-queues a replay under the identity its verdict judged, not the one signed in now", async () => {
-        expect.assertions(2);
+    // A durable replay re-enters `mutation` from the outbox it is draining. Queued
+    // again while the socket is down, it would be persisted as a new write behind
+    // newer ones while the outbox counted the original as done. It must fail with
+    // an error the outbox retries — one with no `code` — and leave the original.
+    it("refuses a durable replay while the socket is down instead of queueing it again", async () => {
+        expect.assertions(4);
 
         const { enqueued, sink } = recordingSink();
         const client = makeClient(sink, "client-fixed");
 
-        client.setAuthToken("token-a", "user-a");
+        const refused = await client
+            .mutation(fnRef("messages:send"), { text: "replay" }, { mutationId: "client-fixed:9", replayBaseline: null })
+            .catch((error: unknown) => error);
 
-        const judged = client.replayIdentityVerdict("subj:user-a");
-        const replayCredential = judged.verdict === "match" ? judged.credential : undefined;
+        expect(refused).toBeInstanceOf(Error);
+        expect((refused as { code?: unknown }).code).toBeUndefined();
+        expect(enqueued).toHaveLength(0);
 
-        client.setAuthToken("token-b", "user-b");
+        await client.mutation(fnRef("messages:send"), { text: "fresh" }, { mutationId: "client-fixed:10" });
 
-        await client.mutation(fnRef("messages:send"), { text: "a's" }, { mutationId: "client-fixed:9", replayBaseline: null, replayCredential });
+        expect(enqueued.map((mutation) => mutation.idempotencyKey)).toStrictEqual(["client-fixed:10"]);
 
-        expect(enqueued).toHaveLength(1);
-        expect(enqueued[0]?.identity).toBe("subj:user-a");
+        client.close();
+    });
+
+    it("takes a refused durable replay's optimistic value back off the screen", async () => {
+        expect.assertions(2);
+
+        const { enqueued, sink } = recordingSink();
+        const client = new LunoraClient({
+            offlineQueue: { queueBeforeFirstConnect: true },
+            outbox: sink,
+            url: "https://app.example",
+            WebSocket: seedableWebSocket(),
+        });
+        const received: unknown[] = [];
+
+        client.subscribe(fnRef("counter:get"), {}, (value) => received.push(value));
+
+        const socket = sockets.at(-1) as SeedableSocket;
+
+        socket.open();
+        socket.receive({ delta: 1, id: subscriptionId(socket), type: "delta" });
+        socket.triggerClose();
+
+        await client.mutation(fnRef("counter:get"), {}, { optimistic: (current) => (current as number) + 1, replayBaseline: null }).catch(() => undefined);
+
+        expect(received).toEqual([1, 2, 1]);
+        expect(enqueued).toHaveLength(0);
 
         client.close();
     });
