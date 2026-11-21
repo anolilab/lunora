@@ -745,7 +745,7 @@ describe("startCodegenWatch", () => {
         });
 
         it("does not retrigger itself when the hook writes under the watched directory", async () => {
-            expect.assertions(1);
+            expect.assertions(2);
 
             codegenSucceeds();
 
@@ -785,6 +785,8 @@ describe("startCodegenWatch", () => {
             await handle.ready;
 
             // The hook's write reaches the watcher as the hook exits: inside the settle window.
+            expect(emit).toBeTypeOf("function");
+
             emit?.("change", "touched-by-hook.ts");
             // Past the debounce, short of the 300 ms settle window.
             await vi.advanceTimersByTimeAsync(250);
@@ -797,7 +799,7 @@ describe("startCodegenWatch", () => {
         });
 
         it("does not retrigger itself when a SLOW hook writes before it exits", async () => {
-            expect.assertions(1);
+            expect.assertions(2);
 
             codegenSucceeds();
 
@@ -845,7 +847,10 @@ describe("startCodegenWatch", () => {
             // rather than reporting one red test.
             try {
                 await hookWrote.promise;
+
                 // The hook writes while it is still running, then keeps running.
+                expect(emit).toBeTypeOf("function");
+
                 emit?.("change", "touched-by-hook.ts");
                 await vi.advanceTimersByTimeAsync(250);
                 finishHook.resolve(undefined);

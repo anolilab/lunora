@@ -194,16 +194,22 @@ describe("lifecycle disposers", () => {
             vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
             let delivered = 0;
-            const second = createNodeShardHost({
-                onAlarm: () => {
-                    delivered += 1;
-                },
-                path,
-            });
+            let second: ReturnType<typeof createNodeShardHost>;
 
-            // Far past the delivery timer, so a second (duplicate) delivery would show up in the count.
-            await vi.advanceTimersByTimeAsync(10_000);
-            vi.useRealTimers();
+            // Restored on failure too, or the fake clock leaks into every later test.
+            try {
+                second = createNodeShardHost({
+                    onAlarm: () => {
+                        delivered += 1;
+                    },
+                    path,
+                });
+
+                // Far past the delivery timer, so a second (duplicate) delivery would show up in the count.
+                await vi.advanceTimersByTimeAsync(10_000);
+            } finally {
+                vi.useRealTimers();
+            }
 
             expect(delivered).toBe(1);
 
