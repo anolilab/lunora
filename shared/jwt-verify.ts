@@ -61,11 +61,12 @@ interface JwtVerifierOptionsOf<Key> {
     algorithms?: string[];
 
     /**
-     * Expected `aud`. Verified only when set — set it whenever your provider
-     * issues one (Auth0's API identifier, Supabase's `authenticated`): without
-     * it, any token the issuer minted for another application verifies too.
+     * Expected `aud` (Auth0's API identifier, Supabase's `authenticated`).
+     * Required: without it, any token the issuer minted for another application
+     * verifies too. `false` opts out, for a provider that issues no `aud` and
+     * binds its tokens to this app through another claim the caller checks.
      */
-    audience?: string | string[];
+    audience: string | string[] | false;
 
     /** Seconds of clock skew tolerated on `exp` / `nbf` / `iat`. */
     clockTolerance?: number;
@@ -300,8 +301,8 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
         return new URL(SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`).origin;
     };
 
-    /** Where the keys come from must be configured, and over https; `verifyJwt` is public, so it checks too, not only `jwtVerifier`. */
-    const assertKeySource = (options: Omit<JwtVerifierOptionsOf<Key>, "onError" | "token">): void => {
+    /** Where the keys come from must be configured, over https, and the audience set or explicitly waived; `verifyJwt` is public, so it checks too, not only `jwtVerifier`. */
+    const assertVerifierOptions = (options: Omit<JwtVerifierOptionsOf<Key>, "onError" | "token">): void => {
         const issuers = issuerList(options.issuer);
         const jwksUrl = options.jwksUrl === undefined ? undefined : String(options.jwksUrl);
 
@@ -316,10 +317,20 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
         if (jwksUrl === undefined && options.keySet === undefined && !isHttpsUrl(issuers[0] ?? "")) {
             throw fail(`${name}: OIDC discovery needs an https \`issuer\`, got "${issuers[0] ?? ""}"`);
         }
+
+        // Read as `unknown`: the type requires the field, but a JS caller or an unset env var still passes `undefined`.
+        const audience: unknown = options.audience;
+        const audiences = Array.isArray(audience) ? audience : [audience];
+
+        if (audience !== false && (audiences.length === 0 || audiences.some((entry) => typeof entry !== "string" || entry.trim() === ""))) {
+            throw fail(
+                `${name}: set \`audience\` to the value your provider puts in \`aud\`, or pass \`audience: false\` if it issues none and another claim binds the token to this app`,
+            );
+        }
     };
 
     const verifyJwt = async (token: string, options: Omit<JwtVerifierOptionsOf<Key>, "onError" | "token">): Promise<Claims> => {
-        assertKeySource(options);
+        assertVerifierOptions(options);
 
         const issuers = issuerList(options.issuer);
         const jwksUrl = options.jwksUrl === undefined ? undefined : String(options.jwksUrl);
@@ -328,7 +339,7 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
 
         const { payload } = await jose.jwtVerify(token, keySet, {
             algorithms: options.algorithms ?? DEFAULT_ALGORITHMS,
-            audience: options.audience,
+            audience: options.audience === false ? undefined : options.audience,
             clockTolerance,
             issuer: issuers.length > 0 ? issuers : undefined,
             requiredClaims: options.requiredClaims ?? ["exp"],
@@ -342,7 +353,7 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
     };
 
     const jwtVerifier = (options: JwtVerifierOptionsOf<Key>): JwtVerifierOf<Claims> => {
-        assertKeySource(options);
+        assertVerifierOptions(options);
 
         const readToken = options.token ?? bearerToken;
 
