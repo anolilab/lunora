@@ -350,6 +350,10 @@ Start with [`.github/CONTRIBUTING.md`](./.github/CONTRIBUTING.md). The default b
 
 For security reports, see [`SECURITY.md`](./SECURITY.md). For community guidelines, see [`.github/CODE_OF_CONDUCT.md`](./.github/CODE_OF_CONDUCT.md). For brand assets and usage rules, see [`marketing/BRAND.md`](./marketing/BRAND.md).
 
+## Commercial support
+
+Lunora is built and maintained by [Daniel Bannert](https://github.com/prisis). If you want help trying Lunora in a project, or need a TypeScript backend or a real-time web app built, he takes on contract work through [Anolilab](https://anolilab.com/?utm_source=github&utm_medium=readme&utm_campaign=lunora). [Book a free first call](https://anolilab.com/contact?utm_source=github&utm_medium=readme&utm_campaign=lunora).
+
 ## License
 
 Lunora is [Apache-2.0](./LICENSE.md) © 2026 anolilab and contributors.
