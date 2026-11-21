@@ -1261,6 +1261,39 @@ describe("createWorker", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
+    it("reads authorizeShard off the options per request, with the options as its receiver", async () => {
+        expect.assertions(2);
+
+        const options = {
+            allowed: new Set(["channel-42"]),
+            authorizeShard(this: { allowed: Set<string> }, caller: { shardKey: string }): boolean {
+                return this.allowed.has(caller.shardKey);
+            },
+            shardDO: shard.namespace,
+        };
+        const worker = createWorker(options);
+        const call = async (): Promise<Response> =>
+            worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "channel-42" }),
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+        await call();
+
+        expect(shard.calls).toHaveLength(1);
+
+        // A revoked policy takes effect on the next request.
+        options.authorizeShard = () => false;
+
+        const revoked = await call();
+
+        expect(revoked.status).toBe(403);
+    });
+
     it("denies a single-shard RPC when authorizeShard returns a truthy non-boolean", async () => {
         expect.assertions(2);
 
