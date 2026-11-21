@@ -210,7 +210,11 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
     // Every org-scoped call names the tenant's shard; `authorizeShard` refuses any other.
     const shard = { shardKey: organizationId };
     const client = useLunora();
-    const [tasks, setTasks] = useState<Awaited<ReturnType<typeof client.query<typeof api.tasks.list>>> | undefined>(undefined);
+    // Keyed by the organisation it was read for, so switching organisations never shows the last one's list.
+    const [loaded, setLoaded] = useState<{ organizationId: string; tasks: Awaited<ReturnType<typeof client.query<typeof api.tasks.list>>> } | undefined>(
+        undefined,
+    );
+    const tasks = loaded?.organizationId === organizationId ? loaded.tasks : undefined;
     // Bumped after each write so the list is fetched again.
     const [listVersion, setListVersion] = useState(0);
     const { mutate: create } = useMutation(api.tasks.create);
@@ -224,7 +228,9 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
 
         client
             .query(api.tasks.list, {}, { shardKey: organizationId, signal: controller.signal })
-            .then(setTasks)
+            .then((next) => {
+                setLoaded({ organizationId, tasks: next });
+            })
             .catch((error_: unknown) => {
                 if (!controller.signal.aborted) {
                     setError(error_ instanceof Error ? error_.message : "The tasks could not be loaded. Try again.");
