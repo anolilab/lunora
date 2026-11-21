@@ -533,11 +533,16 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
 
         const countArgs = normalizeCountArgument(whereOrArgs as Parameters<typeof normalizeCountArgument>[0]);
 
-        if (countArgs.relationBaseWhere !== undefined || (countArgs.where === undefined && countArgs.baseWhere === undefined)) {
+        const { relationBaseWhere } = countArgs as { relationBaseWhere?: unknown };
+
+        if (
+            (typeof relationBaseWhere === "function" && trustedFilters.has(relationBaseWhere)) ||
+            (countArgs.where === undefined && countArgs.baseWhere === undefined)
+        ) {
             return rest;
         }
 
-        return [{ ...countArgs, relationBaseWhere: relationGate(undefined) }, ...more];
+        return [{ ...countArgs, relationBaseWhere: relationGate(relationBaseWhere) }, ...more];
     };
 
     const gateRelationsFor = (name: string): ((rest: unknown[]) => unknown[]) | undefined => {

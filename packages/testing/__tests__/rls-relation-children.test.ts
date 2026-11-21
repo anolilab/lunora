@@ -213,6 +213,41 @@ describe("lunoraTest — relation reads of a protected table without a read poli
         await expect(t.query(policiedAnalytical(read, where), {})).rejects.toMatchObject({ code: "RLS_REQUIRED", table: "secrets" });
     });
 
+    it.each([
+        [
+            "count",
+            async (database: Analytical, relationBaseWhere: unknown) =>
+                database.count("notices", { relationBaseWhere, where: { secrets: { some: { body: "s" } } } }),
+        ],
+        [
+            "aggregate",
+            async (database: Analytical, relationBaseWhere: unknown) =>
+                database.aggregate("notices", { field: "score", op: "sum", relationBaseWhere, where: { secrets: { some: { body: "s" } } } }),
+        ],
+        [
+            "groupBy",
+            async (database: Analytical, relationBaseWhere: unknown) =>
+                database.groupBy("notices", { by: ["text"], relationBaseWhere, where: { secrets: { some: { body: "s" } } } }),
+        ],
+    ] as const)("refuses a relation predicate on the protected child in %s when the caller supplies its own relation filter", async (_name, read) => {
+        expect.assertions(2);
+
+        const t = await seeded();
+
+        for (const relationBaseWhere of [() => undefined, null]) {
+            // eslint-disable-next-line no-await-in-loop -- one harness, the two filters checked in turn
+            await expect(
+                t.query(
+                    query.query(async ({ ctx }) => read(ctx.db as unknown as Analytical, relationBaseWhere)),
+                    {},
+                ),
+            ).rejects.toMatchObject({
+                code: "RLS_REQUIRED",
+                table: "secrets",
+            });
+        }
+    });
+
     it("still counts a .public() parent by a relation predicate on a .public() child", async () => {
         expect.assertions(1);
 
