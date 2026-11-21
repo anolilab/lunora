@@ -233,7 +233,6 @@ const AUDIT_INPUT_IDS: ReadonlyArray<readonly [input: string, detail: string]> =
     ["memberId", "memberId"],
     ["organizationId", "organizationId"],
     ["passkeyId", "passkeyId"],
-    ["role", "role"],
     ["roleId", "roleId"],
     ["teamId", "teamId"],
     ["teamMemberId", "teamMemberId"],
@@ -253,6 +252,19 @@ const stringField = (value: unknown, field: string): string | undefined => {
     return typeof candidate === "string" && candidate !== "" ? candidate : undefined;
 };
 
+/** A `role` as `@lunora/auth` stores it: a multi-role grant arrives as an array and is saved comma-joined. */
+const roleField = (value: unknown): string | undefined => {
+    const role = typeof value === "object" && value !== null ? (value as Record<string, unknown>)["role"] : undefined;
+
+    if (Array.isArray(role)) {
+        const names = role.filter((name): name is string => typeof name === "string" && name !== "");
+
+        return names.length === 0 ? undefined : names.join(",");
+    }
+
+    return stringField(value, "role");
+};
+
 /** The row a successful mutation records: who acted, on which ids, through which route. */
 const buildAuditEntry = (path: string, audit: NonNullable<AuthRouteDescriptor["audit"]>, actor: string, input: unknown, result: unknown): AuthAuditWrite => {
     const detail: Record<string, unknown> = { path };
@@ -263,6 +275,13 @@ const buildAuditEntry = (path: string, audit: NonNullable<AuthRouteDescriptor["a
         if (value !== undefined) {
             detail[detailKey] = value;
         }
+    }
+
+    // Prefer the role the plane saved: `createUser` lets `data.role` override the top-level one.
+    const requestedRole = roleField(input) ?? roleField(typeof input === "object" && input !== null ? (input as Record<string, unknown>)["data"] : undefined);
+
+    if (requestedRole !== undefined) {
+        detail["role"] = roleField(result) ?? requestedRole;
     }
 
     const createdId = audit.resultId === undefined ? undefined : stringField(result, "id");
@@ -508,7 +527,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "listSignUpInvitations",
     },
     [`${AUTH_BASE}/sign-up-invitations/create`]: {
-        audit: { event: "sign-up-invitation-create" },
+        audit: { event: "sign-up-invitation-create", resultId: "invitationId" },
         build: ({ body }) => {
             return {
                 email: requireBodyString(body, "email"),

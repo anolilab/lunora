@@ -454,6 +454,71 @@ describe("createWorker — auth admin audit trail", () => {
         ]);
     });
 
+    it("records the persisted roles of a multi-role grant", async () => {
+        expect.assertions(2);
+
+        const plane: AuthAdmin = {
+            ...auditedAuthAdmin(),
+            updateMemberRole: vi.fn<NonNullable<AuthAdmin["updateMemberRole"]>>(async () => {
+                return { id: "m1", organizationId: "o1", userId: "u1" };
+            }),
+        };
+
+        vi.mocked(plane.setRole as NonNullable<AuthAdmin["setRole"]>).mockImplementationOnce(async () => {
+            return { ...USER, role: "admin,support" };
+        });
+
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        await worker.fetch(post(`${AUTH}/users/role`, { role: ["admin", "support"], userId: "u1" }), {}, fakeContext);
+        await worker.fetch(post(`${AUTH}/organizations/members/role`, { memberId: "m1", role: ["admin", "billing"] }), {}, fakeContext);
+
+        expect(writer.rows[0]?.detail).toMatchObject({ role: "admin,support", targetUserId: "u1" });
+        expect(writer.rows[1]?.detail).toMatchObject({ memberId: "m1", role: "admin,billing" });
+    });
+
+    it("records the role a created user was saved with when `data` overrides it", async () => {
+        expect.assertions(1);
+
+        const plane = auditedAuthAdmin();
+
+        vi.mocked(plane.createUser as NonNullable<AuthAdmin["createUser"]>).mockImplementationOnce(async () => {
+            return { ...USER, role: "admin" };
+        });
+
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        await worker.fetch(post(`${AUTH}/users/create`, { data: { role: "admin" }, email: "new@example.com", name: "New", role: "user" }), {}, fakeContext);
+
+        expect(writer.rows[0]?.detail).toMatchObject({ role: "admin", targetUserId: "u1" });
+    });
+
+    it("names the sign-up invitation it created", async () => {
+        expect.assertions(1);
+
+        const plane: AuthAdmin = {
+            ...auditedAuthAdmin(),
+            createSignUpInvitation: vi.fn<NonNullable<AuthAdmin["createSignUpInvitation"]>>(async () => {
+                return { email: "guest@example.com", id: "si9" };
+            }),
+        };
+
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        await worker.fetch(post(`${AUTH}/sign-up-invitations/create`, { email: "guest@example.com" }), {}, fakeContext);
+
+        expect(writer.rows).toStrictEqual([
+            expect.objectContaining({
+                detail: { invitationId: "si9", path: "/_lunora/admin/auth/sign-up-invitations/create" },
+                event: "sign-up-invitation-create",
+                targetEmail: "guest@example.com",
+            }),
+        ]);
+    });
+
     it("names an invitation's target by address, outside the redacted detail", async () => {
         expect.assertions(1);
 
