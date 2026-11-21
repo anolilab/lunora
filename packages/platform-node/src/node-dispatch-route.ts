@@ -45,7 +45,12 @@ const MAX_DISPATCH_BODY_BYTES = 1_048_576;
 interface NodeDispatchInvocation {
     args: Record<string, unknown>;
     functionPath: string;
-    /** The scheduler record or delivery id, used as the shard's idempotency key. */
+
+    /**
+     * The shard's idempotency key: the scheduler's per-record `dedupKey` when the body carries one,
+     * else the record or delivery id. A scheduler id is free again once its job settles, so the bare
+     * id would answer a reused id's new job from the previous job's dedup row.
+     */
     id: string | undefined;
     /** Identity the trusted caller forwarded, if any. */
     identity: { identity?: string; userId?: string } | undefined;
@@ -76,6 +81,16 @@ const readRawBody = async (request: Request): Promise<string> => {
     }
 
     return text;
+};
+
+const dedupKey = (candidate: Record<string, unknown>): string | undefined => {
+    for (const value of [candidate["dedupKey"], candidate["id"]]) {
+        if (typeof value === "string" && value.length > 0) {
+            return value;
+        }
+    }
+
+    return undefined;
 };
 
 const handle = async (request: Request, options: NodeDispatchRouteOptions): Promise<Response> => {
@@ -133,7 +148,7 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
     return options.invoke({
         args: (candidate["args"] ?? {}) as Record<string, unknown>,
         functionPath: candidate["functionPath"],
-        id: typeof candidate["id"] === "string" && candidate["id"].length > 0 ? candidate["id"] : undefined,
+        id: dedupKey(candidate),
         identity: readForwardedDispatchIdentity(request),
         scheduledFor: typeof candidate["scheduledFor"] === "number" ? candidate["scheduledFor"] : undefined,
         shardKey,
