@@ -226,6 +226,23 @@ public final class LunoraClient {
     /// The `ProcessInfo.systemUptime` deadline of the one re-subscribe a retry hint
     /// asked for, per query subscription id. Guarded by the lock.
     var pendingRetries: [String: TimeInterval] = [:]
+
+    /// How many re-sent `subscribe` frames a reconnect keeps unanswered at once before it waits
+    /// for a reply. Each one runs its query server-side to build a snapshot, and most land on the
+    /// one default-shard Durable Object, so an unpaced burst can knock it over
+    /// (RESUBSCRIBE_CONCURRENCY in packages/client/src/client-tuning.ts, issue #796).
+    public static let resubscribeConcurrency = 3
+
+    /// Seconds an unanswered re-subscribe holds its slot before the next one goes out without it.
+    /// A slot no reply ever frees would stop every queued re-subscribe until the next reconnect,
+    /// which is worse than the burst the pacing avoids.
+    public static let resubscribeAckTimeout: TimeInterval = 10
+
+    /// Query subscription ids a reconnect has yet to re-send, in order, and the ones it has sent and
+    /// not yet heard back about, each with the `ProcessInfo.systemUptime` deadline after which it
+    /// stops holding a slot. See ``resendSubscriptions()``. Guarded by the lock.
+    private var resubscribeQueue: [String] = []
+    private var resubscribeSlots: [String: TimeInterval] = [:]
     private var shapes: [String: ShapeSubscription] = [:]
     private var pokes: [String: PokeBuffer] = [:]
 
@@ -480,6 +497,7 @@ public final class LunoraClient {
         withLock {
             socketGeneration = credentialGeneration
             pendingRetries.removeAll()
+            clearResubscribesLocked()
             // A run cut off by a dropped or failed socket will be replayed in full.
             discardRunsLocked()
             sender(
@@ -510,6 +528,7 @@ public final class LunoraClient {
         let expired = withLock { () -> Bool in
             send = nil
             pendingRetries.removeAll()
+            clearResubscribesLocked()
             discardRunsLocked()
 
             return expiryNotifiedByCloseLocked(closeCode, reason)
@@ -587,6 +606,7 @@ public final class LunoraClient {
             closed = true
             send = nil
             pendingRetries.removeAll()
+            clearResubscribesLocked()
             discardRunsLocked()
 
             let finishers = Array(streamFinishers.values)
@@ -1028,14 +1048,20 @@ public final class LunoraClient {
         return { [weak self] in
             guard let self else { return }
 
-            let sender = self.withLock { () -> LunoraFrameSender? in
+            let (sender, batch) = self.withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
                 self.subscriptions.removeValue(forKey: id)
                 self.pendingRetries[id] = nil
 
-                return self.send
+                // Its frame will never be answered now, so the slot it holds goes to the next one.
+                guard self.resubscribeSlots.removeValue(forKey: id) != nil else { return (self.send, []) }
+
+                return (self.send, self.takeResubscribesLocked(now: ProcessInfo.processInfo.systemUptime))
             }
 
-            sender?(LunoraClient.buildUnsubscribeFrame(id: id))
+            guard let sender else { return }
+
+            sender(LunoraClient.buildUnsubscribeFrame(id: id))
+            self.sendResubscribes(sender, batch)
         }
     }
 
@@ -1173,36 +1199,15 @@ public final class LunoraClient {
     /// Without this the `cursor`/`epoch` tracked on every `data` frame would be
     /// write-only state and a reconnect would silently re-seed from scratch.
     public func resendSubscriptions() {
-        // The frames are BUILT under the lock, not just the map iteration: each
-        // one reads `cursor`/`epoch`, which the frame handler writes. Snapshotting
-        // the entries and reading their cursors afterwards resends a torn one.
-        let (sender, frames) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
-            guard send != nil else { return (nil, []) }
+        let (sender, batch, shapeFrames) = withLock { () -> (LunoraFrameSender?, [[String: Any]], [[String: Any]]) in
+            guard let sender = send else { return (nil, [], []) }
 
-            var frames: [[String: Any]] = []
+            clearResubscribesLocked()
+            // In subscribe order: `sub_N` ids compare by length first, then digits.
+            resubscribeQueue = subscriptions.keys.sorted { ($0.count, $0) < ($1.count, $1) }
 
-            for (id, entry) in subscriptions {
-                let built = try? LunoraClient.buildSubscribeFrame(
-                    id: id,
-                    functionPath: entry.functionPath,
-                    args: entry.args,
-                    sinceSeq: entry.cursor,
-                    sinceEpoch: entry.epoch
-                )
-
-                guard let frame = built else { continue }
-
-                // The replay re-sends the whole run from the cursor before it.
-                entry.discardRun()
-
-                // The resume cursor sits before the dropped change, so the replay re-applies
-                // it. Clear the poison only for a frame that is sent: a frame that failed to
-                // build leaves its subscription frozen.
-                entry.poisoned = false
-                frames.append(frame)
-            }
-
-            frames += shapes.compactMap { id, entry in
+            let batch = takeResubscribesLocked(now: ProcessInfo.processInfo.systemUptime)
+            let shapeFrames = shapes.compactMap { id, entry in
                 try? LunoraClient.buildShapeSubscribeFrame(
                     id: id,
                     name: entry.name,
@@ -1212,13 +1217,79 @@ public final class LunoraClient {
                 )
             }
 
-            return (send, frames)
+            return (sender, batch, shapeFrames)
         }
 
         guard let sender else { return }
 
-        for frame in frames {
+        sendResubscribes(sender, batch)
+
+        for frame in shapeFrames {
             sender(frame)
+        }
+    }
+
+    /// Forgets the paced re-subscribe; call with the lock held.
+    private func clearResubscribesLocked() {
+        resubscribeQueue.removeAll()
+        resubscribeSlots.removeAll()
+    }
+
+    /// Builds the queued re-subscribes that fit in the free slots and claims a slot for each; call
+    /// with the lock held.
+    ///
+    /// Each frame is BUILT here, at the moment it goes out, not when it was queued: it reads the
+    /// `cursor`/`epoch` the frame handler writes, and an identity change can clear them while the
+    /// subscription waits its turn.
+    private func takeResubscribesLocked(now: TimeInterval) -> [[String: Any]] {
+        var batch: [[String: Any]] = []
+
+        while resubscribeSlots.count < LunoraClient.resubscribeConcurrency, !resubscribeQueue.isEmpty {
+            let id = resubscribeQueue.removeFirst()
+
+            // Unsubscribed while it waited its turn: nothing to re-send.
+            guard let entry = subscriptions[id] else { continue }
+
+            let built = try? LunoraClient.buildSubscribeFrame(
+                id: id,
+                functionPath: entry.functionPath,
+                args: entry.args,
+                sinceSeq: entry.cursor,
+                sinceEpoch: entry.epoch
+            )
+
+            guard let frame = built else { continue }
+
+            // The replay re-sends the whole run from the cursor before it.
+            entry.discardRun()
+
+            // The resume cursor sits before the dropped change, so the replay re-applies it.
+            // Cleared only now: a queued subscription is not replaying yet, so a delta reaching it
+            // must not move the cursor past the dropped change, and a frame that failed to build
+            // leaves its subscription frozen.
+            entry.poisoned = false
+            batch.append(frame)
+            resubscribeSlots[id] = now + LunoraClient.resubscribeAckTimeout
+        }
+
+        return batch
+    }
+
+    /// Sends what `takeResubscribesLocked(now:)` built, with the lock released.
+    private func sendResubscribes(_ sender: LunoraFrameSender, _ batch: [[String: Any]]) {
+        guard !batch.isEmpty else { return }
+
+        for frame in batch {
+            sender(frame)
+        }
+
+        // The frames went out after the lock was released, so an unsubscribe on another thread
+        // may have reached the socket first; follow it with another, or the server keeps a
+        // subscription this client no longer holds.
+        let dropped = withLock { batch.compactMap { $0["id"] as? String }.filter { subscriptions[$0] == nil } }
+
+        for id in dropped {
+            sender(LunoraClient.buildUnsubscribeFrame(id: id))
         }
     }
 
@@ -1229,6 +1300,10 @@ public final class LunoraClient {
     ///
     /// Each re-subscribe is cold: the hint asks for a fresh snapshot, so the stored resume cursor
     /// and epoch are cleared first.
+    ///
+    /// It also frees each slot of ``resendSubscriptions()``' pacing that has gone unanswered past
+    /// its deadline, and sends (and counts) the queued re-subscribes that then fit. Those keep their
+    /// resume cursor.
     @discardableResult
     public func retryDueSubscriptions(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Int {
         let (sender, frames) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
@@ -1267,13 +1342,22 @@ public final class LunoraClient {
             sender(LunoraClient.buildUnsubscribeFrame(id: id))
         }
 
-        return frames.count
+        let batch = withLock { () -> [[String: Any]] in
+            resubscribeSlots = resubscribeSlots.filter { $0.value > now }
+
+            return takeResubscribesLocked(now: now)
+        }
+
+        sendResubscribes(sender, batch)
+
+        return frames.count + batch.count
     }
 
-    /// The earliest pending retry deadline on the `ProcessInfo.systemUptime` clock, or nil when
-    /// none is pending. The caller calls ``retryDueSubscriptions(now:)`` at or after it.
+    /// The earliest pending retry or paced re-subscribe deadline on the `ProcessInfo.systemUptime`
+    /// clock, or nil when none is pending. The caller calls ``retryDueSubscriptions(now:)`` at or
+    /// after it.
     public var nextSubscriptionRetryAt: TimeInterval? {
-        withLock { pendingRetries.values.min() }
+        withLock { (Array(pendingRetries.values) + Array(resubscribeSlots.values)).min() }
     }
 
     /// The layered value one live subscription displays.
@@ -1365,6 +1449,20 @@ public final class LunoraClient {
     private func dispatch(_ frame: [String: Any]) -> String? {
         let kind = frame["type"] as? String
         let id = frame["id"] as? String
+
+        // ANY frame bearing a re-sent subscription's id proves the server has taken it off its
+        // plate: an `ack`, but equally the `error` that refuses it or a `data` that overtakes its
+        // ack. Releasing here rather than per type keeps an unanticipated frame, or a case that
+        // returns early, from stalling the drain.
+        if let id {
+            let (sender, batch) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
+                guard resubscribeSlots.removeValue(forKey: id) != nil, let sender = send else { return (nil, []) }
+
+                return (sender, takeResubscribesLocked(now: ProcessInfo.processInfo.systemUptime))
+            }
+
+            if let sender { sendResubscribes(sender, batch) }
+        }
 
         // The server answered this subscription, so a retry it was waiting on is moot. A `data`,
         // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
