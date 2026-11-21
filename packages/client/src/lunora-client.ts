@@ -2440,10 +2440,13 @@ class LunoraClient {
      * ```ts
      * const chat = client.connectWebSocket<{ text: string }>("/chat", {
      *     onMessage: (message) => append(message.text),
+     *     onOpen: () => chat.send({ text: "hello" }),
      * });
-     * chat.send({ text: "hello" });
+     * // …once the view goes away:
      * chat.close();
      * ```
+     *
+     * Send from `onOpen` (or later): a `send` made before the socket opens is dropped.
      *
      * The socket carries the browser's session cookie, or an `Authorization` header
      * where the client can set one, and either establishes a user. A route declared `auth: true` on
