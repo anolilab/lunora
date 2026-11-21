@@ -8,6 +8,7 @@
  * live progress, survives pause/resume, resumes after a dropped connection, and
  * is gated by RLS (denied uploads are rejected, no admin gating involved).
  */
+import { Tus } from "@visulima/storage/handler/http/fetch";
 import { MemoryStorage } from "@visulima/storage/provider/memory";
 import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -341,6 +342,34 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
                 expect(response.headers.get("tus-version")).toBe("1.0.0");
             });
 
+            it.each([["partial"], [`final;${ENDPOINT}/a ${ENDPOINT}/b`]])(
+                "refuses a POST with Upload-Concat: %s (400) before a gate that admits everyone",
+                async (concat) => {
+                    expect.hasAssertions();
+
+                    const authorize = vi.fn<() => boolean>(() => true);
+                    const route = createUploadHandler({ authorize, storage: new MemoryStorage({ path: "/upload" }) });
+                    const response = await route.fetch(
+                        new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Concat": concat, "Upload-Length": "4" }, method: "POST" }),
+                    );
+
+                    expect(response.status).toBe(400);
+                    expect(response.headers.get("tus-resumable")).toBe("1.0.0");
+                    await expect(response.json()).resolves.toMatchObject({ error: { message: expect.stringMatching(/Upload-Concat/) } });
+                    expect(authorize).not.toHaveBeenCalled();
+                },
+            );
+
+            it("does not advertise the concatenation extension on OPTIONS", async () => {
+                expect.hasAssertions();
+
+                const response = await tusRoute().fetch(new Request(ENDPOINT, { method: "OPTIONS" }));
+                const extensions = (response.headers.get("tus-extension") ?? "").split(",").map((extension) => extension.trim());
+
+                expect(extensions).toContain("creation");
+                expect(extensions).not.toContain("concatenation");
+            });
+
             it("refuses GET on a stored upload (405), even with a valid Tus-Resumable header", async () => {
                 expect.hasAssertions();
 
@@ -660,31 +689,27 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     describe("upload ownership, enforced by the gate the docs show", () => {
         /**
          * The gate from the file-storage guide: anyone signed in may create an
-         * upload, every later request must name an upload the caller owns, and
-         * a create that names other uploads (TUS `Upload-Concat: final;…`) is
-         * refused, since the bundled client never sends one.
+         * upload, and every later request must name an upload the caller owns.
          */
         const ownedRoute = (protocol: "chunked-rest" | "tus", storage = new MemoryStorage({ path: "/upload" })) => {
             const owners = new Map<string, string>();
-            const route = createUploadHandler({
-                authorize: ({ method, request, url }) => {
-                    const user = request.headers.get("x-user");
+            const authorize = vi.fn<(context: UploadAuthzContext) => boolean>(({ method, request, url }) => {
+                const user = request.headers.get("x-user");
 
-                    if (user === null) {
-                        return false;
-                    }
+                if (user === null) {
+                    return false;
+                }
 
-                    if (method === "POST") {
-                        return !request.headers.has("upload-concat");
-                    }
+                if (method === "POST") {
+                    return true;
+                }
 
-                    return owners.get(uploadId(url.href)) === user;
-                },
-                protocol,
-                storage,
+                return owners.get(uploadId(url.href)) === user;
             });
+            const route = createUploadHandler({ authorize, protocol, storage });
 
             return {
+                authorize,
                 fetch: async (request: Request): Promise<Response> => {
                     const response = await route.fetch(request);
                     const location = response.headers.get("location");
@@ -763,24 +788,26 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             expect(aliceHead.ok).toBe(true);
         });
 
-        it("refuses a TUS create that concatenates another caller's finished partial upload (403)", async () => {
+        it("refuses a TUS create that concatenates another caller's finished partial upload (400), before the gate", async () => {
             expect.hasAssertions();
 
             const storage = new MemoryStorage({ path: "/upload" });
-            // Alice's partial, written over the same storage: the gate above refuses partial creates too.
-            const seed = tusDriver(createUploadHandler({ silent: true, storage }));
+            // Alice's partial, written by upstream's own handler over the same storage: the route refuses partial creates too.
+            const seed = tusDriver(new Tus({ storage }));
             const partial = await seed.create(4, {}, { "Upload-Concat": "partial" });
 
             const seeded = await seed.patch(partial, 0, new Uint8Array(4).fill(1));
 
             expect(seeded.status).toBe(204);
 
-            const bob = as(ownedRoute("tus", storage), "bob");
+            const route = ownedRoute("tus", storage);
+            const bob = as(route, "bob");
             const concatenated = await bob.fetch(
                 new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Concat": `final;${new URL(partial).pathname}` }, method: "POST" }),
             );
 
-            expect(concatenated.status).toBe(403);
+            expect(concatenated.status).toBe(400);
+            expect(route.authorize).not.toHaveBeenCalled();
         });
     });
 

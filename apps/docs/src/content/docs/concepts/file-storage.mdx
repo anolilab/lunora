@@ -207,11 +207,12 @@ code.
 The gate has two jobs. On `POST` it decides who may start an upload. On every
 other method it must check that the upload in the URL belongs to the caller,
 because anyone who learns an upload's id could otherwise append to it, or cancel
-it. So record the owner when the upload is created. A TUS `POST` can also name
-other uploads: `Upload-Concat: final;<url> <url>` builds a new upload from
-finished partial ones, so a caller who knows another caller's partial upload
-could take its bytes into an upload of their own. The bundled client never
-sends `Upload-Concat`, so refuse a `POST` that carries it. In an
+it. So record the owner when the upload is created. The route refuses TUS
+concatenation (`Upload-Concat`, `400`) before the gate runs: a
+`final;<url> <url>` create names other uploads in a header, not in the URL,
+so a gate that checks ownership by URL could not stop one caller from building a
+file out of another caller's partial upload. The bundled client never sends it.
+In an
 [HTTP action](/docs/concepts/http-endpoints) the caller is already resolved on
 `ctx.auth`:
 
@@ -244,8 +245,7 @@ const upload = httpAction(async (ctx, request) => {
         maxFileSize: 2048 * MiB, // 2 GiB, the ceiling for any upload
         // Lower it per upload from the type the client declares.
         maxFileSizeFor: ({ contentType }) => (contentType.startsWith("image/") ? 10 * MiB : undefined),
-        authorize: async ({ method, request, url }) =>
-            method === "POST" ? !request.headers.has("upload-concat") : await ctx.runQuery(internal.uploads.isOwner, { uploadId: uploadId(url), userId }),
+        authorize: async ({ method, url }) => method === "POST" || (await ctx.runQuery(internal.uploads.isOwner, { uploadId: uploadId(url), userId })),
     });
     const response = await handler.fetch(request);
 
@@ -400,7 +400,7 @@ the binding of that same bucket.
 - **Unsupported TUS extensions.** The binding provider does not offer
   `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`. A
   request that sends `Upload-Checksum` anyway gets a `400` before its body is
-  read.
+  read. The route refuses `Upload-Concat` (`400`) over every provider.
 - **Method overrides.** A request carrying `X-HTTP-Method-Override` (or
   `X-HTTP-Method`, `X-Method-Override`) gets a `405`, so no request can pass the
   write gate as one method and run as another.
