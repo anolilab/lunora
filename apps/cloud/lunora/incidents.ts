@@ -8,7 +8,6 @@ import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { ActionCtx as ActionContext } from "./_generated/server";
 import { action, mutation, query, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -175,12 +174,11 @@ interface LogRow extends EvidenceLogRow {
  * fetched logs) to produce the bundle the runner reasons over.
  */
 const gatherEvidence = async (context: ActionContext, organizationId: Id<"organizations">, incident: InvestigationIncident) => {
-    const { page: storedSpans } = await context.db.observations.findMany({
+    const { page: spans } = await context.db.observations.findMany({
         limit: EVIDENCE_SPAN_SCAN,
         orderBy: [{ startedAt: "desc" }],
         where: { organizationId },
     });
-    const spans = storedSpans.map((row) => absentForNull(row));
 
     // First pass: correlate spans → related trace ids (no logs yet).
     const preliminary = buildEvidenceBundle({ incident, logs: [], spans });
@@ -195,7 +193,7 @@ const gatherEvidence = async (context: ActionContext, organizationId: Id<"organi
             where: { organizationId, traceId },
         });
 
-        logs.push(...logPage.map((row) => absentForNull(row)));
+        logs.push(...logPage);
     }
 
     return buildEvidenceBundle({ incident, logs, spans });

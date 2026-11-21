@@ -345,11 +345,7 @@ export const planForScript = query
  * compile-time only and strips nothing at the wire.
  */
 
-/**
- * The columns `toDeploymentView` writes, typed as the stored row types them. The
- * nullable columns it leaves out stay on the declared type, nullable as they were,
- * so the listed API's return type does not change shape.
- */
+/** The columns `toDeploymentView` writes, typed as the stored row types them. */
 type DeploymentView = Pick<
     DeploymentRow,
     | "_id"
@@ -359,21 +355,21 @@ type DeploymentView = Pick<
     | "bundleHash"
     | "createdAt"
     | "createdBy"
+    | "cronSpecs"
+    | "durableObjectClasses"
     | "expiresAt"
     | "kind"
     | "organizationId"
     | "projectId"
+    | "runtime"
     | "scriptName"
     | "status"
     | "updatedAt"
     | "url"
+    | "verifyingAt"
     | "version"
 > & {
-    cronSpecs?: null | string[];
-    durableObjectClasses?: null | string[];
-    runtime?: "worker" | null;
     target?: string;
-    verifyingAt?: null | number;
 };
 
 /** Drop the admin-token fields from a stored row. */

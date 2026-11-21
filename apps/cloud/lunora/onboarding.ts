@@ -1,5 +1,4 @@
 import { query, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import { assertMember } from "./authz";
 
 /**
@@ -75,7 +74,7 @@ export const checklist = query
 
         const steps = deriveChecklistSteps({
             deployments: deployments.page,
-            keys: keys.page.map((row) => absentForNull(row)),
+            keys: keys.page,
             projects: projects.page.length,
         });
 

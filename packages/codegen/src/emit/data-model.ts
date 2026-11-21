@@ -34,11 +34,10 @@ const emitDataModel = (schema: SchemaIR): string => {
                     if (validator.kind === "optional") {
                         const inner = validator.inner ? validatorToType(validator.inner) : "unknown";
 
-                        // A `.global()` table is D1: an unset optional column comes back as SQL NULL,
-                        // not as an absent key. A shard document is JSON, where an unset field is absent.
-                        const absent = table.shardMode === "global" ? `${inner} | null` : inner;
-
-                        return `    ${propertyKey}?: ${absent};`;
+                        // Shard and `.global()` tables alike: the global row decode (`decodeGlobalRow`
+                        // in @lunora/sql-store) drops a NULL column unless the inner validator admits
+                        // null, and then `inner` already renders the `| null` itself.
+                        return `    ${propertyKey}?: ${inner};`;
                     }
 
                     return `    ${propertyKey}: ${validatorToType(validator)};`;

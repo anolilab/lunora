@@ -5,7 +5,6 @@ import type { NotificationEvent, NotificationKind } from "../src/notifications/e
 import { NOTIFICATION_EVENTS, renderNotification } from "../src/notifications/events";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import { mutation, query, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
 import { queueDelivery } from "./notification-outbox";
@@ -122,7 +121,7 @@ export const deliveries = query
         });
 
         return (page as unknown as DeliveryRow[]).map((row) => {
-            return { ...absentForNull(row), channelName: names.get(row.channelId) ?? "removed channel" };
+            return { ...row, channelName: names.get(row.channelId) ?? "removed channel" };
         });
     });
 

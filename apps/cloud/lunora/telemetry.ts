@@ -6,7 +6,6 @@ import { fireCrossedRules, fireMetricRules, partitionByCoverage, readMetricWindo
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server";
-import { absentForNull } from "./absent";
 import {
     assertRowInOrg,
     assertServicesInKeyProject,
@@ -313,7 +312,7 @@ export const ingest = mutation
                 });
             }
             const { page: rulePage } = await context.db.alertRules.findMany({ where: { organizationId: args.organizationId } });
-            const enabledRules = rulePage.map((row) => absentForNull(row)).filter((rule) => rule.enabled);
+            const enabledRules = rulePage.filter((rule) => rule.enabled);
             // Count-crossing rules (issue/incident) evaluated per upserted group below.
             const rules: FiringRule[] = enabledRules
                 .filter((rule) => COUNT_TARGETS.has(rule.target))
@@ -421,7 +420,7 @@ export const ingest = mutation
                             where: { organizationId: args.organizationId, startedAt: { gt: since } },
                         });
 
-                        return { ...result, page: result.page.map((row) => absentForNull(row)) };
+                        return result;
                     },
                 );
                 // A rule whose windows reach past the bound is left to the periodic
