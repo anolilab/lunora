@@ -52,6 +52,17 @@ const postsWith = (withInput: Record<string, unknown>) =>
 /** No `rls()` at all: the guard admits the `.public()` parent, and the child must still be refused. */
 const noticesWithSecrets = query.query(async ({ ctx }) => (ctx.db as unknown as { findMany: FindMany }).findMany("notices", { with: { secrets: true } }));
 
+/** No `rls()`, and the caller hands in its own relation filter: it must not stand in for the middleware's. */
+const noticesWithFilter = (relationBaseWhere: unknown) =>
+    query.query(async ({ ctx }) => (ctx.db as unknown as { findMany: FindMany }).findMany("notices", { relationBaseWhere, with: { secrets: true } }));
+
+const readSecrets = definePolicy({ on: "read", table: "secrets", when: () => true });
+
+/** The child has a read policy too, so the relation load is allowed. */
+const postsWithPoliciedSecrets = query
+    .use(rlsForTest(definePolicies([readPosts, readSecrets])))
+    .query(async ({ ctx }) => (ctx.db as unknown as { findMany: FindMany }).findMany("posts", { with: { secrets: true } }));
+
 const harnesses = trackHarnesses();
 
 const seeded = async (): Promise<ReturnType<typeof lunoraTest>> => {
@@ -108,6 +119,26 @@ describe("lunoraTest — relation reads of a protected table without a read poli
         const t = await seeded();
 
         await expect(t.query(noticesWithSecrets, {})).rejects.toMatchObject({ code: "RLS_REQUIRED", table: "secrets" });
+    });
+
+    it.each([
+        ["a callback answering no filter", () => undefined],
+        ["null", null],
+    ])("refuses the protected child when the caller supplies %s as its relation filter", async (_label, relationBaseWhere) => {
+        expect.assertions(1);
+
+        const t = await seeded();
+
+        await expect(t.query(noticesWithFilter(relationBaseWhere), {})).rejects.toMatchObject({ code: "RLS_REQUIRED", table: "secrets" });
+    });
+
+    it("still loads a protected child its read policy allows", async () => {
+        expect.assertions(1);
+
+        const t = await seeded();
+        const { page } = await t.query(postsWithPoliciedSecrets, {});
+
+        expect(page.map((post) => (post["secrets"] as Record<string, unknown>[]).map((row) => row["body"]))).toStrictEqual([["s"]]);
     });
 
     it("still loads a .public() child", async () => {

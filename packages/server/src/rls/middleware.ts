@@ -497,9 +497,10 @@ const FALSE_PREDICATE: WhereInput = deny();
 const RLS_UNWRAP_SYMBOL = Symbol.for("lunora.ctxdb.rls-unwrap");
 
 /**
- * The guard's table gate, read off the guarded writer through the same kind of
- * `Symbol.for` key: it throws `RlsRequiredError` for a protected table and is
- * absent on a writer that is not guarded.
+ * The guard's relation gate, read off the guarded writer through the same kind of
+ * `Symbol.for` key and absent on a writer that is not guarded: `gate` throws
+ * `RlsRequiredError` for a protected table, and `trust` registers this
+ * middleware's relation filter as the one the guard lets replace its own gate.
  */
 const RLS_RELATION_GATE_SYMBOL = Symbol.for("lunora.ctxdb.rls-relation-gate");
 
@@ -1011,7 +1012,9 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      */
     const route = (tableName: string): RlsDatabase => (readBase(tableName).restricts ? raw : base);
 
-    const relationGate = (base as unknown as Record<PropertyKey, unknown>)[RLS_RELATION_GATE_SYMBOL] as ((tableName: string) => void) | undefined;
+    const relationGuard = (base as unknown as Record<PropertyKey, unknown>)[RLS_RELATION_GATE_SYMBOL] as
+        | { gate: (tableName: string) => void; trust: (filter: object) => void }
+        | undefined;
 
     /**
      * The read filter for a TARGET table, attached to every read so `@lunora/do`'s
@@ -1033,11 +1036,13 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         const { baseWhere, restricts } = readBase(table);
 
         if (!restricts) {
-            relationGate?.(table);
+            relationGuard?.gate(table);
         }
 
         return baseWhere;
     };
+
+    relationGuard?.trust(relationReadFilter);
 
     /**
      * Resolve the raw row for `table`'s `id` and whether that table is policy-gated. The owner is the named table,

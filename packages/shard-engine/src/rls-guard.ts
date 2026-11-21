@@ -35,11 +35,12 @@ import type { DatabaseWriterLike, RelatedOptions, RelatedStart, RelationEdge } f
 const RLS_UNWRAP_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-unwrap");
 
 /**
- * Well-known symbol the guard hangs its table gate off of, keyed and hidden for
+ * Well-known symbol the guard hangs its relation gate off of, keyed and hidden for
  * the reasons {@link RLS_UNWRAP_SYMBOL} gives. A policied parent read routes
  * around the guard to the unwrapped writer, so the relation children that read
- * loads never reach a gated method; the `rls()` middleware calls this gate from
- * its relation read filter for every child table it has no read policy for.
+ * loads never reach a gated method; the `rls()` middleware calls `gate` from
+ * its relation read filter for every child table it has no read policy for, and
+ * registers that filter through `trust` so the guard lets it stand in for its own.
  */
 const RLS_RELATION_GATE_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-relation-gate");
 
@@ -488,13 +489,19 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
 
     // The engine resolves a read's relation children against the unwrapped
     // writer, so gating the parent table alone would let a `.public()` parent
-    // carry a protected child out. A caller-supplied filter is the `rls()`
-    // middleware's, which gates through {@link RLS_RELATION_GATE_SYMBOL} itself.
-    const relationGate = (tableName: string): undefined => {
-        guardTable(tableName);
+    // carry a protected child out. Only the `rls()` middleware's filter, which
+    // gates through {@link RLS_RELATION_GATE_SYMBOL} itself, replaces that gate:
+    // any other value in the args (a handler's own callback, a forwarded `null`)
+    // could answer "no filter" for a protected child.
+    const trustedFilters = new WeakSet<object>();
 
-        return undefined;
-    };
+    const relationGate =
+        (callerFilter: unknown) =>
+        (tableName: string): unknown => {
+            guardTable(tableName);
+
+            return typeof callerFilter === "function" ? (callerFilter as (table: string) => unknown)(tableName) : undefined;
+        };
 
     const withRelationGate = (rest: unknown[]): unknown[] => {
         const [args, ...more] = rest;
@@ -504,11 +511,13 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
             return rest;
         }
 
-        if ((args as { relationBaseWhere?: unknown }).relationBaseWhere !== undefined) {
+        const { relationBaseWhere } = args as { relationBaseWhere?: unknown };
+
+        if (typeof relationBaseWhere === "function" && trustedFilters.has(relationBaseWhere)) {
             return rest;
         }
 
-        return [{ ...args, relationBaseWhere: relationGate }, ...more];
+        return [{ ...args, relationBaseWhere: relationGate(relationBaseWhere) }, ...more];
     };
 
     for (const name of LOOP_GATED_METHODS) {
@@ -553,7 +562,17 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
     // enumerable. Direct property reads (the middleware's own lookup, the test
     // harness's `rawDatabase`) are unaffected.
     Object.defineProperty(guarded, RLS_UNWRAP_SYMBOL, { configurable: true, enumerable: false, value: raw, writable: false });
-    Object.defineProperty(guarded, RLS_RELATION_GATE_SYMBOL, { configurable: true, enumerable: false, value: guardTable, writable: false });
+    Object.defineProperty(guarded, RLS_RELATION_GATE_SYMBOL, {
+        configurable: true,
+        enumerable: false,
+        value: {
+            gate: guardTable,
+            trust: (filter: object): void => {
+                trustedFilters.add(filter);
+            },
+        },
+        writable: false,
+    });
 
     return guarded as unknown as W;
 };
