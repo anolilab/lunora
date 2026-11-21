@@ -35,9 +35,12 @@ const emitDataModel = (schema: SchemaIR): string => {
                         const inner = validator.inner ? validatorToType(validator.inner) : "unknown";
 
                         // Shard and `.global()` tables alike: the global row decode (`decodeGlobalRow`
-                        // in @lunora/sql-store) drops a NULL column unless the inner validator admits
-                        // null, and then `inner` already renders the `| null` itself.
-                        return `    ${propertyKey}?: ${inner};`;
+                        // in @lunora/sql-store) drops a NULL column unless the validator admits null.
+                        // An inner `.nullable()` already renders its `| null` in `inner`; the optional's
+                        // own `.nullable()` sits on its column meta and widens here.
+                        const type = validator.column?.notNull === false ? `${inner} | null` : inner;
+
+                        return `    ${propertyKey}?: ${type};`;
                     }
 
                     return `    ${propertyKey}: ${validatorToType(validator)};`;
