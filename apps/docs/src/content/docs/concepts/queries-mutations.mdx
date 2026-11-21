@@ -159,7 +159,9 @@ Use it only for data you control; reach for `insertMany` for anything user-suppl
 In a mutation a failed batch rolls back whole. In an action there is no surrounding
 transaction: a large batch is written in several statements, so when a later one
 fails (a duplicate `_id`, say) the rows before it stay, fully indexed and broadcast,
-and the call still rejects.
+and the call still rejects. A `.global()` table is the exception in both: its rows go
+to D1 one `INSERT` at a time, outside the mutation's transaction, so the rows before
+a failing one stay there either way.
 
 ## `ctx.auth`
 

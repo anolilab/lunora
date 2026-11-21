@@ -884,7 +884,8 @@ export interface DatabaseWriterLike {
      *
      * Rows are written in chunked multi-row INSERTs. Outside a transaction (an action) each chunk is
      * its own commit, so a chunk that throws leaves the earlier ones on disk, each row with its
-     * companions and write report; inside one, the throw rolls the whole batch back.
+     * companions and write report; inside one, the throw rolls the whole batch back. A `.global()`
+     * table's rows go to D1 one at a time, outside any transaction, so earlier rows stay either way.
      */
     insertManyUnsafe?: (
         tableName: string,

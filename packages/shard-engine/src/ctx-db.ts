@@ -3258,6 +3258,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     });
 
     /**
+     * Companions + write report for rows an `insertManyUnsafe` chunk committed before a later chunk
+     * threw. Each row on its own, failures dropped: one row's companion error must not leave the
+     * rows after it unsynced, nor replace the insert error that stopped the batch, which is the one
+     * the caller has to act on.
+     */
+    const catchUpCommittedRows = async (tableName: string, rows: ReadonlyArray<{ document: Record<string, unknown>; id: string }>): Promise<void> => {
+        for (const { document, id } of rows) {
+            try {
+                syncCompanionsForInsert(tableName, id, document);
+                // Raw hook, not `onWrite`: the batch was metered before the insert.
+                // eslint-disable-next-line no-await-in-loop -- sequential write-hook fan-out, mirrors the single insert
+                await reportWrite({ doc: document, id, op: "insert", table: tableName });
+            } catch {
+                // Dropped: see above.
+            }
+        }
+    };
+
+    /**
      * Reject a `rank()`/`rankPage()` whose partition spans shards. When a table
      * is `.shardBy(field)` and the rankIndex's `partitionBy` does NOT include
      * that shard field, each partition is split across every DO — so this
@@ -4731,7 +4750,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // table for good. Inside a transaction the throw rolls every chunk
                 // back, so there is nothing to catch up.
                 if (!inTransaction()) {
-                    await syncWritten(rows.slice(0, written));
+                    await catchUpCommittedRows(tableName, rows.slice(0, written));
                 }
 
                 throw error;

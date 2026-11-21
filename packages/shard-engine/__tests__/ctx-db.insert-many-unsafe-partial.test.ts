@@ -81,7 +81,7 @@ describe("insertManyUnsafe — a later chunk fails outside a transaction", () =>
     });
 
     it("leaves a transaction's failed batch to the rollback: nothing is caught up or reported", async () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         runShardMigrations(harness.sql, schema);
 
@@ -100,9 +100,44 @@ describe("insertManyUnsafe — a later chunk fails outside a transaction", () =>
             return { _id: index === DUPLICATE_AT ? "r0" : `r${String(index)}`, body: "hello", bucket: "b", score: index };
         });
 
+        harness.sql.exec("BEGIN");
+
         await expect(writer.insertManyUnsafe?.("items", documents, { allowExplicitId: true })).rejects.toThrow('unique constraint violation on "items"');
+
+        harness.sql.exec("ROLLBACK");
 
         // The storage transaction undoes the first chunk; the writer must not have announced it.
         expect(reported).toStrictEqual([]);
+        expect(harness.sql.exec("SELECT COUNT(*) AS n FROM items").toArray()[0]?.["n"]).toBe(0);
+        expect(harness.sql.exec(`SELECT COUNT(*) AS n FROM ${aggregateTableName("items", "count_by_bucket")}`).toArray()[0]?.["n"]).toBe(0);
+    });
+
+    it("keeps the insert error and catches up every committed row when one row's catch-up fails", async () => {
+        expect.assertions(2);
+
+        runShardMigrations(harness.sql, schema);
+
+        const reported: string[] = [];
+        const writer = createShardContextDatabase({
+            clock: () => 1_700_000_000_000,
+            onWrite: (event) => {
+                if (event.id === "r1") {
+                    throw new Error("write hook failed");
+                }
+
+                reported.push(event.id);
+            },
+            schema,
+            sql: harness.sql,
+        });
+
+        const documents = Array.from({ length: ROWS }, (_, index) => {
+            return { _id: index === DUPLICATE_AT ? "r0" : `r${String(index)}`, body: "hello", bucket: "b", score: index };
+        });
+
+        await expect(writer.insertManyUnsafe?.("items", documents, { allowExplicitId: true })).rejects.toThrow('unique constraint violation on "items"');
+
+        // Every committed row but the one whose hook threw was still reported.
+        expect(reported).toHaveLength(32);
     });
 });
