@@ -1119,45 +1119,46 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
 };
 
 /**
- * Scaffold `lunora/{schema,messages}.ts` into `cwd` when absent. Idempotent:
- * an existing `lunora/schema.ts` is left untouched and reported, so re-running
- * `lunora init --here` never double-patches the schema. Returns the list of
- * files actually written (empty when the directory already had a schema).
+ * Scaffold `lunora/{schema,messages}.ts` into `cwd`, each only when missing:
+ * a hand-edited file is never clobbered on a re-run, and a re-run after a
+ * partial failure still writes the file the first run could not. A failed
+ * write fails the in-place init like a failed Vite config write does.
  */
-const scaffoldLunoraDirectory = (cwd: string, logger: Logger): ReadonlyArray<string> => {
+const scaffoldLunoraDirectory = (cwd: string, logger: Logger): InitCommandResult => {
     const lunoraDirectory = join(cwd, "lunora");
-    const schemaPath = join(lunoraDirectory, "schema.ts");
+    const files: [path: string, content: string][] = [
+        [join(lunoraDirectory, "schema.ts"), SAMPLE_SCHEMA],
+        [join(lunoraDirectory, "messages.ts"), SAMPLE_FUNCTION],
+    ];
+    const pending = files.filter(([path]) => !existsSync(path));
 
-    if (existsSync(schemaPath)) {
-        logger.info(`lunora/ already present — left ${schemaPath} untouched`);
+    if (pending.length === 0) {
+        logger.info(`lunora/ already present — left ${lunoraDirectory} untouched`);
 
-        return [];
+        return { code: 0, files: [], target: cwd };
+    }
+
+    try {
+        mkdirSync(lunoraDirectory, { recursive: true });
+    } catch (error) {
+        return inPlaceIoFailure("write", lunoraDirectory, error, cwd, logger);
     }
 
     const written: string[] = [];
 
-    try {
-        mkdirSync(lunoraDirectory, { recursive: true });
-        writeFileSync(schemaPath, SAMPLE_SCHEMA, "utf8");
-        written.push(schemaPath);
-
-        const functionPath = join(lunoraDirectory, "messages.ts");
-
-        // The function file is only written when missing so a hand-edited one is
-        // never clobbered on a re-run.
-        if (!existsSync(functionPath)) {
-            writeFileSync(functionPath, SAMPLE_FUNCTION, "utf8");
-            written.push(functionPath);
+    for (const [path, content] of pending) {
+        try {
+            writeFileSync(path, content, "utf8");
+        } catch (error) {
+            return inPlaceIoFailure("write", path, error, cwd, logger);
         }
 
-        logger.success(`scaffolded lunora/ (${String(written.length)} file(s))`);
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.error(`init --here: could not scaffold lunora/: ${message}`);
+        written.push(path);
     }
 
-    return written;
+    logger.success(`scaffolded lunora/ (${String(written.length)} file(s))`);
+
+    return { code: 0, files: written, target: cwd };
 };
 
 /**
@@ -1275,11 +1276,15 @@ const runInPlaceInit = (cwd: string, logger: Logger): InitCommandResult => {
 
     const scaffolded = scaffoldLunoraDirectory(cwd, logger);
 
+    if (scaffolded.code !== 0) {
+        return scaffolded;
+    }
+
     // The overlay path patches an existing project, so honour its package
     // manager (packageManager field / lockfile) rather than assuming pnpm.
     printFrameworkNextSteps(detection, detectPackageManager(cwd), logger);
 
-    return { code: 0, files: [...viteResult.files, ...scaffolded], target: cwd };
+    return { code: 0, files: [...viteResult.files, ...scaffolded.files], target: cwd };
 };
 
 /**
