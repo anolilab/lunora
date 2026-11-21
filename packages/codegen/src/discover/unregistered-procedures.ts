@@ -383,11 +383,10 @@ const reExportFindings = (
     const findings: Finding[] = [];
 
     for (const [exportName, declarations] of source.getExportedDeclarations()) {
-        if (isRegistered(registrations, relativePath, exportName)) {
-            continue;
-        }
-
-        const declaration = declarations.find((candidate) => Node.isVariableDeclaration(candidate) || Node.isBindingElement(candidate));
+        // `export default onWhisper(…)` resolves to the exported expression, not a declaration.
+        const declaration = declarations.find(
+            (candidate) => Node.isVariableDeclaration(candidate) || Node.isBindingElement(candidate) || Node.isExportAssignment(candidate.getParent()),
+        );
         const home = declaration?.getSourceFile();
 
         if (declaration === undefined || home === undefined || home === source || walked.has(home) || home.getFilePath().includes("/_generated/")) {
@@ -396,7 +395,12 @@ const reExportFindings = (
 
         const registration = registrationOf(declaration);
 
-        if (registration !== undefined) {
+        // A bare-name registration (a queue, workflow, agent or container elsewhere) says nothing
+        // about this binding; for a check that fails open only an exact path may vouch for it.
+        const registered =
+            registration?.security === true ? registrations.byPath.has(`${relativePath}:${exportName}`) : isRegistered(registrations, relativePath, exportName);
+
+        if (registration !== undefined && !registered) {
             findings.push(
                 findingFor(
                     relativePath,

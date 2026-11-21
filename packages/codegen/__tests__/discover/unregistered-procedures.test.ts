@@ -504,6 +504,37 @@ export const viaFactory = makeQuery();
         expect(findings[0]?.remediation).toContain("under `lunora/`");
     });
 
+    it("fails the build for an outside default-export authorizer re-exported into lunora/ under a name", () => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/default-whisper.ts", `import { onWhisper } from "@lunora/server";\n\nexport default onWhisper(async () => false);\n`);
+        write("reexport.ts", `export { default as gate } from "../src/auth/default-whisper";\n`);
+        load("reexport.ts");
+
+        const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter((finding) => finding.name === "procedure_not_registered");
+
+        expect(findings.map((finding) => [finding.metadata["filePath"], finding.metadata["exportName"], finding.level])).toStrictEqual([
+            ["reexport", "gate", "ERROR"],
+        ]);
+    });
+
+    it("fails the build for a re-exported authorizer that shares its name with a registered queue", () => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        write("reexport.ts", `export { gate } from "../src/auth/whisper";\n`);
+        load("reexport.ts");
+
+        // A queue elsewhere registered as `gate` keys on the bare name; it must not stand in for this authorizer.
+        const findings = run(discoverFunctions(project, join(workdir, "lunora")), { byName: ["gate"] }).filter(
+            (finding) => finding.name === "procedure_not_registered",
+        );
+
+        expect(findings.map((finding) => [finding.metadata["exportName"], finding.level])).toStrictEqual([["gate", "ERROR"]]);
+    });
+
     it("warns, without blocking, for an ordinary query re-exported into lunora/ from outside it", () => {
         expect.assertions(2);
 
