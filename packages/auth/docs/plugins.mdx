@@ -180,7 +180,7 @@ refuses with `API_KEY_STORAGE_UNSUPPORTED` when the auth instance has secondary 
 configured, because a cached copy of the key could keep verifying; revoke through
 better-auth's own endpoint in that setup.
 
-**Bans.** A user banned through the `admin` plugin resolves to no identity for as long as the ban is in force, whether they present a cookie session or an API key. Their keys are kept, so lifting the ban restores them.
+**Bans.** A user banned through the `admin` plugin resolves to no identity for as long as the ban is in force when they present an API key, from their next call. A ban also deletes their sessions, but a cookie session can keep resolving for up to the session cookie cache window plus the identity cache window above, because both serve the pre-ban user. Their keys are kept, so lifting the ban restores them.
 
 **The studio** lists a user's keys in the user drawer, with name, the leading
 characters of the key, creation time and expiry, and a Revoke action per row. The
