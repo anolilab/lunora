@@ -1,5 +1,5 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
-import { get } from "svelte/store";
+import { get, writable } from "svelte/store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HeartbeatReference, ListPresentReference } from "../src/presence";
@@ -470,5 +470,59 @@ describe("presence (Svelte)", () => {
         stopError();
         stopPresent();
         handle.teardown();
+    });
+
+    it("follows a reactive room id: leaves the old room, joins the new one at once, and drops the old room's data", () => {
+        expect.assertions(9);
+
+        const fake = createPresenceFakeClient();
+        const room = writable("a");
+
+        // A long interval, so only a room-change heartbeat can reach the new room.
+        const handle = presence(fake.client, room, { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+        const stopPresent = handle.present.subscribe(() => {});
+
+        fake.push("presence:listPresent", { roomId: "a" }, ["alice"]);
+
+        expect(get(handle.present)).toStrictEqual(["alice"]);
+
+        room.set("b");
+
+        expect(fake.mutationCalls.map((call) => (call.args as { roomId: string }).roomId)).toStrictEqual(["a", "b"]);
+        expect(fake.subscribeCalls.map((call) => call.args)).toStrictEqual([{ roomId: "a" }, { roomId: "b" }]);
+        expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true, false]);
+        expect(fake.currentConnectionContext()).toStrictEqual({ roomId: "b", sessionId: "sess-fixed" });
+        expect(get(handle.present)).toBeUndefined();
+
+        // A late push for the room that was left must not appear under the new one.
+        fake.subscribeCalls[0]?.callback(["stale"]);
+
+        expect(get(handle.present)).toBeUndefined();
+
+        fake.push("presence:listPresent", { roomId: "b" }, ["bob"]);
+
+        expect(get(handle.present)).toStrictEqual(["bob"]);
+
+        stopPresent();
+        handle.teardown();
+
+        expect(fake.currentConnectionContext()).toBeUndefined();
+    });
+
+    it("teardown stops the room subscription even while present is still subscribed", () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const room = writable("a");
+        const handle = presence(fake.client, room, { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+        const stopPresent = handle.present.subscribe(() => {});
+
+        handle.teardown();
+        room.set("b");
+
+        expect(fake.subscribeCalls.map((call) => call.args)).toStrictEqual([{ roomId: "a" }]);
+        expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true]);
+
+        stopPresent();
     });
 });

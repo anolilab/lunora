@@ -777,7 +777,7 @@ const usePaginatedQuery: <F extends FunctionReference>(function_: F, args: Maybe
 ### `usePresence` (const)
 
 ```ts
-const usePresence: <H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: UsePresenceOptions<H, L>) => UsePresenceResult<L>;
+const usePresence: <H extends HeartbeatReference, L extends ListPresentReference>(roomId: MaybeRefOrGetter<string>, options: UsePresenceOptions<H, L>) => UsePresenceResult<L>;
 ```
 
 ### `useQuery` (const)

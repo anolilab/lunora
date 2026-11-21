@@ -29,7 +29,8 @@
  * snapshot it writes alongside is what makes the next diff see a dropped table
  * at all.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { discoverMigrations, discoverSchema, readPackageDependencies } from "@lunora/codegen";
@@ -179,8 +180,42 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
 
     const body = renderMigrationFile(slug, diff, now.toISOString());
 
-    writeFileSync(migrationFile, body, "utf8");
-    writeFileSync(snapshotPath, `${JSON.stringify(nextSnapshot, undefined, 4)}\n`, "utf8");
+    // "wx": the file name has one-second resolution, so a same-second rerun must not replace a
+    // migration whose diff the snapshot has already absorbed.
+    try {
+        writeFileSync(migrationFile, body, { encoding: "utf8", flag: "wx" });
+    } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+            // Only EEXIST means the file was someone else's: any other error came after (or instead
+            // of) this run's exclusive create, so a partial file left here would be applied as-is
+            // and could never be rewritten.
+            rmSync(migrationFile, { force: true });
+
+            throw error;
+        }
+
+        const message = `${filename} already exists — a migration with this name was generated in the same second; re-run, or pass a different --name`;
+
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, empty: true, error: message, migrationFile: "" };
+    }
+
+    // Temp file + rename so a crash cannot leave a torn snapshot; on failure the migration file is
+    // removed so the retry diffs against the old snapshot instead of emitting the same diff twice.
+    // A per-run name created with "wx" never follows a link planted in the project, and two runs
+    // never rename each other's file into place.
+    const temporarySnapshotPath = `${snapshotPath}.${randomUUID()}.tmp`;
+
+    try {
+        writeFileSync(temporarySnapshotPath, `${JSON.stringify(nextSnapshot, undefined, 4)}\n`, { encoding: "utf8", flag: "wx" });
+        renameSync(temporarySnapshotPath, snapshotPath);
+    } catch (error: unknown) {
+        rmSync(migrationFile, { force: true });
+        rmSync(temporarySnapshotPath, { force: true });
+
+        throw error;
+    }
 
     options.logger.success(`wrote ${migrationFile}`);
 

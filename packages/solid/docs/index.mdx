@@ -67,7 +67,7 @@ render(
 | `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                                     |
 | `createAuth`                                        | primitive | Identity plumbing: `{ status, token, user }` signals + `setToken`. Gate on `status`.                               |
 | `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                                         |
-| `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list.                                                   |
+| `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list. `roomId` may be an accessor; presence follows it. |
 | `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.                              |
 | `createConnectionStatus`                            | primitive | Reactive accessor of the live-socket `ConnectionStatus`.                                                           |
 | `hydratePreloaded`                                  | primitive | Seed a query accessor synchronously from an SSR `Preloaded` token, then attach the subscription.                   |

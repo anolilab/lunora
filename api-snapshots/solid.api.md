@@ -760,7 +760,7 @@ const createPaginatedQuery: <F extends FunctionReference>(function_: F, args: "s
 ### `createPresence` (const)
 
 ```ts
-const createPresence: <H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: CreatePresenceOptions<H, L>) => CreatePresenceResult<L>;
+const createPresence: <H extends HeartbeatReference, L extends ListPresentReference>(roomId: Accessor<string> | string, options: CreatePresenceOptions<H, L>) => CreatePresenceResult<L>;
 ```
 
 ### `createQuery` (const)

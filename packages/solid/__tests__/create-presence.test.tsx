@@ -1,6 +1,7 @@
 /* eslint-disable no-underscore-dangle -- `__lunoraRef` is the Lunora function-reference field */
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HeartbeatReference, ListPresentReference } from "../src/create-presence";
@@ -390,5 +391,85 @@ describe("createPresence (Solid)", () => {
         expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
         // The last good value is retained — the error is additive, not a reset.
         expect(captured!.present()).toStrictEqual([{ sessionId: "sess-fixed" }]);
+    });
+
+    it("follows a reactive room id: leaves the old room, joins the new one at once, and drops the old room's data", async () => {
+        expect.assertions(9);
+
+        const fake = createPresenceFakeClient();
+        const [room, setRoom] = createSignal("a");
+        let captured: ReturnType<typeof createPresence> | undefined;
+
+        render(
+            () => {
+                // A long interval, so only a room-change heartbeat can reach the new room.
+                captured = createPresence(room, { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        fake.push("presence:listPresent", { roomId: "a" }, ["alice"]);
+
+        expect(captured!.present()).toStrictEqual(["alice"]);
+
+        setRoom("b");
+        await flushAsync();
+
+        expect(fake.mutationCalls.map((call) => (call.args as { roomId: string }).roomId)).toStrictEqual(["a", "b"]);
+        expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true, false]);
+        expect(fake.subscribeCalls.map((call) => call.args)).toStrictEqual([{ roomId: "a" }, { roomId: "b" }]);
+        expect(fake.connectionContextHolders.map((holder) => holder.context)).toStrictEqual([
+            { roomId: "a", sessionId: "sess-fixed" },
+            { roomId: "b", sessionId: "sess-fixed" },
+        ]);
+        expect(fake.connectionContextHolders.map((holder) => holder.released)).toStrictEqual([true, false]);
+        expect(captured!.present()).toBeUndefined();
+
+        // A late push for the room that was left must not appear under the new one.
+        fake.subscribeCalls[0]?.callback(["stale"]);
+
+        expect(captured!.present()).toBeUndefined();
+
+        fake.push("presence:listPresent", { roomId: "b" }, ["bob"]);
+
+        expect(captured!.present()).toStrictEqual(["bob"]);
+    });
+
+    it("keeps the room armed when the room id accessor re-runs to the same value", async () => {
+        expect.assertions(3);
+
+        const fake = createPresenceFakeClient();
+        const [org, setOrg] = createSignal({ id: "acme" });
+        let captured: ReturnType<typeof createPresence> | undefined;
+
+        render(
+            () => {
+                captured = createPresence(() => `${org().id}:lobby`, {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 60_000,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        fake.push("presence:listPresent", { roomId: "acme:lobby" }, ["alice"]);
+
+        // A new object with the same id: the accessor re-runs, the room string does not change.
+        setOrg({ id: "acme" });
+        await flushAsync();
+
+        expect(fake.subscribeCalls).toHaveLength(1);
+        expect(fake.connectionContextHolders).toHaveLength(1);
+        expect(captured!.present()).toStrictEqual(["alice"]);
     });
 });

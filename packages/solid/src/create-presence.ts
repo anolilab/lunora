@@ -1,17 +1,19 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
-import { createSignal } from "solid-js";
+import type { Accessor } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
-import { onMounted } from "./solid-compat";
+import { trackedEffect } from "./solid-compat";
 
 /**
  * `createPresence` — collaborative-awareness primitive, the client half of the
  * `@lunora/server` `definePresence` preset.
  *
  * Drives the heartbeat mutation (on mount, interval, and tab re-focus) and
- * subscribes to the live `listPresent` query for the given room.
+ * subscribes to the live `listPresent` query for the given room. `roomId` may
+ * be an accessor; a change leaves the old room and joins the new one.
  *
  * Call inside a reactive context (component / `createRoot`).
  */
@@ -67,7 +69,7 @@ interface CreatePresenceResult<L extends ListPresentReference> {
 const DEFAULT_INTERVAL_MS = 10_000;
 
 const createPresence = <H extends HeartbeatReference, L extends ListPresentReference>(
-    roomId: string,
+    roomId: Accessor<string> | string,
     options: CreatePresenceOptions<H, L>,
 ): CreatePresenceResult<L> => {
     const client = useLunora();
@@ -85,10 +87,12 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     let latestData: Record<string, unknown> | undefined = options.data;
     // True only between mount and teardown; `setData` must not heartbeat before then.
     let mounted = false;
+    // The room the armed wiring belongs to; only read while `mounted`.
+    let currentRoom = "";
 
     const sendHeartbeat = (): void => {
         const args = {
-            roomId,
+            roomId: currentRoom,
             sessionId,
             ...(latestData === undefined ? {} : { data: latestData }),
         } as ArgsOf<H>;
@@ -104,10 +108,25 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         }
     };
 
-    onMounted(() => {
+    // Memoised: Solid 1.x's `on` re-runs on every dependency notification, so an accessor that
+    // re-computes the same room string would otherwise leave and rejoin the room.
+    const resolveRoom: Accessor<string> = typeof roomId === "function" ? createMemo(roomId) : () => roomId;
+
+    // Re-runs per room: the previous room's interval, listener, connection context and subscription
+    // are torn down before the next room is armed. Effects do not run during SSR, which keeps
+    // heartbeats and sockets off the server.
+    trackedEffect(resolveRoom, (room) => {
+        currentRoom = room;
         mounted = true;
 
-        // Heartbeat immediately on mount.
+        // A room change must not show the previous room's members or error under the new one.
+        setPresent(() => undefined);
+        setError(() => undefined);
+
+        // Guards a value or error the client delivers after this room was torn down.
+        let live = true;
+
+        // Heartbeat immediately on mount, and at once for a new room.
         sendHeartbeat();
 
         const intervalHandle = setInterval(sendHeartbeat, intervalMs);
@@ -129,26 +148,31 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         // shard each hold their own registration, so one unmounting no longer
         // clears the other's context. The returned release drops only this hook's
         // holder.
-        const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
+        const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
 
         // Subscribe to the live present-list for the room.
         const unsubscribe = client.subscribe(
             listPresent,
-            { roomId } as ArgsOf<L>,
+            { roomId: room } as ArgsOf<L>,
             (value) => {
-                setPresent(() => value);
-                setError(undefined);
+                if (live) {
+                    setPresent(() => value);
+                    setError(undefined);
+                }
             },
             {
                 onError: (subscriptionError) => {
-                    setError(subscriptionError);
-                    options.onError?.(subscriptionError);
+                    if (live) {
+                        setError(subscriptionError);
+                        options.onError?.(subscriptionError);
+                    }
                 },
                 shardKey,
             },
         );
 
         return () => {
+            live = false;
             mounted = false;
             clearInterval(intervalHandle);
 

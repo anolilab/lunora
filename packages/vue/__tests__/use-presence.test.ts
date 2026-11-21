@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { effectScope, nextTick } from "vue";
+import { effectScope, nextTick, ref } from "vue";
 
 import type { HeartbeatReference, ListPresentReference } from "../src/use-presence";
 import { usePresence } from "../src/use-presence";
@@ -236,6 +236,50 @@ describe("usePresence (Vue)", () => {
 
         expect(fake.mutationSpy).toHaveBeenCalledTimes(callsAtStop);
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("follows a reactive room id: leaves the old room, joins the new one at once, and drops the old room's data", async () => {
+        expect.assertions(9);
+
+        const fake = createPresenceFakeClient();
+        const room = ref("a");
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence(room, {
+                    // A long interval, so only a room-change heartbeat can reach the new room.
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 60_000,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        fake.push("presence:listPresent", { roomId: "a" }, ["alice"]);
+
+        expect(result.present.value).toStrictEqual(["alice"]);
+        expect(fake.acquireConnectionContext).toHaveBeenCalledTimes(1);
+
+        room.value = "b";
+        await nextTick();
+
+        expect(fake.mutationSpy.mock.calls.map((call) => (call[1] as { roomId: string }).roomId)).toStrictEqual(["a", "b"]);
+        expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
+        expect(fake.subscribeCalls.map((call) => call.args)).toStrictEqual([{ roomId: "a" }, { roomId: "b" }]);
+        expect(fake.contextFor()).toStrictEqual({ roomId: "b", sessionId: "sess-fixed" });
+        expect(result.present.value).toBeUndefined();
+
+        // A late push for the room that was left must not appear under the new one.
+        fake.subscribeCalls[0]?.callback(["stale"]);
+
+        expect(result.present.value).toBeUndefined();
+
+        fake.push("presence:listPresent", { roomId: "b" }, ["bob"]);
+
+        expect(result.present.value).toStrictEqual(["bob"]);
+
+        scope.stop();
     });
 
     it("two concurrent presence hooks do not clear each other's connection context (refcount)", async () => {
