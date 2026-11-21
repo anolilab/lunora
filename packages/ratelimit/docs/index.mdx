@@ -73,17 +73,18 @@ const limiter = new RateLimiter({
 
 Each entry in the config map is a `RateLimitConfig`:
 
-| Field      | Type            | Default | Notes                                                                                                                                 |
-| ---------- | --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`     | `RateLimitKind` | —       | `"token bucket"`, `"fixed window"`, or `"sliding window"`. Required.                                                                  |
-| `rate`     | `number`        | —       | Tokens granted per `period`. Required; must be a positive number.                                                                     |
-| `period`   | `number`        | —       | Window/refill period in milliseconds. Required; must be a positive number.                                                            |
-| `capacity` | `number`        | `rate`  | Rollover ceiling. Caps a token-bucket burst; for fixed windows enables cross-window rollover. Ignored by sliding windows. At least 1. |
-| `start`    | `number`        | `0`     | Phase offset in epoch ms for windowed algorithms; windows align to `start + n * period`. Ignored by token buckets.                    |
+| Field      | Type            | Default | Notes                                                                                                                                                  |
+| ---------- | --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `kind`     | `RateLimitKind` | —       | `"token bucket"`, `"fixed window"`, or `"sliding window"`. Required.                                                                                   |
+| `rate`     | `number`        | —       | Tokens granted per `period`. Required; must be a positive number.                                                                                      |
+| `period`   | `number`        | —       | Window/refill period in milliseconds. Required; must be a positive number.                                                                             |
+| `capacity` | `number`        | `rate`  | Rollover ceiling. Caps a token-bucket burst; for fixed windows enables cross-window rollover. At least 1, except for sliding windows, which ignore it. |
+| `start`    | `number`        | `0`     | Phase offset in epoch ms for windowed algorithms; windows align to `start + n * period`. Ignored by token buckets.                                     |
 
 <Callout type="info">
-    The constructor validates every config up front: a non-positive `period` or `rate`, a `capacity` below 1, or a `rate` below 1 where it is the ceiling (a
-    sliding window, or a limit without `capacity`) throws at construction rather than corrupting accounting later or refusing every request.
+    The constructor validates every config up front: a non-positive `period` or `rate`, a `capacity` below 1 (or, on a sliding window, a negative one), or a
+    `rate` below 1 where it is the ceiling (a sliding window, or a limit without `capacity`) throws at construction rather than corrupting accounting later or
+    refusing every request.
 </Callout>
 
 ## Consuming a limit

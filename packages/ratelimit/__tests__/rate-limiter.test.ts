@@ -9,6 +9,7 @@ const NOT_CONFIGURED_RE = /not configured/;
 const POSITIVE_PERIOD_RE = /period must be a positive number/;
 const POSITIVE_RATE_RE = /rate must be a positive number/;
 const CAPACITY_AT_LEAST_ONE_RE = /capacity must be at least 1/;
+const NON_NEGATIVE_CAPACITY_RE = /capacity must be a non-negative number/;
 const CEILING_RATE_AT_LEAST_ONE_RE = /rate must be at least 1/;
 
 const config = {
@@ -418,11 +419,35 @@ describe("config validation", () => {
         expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", period: 1000, rate } }, now: () => 0 })).toThrow(POSITIVE_RATE_RE);
     });
 
-    it.each([0, 0.5, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a capacity no request fits (%p) at construction", (capacity) => {
+    it.each([0, 0.5])("rejects a capacity no request fits (%p) at construction", (capacity) => {
         expect.assertions(1);
 
         expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", capacity, period: 1000, rate: 4 } }, now: () => 0 })).toThrow(
             CAPACITY_AT_LEAST_ONE_RE,
+        );
+    });
+
+    it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a negative/non-finite capacity (%p) at construction", (capacity) => {
+        expect.assertions(1);
+
+        expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", capacity, period: 1000, rate: 4 } }, now: () => 0 })).toThrow(
+            NON_NEGATIVE_CAPACITY_RE,
+        );
+    });
+
+    it.each([0, 0.5])("keeps building a sliding window whose ignored capacity is %p", async (capacity) => {
+        expect.assertions(1);
+
+        const limiter = new RateLimiter({ config: { hits: { capacity, kind: "sliding window", period: 1000, rate: 10 } }, now: () => 0 });
+
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: true });
+    });
+
+    it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("still rejects a sliding window's malformed capacity (%p)", (capacity) => {
+        expect.assertions(1);
+
+        expect(() => new RateLimiter({ config: { hits: { capacity, kind: "sliding window", period: 1000, rate: 10 } }, now: () => 0 })).toThrow(
+            NON_NEGATIVE_CAPACITY_RE,
         );
     });
 
