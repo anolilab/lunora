@@ -1296,6 +1296,35 @@ describe("shardDO subscription re-execution", () => {
         expect(shard.rpcCount).toBe(1);
     });
 
+    it("refuses a per-dispatch query whose module is not loaded yet, judging it once loaded", async () => {
+        expect.assertions(3);
+
+        // A lazy registry's stub carries no `perDispatch` until `prepareFunction` loads its module.
+        class ColdShard extends ReexecShard {
+            public loaded = false;
+
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return this.loaded && functionPath === "cursors:listCursors";
+            }
+
+            protected override async prepareFunction(): Promise<void> {
+                this.loaded = true;
+            }
+        }
+
+        const shard = new ColdShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual(perDispatchRefusal);
+        expect(shard.execCount).toBe(0);
+        expect(ws.attachment).toEqual({ subs: {} });
+    });
+
     it("still subscribes a query without per-dispatch middleware", async () => {
         expect.assertions(2);
 
