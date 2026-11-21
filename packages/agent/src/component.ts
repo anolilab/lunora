@@ -144,6 +144,12 @@ const agentExtension: SchemaExtension<
              */
             status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("awaiting_secret"), v.literal("approved"), v.literal("rejected"))),
             approvalAgent: v.optional(v.string()),
+
+            /**
+             * On an approval marker whose call repeats an earlier turn's tool-call id: the turn-scoped key its wait is
+             * armed under. Absent means the wait is keyed on `toolCallId` itself.
+             */
+            approvalSlot: v.optional(v.string()),
             stepName: v.optional(v.string()),
             threadKey: v.string(),
             toolCallId: v.optional(v.string()),
@@ -398,14 +404,21 @@ type QueueDatabase = DatabaseWriter;
  * The pending approval marker a decision answers, refused unless the call is still awaiting one. Every decision goes
  * through here before anything is written or sent, so only the first decision on a call counts and none is reported
  * as resolved once the run has stopped waiting. Mutations run one at a time, so the read is decisive.
+ *
+ * A client answers with the provider's tool-call id, which a later turn can reuse under a turn-scoped marker key, so
+ * the marker is found by its `toolCallId` among the instance's markers rather than by key. A paused run waits on one
+ * call at a time, so more than one match is refused rather than guessed at.
  */
 const pendingApprovalMarker = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<Record<string, unknown>> => {
-    const marker = await database
+    // Markers are keyed `<instanceId>:approval:<slot>`. `;` is the byte after `:`, so the range holds exactly this instance's markers.
+    const rows = await database
         .query(MESSAGES_TABLE)
-        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
-        .first();
+        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).gte("messageKey", `${instanceId}:approval:`).lt("messageKey", `${instanceId}:approval;`))
+        .collect();
+    const pending = rows.filter((row) => row["status"] === "awaiting_approval" && row["toolCallId"] === toolCallId);
+    const [marker] = pending;
 
-    if (marker?.["status"] !== "awaiting_approval") {
+    if (pending.length !== 1 || marker === undefined) {
         throw new LunoraError("CONFLICT", `@lunora/agent: no pending approval for tool call "${toolCallId}" on thread "${threadKey}" to decide`);
     }
 
@@ -902,6 +915,7 @@ export const agentComponent = (): AgentComponent => {
             role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool"), v.literal("system")),
             status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("awaiting_secret"), v.literal("approved"), v.literal("rejected"))),
             approvalAgent: v.optional(v.string()),
+            approvalSlot: v.optional(v.string()),
             stepName: v.optional(v.string()),
             threadKey: v.string(),
             toolCallId: v.optional(v.string()),
@@ -941,6 +955,7 @@ export const agentComponent = (): AgentComponent => {
                 threadKey: args.threadKey,
                 ...(args.approvalScope === undefined ? {} : { approvalScope: args.approvalScope }),
                 ...(args.approvalAgent === undefined ? {} : { approvalAgent: args.approvalAgent }),
+                ...(args.approvalSlot === undefined ? {} : { approvalSlot: args.approvalSlot }),
                 ...(args.expiresAt === undefined ? {} : { expiresAt: args.expiresAt }),
                 ...(args.status === undefined ? {} : { status: args.status }),
                 ...(args.stepName === undefined ? {} : { stepName: args.stepName }),
@@ -1536,8 +1551,8 @@ export const agentComponent = (): AgentComponent => {
                     ...(args.decision === "approve_for_thread" ? { scope: "thread" } : {}),
                     ...(args.note === undefined ? {} : { note: args.note }),
                 },
-                // Scoped per tool call — see the doc comment above.
-                type: `agent-approval:${args.toolCallId}`,
+                // Scoped per tool call — see the doc comment above. A repeated call id waits under its slot.
+                type: `agent-approval:${typeof marker["approvalSlot"] === "string" ? marker["approvalSlot"] : args.toolCallId}`,
             });
 
             return { resolved: true };
