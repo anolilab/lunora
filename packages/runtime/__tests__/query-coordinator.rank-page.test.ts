@@ -395,6 +395,46 @@ describe("orchestrateRankPage — failures and request forwarding", () => {
         expect(result.partial).toBe(true);
     });
 
+    it("drops a shard that fails two consecutive pages, so paging ends with the result partial and the shard named", async () => {
+        expect.assertions(6);
+
+        const bCalls = { count: 0 };
+        const stubFor = (shardKey: string) => {
+            const inner = failingShardBStub(shardKey);
+
+            return {
+                async fetch(request: Request): Promise<Response> {
+                    if (shardKey === "b") {
+                        bCalls.count += 1;
+                    }
+
+                    return inner.fetch(request);
+                },
+            };
+        };
+        const namespace: ShardNamespaceLike = {
+            get: (id) => stubFor((id as { __name: string }).__name),
+            getByName: (name) => stubFor(name),
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a", "b"] }) });
+
+        const page1 = await coordinator.orchestrateRankPage(namespace, { index: "lb", table: "scores", take: 100 });
+
+        expect(page1.isDone).toBe(false);
+
+        const page2 = await coordinator.orchestrateRankPage(namespace, { cursor: page1.continueCursor, index: "lb", table: "scores", take: 100 });
+
+        // Its second failure in a row: dropped, and nothing else is left to page.
+        expect(page2.isDone).toBe(true);
+        expect(page2.continueCursor).toBeNull();
+        expect(page2.partial).toBe(true);
+        expect(page2.shards.find((shard) => shard.shardKey === "b")?.error).toBeDefined();
+        expect(bCalls.count).toBe(2);
+    });
+
     it("delivers a recovered never-paged shard's rows on a later page", async () => {
         expect.assertions(8);
 

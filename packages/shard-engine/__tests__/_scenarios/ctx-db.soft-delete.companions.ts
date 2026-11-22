@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aggregateTableName } from "../../src/aggregate-tally";
 import type { DatabaseWriterLike, SchemaLike, WriteHook } from "../../src/ctx-db";
 import { backfillAggregateIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../../src/ctx-db";
-import { clearCompanionSignatures } from "../../src/ctx-db-companion-state";
+import { clearCompanionSignatures, readCompanionSignature, writeCompanionSignature } from "../../src/ctx-db-companion-state";
 import { rankTableName } from "../../src/rank";
 import type { SqlHarness } from "../_helpers/sql-harness";
 
@@ -125,6 +125,32 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
 
             expect(page.page.map((row) => row["_id"])).toStrictEqual(["s2", "s3", "s1"]);
             expect(companionRowCount()).toBe(3);
+        });
+
+        it("rebuilds, on its next touch, a companion that kept a soft-deleted row's entry from before that write was refused", async () => {
+            expect.assertions(2);
+
+            const writer = await setup();
+            const rankTable = rankTableName("scores", "by_score");
+            const kept = harness.sql.exec(`SELECT * FROM ${rankTable} WHERE __id__ = 's2'`).toArray()[0] as Record<string, unknown>;
+            const columns = Object.keys(kept);
+
+            await writer.delete("scores", "s2");
+            harness.sql.exec(
+                `INSERT INTO ${rankTable} (${columns.map((column) => `"${column}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+                ...columns.map((column) => kept[column]),
+            );
+
+            // The marker such a shard holds: the rank format it was built under, before the refusal.
+            const signature = JSON.parse(readCompanionSignature(harness.sql, rankTable)!) as unknown[];
+
+            writeCompanionSignature(harness.sql, rankTable, JSON.stringify([1, ...signature.slice(1)]));
+
+            const upgraded = createShardContextDatabase({ clock: () => FIXED, schema, sql: harness.sql });
+            const page = await upgraded.rankPage("scores", "by_score", {});
+
+            expect(page.page.map((row) => row["_id"])).toStrictEqual(["s3", "s1"]);
+            expect(companionRowCount()).toBe(2);
         });
 
         it("restore replaces an entry a soft-deleted row kept from before that write was refused", async () => {

@@ -890,9 +890,45 @@ const compareRankKeys = (a: RankPageKey, b: RankPageKey, directions: ReadonlyArr
  * resume point).
  */
 interface RankPageCursorState {
+    /**
+     * Shards no longer asked: each failed two consecutive pages of this cursor. Kept so a later page
+     * neither restarts them from their first row nor waits on them, and still reports them failed.
+     */
+    dropped?: string[];
+    /** shardKey → how many pages in a row it has failed; a success clears it. */
+    failures?: Record<string, number>;
     /** shardKey → the rank key the next page resumes strictly-after. */
     perShard: Record<string, RankPageKey>;
 }
+
+/** Consecutive failed pages after which a shard is dropped from the cursor, so paging can end. */
+const RANK_PAGE_DROP_AFTER_FAILURES = 2;
+
+/**
+ * Record one shard's failed page: retried on the next page, or dropped on its second failure in a
+ * row. Without the cap a shard that stays down keeps the cursor open forever, each page empty and
+ * the same; past it the shard is given up on, and its rows are missing from the result.
+ */
+const noteRankPageFailure = (
+    shardKey: string,
+    cursorState: RankPageCursorState,
+    next: { dropped: Set<string>; failedShardKeys: string[]; failures: Map<string, number> },
+): void => {
+    if (next.dropped.has(shardKey)) {
+        return;
+    }
+
+    const failedInARow = (cursorState.failures?.[shardKey] ?? 0) + 1;
+
+    if (failedInARow >= RANK_PAGE_DROP_AFTER_FAILURES) {
+        next.dropped.add(shardKey);
+    } else {
+        next.failures.set(shardKey, failedInARow);
+        next.failedShardKeys.push(shardKey);
+    }
+};
+
+const droppedShardMessage = `dropped from this cursor after failing ${String(RANK_PAGE_DROP_AFTER_FAILURES)} pages in a row; its rows are missing from the result`;
 
 /** Encode the composite cursor as base64-of-JSON — opaque to callers, same envelope style as the shard-local rank cursor. */
 const encodeRankPageCursor = (state: RankPageCursorState): string => toBase64(new TextEncoder().encode(JSON.stringify(state)));
@@ -905,7 +941,13 @@ const decodeRankPageCursor = (cursor: string): RankPageCursorState => {
             const { perShard } = parsed as { perShard?: unknown };
 
             if (perShard !== null && typeof perShard === "object") {
-                return { perShard: perShard as Record<string, RankPageKey> };
+                const { dropped, failures } = parsed as { dropped?: unknown; failures?: unknown };
+
+                return {
+                    dropped: Array.isArray(dropped) ? dropped.filter((key): key is string => typeof key === "string") : undefined,
+                    failures: failures !== null && typeof failures === "object" ? (failures as Record<string, number>) : undefined,
+                    perShard: perShard as Record<string, RankPageKey>,
+                };
             }
         }
     } catch {
@@ -969,7 +1011,10 @@ const pickSmallestHead = (slices: ShardSlice[], directions: ReadonlyArray<RankPa
 /**
  * Build the next composite cursor from each shard's resume key. `anyRemaining`
  * is true when any ok shard still has unconsumed rows in its slice or reported
- * more locally, OR when any shard failed this page (it is unresolved — not done).
+ * more locally, OR when any shard failed this page (it is unresolved — not done),
+ * unless that was its second failure in a row: the caller drops it instead (see
+ * {@link RankPageCursorState.dropped}), so a shard that stays down cannot hold
+ * the cursor open forever.
  * A never-paged failed shard has no resume key, so on retry it restarts from its
  * first row: its rows that sort before the already-delivered frontier arrive late
  * (out of global order) on a page already marked partial, rather than never.
@@ -981,7 +1026,12 @@ const pickSmallestHead = (slices: ShardSlice[], directions: ReadonlyArray<RankPa
  * re-emit rows already delivered on earlier pages → duplicates across the result.
  * @returns the encoded cursor string, or `null` when all shards are drained.
  */
-const buildNextRankPageCursor = (slices: ShardSlice[], lastConsumedKey: Record<string, RankPageKey>, failedShardKeys: ReadonlyArray<string>): null | string => {
+const buildNextRankPageCursor = (
+    slices: ShardSlice[],
+    lastConsumedKey: Record<string, RankPageKey>,
+    failedShardKeys: ReadonlyArray<string>,
+    health: Pick<RankPageCursorState, "dropped" | "failures"> = {},
+): null | string => {
     let anyRemaining = failedShardKeys.length > 0;
     const sliceKeys = new Set<string>();
 
@@ -1010,7 +1060,7 @@ const buildNextRankPageCursor = (slices: ShardSlice[], lastConsumedKey: Record<s
         return null;
     }
 
-    return encodeRankPageCursor({ perShard });
+    return encodeRankPageCursor({ ...health, perShard });
 };
 
 /**
@@ -1027,6 +1077,7 @@ const kWayMergeRankPages = (
     directions: ReadonlyArray<RankPageDirection>,
     priorPerShard: Record<string, RankPageKey>,
     failedShardKeys: ReadonlyArray<string>,
+    health: Pick<RankPageCursorState, "dropped" | "failures"> = {},
 ): { isDone: boolean; nextCursor: null | string; page: ReadonlyArray<Record<string, unknown>> } => {
     const page: Record<string, unknown>[] = [];
     // Seed each shard's resume point from the prior cursor (see
@@ -1045,7 +1096,7 @@ const kWayMergeRankPages = (
         best.slice.head += 1;
     }
 
-    const nextCursor = buildNextRankPageCursor(slices, lastConsumedKey, failedShardKeys);
+    const nextCursor = buildNextRankPageCursor(slices, lastConsumedKey, failedShardKeys, health);
 
     return { isDone: nextCursor === null, nextCursor, page };
 };
@@ -2127,7 +2178,8 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             const keys = await options.registry.listShardKeys(request.table);
             const take = Math.max(1, Math.min(1000, Math.floor(request.take ?? 100)));
             const requestedDirections = request.directions ?? [];
-            const cursorState = request.cursor ? decodeRankPageCursor(request.cursor) : { perShard: {} };
+            const cursorState: RankPageCursorState = request.cursor ? decodeRankPageCursor(request.cursor) : { perShard: {} };
+            const previouslyDropped = new Set(cursorState.dropped);
 
             // Each shard resumes from its own cursor, so (like cdcSync) we can't
             // reuse `runBoundedFanOut`'s same-args-to-all model — drive a
@@ -2135,39 +2187,54 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // `take`; the shard-local reader internally `LIMIT take + 1`s so its
             // `hasMore` is observable even when the returned slice is exactly
             // `take` long, but the merge only ever emits up to the GLOBAL `take`.
-            const outcomes = await runBoundedJobs(keys, maxConcurrency, async (shardKey): Promise<ShardRankPageOutcome> => {
-                const shardCursorKey = cursorState.perShard[shardKey];
-                const args: Record<string, unknown> = {
-                    index: request.index,
-                    table: request.table,
-                    take,
-                };
+            const asked = await runBoundedJobs(
+                keys.filter((key) => !previouslyDropped.has(key)),
+                maxConcurrency,
+                async (shardKey): Promise<ShardRankPageOutcome> => {
+                    const shardCursorKey = cursorState.perShard[shardKey];
+                    const args: Record<string, unknown> = {
+                        index: request.index,
+                        table: request.table,
+                        take,
+                    };
 
-                if (request.partitionKey !== undefined) {
-                    args["partitionKey"] = request.partitionKey;
-                }
+                    if (request.partitionKey !== undefined) {
+                        args["partitionKey"] = request.partitionKey;
+                    }
 
-                if (shardCursorKey !== undefined) {
-                    // Forward the prior page's resume key for THIS shard so
-                    // it pages strictly-after the last globally-consumed row.
-                    args["after"] = shardCursorKey;
-                }
+                    if (shardCursorKey !== undefined) {
+                        // Forward the prior page's resume key for THIS shard so
+                        // it pages strictly-after the last globally-consumed row.
+                        args["after"] = shardCursorKey;
+                    }
 
-                const outcome = await callOneShard(
-                    namespace,
-                    shardKey,
-                    prepareShardRpc({ args, functionPath: "__lunora_admin__:rankPage", headers: request.headers }),
-                    perShardTimeoutMs,
-                );
+                    const outcome = await callOneShard(
+                        namespace,
+                        shardKey,
+                        prepareShardRpc({ args, functionPath: "__lunora_admin__:rankPage", headers: request.headers }),
+                        perShardTimeoutMs,
+                    );
 
-                if (outcome.kind === "err") {
-                    return { error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey };
-                }
+                    if (outcome.kind === "err") {
+                        return { error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey };
+                    }
 
-                const payload = readRankPageResult(unwrapResult(outcome.value));
+                    const payload = readRankPageResult(unwrapResult(outcome.value));
 
-                return { directions: payload.directions, hasMore: payload.hasMore, rows: payload.rows, shardKey };
-            });
+                    return { directions: payload.directions, hasMore: payload.hasMore, rows: payload.rows, shardKey };
+                },
+            );
+            // A dropped shard is still named on every later page, so the result stays partial.
+            const outcomes: ShardRankPageOutcome[] = [
+                ...asked,
+                ...keys
+                    .filter((key) => previouslyDropped.has(key))
+                    .map((shardKey) => {
+                        return { error: { message: droppedShardMessage, timedOut: false }, shardKey };
+                    }),
+            ];
+            const dropped = new Set(previouslyDropped);
+            const failures = new Map<string, number>();
 
             const slices: ShardSlice[] = [];
             let ok = 0;
@@ -2184,7 +2251,8 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             for (const outcome of outcomes) {
                 if (outcome.error) {
                     failed += 1;
-                    failedShardKeys.push(outcome.shardKey);
+
+                    noteRankPageFailure(outcome.shardKey, cursorState, { dropped, failedShardKeys, failures });
 
                     continue;
                 }
@@ -2198,7 +2266,11 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 slices.push({ hasMore: outcome.hasMore ?? false, head: 0, rows: outcome.rows ?? [], shardKey: outcome.shardKey });
             }
 
-            const merged = kWayMergeRankPages(slices, take, reportedDirections ?? requestedDirections, cursorState.perShard, failedShardKeys);
+            const resumeKeys = Object.fromEntries(Object.entries(cursorState.perShard).filter(([shardKey]) => !dropped.has(shardKey)));
+            const merged = kWayMergeRankPages(slices, take, reportedDirections ?? requestedDirections, resumeKeys, failedShardKeys, {
+                ...(dropped.size > 0 ? { dropped: [...dropped] } : {}),
+                ...(failures.size > 0 ? { failures: Object.fromEntries(failures) } : {}),
+            });
 
             return {
                 continueCursor: merged.nextCursor,
