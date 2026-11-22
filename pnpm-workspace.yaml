@@ -781,7 +781,7 @@ catalogs:
   storage:
     # Incremental SHA-256 for @lunora/runtime's restore: WebCrypto digests only a
     # whole buffer, and a multipart-assembled object never sits in memory whole.
-    "@noble/hashes": 2.2.0
+    "@noble/hashes": 2.4.0
     "@visulima/storage": 3.0.0
     "@visulima/storage-client": 1.0.9
     # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional
