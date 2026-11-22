@@ -2747,6 +2747,34 @@ describe("a tool-call id a later turn reuses", () => {
         expect(runs).toStrictEqual(["echo", "echo"]);
     });
 
+    it("hands a tool its call key, turn-scoped for a reused id, beside the provider's id", async () => {
+        expect.assertions(1);
+
+        const seen: { callKey: string | undefined; toolCallId: string }[] = [];
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                probe: defineAgentTool({
+                    description: "Record the context.",
+                    execute: (_input, context) => {
+                        seen.push({ callKey: context.callKey, toolCallId: context.toolCallId });
+
+                        return "ok";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+            },
+        });
+        const generate = scriptedGenerate([toolTurn("x", "probe", {}), toolTurn("x", "probe", {}), finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: memoryRuntime().run, step: new DurableStepJournal() }));
+
+        expect(seen).toStrictEqual([
+            { callKey: "x", toolCallId: "x" },
+            { callKey: "1:x", toolCallId: "x" },
+        ]);
+    });
+
     it("runs the same tool again under a reused id and keeps both results, and a replay runs neither again", async () => {
         expect.assertions(5);
 

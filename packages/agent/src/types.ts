@@ -87,6 +87,13 @@ export interface AgentStepLike {
  */
 export interface AgentToolContext {
     /**
+     * The key this call's steps and rows are stored under: {@link AgentToolContext.toolCallId} on its first use in the run,
+     * turn-scoped (`<turn>:<id>`) when a provider reuses the id in a later turn. Key anything a tool derives per call
+     * (a sub-run, a stored object) on this, or a reused id finds the earlier call's. Absent outside the agent loop.
+     */
+    callKey?: string;
+
+    /**
      * How many sub-agent delegations deep this run already is — 0 for a run a
      * user started, one more per `agent.asTool` hop. The loop copies it off
      * {@link AgentRunInput.depth}; `agent.asTool` reads it to refuse spawning a

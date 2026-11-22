@@ -251,6 +251,7 @@ const runToolScript = async (
         // in one script don't collide on a shared key when they dedupe on it.
         const stepContext: AgentToolContext = {
             ...context,
+            callKey: `${context.callKey ?? context.toolCallId}:${step.id}`,
             idempotencyKey: `${context.idempotencyKey}:${step.id}`,
             toolCallId: `${context.toolCallId}:${step.id}`,
         };

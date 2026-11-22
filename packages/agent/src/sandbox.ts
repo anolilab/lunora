@@ -347,7 +347,9 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
                           // Replay-stable: both identifiers are fixed for the
                           // life of this tool call, so a retried step rewrites
                           // the same object instead of leaking one per attempt.
-                          path: `${context.threadKey}/${context.toolCallId}.${extension}`,
+                          // The call key keeps a reused provider id from
+                          // overwriting the render an earlier result points at.
+                          path: `${context.threadKey}/${context.callKey ?? context.toolCallId}.${extension}`,
                           ...(options.root === undefined ? {} : { root: options.root }),
                       };
 

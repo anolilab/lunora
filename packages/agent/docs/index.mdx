@@ -663,9 +663,11 @@ export const operator = defineAgent({
   tool result is capped at 4000 characters before it is persisted, and base64 of
   even a small PNG is several times that, so inline bytes arrived truncated
   mid-string after the render had already been billed. Each render lands at
-  `<root>/<threadKey>/<toolCallId>.<ext>`, derived only from replay-stable
+  `<root>/<threadKey>/<callKey>.<ext>`, derived only from replay-stable
   identifiers, so a retried step overwrites its own object instead of leaking one
-  per attempt. Without a `bucket` those two ops are refused as a tool result and
+  per attempt. The call key is the tool-call id, turn-scoped when a provider
+  reuses the id in a later turn, so a reused id never overwrites an earlier
+  render. Without a `bucket` those two ops are refused as a tool result and
   never dispatched, so nothing is billed. The
   model picks the `url` with no allowlist, so this is a **server-side request forgery (SSRF) surface**: a
   prompt-injected model can aim it at an internal/link-local endpoint. It runs
@@ -1534,7 +1536,10 @@ when the workflow replays.
 
 The second argument to a tool's `execute`. It carries `env`, `run` for calling
 Lunora functions, `setState` and `getState` for the thread's synced state,
-`reportProgress`, `threadKey`, `toolCallId`, `owner` and `shardKey`.
+`reportProgress`, `threadKey`, `toolCallId`, `owner` and `shardKey`. `callKey` is the key
+the call's durable steps use: the tool-call id on its first use in a run, turn-scoped when a provider
+reuses the id later. Key anything you derive per call (a sub-run, a stored object) on `callKey`;
+`agent.asTool` and `browserTool` do.
 
 #### `defineSkill(config)`
 

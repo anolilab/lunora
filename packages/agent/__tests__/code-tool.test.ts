@@ -241,6 +241,25 @@ describe(runToolScript, () => {
         expect(calls).toStrictEqual([]);
     });
 
+    it("gives each step its own call key derived from the code tool's", async () => {
+        const seen: (string | undefined)[] = [];
+        const tool: AgentToolDefinition = {
+            description: "t",
+            execute: (_input, ctx) => {
+                seen.push(ctx.callKey);
+
+                return "ok";
+            },
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
+            isLunoraAgentTool: true,
+        };
+        const baseContext = { callKey: "1:call_1", idempotencyKey: "tool:code:1:call_1", step: passthroughStep, toolCallId: "call_1" } as AgentToolContext;
+
+        await runToolScript({ steps: [{ id: "a", tool: "t" }] }, { t: tool }, baseContext, 16);
+
+        expect(seen).toStrictEqual(["1:call_1:a"]);
+    });
+
     it("gives each step its own idempotency key / tool-call id derived from the code tool's", async () => {
         const seen: { idempotencyKey: string; toolCallId: string }[] = [];
         const tool: AgentToolDefinition = {
