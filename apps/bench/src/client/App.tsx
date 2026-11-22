@@ -230,6 +230,8 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
             .query(api.tasks.list, {}, { shardKey: organizationId, signal: controller.signal })
             .then((next) => {
                 setLoaded({ organizationId, tasks: next });
+
+                return next;
             })
             .catch((error_: unknown) => {
                 if (!controller.signal.aborted) {

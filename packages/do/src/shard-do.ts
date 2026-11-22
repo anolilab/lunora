@@ -8848,19 +8848,8 @@ abstract class ShardDO {
                 }
             }
 
-            // A lazy registry's stub does not carry `perDispatch` until its module loads, so the
-            // refusal in `subscribe` would wave a cold per-dispatch query through. A failed load is
-            // left to the seed, which reports it on this subscription.
             if (functionPath !== undefined && !isAdmin) {
-                const requestScope = this.captureRequestScope();
-
-                try {
-                    await this.prepareFunction(functionPath, "subscription");
-                } catch {
-                    // Reported by the seed: see above.
-                } finally {
-                    this.restoreRequestScope(requestScope);
-                }
+                await this.prepareForLiveQueryGate(functionPath);
             }
 
             const registered = this.readAttachment(ws).subs;
@@ -9854,6 +9843,32 @@ abstract class ShardDO {
         this.currentRequestTrace = scope.trace;
         this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
+    }
+
+    /**
+     * Load `functionPath`'s module before a live-query gate reads its registry entry: a lazy
+     * registry's stub carries no `perDispatch` until then, so the gate would wave a cold per-dispatch
+     * query through and run it once. A failed load is left to the run that follows, which reports it.
+     */
+    private async prepareForLiveQueryGate(functionPath: string): Promise<void> {
+        const requestScope = this.captureRequestScope();
+
+        try {
+            await this.prepareFunction(functionPath, "subscription");
+        } catch {
+            // Reported by the run that follows: see above.
+        } finally {
+            this.restoreRequestScope(requestScope);
+        }
+    }
+
+    /** The refresh sweep's {@link ShardDO.liveQueryRefusal}, asked once the function is loaded; admin paths have no module to load. */
+    private async liveQueryRefusalLoaded(functionPath: string): Promise<{ message: string; status: "paid" | "per_dispatch" } | undefined> {
+        if (!functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            await this.prepareForLiveQueryGate(functionPath);
+        }
+
+        return this.liveQueryRefusal(functionPath);
     }
 
     /** Why `functionPath` may not be held as a live subscription, or `undefined` when it may; shared by `subscribe` and the refresh sweep. */
@@ -15180,7 +15195,8 @@ abstract class ShardDO {
                 // Without this it keeps being re-run on every write for the life
                 // of the socket — the paid result served free, or the
                 // subscriber charged for writes it did not make.
-                const refusal = this.liveQueryRefusal(functionPath);
+                // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket are refreshed in order
+                const refusal = await this.liveQueryRefusalLoaded(functionPath);
 
                 if (refusal !== undefined) {
                     this.unsubscribe(ws, subId);

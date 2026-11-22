@@ -1347,6 +1347,47 @@ describe("shardDO subscription re-execution", () => {
         expect(JSON.parse(ws.sent[1]!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
     });
 
+    it("drops a hibernated per-dispatch subscription on a cold isolate without running it once", async () => {
+        expect.assertions(3);
+
+        // The lazy registry's stub carries no `perDispatch` until `prepareFunction` loads the module.
+        class ColdSweepShard extends ReexecShard {
+            public limited = false;
+
+            public loaded = false;
+
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return this.limited && this.loaded && functionPath === "cursors:listCursors";
+            }
+
+            protected override async prepareFunction(functionPath: string): Promise<void> {
+                if (functionPath === "cursors:listCursors") {
+                    this.loaded = true;
+                }
+            }
+        }
+
+        const shard = new ColdSweepShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        await subscribe(shard, ws);
+
+        // A deploy added a `rateLimit(...)` step, and the socket woke in a fresh isolate.
+        shard.limited = true;
+        shard.loaded = false;
+        shard.changedTableOnRpc = "cursors";
+
+        const execBefore = shard.execCount;
+
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(execBefore);
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual(perDispatchRefusal);
+        expect(ws.attachment?.subs).toEqual({});
+    });
+
     it("drops a subscription whose query gained per-dispatch middleware on the next refresh", async () => {
         expect.assertions(4);
 
