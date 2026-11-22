@@ -14,7 +14,9 @@ import onScopeDisposeOrWarn from "./scope-dispose";
  *
  * Drives the heartbeat mutation (on mount, interval, and tab re-focus) and
  * subscribes to the live `listPresent` query for the given room. `roomId` may
- * be a ref or getter; a change leaves the old room and joins the new one.
+ * be a ref or getter; a change stops the old room's heartbeats and subscription and joins
+ * the new one. Pass `leave` to drop the old room's row at once;
+ * without it the server keeps that row until it ages out (`ttlMs`).
  *
  * Call inside `setup()` (or any active effect scope).
  */
@@ -30,6 +32,11 @@ type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, 
  */
 type ListPresentReference = FunctionReference<"query", { roomId: string }>;
 
+/**
+ * The presence `leave` mutation: `definePresence(...).functions.leave`.
+ */
+type LeaveReference = FunctionReference<"mutation", { roomId: string; sessionId: string }>;
+
 interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresentReference> {
     /** Awareness blob for the first heartbeat (selection, cursor, name, color…). */
     data?: Record<string, unknown>;
@@ -37,6 +44,13 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     heartbeat: H;
     /** Heartbeat cadence in ms. Defaults to 10s. */
     intervalMs?: number;
+
+    /**
+     * The `api.*` reference for the presence `leave` mutation. When given, leaving a room (a room
+     * change, or teardown) removes this session's row there at once; without it the old room lists
+     * the session until its last heartbeat ages out (`ttlMs`).
+     */
+    leave?: LeaveReference;
     /** The `api.*` reference for the presence listPresent query. */
     listPresent: L;
 
@@ -74,7 +88,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     options: UsePresenceOptions<H, L>,
 ): UsePresenceResult<L> => {
     const client = useLunora();
-    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, leave, listPresent, shardKey } = options;
 
     assertPresenceInterval(intervalMs);
 
@@ -91,7 +105,8 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     let mounted = false;
 
     // The room the armed wiring belongs to; `setData` and the interval heartbeat read it at send time.
-    let currentRoom = typeof roomId === "string" ? roomId : toValue(roomId);
+    // Set by `arm`, never read here: a getter such as `() => window.location.hash` throws during SSR.
+    let currentRoom = "";
 
     const sendHeartbeat = (): void => {
         const args = {
@@ -100,8 +115,9 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
             ...(latestData === undefined ? {} : { data: latestData }),
         } as ArgsOf<H>;
 
-        // Fire-and-forget — a dropped heartbeat self-heals on the next tick.
-        client.mutation(heartbeat, args, { shardKey }).catch(() => undefined);
+        // Fire-and-forget — a dropped heartbeat self-heals on the next tick. Never queued: a
+        // heartbeat replayed after reconnect would mark a room this session has since left.
+        client.mutation(heartbeat, args, { onlineOnly: true, shardKey }).catch(() => undefined);
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -149,29 +165,16 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
             // doesn't clobber this one's context when either unmounts.
             const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
 
-            // Subscribe to the live present-list for the room.
-            const unsubscribe = client.subscribe(
-                listPresent,
-                { roomId: room } as ArgsOf<L>,
-                (value) => {
-                    if (live) {
-                        present.value = value;
-                        error.value = undefined;
-                    }
-                },
-                {
-                    onError: (subscriptionError) => {
-                        if (live) {
-                            error.value = subscriptionError;
-                            options.onError?.(subscriptionError);
-                        }
-                    },
-                    shardKey,
-                },
-            );
+            let unsubscribe: (() => void) | undefined;
+            let disposed = false;
 
             // Teardown: clear interval, remove listener, clear connection context, unsubscribe.
-            return () => {
+            const dispose = (): void => {
+                if (disposed) {
+                    return;
+                }
+
+                disposed = true;
                 live = false;
                 mounted = false;
                 clearInterval(intervalHandle);
@@ -181,36 +184,86 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
                 }
 
                 releaseConnectionContext();
-                unsubscribe();
+                unsubscribe?.();
+
+                // The old room stops listing this session now, instead of when its last heartbeat ages out.
+                if (leave !== undefined) {
+                    client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }).catch(() => undefined);
+                }
             };
+
+            // Subscribe to the live present-list for the room.
+            try {
+                unsubscribe = client.subscribe(
+                    listPresent,
+                    { roomId: room } as ArgsOf<L>,
+                    (value) => {
+                        if (live) {
+                            present.value = value;
+                            error.value = undefined;
+                        }
+                    },
+                    {
+                        onError: (subscriptionError) => {
+                            if (live) {
+                                error.value = subscriptionError;
+                                options.onError?.(subscriptionError);
+                            }
+                        },
+                        shardKey,
+                    },
+                );
+            } catch (subscribeError) {
+                dispose();
+
+                throw subscribeError;
+            }
+
+            return dispose;
         };
 
-        let teardownRoom = arm(typeof roomId === "string" ? roomId : toValue(roomId));
+        let teardownRoom: (() => void) | undefined;
         let stopWatching: (() => void) | undefined;
+        // Set before anything is torn down: a replayed refusal can stop the scope inside `arm`,
+        // and the room it was opening must then be disposed as soon as `arm` returns.
+        let scopeDisposed = false;
 
-        if (typeof roomId !== "string") {
-            stopWatching = watch(
-                () => toValue(roomId),
-                (room) => {
-                    teardownRoom();
-                    present.value = undefined;
-                    error.value = undefined;
-                    teardownRoom = arm(room);
-                },
-            );
-        }
+        const open = (room: string): void => {
+            teardownRoom?.();
+            teardownRoom = undefined;
+            present.value = undefined;
+            error.value = undefined;
+
+            const dispose = arm(room);
+
+            if (scopeDisposed) {
+                dispose();
+            } else {
+                teardownRoom = dispose;
+            }
+        };
 
         const noScopeWarning =
             "[@lunora/vue] usePresence called with no active effect scope — its heartbeat interval and live subscription will not be cleaned up automatically. Call it inside setup()/an effect scope.";
 
         onScopeDisposeOrWarn(() => {
+            scopeDisposed = true;
             stopWatching?.();
-            teardownRoom();
+            teardownRoom?.();
+            teardownRoom = undefined;
         }, noScopeWarning);
+
+        if (typeof roomId === "string") {
+            open(roomId);
+        } else {
+            // Immediate, so the watcher owns the first room too: a change made while that room
+            // opens (a refusal's `onError` switching rooms) is then seen as a change, not a start.
+            stopWatching = watch(() => toValue(roomId), open, { immediate: true });
+        }
     }
 
     return { error, present, sessionId, setData };
 };
 
-export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult };
+export type { HeartbeatReference, LeaveReference, ListPresentReference, UsePresenceOptions, UsePresenceResult };
 export { usePresence };

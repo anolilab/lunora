@@ -118,7 +118,7 @@ export const liveQuery = <F extends FunctionReference>(
     // Skip the socket during SSR: on the Angular server platform the value stays
     // at its `undefined` seed, matching the "opens its WebSocket lazily in the
     // browser" contract. The browser render re-runs this and attaches.
-    if (shouldOpenSubscription(fromInjectionContext)) {
+    if (shouldOpenSubscription(fromInjectionContext, options.injector)) {
         if (typeof args === "function") {
             // Cast: TS can't rule out `ArgsOf<F>` itself being function-shaped for
             // an unconstrained generic, so `typeof args === "function"` alone

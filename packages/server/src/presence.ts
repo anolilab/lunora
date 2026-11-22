@@ -41,7 +41,8 @@
  *
  * // Re-export the functions so codegen exposes them under `presence:*`.
  * // `disconnect` is optional: without it a dropped socket's row lingers until the TTL.
- * export const { disconnect, heartbeat, listPresent, sweep } = presence.functions;
+ * // `leave` is optional: the client adapters call it when a room is left with the socket open.
+ * export const { disconnect, heartbeat, leave, listPresent, sweep } = presence.functions;
  *
  * // lunora/schema.ts — merge the table (auto-namespaced to `presence_present`):
  * import { presence } from "./presence";
@@ -228,6 +229,16 @@ interface PresenceFunctions {
         },
         { lastSeen: number }
     >;
+
+    /**
+     * Drop the caller's own row for `(roomId, sessionId)` now, instead of
+     * leaving it to age out. The client adapters call it (when given a `leave`
+     * reference) as a room is left while the socket stays open — a room switch or
+     * an unmount — which `disconnect` never sees. The same ownership gate as
+     * `disconnect`: a row held by another identity is left alone, so the result
+     * says whether a row was removed.
+     */
+    leave: RegisteredMutation<{ roomId: StringColumnValidator; sessionId: StringColumnValidator }, { left: boolean }>;
 
     /**
      * Live query returning the non-expired members of `roomId` in the caller's
@@ -441,6 +452,27 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
         return members;
     });
 
+    // Deliberate departure with the socket still open (a room switch, an unmount): `disconnect`
+    // never fires for that, so without this the old room lists the session until the TTL.
+    const leave = mutation.input({ roomId: v.string(), sessionId: v.string() }).mutation(async ({ args, ctx: context }): Promise<{ left: boolean }> => {
+        const tenantId = tenantOf(await context.auth.getIdentity());
+        const existing = await context.db
+            .query(PRESENCE_TABLE)
+            .withIndex("byTenantRoomSession", (q) => q.eq("tenantId", tenantId).eq("roomId", args.roomId).eq("sessionId", args.sessionId))
+            .first();
+
+        // Same ownership gate as `disconnect`: only the identity that owns the row may remove
+        // it (an anonymous-owned row only by an anonymous caller), so a guessed
+        // `(roomId, sessionId)` cannot evict someone else. No grace window: leaving is deliberate.
+        if (!existing || (existing["userId"] ?? undefined) !== (context.auth.userId ?? undefined)) {
+            return { left: false };
+        }
+
+        await context.db.delete(PRESENCE_TABLE, existing["_id"] as never);
+
+        return { left: true };
+    });
+
     // Server-only: an `internalMutation`, so a client can never trigger the bulk delete.
     const sweep = internalMutation
         .input({ roomId: v.string(), tenantId: v.string() })
@@ -517,7 +549,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
 
     return defineComponent(PRESENCE_KEY, {
         extension: presenceExtension,
-        functions: { disconnect, heartbeat, listPresent, sweep },
+        functions: { disconnect, heartbeat, leave, listPresent, sweep },
     }) as PresenceComponent;
 };
 

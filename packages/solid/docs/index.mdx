@@ -51,35 +51,35 @@ render(
 
 ## Exports
 
-| Symbol                                              | Kind      | Role                                                                                                               |
-| --------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------ |
-| `LunoraProvider`                                    | component | Provides the shared `LunoraClient` to the tree via context. Required at the root.                                  |
-| `useLunora`                                         | function  | Read the `LunoraClient` from the nearest `<LunoraProvider>`. Throws if none is mounted.                            |
-| `LunoraContext`                                     | context   | The underlying Solid context, for advanced manual `useContext`.                                                    |
-| `createQuery`                                       | primitive | Live query as a reactive accessor. Accessor args re-subscribe; `"skip"` short-circuits.                            |
-| `createMutation`                                    | primitive | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` accessors.                                   |
-| `createMutationForClient`                           | primitive | Build a mutation handle bound to an explicit client (test/internal seam).                                          |
-| `createAction`                                      | primitive | Action handle: `{ data, error, pending, call, reset }` accessors. No optimistic options.                           |
-| `createActionForClient`                             | primitive | Build an action handle bound to an explicit client (test/internal seam).                                           |
-| `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                                               |
-| `createLiveTopic`                                   | primitive | One declared live topic (`live.posts.post({ postId })`): `{ lastEvent, error }` accessors. Resubscribes on change. |
-| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore, error }`.                                              |
-| `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                                     |
-| `createAuth`                                        | primitive | Identity plumbing: `{ status, token, user }` signals + `setToken`. Gate on `status`.                               |
-| `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                                         |
-| `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list. `roomId` may be an accessor; presence follows it. |
-| `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.                              |
-| `createConnectionStatus`                            | primitive | Reactive accessor of the live-socket `ConnectionStatus`.                                                           |
-| `hydratePreloaded`                                  | primitive | Seed a query accessor synchronously from an SSR `Preloaded` token, then attach the subscription.                   |
-| `createStream`                                      | primitive | Streaming query: chunks, lifecycle status and cancel as accessors. Changing `args` resets the stream.              |
-| `createFlag` / `createFlags`                        | primitive | Reactive accessor of one feature flag, or a record of several. The accessor reads the default until evaluation.    |
-| `createMutator`                                     | primitive | Wrapper over a bound custom mutator handle from `@lunora/db`: `{ mutate, pending, error, isError, reset }`.        |
-| `createAgent`                                       | primitive | Thread `status` plus `run` / `cancel` for one agent, without the chat message surface.                             |
-| `createAgentChat`                                   | primitive | Full agent conversation for one thread: durable history, streaming deltas, approvals and `send` / `cancel`.        |
-| `createAgentState`                                  | primitive | Live synced state of one agent thread. Updates only on a real `setState`.                                          |
-| `createAgentToolEvents`                             | primitive | Tool calls, results, approval pauses and progress events for one agent thread.                                     |
-| `createVoiceAgent`                                  | primitive | Full-duplex voice call against an agent's `<name>Voice` reference, with `status`, `transcript` and call controls.  |
-| `SolidChildren`                                     | type      | Children type that compiles on both Solid 1.x and 2.x.                                                             |
+| Symbol                                              | Kind      | Role                                                                                                                                                                 |
+| --------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LunoraProvider`                                    | component | Provides the shared `LunoraClient` to the tree via context. Required at the root.                                                                                    |
+| `useLunora`                                         | function  | Read the `LunoraClient` from the nearest `<LunoraProvider>`. Throws if none is mounted.                                                                              |
+| `LunoraContext`                                     | context   | The underlying Solid context, for advanced manual `useContext`.                                                                                                      |
+| `createQuery`                                       | primitive | Live query as a reactive accessor. Accessor args re-subscribe; `"skip"` short-circuits.                                                                              |
+| `createMutation`                                    | primitive | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` accessors.                                                                                     |
+| `createMutationForClient`                           | primitive | Build a mutation handle bound to an explicit client (test/internal seam).                                                                                            |
+| `createAction`                                      | primitive | Action handle: `{ data, error, pending, call, reset }` accessors. No optimistic options.                                                                             |
+| `createActionForClient`                             | primitive | Build an action handle bound to an explicit client (test/internal seam).                                                                                             |
+| `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                                                                                                 |
+| `createLiveTopic`                                   | primitive | One declared live topic (`live.posts.post({ postId })`): `{ lastEvent, error }` accessors. Resubscribes on change.                                                   |
+| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore, error }`.                                                                                                |
+| `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                                                                                       |
+| `createAuth`                                        | primitive | Identity plumbing: `{ status, token, user }` signals + `setToken`. Gate on `status`.                                                                                 |
+| `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                                                                                           |
+| `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list. `roomId` may be an accessor; presence follows it (pass `leave` to drop the old room's row at once). |
+| `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.                                                                                |
+| `createConnectionStatus`                            | primitive | Reactive accessor of the live-socket `ConnectionStatus`.                                                                                                             |
+| `hydratePreloaded`                                  | primitive | Seed a query accessor synchronously from an SSR `Preloaded` token, then attach the subscription.                                                                     |
+| `createStream`                                      | primitive | Streaming query: chunks, lifecycle status and cancel as accessors. Changing `args` resets the stream.                                                                |
+| `createFlag` / `createFlags`                        | primitive | Reactive accessor of one feature flag, or a record of several. The accessor reads the default until evaluation.                                                      |
+| `createMutator`                                     | primitive | Wrapper over a bound custom mutator handle from `@lunora/db`: `{ mutate, pending, error, isError, reset }`.                                                          |
+| `createAgent`                                       | primitive | Thread `status` plus `run` / `cancel` for one agent, without the chat message surface.                                                                               |
+| `createAgentChat`                                   | primitive | Full agent conversation for one thread: durable history, streaming deltas, approvals and `send` / `cancel`.                                                          |
+| `createAgentState`                                  | primitive | Live synced state of one agent thread. Updates only on a real `setState`.                                                                                            |
+| `createAgentToolEvents`                             | primitive | Tool calls, results, approval pauses and progress events for one agent thread.                                                                                       |
+| `createVoiceAgent`                                  | primitive | Full-duplex voice call against an agent's `<name>Voice` reference, with `status`, `transcript` and call controls.                                                    |
+| `SolidChildren`                                     | type      | Children type that compiles on both Solid 1.x and 2.x.                                                                                                               |
 
 Re-exported types: `ArgsOf`, `FunctionReference`, `OptimisticUpdate`,
 `Preloaded`, `ReturnOf`, `SubscriptionError`, `SubscriptionErrorCallback`,

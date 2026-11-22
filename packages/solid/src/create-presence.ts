@@ -13,7 +13,9 @@ import { trackedEffect } from "./solid-compat";
  *
  * Drives the heartbeat mutation (on mount, interval, and tab re-focus) and
  * subscribes to the live `listPresent` query for the given room. `roomId` may
- * be an accessor; a change leaves the old room and joins the new one.
+ * be an accessor; a change stops the old room's heartbeats and subscription and joins
+ * the new one. Pass `leave` to drop the old room's row at once;
+ * without it the server keeps that row until it ages out (`ttlMs`).
  *
  * Call inside a reactive context (component / `createRoot`).
  */
@@ -29,6 +31,11 @@ type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, 
  */
 type ListPresentReference = FunctionReference<"query", { roomId: string }>;
 
+/**
+ * The presence `leave` mutation: `definePresence(...).functions.leave`.
+ */
+type LeaveReference = FunctionReference<"mutation", { roomId: string; sessionId: string }>;
+
 interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPresentReference> {
     /** Awareness blob for the first heartbeat (selection, cursor, name, color…). */
     data?: Record<string, unknown>;
@@ -36,6 +43,13 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
     heartbeat: H;
     /** Heartbeat cadence in ms. Defaults to 10s. */
     intervalMs?: number;
+
+    /**
+     * The `api.*` reference for the presence `leave` mutation. When given, leaving a room (a room
+     * change, or teardown) removes this session's row there at once; without it the old room lists
+     * the session until its last heartbeat ages out (`ttlMs`).
+     */
+    leave?: LeaveReference;
     /** The `api.*` reference for the presence listPresent query. */
     listPresent: L;
 
@@ -73,7 +87,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     options: CreatePresenceOptions<H, L>,
 ): CreatePresenceResult<L> => {
     const client = useLunora();
-    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, leave, listPresent, shardKey } = options;
 
     assertPresenceInterval(intervalMs);
 
@@ -97,7 +111,8 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
             ...(latestData === undefined ? {} : { data: latestData }),
         } as ArgsOf<H>;
 
-        client.mutation(heartbeat, args, { shardKey }).catch(() => undefined);
+        // Never queued: a heartbeat replayed after reconnect would mark a room this session has since left.
+        client.mutation(heartbeat, args, { onlineOnly: true, shardKey }).catch(() => undefined);
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -107,6 +122,13 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
             sendHeartbeat();
         }
     };
+
+    // The memo below runs eagerly on the server, where an accessor such as
+    // `() => window.location.hash` throws; effects never run there anyway, so stay idle until the
+    // client takes over. `solid-js/web`'s `isServer` is not importable from both majors.
+    if ((globalThis as { window?: unknown }).window === undefined) {
+        return { error, present, sessionId, setData };
+    }
 
     // Memoised: Solid 1.x's `on` re-runs on every dependency notification, so an accessor that
     // re-computes the same room string would otherwise leave and rejoin the room.
@@ -150,28 +172,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         // holder.
         const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
 
-        // Subscribe to the live present-list for the room.
-        const unsubscribe = client.subscribe(
-            listPresent,
-            { roomId: room } as ArgsOf<L>,
-            (value) => {
-                if (live) {
-                    setPresent(() => value);
-                    setError(undefined);
-                }
-            },
-            {
-                onError: (subscriptionError) => {
-                    if (live) {
-                        setError(subscriptionError);
-                        options.onError?.(subscriptionError);
-                    }
-                },
-                shardKey,
-            },
-        );
-
-        return () => {
+        const dispose = (): void => {
             live = false;
             mounted = false;
             clearInterval(intervalHandle);
@@ -181,12 +182,50 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
             }
 
             releaseConnectionContext();
+        };
+
+        let unsubscribe: () => void;
+
+        // Subscribe to the live present-list for the room; a throw rolls this room's setup back.
+        try {
+            unsubscribe = client.subscribe(
+                listPresent,
+                { roomId: room } as ArgsOf<L>,
+                (value) => {
+                    if (live) {
+                        setPresent(() => value);
+                        setError(undefined);
+                    }
+                },
+                {
+                    onError: (subscriptionError) => {
+                        if (live) {
+                            setError(subscriptionError);
+                            options.onError?.(subscriptionError);
+                        }
+                    },
+                    shardKey,
+                },
+            );
+        } catch (subscribeError) {
+            dispose();
+
+            throw subscribeError;
+        }
+
+        return () => {
+            dispose();
             unsubscribe();
+
+            // The old room stops listing this session now, instead of when its last heartbeat ages out.
+            if (leave !== undefined) {
+                client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }).catch(() => undefined);
+            }
         };
     });
 
     return { error, present, sessionId, setData };
 };
 
-export type { CreatePresenceOptions, CreatePresenceResult, HeartbeatReference, ListPresentReference };
+export type { CreatePresenceOptions, CreatePresenceResult, HeartbeatReference, LeaveReference, ListPresentReference };
 export { createPresence };

@@ -124,7 +124,7 @@ export const subscription = <F extends FunctionReference>(
     // The `shouldOpenSubscription()` guard skips the socket on the Angular server
     // platform (SSR): the signals stay at their initial `undefined`, and the
     // browser render re-runs this and attaches.
-    if (shouldOpenSubscription(fromInjectionContext)) {
+    if (shouldOpenSubscription(fromInjectionContext, options.injector)) {
         if (typeof args === "function") {
             // Cast: TS can't rule out `ArgsOf<F>` itself being function-shaped for
             // an unconstrained generic — see `liveQuery`'s equivalent cast.

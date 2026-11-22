@@ -472,4 +472,105 @@ describe("createPresence (Solid)", () => {
         expect(fake.connectionContextHolders).toHaveLength(1);
         expect(captured!.present()).toStrictEqual(["alice"]);
     });
+
+    it("leaves each room it stops showing, and the last one on unmount, through the leave mutation", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const mutation = vi.spyOn(fake.client, "mutation");
+        const [room, setRoom] = createSignal("a");
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+
+        const view = render(
+            () => {
+                createPresence(room, { heartbeat: HEARTBEAT, intervalMs: 60_000, leave: LEAVE, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+        setRoom("b");
+        await flushAsync();
+        view.unmount();
+
+        expect(
+            mutation.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === "presence:leave").map((call) => call[1]),
+        ).toStrictEqual([
+            { roomId: "a", sessionId: "sess-fixed" },
+            { roomId: "b", sessionId: "sess-fixed" },
+        ]);
+    });
+
+    it("never queues a heartbeat for offline replay", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const mutation = vi.spyOn(fake.client, "mutation");
+
+        render(
+            () => {
+                createPresence("a", { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ onlineOnly: true });
+    });
+
+    it("does not read the room accessor without a browser global (SSR)", () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const room = vi.fn<() => string>(() => {
+            throw new Error("window.location is not available on the server");
+        });
+
+        vi.stubGlobal("window", undefined);
+
+        try {
+            render(
+                () => {
+                    createPresence(room, { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                    return <div />;
+                },
+                { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+            );
+        } finally {
+            vi.unstubAllGlobals();
+        }
+
+        expect(room).not.toHaveBeenCalled();
+    });
+
+    it("rolls a room's setup back when subscribing to it throws", async () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+
+        vi.spyOn(fake.client, "subscribe").mockImplementation(() => {
+            throw new Error("client closed");
+        });
+
+        expect(() =>
+            render(
+                () => {
+                    createPresence("a", { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                    return <div />;
+                },
+                { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+            ),
+        ).toThrow("client closed");
+
+        await flushAsync();
+
+        expect(fake.connectionContextHolders.map((holder) => holder.released)).toStrictEqual([true]);
+    });
 });

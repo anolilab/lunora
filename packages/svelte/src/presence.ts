@@ -15,7 +15,9 @@ import { subscribeReactiveArgs } from "./subscribe-reactive-args";
  *
  * Drives the heartbeat mutation (on call, interval, and tab re-focus) and
  * subscribes to the live `listPresent` query for the given room. `roomId` may
- * be a `Readable<string>`; a change leaves the old room and joins the new one.
+ * be a `Readable<string>`; a change stops the old room's heartbeats and subscription and joins
+ * the new one. Pass `leave` to drop the old room's row at once;
+ * without it the server keeps that row until it ages out (`ttlMs`).
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client from the
  * Svelte context.
@@ -32,6 +34,11 @@ type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, 
  */
 type ListPresentReference = FunctionReference<"query", { roomId: string }>;
 
+/**
+ * The presence `leave` mutation: `definePresence(...).functions.leave`.
+ */
+type LeaveReference = FunctionReference<"mutation", { roomId: string; sessionId: string }>;
+
 interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentReference> {
     /** Awareness blob for the first heartbeat (selection, cursor, name, color…). */
     data?: Record<string, unknown>;
@@ -39,6 +46,13 @@ interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentRef
     heartbeat: H;
     /** Heartbeat cadence in ms. Defaults to 10s. */
     intervalMs?: number;
+
+    /**
+     * The `api.*` reference for the presence `leave` mutation. When given, leaving a room (a room
+     * change, or teardown) removes this session's row there at once; without it the old room lists
+     * the session until its last heartbeat ages out (`ttlMs`).
+     */
+    leave?: LeaveReference;
     /** The `api.*` reference for the presence listPresent query. */
     listPresent: L;
 
@@ -79,7 +93,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     roomId: Readable<string> | string,
     options: PresenceOptions<H, L>,
 ): PresenceHandle<L> => {
-    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, leave, listPresent, shardKey } = options;
 
     assertPresenceInterval(intervalMs);
 
@@ -98,7 +112,8 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
             ...(latestData === undefined ? {} : { data: latestData }),
         } as ArgsOf<H>;
 
-        client.mutation(heartbeat, args, { shardKey }).catch(() => undefined);
+        // Never queued: a heartbeat replayed after reconnect would mark a room this session has since left.
+        client.mutation(heartbeat, args, { onlineOnly: true, shardKey }).catch(() => undefined);
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -156,12 +171,19 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
                 }
 
                 releaseConnectionContext();
+
+                // The old room stops listing this session now, instead of when its last heartbeat ages out.
+                if (leave !== undefined) {
+                    client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }).catch(() => undefined);
+                }
             };
         });
     }
 
     const errorStore = writable<SubscriptionError | undefined>();
     let torndown = false;
+    // Read through a call where `subscribe` can flip it: control-flow narrowing cannot see that.
+    const isTornDown = (): boolean => torndown;
     // `teardown` stops the live subscription even while a consumer is still subscribed to `present`;
     // otherwise a later room change would open a fresh one for a destroyed handle.
     let stopPresentRoom: (() => void) | undefined;
@@ -177,6 +199,11 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         }
 
         const stop = subscribeReactiveArgs(roomId, (room) => {
+            // A room change after teardown opens nothing.
+            if (torndown) {
+                return () => {};
+            }
+
             // A room change must not show the previous room's members or error under the new one.
             set(undefined);
             errorStore.set(undefined);
@@ -203,6 +230,15 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
                     shardKey,
                 },
             );
+
+            // Torn down while `subscribe` replayed (a refusal whose `onError` called `teardown`):
+            // the stop that ran held the previous room's disposer, not this one.
+            if (isTornDown()) {
+                live = false;
+                unsubscribe();
+
+                return () => {};
+            }
 
             return () => {
                 live = false;
@@ -287,4 +323,4 @@ export function presence<H extends HeartbeatReference, L extends ListPresentRefe
     return createPresenceHandle(client, roomId, options);
 }
 
-export type { HeartbeatReference, ListPresentReference, PresenceHandle, PresenceOptions };
+export type { HeartbeatReference, LeaveReference, ListPresentReference, PresenceHandle, PresenceOptions };

@@ -95,6 +95,173 @@ describe("usePresence (Vue)", () => {
         Reflect.deleteProperty(globalThis, "window");
     });
 
+    /** The fake client with `subscribe` replaced, for the setup-order edge cases. */
+    const withSubscribe = (fake: ReturnType<typeof createPresenceFakeClient>, wrap: (original: (...args: never[]) => () => void) => unknown): void => {
+        const client = fake.client as unknown as Record<string, unknown>;
+        const original = (client["subscribe"] as (...args: never[]) => () => void).bind(fake.client);
+
+        client["subscribe"] = wrap(original);
+    };
+
+    it("leaves each room it stops showing, and the last one on dispose, through the leave mutation", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const scope = effectScope();
+        const room = ref("a");
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+
+        scope.run(() =>
+            fake.provide(() =>
+                usePresence(room, { heartbeat: HEARTBEAT, intervalMs: 60_000, leave: LEAVE, listPresent: LIST_PRESENT, sessionId: "sess-fixed" }),
+            ),
+        );
+        await flushAsync();
+        room.value = "b";
+        await flushAsync();
+        scope.stop();
+
+        expect(
+            fake.mutationSpy.mock.calls
+                .filter((call) => (call[0] as Record<string, unknown>)["__lunoraRef"] === "presence:leave")
+                .map((call) => call[1] as unknown),
+        ).toStrictEqual([
+            { roomId: "a", sessionId: "sess-fixed" },
+            { roomId: "b", sessionId: "sess-fixed" },
+        ]);
+    });
+
+    it("never queues a heartbeat for offline replay", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const scope = effectScope();
+
+        scope.run(() =>
+            fake.provide(() => usePresence("room-1", { heartbeat: HEARTBEAT, intervalMs: 500, listPresent: LIST_PRESENT, sessionId: "sess-fixed" })),
+        );
+        await flushAsync();
+
+        expect(fake.mutationSpy.mock.calls[0]?.[2]).toMatchObject({ onlineOnly: true });
+
+        scope.stop();
+    });
+
+    it("does not read a room getter during SSR", () => {
+        expect.assertions(1);
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        const fake = createPresenceFakeClient();
+        const scope = effectScope();
+        const room = (): string => {
+            throw new Error("window.location is not available on the server");
+        };
+
+        expect(() =>
+            scope.run(() =>
+                fake.provide(() => usePresence(room, { heartbeat: HEARTBEAT, intervalMs: 500, listPresent: LIST_PRESENT, sessionId: "sess-fixed" })),
+            ),
+        ).not.toThrow();
+
+        scope.stop();
+    });
+
+    it("rolls a room's setup back when subscribing to it throws", () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const scope = effectScope();
+
+        withSubscribe(fake, () => () => {
+            throw new Error("client closed");
+        });
+
+        expect(() =>
+            scope.run(() =>
+                fake.provide(() => usePresence("room-1", { heartbeat: HEARTBEAT, intervalMs: 500, listPresent: LIST_PRESENT, sessionId: "sess-fixed" })),
+            ),
+        ).toThrow("client closed");
+        expect(fake.contextFor()).toBeUndefined();
+
+        scope.stop();
+    });
+
+    it("disposes a room whose scope stops while its subscription replays a refusal", async () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const scope = effectScope();
+
+        // A replayed refusal reaches onError before subscribe returns.
+        withSubscribe(fake, (original) => (...args: never[]) => {
+            const unsubscribe = original(...args);
+            const options = (args as unknown[])[3] as { onError?: (error: unknown) => void };
+
+            options.onError?.({ code: "FORBIDDEN", message: "no" });
+
+            return unsubscribe;
+        });
+
+        scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    onError: () => {
+                        scope.stop();
+                    },
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        );
+        await flushAsync();
+
+        expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
+        expect(fake.contextFor()).toBeUndefined();
+    });
+
+    it("opens the room a refusal switched to while the first room was opening", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const scope = effectScope();
+        const room = ref("a");
+        let refused = false;
+
+        withSubscribe(fake, (original) => (...args: never[]) => {
+            const unsubscribe = original(...args);
+            const options = (args as unknown[])[3] as { onError?: (error: unknown) => void };
+
+            if (!refused) {
+                refused = true;
+                options.onError?.({ code: "FORBIDDEN", message: "no" });
+            }
+
+            return unsubscribe;
+        });
+
+        scope.run(() =>
+            fake.provide(() =>
+                usePresence(room, {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    onError: () => {
+                        room.value = "b";
+                    },
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        );
+        await flushAsync();
+
+        expect(fake.subscribeCalls.at(-1)?.args).toStrictEqual({ roomId: "b" });
+
+        scope.stop();
+    });
+
     it("throws a RangeError for a non-positive intervalMs", () => {
         expect.assertions(1);
 

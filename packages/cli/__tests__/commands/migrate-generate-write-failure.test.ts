@@ -8,23 +8,52 @@ import { runMigrateGenerateCommand } from "../../src/commands/migrate/handler";
 import type { Logger } from "../../src/util/logger";
 
 const failSqlWrite = vi.hoisted(() => {
-    return { enabled: false };
+    return { enabled: false, openFails: false, sqlDescriptors: new Set<number>() };
 });
 
-// A write that fails after the exclusive open has created the file (a full disk) cannot be produced
-// on demand, so the SQL write is made to leave a partial file and throw.
+const isSqlPath = (path: unknown): path is string => typeof path === "string" && path.endsWith(".sql");
+
+// Neither failure can be produced on demand: a write that fails after the exclusive open has
+// created the file (a full disk), and an open refused before it checks whether the file exists
+// (ENFILE). The SQL file's open and write are made to fail that way, whether the code opens it by
+// path or through a descriptor.
 vi.mock(import("node:fs"), async (importOriginal) => {
     const actual = await importOriginal();
+    const enfile = (): Error => Object.assign(new Error("ENFILE: file table overflow"), { code: "ENFILE" });
+    const enospc = (): Error => Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
 
     return {
         ...actual,
+        openSync: (...args: Parameters<typeof actual.openSync>) => {
+            if (failSqlWrite.openFails && isSqlPath(args[0])) {
+                throw enfile();
+            }
+
+            const descriptor = actual.openSync(...args);
+
+            if (isSqlPath(args[0])) {
+                failSqlWrite.sqlDescriptors.add(descriptor);
+            }
+
+            return descriptor;
+        },
         writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-            const [path] = args;
+            const [target] = args;
 
-            if (failSqlWrite.enabled && typeof path === "string" && path.endsWith(".sql")) {
-                actual.writeFileSync(path, "-- partial", { encoding: "utf8", flag: "wx" });
+            if (failSqlWrite.openFails && isSqlPath(target)) {
+                throw enfile();
+            }
 
-                throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+            if (failSqlWrite.enabled && isSqlPath(target)) {
+                actual.writeFileSync(target, "-- partial", { encoding: "utf8", flag: "wx" });
+
+                throw enospc();
+            }
+
+            if (failSqlWrite.enabled && typeof target === "number" && failSqlWrite.sqlDescriptors.has(target)) {
+                actual.writeFileSync(target, "-- partial", "utf8");
+
+                throw enospc();
             }
 
             actual.writeFileSync(...args);
@@ -61,7 +90,24 @@ export const schema = defineSchema({
 
     afterEach(() => {
         failSqlWrite.enabled = false;
+        failSqlWrite.openFails = false;
+        failSqlWrite.sqlDescriptors.clear();
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("leaves a same-name migration alone when the exclusive open fails before checking it exists", () => {
+        expect.assertions(2);
+
+        const now = (): Date => new Date("2024-04-01T12:34:56.000Z");
+        const migrations = join(workdir, "lunora", "migrations");
+        const existing = join(migrations, "20240401123456_init.sql");
+
+        mkdirSync(migrations, { recursive: true });
+        writeFileSync(existing, "-- an earlier run's migration\n", "utf8");
+        failSqlWrite.openFails = true;
+
+        expect(() => runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now })).toThrow(/ENFILE/u);
+        expect(readFileSync(existing, "utf8")).toBe("-- an earlier run's migration\n");
     });
 
     it("removes the partial migration it created, so a retry can write it whole", () => {

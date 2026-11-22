@@ -422,7 +422,7 @@ const useReactivePaginatedCore = <F extends FunctionReference>(
 
     const active = signal<PaginatedCore<F> | undefined>(undefined);
 
-    if (shouldOpenSubscription(fromInjectionContext)) {
+    if (shouldOpenSubscription(fromInjectionContext, options.injector)) {
         attachReactiveArgs(baseArgs, { destroyRef, injector: options.injector }, (resolvedArgs, onCleanup) => {
             const teardowns: (() => void)[] = [];
 

@@ -18,7 +18,7 @@ const NO_WEB_CRYPTO = /no Web Crypto available/;
 const createPresenceFakeClient = () => {
     type Callback = (value: unknown) => void;
 
-    const mutationCalls: { args: unknown; functionPath: string }[] = [];
+    const mutationCalls: { args: unknown; functionPath: string; options?: unknown }[] = [];
     const subscribeCalls: {
         args: unknown;
         callback: Callback;
@@ -76,8 +76,8 @@ const createPresenceFakeClient = () => {
                 }
             };
         },
-        mutation: (function_: FunctionReference, args: unknown) => {
-            mutationCalls.push({ args, functionPath: function_["__lunoraRef"] });
+        mutation: (function_: FunctionReference, args: unknown, options?: unknown) => {
+            mutationCalls.push({ args, functionPath: function_["__lunoraRef"], options });
 
             return Promise.resolve(undefined);
         },
@@ -521,6 +521,72 @@ describe("presence (Svelte)", () => {
         room.set("b");
 
         expect(fake.subscribeCalls.map((call) => call.args)).toStrictEqual([{ roomId: "a" }]);
+        expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true]);
+
+        stopPresent();
+    });
+
+    it("leaves each room it stops showing, and the last one on teardown, through the leave mutation", () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const room = writable("a");
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const handle = presence(fake.client, room, {
+            heartbeat: HEARTBEAT,
+            intervalMs: 60_000,
+            leave: LEAVE,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        room.set("b");
+        handle.teardown();
+
+        expect(fake.mutationCalls.filter((call) => call.functionPath === "presence:leave").map((call) => call.args)).toStrictEqual([
+            { roomId: "a", sessionId: "sess-fixed" },
+            { roomId: "b", sessionId: "sess-fixed" },
+        ]);
+    });
+
+    it("never queues a heartbeat for offline replay", () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const handle = presence(fake.client, "room-1", { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+        expect(fake.mutationCalls[0]?.options).toMatchObject({ onlineOnly: true });
+
+        handle.teardown();
+    });
+
+    it("stops a room subscription that teardown overtook while it was opening", () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const original = fake.client.subscribe.bind(fake.client);
+
+        // A replayed refusal reaches onError, and the consumer tears down, before subscribe returns.
+        (fake.client as unknown as { subscribe: unknown }).subscribe = (...args: Parameters<typeof original>) => {
+            const unsubscribe = original(...args);
+
+            fake.subscribeCalls.at(-1)?.onError?.({ code: "FORBIDDEN", message: "no" });
+
+            return unsubscribe;
+        };
+
+        const handle: ReturnType<typeof presence> = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 60_000,
+            listPresent: LIST_PRESENT,
+            onError: () => {
+                handle.teardown();
+            },
+            sessionId: "sess-fixed",
+        });
+
+        const stopPresent = handle.present.subscribe(() => {});
+
         expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true]);
 
         stopPresent();

@@ -30,7 +30,7 @@
  * at all.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { discoverMigrations, discoverSchema, readPackageDependencies } from "@lunora/codegen";
@@ -172,16 +172,15 @@ const generateMigration = (options: MigrateGenerateCommandOptions, cwd: string, 
     const body = renderMigrationFile(slug, diff, now.toISOString());
 
     // "wx": the file name has one-second resolution, so a same-second rerun must not replace a
-    // migration whose diff the snapshot has already absorbed.
+    // migration whose diff the snapshot has already absorbed. The open is separate from the write:
+    // an open can fail before it checks whether the file exists (ENFILE), so only a successful
+    // exclusive open proves the file is this run's to remove after a failed write.
+    let descriptor: number;
+
     try {
-        writeFileSync(migrationFile, body, { encoding: "utf8", flag: "wx" });
+        descriptor = openSync(migrationFile, "wx");
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-            // Only EEXIST means the file was someone else's: any other error came after (or instead
-            // of) this run's exclusive create, so a partial file left here would be applied as-is
-            // and could never be rewritten.
-            rmSync(migrationFile, { force: true });
-
             throw error;
         }
 
@@ -191,6 +190,18 @@ const generateMigration = (options: MigrateGenerateCommandOptions, cwd: string, 
 
         return { code: EXIT_CODE.USAGE, empty: true, error: message, migrationFile: "" };
     }
+
+    try {
+        writeFileSync(descriptor, body, "utf8");
+    } catch (error: unknown) {
+        // A partial file left here would be applied as-is and could never be rewritten.
+        closeSync(descriptor);
+        rmSync(migrationFile, { force: true });
+
+        throw error;
+    }
+
+    closeSync(descriptor);
 
     // Temp file + rename so a crash cannot leave a torn snapshot; on failure the migration file is
     // removed so the retry diffs against the old snapshot instead of emitting the same diff twice.

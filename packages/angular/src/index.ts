@@ -54,7 +54,7 @@ export type { PaginatedQueryOptions, PaginatedQueryResult } from "./paginated-qu
 export type { InfiniteQueryResult } from "./paginated-query";
 export { paginatedQuery } from "./paginated-query";
 export { infiniteQuery } from "./paginated-query";
-export type { HeartbeatReference, ListPresentReference, PresenceOptions, PresenceResult } from "./presence";
+export type { HeartbeatReference, LeaveReference, ListPresentReference, PresenceOptions, PresenceResult } from "./presence";
 export { presence } from "./presence";
 export type { RateLimitOptions, RateLimitResult } from "./rate-limit";
 export { rateLimit } from "./rate-limit";

@@ -24,8 +24,15 @@ import { stableWireKey } from "@lunora/wire";
  * "attach" rather than throwing, and compared against the literal `"server"`
  * (Angular's `PLATFORM_SERVER_ID`) to keep this free of an `@angular/common`
  * dependency.
+ *
+ * A caller outside DI that passes an `injector` is asked through it: that injector
+ * is what the primitive's effect runs in, so a server one must gate the socket too.
  */
-export const shouldOpenSubscription = (fromInjectionContext: boolean): boolean => {
+export const shouldOpenSubscription = (fromInjectionContext: boolean, injector?: Injector): boolean => {
+    if (injector !== undefined) {
+        return injector.get(PLATFORM_ID, undefined, { optional: true }) !== "server";
+    }
+
     if (!fromInjectionContext) {
         return true;
     }

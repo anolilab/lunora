@@ -449,7 +449,7 @@ Subscribes to a live topic declared with `defineLiveStream`. It returns `lastEve
 
 The client half of the `definePresence` preset: it sends heartbeats and lists the
 people present in a room. `roomId` may be a ref or a getter; presence follows it, leaving the
-old room and joining the new one when it changes.
+old room and joining the new one when it changes. Pass `leave` (the preset's `leave` mutation) to drop the old room's row at once; without it the old room lists this session until its row ages out (`ttlMs`).
 
 ### `useRateLimit(config, options?)`
 
