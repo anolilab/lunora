@@ -600,7 +600,12 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction, sin
     return transitionSubscription(store, action, existing, targetState, singleSubscriptionPerReference, now);
 };
 
-/** Route a claimed event to the row it changes. A throw here releases the claim, so the provider retries. */
+/**
+ * Route a claimed event to the row it changes. A throw here releases the claim, so the provider retries.
+ *
+ * `settlePendingRefund` calls this directly for a refund it read from the provider: no event id was
+ * delivered, so there is none to claim, and the refund still has to go through the same per-refund marker.
+ */
 const applyClaimedAction = async (
     store: PaymentStore,
     action: WebhookAction,
@@ -713,4 +718,4 @@ const applyWebhookAction = async (
     return result;
 };
 
-export default applyWebhookAction;
+export { applyClaimedAction, applyWebhookAction };

@@ -282,6 +282,9 @@ const paymentStub: LunoraPayment = {
     resumeSubscription: () => {
         throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
+    settlePendingRefund: () => {
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
+    },
     get store(): never {
         throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },

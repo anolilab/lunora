@@ -23,7 +23,7 @@ import { createDatabasePaymentStore } from "../../src/database-store";
 import { money } from "../../src/money";
 import paymentExtension from "../../src/schema";
 import type { PaymentStore } from "../../src/store";
-import applyWebhookAction from "../../src/sync";
+import { applyWebhookAction } from "../../src/sync";
 import type { PaymentSession, Subscription, UsageEvent } from "../../src/types";
 
 const schema = defineSchema({}).extend(paymentExtension) as unknown as SchemaLike;

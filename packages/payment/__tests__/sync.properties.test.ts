@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import { MemoryPaymentStore } from "../src/store";
-import applyWebhookAction from "../src/sync";
+import { applyWebhookAction } from "../src/sync";
 import type { Subscription, WebhookAction } from "../src/types";
 
 /**

@@ -5,7 +5,7 @@ import { LunoraPaymentError } from "../src/errors";
 import { money } from "../src/money";
 import type { PaymentObserver } from "../src/observability";
 import { MemoryPaymentStore } from "../src/store";
-import applyWebhookAction from "../src/sync";
+import { applyWebhookAction } from "../src/sync";
 import type { PaymentSession, ProviderId, WebhookAction } from "../src/types";
 
 const captureEvent = (eventId: string): WebhookAction => {

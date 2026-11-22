@@ -30,6 +30,7 @@ import type {
     PaymentSession,
     PaymentState,
     PortalInput,
+    ProviderRefund,
     RefundInput,
     ReportUsageInput,
     Subscription,
@@ -177,6 +178,37 @@ const refundedMinorOf = (payment: Record<string, unknown>): bigint => {
     }
 
     return total;
+};
+
+/**
+ * The refunds a Dodo `Payment` carries inline. `refunds.list` cannot filter by payment, so this list is
+ * the per-payment read. `review` may still move money, so it counts as pending, and so does a
+ * `succeeded` entry with no amount (nullable on `RefundListItem`) or no id: neither could be booked.
+ */
+const refundsFromDodo = (payment: Record<string, unknown>): ProviderRefund[] => {
+    const { refunds } = payment;
+
+    if (!Array.isArray(refunds)) {
+        return [];
+    }
+
+    const paymentCurrency = readString(payment, "currency") ?? "usd";
+
+    return refunds.map((entry) => {
+        const refund = asRecord(entry);
+        const refundId = readString(refund, "refund_id") ?? "";
+        const amount = readNumber(refund, "amount");
+        const status = readString(refund, "status");
+        let settled: ProviderRefund["status"] = "pending";
+
+        if (status === "failed") {
+            settled = "failed";
+        } else if (status === "succeeded" && amount !== undefined && refundId !== "") {
+            settled = "succeeded";
+        }
+
+        return { amount: moneyFromMinor(amount ?? 0, readString(refund, "currency") ?? paymentCurrency), refundId, status: settled };
+    });
 };
 
 const paymentFromDodo = (input: unknown): PaymentSession => {
@@ -402,6 +434,12 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         },
 
         identifier: "dodopayments",
+
+        listRefunds: async (sessionId) => {
+            const client = await loadClient();
+
+            return refundsFromDodo(asRecord(await client.payments.retrieve(sessionId)));
+        },
 
         parseWebhook: async ({ headers, payload }: WebhookInput): Promise<WebhookAction> => {
             const webhookId = headers.get("webhook-id") ?? "";

@@ -433,7 +433,10 @@ await ctx.payments.refundPayment({ sessionId: orderId, amount: money(500n, "USD"
 <Callout type="info">
     Polar can answer a refund as `pending`. A pending refund is not booked, so while it is pending the order is held: any further `refundPayment` on it — a
     retry or a different amount — raises `INVALID_TRANSITION` ("a refund on this session is still pending; retry once it settles") without calling Polar. The
-    hold is released when `refund.updated` reports the refund `succeeded` (booked) or `failed` / `canceled`, so subscribe to `refund.updated`.
+    hold is released when `refund.updated` reports the refund `succeeded` (booked) or `failed` / `canceled`, so subscribe to `refund.updated`. Nothing else
+    releases it on its own. If that delivery is lost, or you do not subscribe, call `ctx.payments.settlePendingRefund({ sessionId: orderId })`: it lists the
+    order's refunds from Polar (the token needs `refunds:read`, which `refunds:write` includes), books a refund that succeeded exactly as the webhook would, so
+    a late webhook adds nothing, and releases the hold. A refund that failed, or none at all, releases it with nothing booked. One still pending keeps it.
 </Callout>
 
 ## Billing portal

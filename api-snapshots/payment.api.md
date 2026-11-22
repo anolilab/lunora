@@ -235,6 +235,9 @@ interface LunoraPayment {
     resumeSubscription: (subscriptionId: string, options?: {
         idempotencyKey?: string;
     }) => Promise<Subscription>;
+    settlePendingRefund: (input: {
+        sessionId: string;
+    }) => Promise<PaymentSession>;
     readonly store: PaymentStore;
     track: (input: TrackInput) => Promise<TrackResult>;
     updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
@@ -333,6 +336,7 @@ interface PaymentAdapter {
     getPaymentStatus: (sessionId: string) => Promise<PaymentSession>;
     getSubscriptionStatus: (subscriptionId: string) => Promise<Subscription>;
     readonly identifier: ProviderId;
+    listRefunds?: (sessionId: string) => Promise<ProviderRefund[]>;
     parseWebhook: (input: WebhookInput) => Promise<WebhookAction>;
     refundPayment: (input: RefundInput) => Promise<RefundResult>;
     reportUsage?: (input: ReportUsageInput) => Promise<void>;
@@ -424,6 +428,12 @@ type PaymentEvent = {
     refundId: string;
     sessionId: string;
     type: "refund.replayed";
+} | {
+    booked: number;
+    provider: ProviderId;
+    referenceId?: string;
+    sessionId: string;
+    type: "refund.hold_released";
 } | {
     featureId: string;
     provider: ProviderId;
@@ -561,6 +571,16 @@ interface ProviderCapabilities {
 
 ```ts
 type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
+```
+
+### `ProviderRefund` (interface)
+
+```ts
+interface ProviderRefund {
+    readonly amount: Money;
+    readonly refundId: string;
+    readonly status: "failed" | "pending" | "succeeded";
+}
 ```
 
 ### `ReconcileInput` (interface)

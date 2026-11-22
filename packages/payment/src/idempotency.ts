@@ -32,8 +32,9 @@
  * `refundPayment` returns, so the over-refund check rejects the retry without reaching the
  * adapter. A pending refund is deliberately NOT recorded (no money has moved), so the session
  * carries a {@link pendingRefundKey} marker instead, claimed before the adapter is called and held
- * until the provider's `payment.refunded` or `payment.refund_failed` webhook settles it; any
- * `refundPayment` on that session meanwhile is refused.
+ * until the provider's `payment.refunded` or `payment.refund_failed` webhook settles it, or until
+ * `settlePendingRefund` reads the refund's outcome from the provider (the only way out when those
+ * webhooks never arrive); any `refundPayment` on that session meanwhile is refused.
  *
  * Un-keyable and non-money-moving, for completeness: Creem `subscriptions.cancel` and
  * `customers.create`; Autumn `billing.update` (the cancel/uncancel pair); Dodo

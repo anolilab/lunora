@@ -338,6 +338,24 @@ export interface RefundInput {
 }
 
 /**
+ * One refund on a payment as the provider reports it now — what `settlePendingRefund` reads to clear a
+ * pending-refund hold whose webhook never arrived.
+ */
+export interface ProviderRefund {
+    /** What this refund moved, tax-inclusive like the capture and the provider's refund webhook. */
+    readonly amount: Money;
+    /** The provider's id for the refund — the same id its refund webhook carries. */
+    readonly refundId: string;
+
+    /**
+     * `pending` is every status that may still move money (Dodo `review`), and a settled refund whose
+     * amount the provider left out: booking nothing for it would release the hold with the money unrecorded.
+     * `failed` includes Polar's `canceled`.
+     */
+    readonly status: "failed" | "pending" | "succeeded";
+}
+
+/**
  * What an adapter's `refundPayment` returns: the provider-shaped session, plus the provider's own id
  * for the refund it just issued.
  */

@@ -44,7 +44,7 @@ export {
 } from "./state-machine";
 export type { PaymentStore } from "./store";
 export { MemoryPaymentStore } from "./store";
-export { default as applyWebhookAction } from "./sync";
+export { applyWebhookAction } from "./sync";
 export type {
     ApplyResult,
     AttachInput,
@@ -64,6 +64,7 @@ export type {
     PortalInput,
     ProviderCapabilities,
     ProviderId,
+    ProviderRefund,
     RefundAmountKind,
     RefundInput,
     RefundResult,

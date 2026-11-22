@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import DodoPayments from "dodopayments";
 import { describe, expect, it } from "vitest";
 
+import { money } from "../../src/money";
 import type { DodoPaymentsClientLike } from "../../src/providers/dodopayments";
 import { createDodoPaymentsAdapter } from "../../src/providers/dodopayments";
 
@@ -90,6 +91,37 @@ const makeClient = (calls: RecordedCall[] = []): DodoPaymentsClientLike => {
 };
 
 describe("dodopayments adapter", () => {
+    it("lists a payment's inline refunds, holding back any that could still move money or cannot be booked", async () => {
+        expect.assertions(1);
+
+        const client = makeClient();
+
+        (client as { payments: { retrieve: unknown } }).payments = {
+            retrieve: async (id: string) => {
+                return {
+                    currency: "EUR",
+                    payment_id: id,
+                    refunds: [
+                        { amount: 4000, currency: "EUR", refund_id: "ref_ok", status: "succeeded" },
+                        { amount: 1000, refund_id: "ref_no", status: "failed" },
+                        { amount: 500, refund_id: "ref_review", status: "review" },
+                        { amount: null, refund_id: "ref_blank", status: "succeeded" },
+                    ],
+                    status: "succeeded",
+                    total_amount: 10_000,
+                };
+            },
+        };
+        const adapter = createDodoPaymentsAdapter({ client: () => client, webhookSecret: SECRET });
+
+        await expect(adapter.listRefunds?.("pay_1")).resolves.toStrictEqual([
+            { amount: money(4000, "EUR"), refundId: "ref_ok", status: "succeeded" },
+            { amount: money(1000, "EUR"), refundId: "ref_no", status: "failed" },
+            { amount: money(500, "EUR"), refundId: "ref_review", status: "pending" },
+            { amount: money(0, "EUR"), refundId: "ref_blank", status: "pending" },
+        ]);
+    });
+
     it("is a merchant-of-record: rejects manual capture but supports refunds", async () => {
         expect.assertions(3);
 

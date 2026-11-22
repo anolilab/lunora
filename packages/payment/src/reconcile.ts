@@ -12,6 +12,9 @@
  *
  * The same sweep also retries metered-usage forwards the provider never accepted (see
  * `sweepUnreportedUsage`) — the out-of-band retry `track`'s swallowed forward failure relies on.
+ *
+ * It does not clear a Polar/Dodo pending-refund hold: the store cannot list which sessions hold one, so
+ * that repair is the per-session `settlePendingRefund` on the payment facade.
  */
 import type { PaymentAdapter } from "./adapter";
 import { usageForwardIsIdempotent } from "./idempotency";
