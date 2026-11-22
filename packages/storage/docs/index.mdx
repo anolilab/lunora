@@ -399,15 +399,16 @@ The handler is also built with `allowMethodOverride: false`. Send each request
 with its real method; the bundled client does.
 
 The handler does not record who created an upload: binding an upload to its
-creator is `authorize`'s job, and it sees the upload id in `url`. On a create
-(`POST`, and the chunked-REST `PUT`) decide who may upload; on every other
-request check that the id in the URL belongs to the caller, or anyone who learns
-an id can append to the upload, read its offset, or cancel it. The route itself
+creator is `authorize`'s job, and it sees the upload id in `url`. On a TUS route,
+decide on `POST` who may upload; on every other request check that the id in the
+URL belongs to the caller, or anyone who learns an id can append to the upload,
+read its offset, or cancel it. The route itself
 refuses TUS concatenation (`Upload-Concat`, `400`) before `authorize` runs,
 and does not advertise the `concatenation` extension: `final;<url> …` names
 the uploads it assembles in a header, not the URL, so a gate that checks the id
 in `url` could not bind them to the caller. The bundled client never sends it.
-Record the owner from the create's `Location`, after the handler answers:
+On a TUS route, record the owner from the create's `Location`, after the
+handler answers:
 
 ```ts
 const handler = createUploadHandler({
@@ -421,6 +422,11 @@ if (request.method === "POST" && response.ok && location !== null) {
     await claim(uploadIdFrom(new URL(location, request.url)), userId);
 }
 ```
+
+This example is for TUS only. A chunked-REST `PUT` creates a file under a name
+the client picks, and a multipart create returns its id in a JSON body with no
+`Location`, so this gate and claim would leave either one unowned. Write and
+test your own claim for those protocols before you expose such a route.
 
 [File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
 has the full HTTP action, with `isOwner` and `claim` as internal functions.

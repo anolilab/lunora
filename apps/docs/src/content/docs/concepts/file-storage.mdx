@@ -271,9 +271,11 @@ export default app;
 `internal.uploads.claim` and `internal.uploads.isOwner` are your own
 [internal functions](/docs/concepts/internal-functions) over an `uploads` table:
 one inserts `{ uploadId, userId }`, the other reports whether that row exists.
-The same table is where you check ownership before you serve the file. On a
-`"chunked-rest"` route a `PUT` creates a file too, under a name the client
-picks: treat it like `POST` in the gate and claim the name once it succeeds.
+The same table is where you check ownership before you serve the file. This
+gate and claim are for TUS only. A `"chunked-rest"` `PUT` creates a file under a
+name the client picks, and a `"multipart"` create returns its id in a JSON body
+with no `Location`, so neither gets an owner here. Write and test your own claim
+for those protocols before you expose such a route.
 
 An upload's progress lives in the bucket, not in the Worker: one small state
 object per upload under `_lunora/uploads/`, written with conditional puts, so a
