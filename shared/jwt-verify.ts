@@ -320,9 +320,10 @@ const createJwtVerification = <Key, Claims extends JwtClaims>({
 
         // Read as `unknown`: the type requires the field, but a JS caller or an unset env var still passes `undefined`.
         const audience: unknown = options.audience;
+        // `Array.from` fills a sparse array's holes with `undefined`, which `some` would otherwise skip.
         const audiences = Array.isArray(audience) ? audience : [audience];
 
-        if (audience !== false && (audiences.length === 0 || audiences.some((entry) => typeof entry !== "string" || entry.trim() === ""))) {
+        if (audience !== false && (audiences.length === 0 || Array.from(audiences).some((entry) => typeof entry !== "string" || entry.trim() === ""))) {
             throw fail(
                 `${name}: set \`audience\` to the value your provider puts in \`aud\`, or pass \`audience: false\` if it issues none and another claim binds the token to this app`,
             );

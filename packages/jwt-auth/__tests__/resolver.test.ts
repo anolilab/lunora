@@ -156,7 +156,7 @@ describe(jwtIdentityResolver, () => {
     });
 
     it("refuses to build without an audience, or with an empty one", () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         // @ts-expect-error -- exercising the runtime guard for JS callers and env-derived undefined
         expect(() => jwtIdentityResolver({ issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
@@ -166,6 +166,13 @@ describe(jwtIdentityResolver, () => {
         // An env var holding only spaces would otherwise build a resolver that rejects every token.
         expect(() => jwtIdentityResolver({ audience: "  ", issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
         expect(() => jwtIdentityResolver({ audience: [AUDIENCE, " "], issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
+
+        // A sparse array: `some` skips the hole, which then matches no token's `aud`.
+        const sparse = [AUDIENCE];
+
+        sparse.length = 2;
+
+        expect(() => jwtIdentityResolver({ audience: sparse, issuer: ISSUER, keySet: createLocalJWKSet(jwks) })).toThrow(/audience/);
     });
 
     it("accepts only a token minted for the configured audience", async () => {
