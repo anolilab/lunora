@@ -185,6 +185,8 @@ interface AuthAdminRouteDeps {
     assertAdmin: (request: Request) => void;
     /** Throw 403 unless the caller holds root admin authority (not a named admin token). */
     assertRootAdmin: (request: Request) => void;
+    /** The caller's IP when a trustworthy header names it (`trustedClientIp`), for the audit row. */
+    clientIp: (request: Request) => string | undefined;
     /** Where mutations are recorded (`authAuditWriter`), or undefined, in which case nothing is recorded. */
     getAuditWriter: () => AuthAuditWriter | undefined;
     /** The configured auth plane (`authAdmin`), or undefined. */
@@ -208,9 +210,11 @@ interface AuthRouteContext {
 interface AuthRouteDescriptor {
     /**
      * Set on every mutation: the security-feed event it records once it succeeds. `resultId` names the detail key the
-     * created row's `id` fills, for an op whose input has no id of its target yet.
+     * created row's `id` fills, for an op whose input has no id of its target yet. `role` marks an op that grants a
+     * role, whose row records the role saved even when the request left it to the plane's default. `roleKey` names the
+     * detail key for an op whose `role` is a custom role's name rather than a grant, as the better-auth hook keys it.
      */
-    audit?: { event: string; resultId?: string };
+    audit?: { event: string; resultId?: string; role?: true; roleKey?: "roleName" };
     /** Build the method input from query (GET) or body (POST); throw `LunoraError` for invalid input. */
     build: (context: AuthRouteContext) => unknown;
     http: "GET" | "POST";
@@ -265,8 +269,48 @@ const roleField = (value: unknown): string | undefined => {
     return stringField(value, "role");
 };
 
-/** The row a successful mutation records: who acted, on which ids, through which route. */
-const buildAuditEntry = (path: string, audit: NonNullable<AuthRouteDescriptor["audit"]>, actor: string, input: unknown, result: unknown): AuthAuditWrite => {
+/** The `data` object an input carries (`createUser` / `updateUser`), which the plane spreads over the top-level fields. */
+const dataOf = (input: unknown): unknown => (typeof input === "object" && input !== null ? (input as Record<string, unknown>)["data"] : undefined);
+
+/**
+ * The role a row records: the one the plane saved, which `createUser`'s `data.role` can override, and for a
+ * role-granting op the plane's default when the request named none.
+ */
+const auditedRole = (audit: NonNullable<AuthRouteDescriptor["audit"]>, input: unknown, result: unknown): string | undefined => {
+    const requestedRole = roleField(input) ?? roleField(dataOf(input));
+
+    return requestedRole !== undefined || audit.role === true ? (roleField(result) ?? requestedRole) : undefined;
+};
+
+/**
+ * An invitation names its target only by address, and a created user's address identifies it to a reader. It goes in
+ * `targetEmail`: inside `detail` the PII rules erase it. The saved address wins over the requested one, since
+ * `createUser` lets `data.email` override the top-level field.
+ */
+const auditedTargetEmail = (input: unknown, result: unknown): string | undefined => {
+    const requestedEmail = stringField(input, "email") ?? stringField(dataOf(input), "email");
+
+    return requestedEmail === undefined ? undefined : (stringField(result, "email") ?? requestedEmail);
+};
+
+/** Longest user agent an admin row keeps; the header is client-written and otherwise unbounded. */
+const MAX_USER_AGENT_LENGTH = 512;
+
+/** Where an admin request came from: the trusted client IP (see `trustedClientIp`) and its user agent. */
+interface AuditOrigin {
+    ip: string | undefined;
+    userAgent: string | undefined;
+}
+
+/** The row a successful mutation records: who acted, from where, on which ids, through which route. */
+const buildAuditEntry = (
+    path: string,
+    audit: NonNullable<AuthRouteDescriptor["audit"]>,
+    actor: string,
+    origin: AuditOrigin,
+    input: unknown,
+    result: unknown,
+): AuthAuditWrite => {
     const detail: Record<string, unknown> = { path };
 
     for (const [inputField, detailKey] of AUDIT_INPUT_IDS) {
@@ -277,11 +321,10 @@ const buildAuditEntry = (path: string, audit: NonNullable<AuthRouteDescriptor["a
         }
     }
 
-    // Prefer the role the plane saved: `createUser` lets `data.role` override the top-level one.
-    const requestedRole = roleField(input) ?? roleField(typeof input === "object" && input !== null ? (input as Record<string, unknown>)["data"] : undefined);
+    const savedRole = auditedRole(audit, input, result);
 
-    if (requestedRole !== undefined) {
-        detail["role"] = roleField(result) ?? requestedRole;
+    if (savedRole !== undefined) {
+        detail[audit.roleKey ?? "role"] = savedRole;
     }
 
     const createdId = audit.resultId === undefined ? undefined : stringField(result, "id");
@@ -290,9 +333,7 @@ const buildAuditEntry = (path: string, audit: NonNullable<AuthRouteDescriptor["a
         detail[audit.resultId] = createdId;
     }
 
-    // An invitation names its target only by address, and a created user's address identifies it to a reader. It goes in
-    // `targetEmail`: inside `detail` the PII rules erase it.
-    const email = stringField(input, "email");
+    const email = auditedTargetEmail(input, result);
 
     return {
         actorId: actor,
@@ -300,7 +341,9 @@ const buildAuditEntry = (path: string, audit: NonNullable<AuthRouteDescriptor["a
         event: audit.event,
         outcome: "success",
         ts: Date.now(),
+        ...(origin.ip === undefined ? {} : { ip: origin.ip }),
         ...(email === undefined ? {} : { targetEmail: email.slice(0, MAX_TARGET_EMAIL_LENGTH) }),
+        ...(origin.userAgent === undefined ? {} : { userAgent: origin.userAgent.slice(0, MAX_USER_AGENT_LENGTH) }),
     };
 };
 
@@ -578,7 +621,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
 
     // --- mutations (POST) -------------------------------------------------------
     [`${AUTH_BASE}/users/create`]: {
-        audit: { event: "admin-user-create", resultId: "targetUserId" },
+        audit: { event: "admin-user-create", resultId: "targetUserId", role: true },
         build: ({ body }) => {
             return {
                 data: optionalBodyObject(body, "data"),
@@ -606,7 +649,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "updateUser",
     },
     [`${AUTH_BASE}/users/role`]: {
-        audit: { event: "admin-role-change" },
+        audit: { event: "admin-role-change", role: true },
         build: ({ body }) => {
             return { role: requireRole(body), userId: requireBodyString(body, "userId") };
         },
@@ -760,7 +803,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/organizations/members/add`]: {
-        audit: { event: "org-member-add", resultId: "memberId" },
+        audit: { event: "org-member-add", resultId: "memberId", role: true },
         build: ({ body }) => {
             return {
                 organizationId: requireBodyString(body, "organizationId"),
@@ -772,7 +815,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "addMember",
     },
     [`${AUTH_BASE}/organizations/members/invite`]: {
-        audit: { event: "org-invitation-create", resultId: "invitationId" },
+        audit: { event: "org-invitation-create", resultId: "invitationId", role: true },
         build: ({ body }) => {
             return {
                 email: requireBodyString(body, "email"),
@@ -785,7 +828,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "inviteMember",
     },
     [`${AUTH_BASE}/organizations/members/role`]: {
-        audit: { event: "org-member-role-change" },
+        audit: { event: "org-member-role-change", role: true },
         build: ({ body }) => {
             return { memberId: requireBodyString(body, "memberId"), role: requireRole(body) };
         },
@@ -835,7 +878,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/organizations/roles/create`]: {
-        audit: { event: "org-role-change", resultId: "roleId" },
+        audit: { event: "org-role-change", resultId: "roleId", roleKey: "roleName" },
         build: ({ body }) => {
             return {
                 organizationId: requireBodyString(body, "organizationId"),
@@ -938,7 +981,16 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
 
         if (descriptor.audit !== undefined && writer !== undefined) {
             try {
-                await writer.write(buildAuditEntry(url.pathname, descriptor.audit, deps.adminActor(request), input, result));
+                await writer.write(
+                    buildAuditEntry(
+                        url.pathname,
+                        descriptor.audit,
+                        deps.adminActor(request),
+                        { ip: deps.clientIp(request), userAgent: request.headers.get("user-agent") ?? undefined },
+                        input,
+                        result,
+                    ),
+                );
             } catch (error) {
                 // The operation already happened; failing the response would invite a retry that repeats it. Same
                 // policy as the better-auth audit hook.

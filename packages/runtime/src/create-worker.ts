@@ -6890,6 +6890,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             },
             assertAdmin: assertAdminAuthorized,
             assertRootAdmin,
+            clientIp: (request) => trustedClientIp(request.headers, options.trustedClientIpHeader),
             getAuditWriter: () => options.authAuditWriter,
             getAuthAdmin: () => options.authAdmin,
             parsePaging,

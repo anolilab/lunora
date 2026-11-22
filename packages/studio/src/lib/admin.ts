@@ -956,6 +956,8 @@ export interface AuthAuditEntry {
     ip?: string;
     outcome: "failure" | "success";
     seq: number;
+    /** The address an event was about when it names its target by address: a failed sign-in's, an invitation's, a created user's. */
+    targetEmail?: string;
     ts: number;
     userAgent?: string;
 }

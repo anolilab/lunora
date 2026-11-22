@@ -22,6 +22,17 @@ const ENTRIES: AuthAuditEntry[] = [
     { actorId: "u2", event: "password-change", ip: "198.51.100.4", outcome: "failure", seq: 1, ts: 1_700_000_001_000 },
 ];
 
+// What the admin plane records: the account it acted on, by address and by id.
+const ADMIN_ENTRY: AuthAuditEntry = {
+    actorId: "admin:token:oncall",
+    detail: { path: "/_lunora/admin/auth/users/create", targetUserId: "u9" },
+    event: "admin-user-create",
+    outcome: "success",
+    seq: 3,
+    targetEmail: "new@example.com",
+    ts: 1_700_000_003_000,
+};
+
 const createClient = (entries: AuthAuditEntry[] = ENTRIES): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
@@ -66,10 +77,27 @@ describe("authAuditPanel", () => {
         const signIn = bodyRows()[0] as HTMLElement;
         const cells = within(signIn).getAllByRole("cell");
 
-        // columns: time, event, actor, ip/ua, outcome
+        // columns: time, event, actor, target, ip/ua, outcome
         expect(cells[2]?.textContent).toContain("alice@example.com");
-        expect(cells[3]?.textContent).toContain("203.0.113.7");
-        expect(cells[4]?.textContent?.toLowerCase()).toContain("success");
+        expect(cells[4]?.textContent).toContain("203.0.113.7");
+        expect(cells[5]?.textContent?.toLowerCase()).toContain("success");
+    });
+
+    it("names the account an admin operation acted on, and finds the row by it", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createClient([ADMIN_ENTRY, ...ENTRIES])));
+
+        await screen.findByTestId("aa-table");
+
+        const target = within(bodyRows()[0] as HTMLElement).getAllByRole("cell")[3];
+
+        expect(target?.textContent).toContain("new@example.com");
+        expect(target?.textContent).toContain("u9");
+
+        fireEvent.change(screen.getByTestId("aa-search"), { target: { value: "u9" } });
+
+        await expect(screen.findAllByTestId("aa-row")).resolves.toHaveLength(1);
     });
 
     it("shows the empty state when there are no events", async () => {

@@ -585,7 +585,7 @@ interface AuthAuditWriter {
  * through `withAuthAudit`), each row also goes through that hook's `retention`, `redactDetail` and
  * `onRecord`, so a SIEM tap sees the admin plane as well as sign-ins.
  */
-const createAuthAuditWriter = (executor: SqlExecutor, auth?: { options: { hooks?: { after?: unknown } } }): AuthAuditWriter => {
+const createAuthAuditWriter = (executor: SqlExecutor, auth?: { options: { hooks?: { after?: unknown } } } | null): AuthAuditWriter => {
     const after = auth?.options.hooks?.after;
     const config = typeof after === "function" ? auditHookConfigOf(after) : undefined;
 

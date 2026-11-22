@@ -137,4 +137,13 @@ describe(createAuthAuditWriter, () => {
 
         await expect(createAuthAuditReader(executor).read({})).resolves.toHaveLength(1);
     });
+
+    it("accepts the generated worker's absent auth instance (null) and records with no hook config", async () => {
+        expect.assertions(1);
+
+        // `getAuth()` answers null in a worker built without auth options; the generated wiring passes it straight in.
+        await createAuthAuditWriter(executor, null).write({ actorId: "admin:root", detail: {}, event: "admin-user-ban", outcome: "success", ts: 1 });
+
+        await expect(createAuthAuditReader(executor).read({})).resolves.toHaveLength(1);
+    });
 });

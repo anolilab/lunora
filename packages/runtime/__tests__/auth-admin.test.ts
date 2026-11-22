@@ -415,9 +415,11 @@ describe("createWorker — auth admin audit trail", () => {
             "users/create",
             { email: "new@example.com", name: "New", password: FIXTURE_PASSWORD }, // secret-scanner:allow -- fake test fixture, not a real credential
             "admin-user-create",
-            { targetUserId: "u1" },
+            // The plane saved its default role; the row says which.
+            { role: "user", targetUserId: "u1" },
             {
-                targetEmail: "new@example.com",
+                // The address the plane saved (the mock's), not the one asked for.
+                targetEmail: "a@example.com",
             },
         ],
         ["user ban", "users/ban", { reason: "spam", userId: "u1" }, "admin-user-ban", { targetUserId: "u1" }],
@@ -476,6 +478,73 @@ describe("createWorker — auth admin audit trail", () => {
 
         expect(writer.rows[0]?.detail).toMatchObject({ role: "admin,support", targetUserId: "u1" });
         expect(writer.rows[1]?.detail).toMatchObject({ memberId: "m1", role: "admin,billing" });
+    });
+
+    it("records the address a created user was saved under, the caller's address and agent, and an org role's name", async () => {
+        expect.assertions(3);
+
+        const plane: AuthAdmin = {
+            ...auditedAuthAdmin(),
+            createOrgRole: vi.fn<NonNullable<AuthAdmin["createOrgRole"]>>(async () => {
+                return { id: "r9", organizationId: "o1", permission: {}, role: "editor" };
+            }),
+        };
+
+        vi.mocked(plane.createUser as NonNullable<AuthAdmin["createUser"]>).mockImplementationOnce(async () => {
+            return { ...USER, email: "saved@example.com" };
+        });
+
+        const writer = recordingWriter();
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            authAdmin: plane,
+            authAuditWriter: writer,
+            shardDO: noopNamespace,
+            trustedClientIpHeader: "x-real-ip",
+        });
+        const withOrigin = (request: Request): Request => {
+            request.headers.set("x-real-ip", "203.0.113.9");
+            request.headers.set("user-agent", "ops-cli/1");
+
+            return request;
+        };
+
+        await worker.fetch(
+            withOrigin(post(`${AUTH}/users/create`, { data: { email: "saved@example.com" }, email: "asked@example.com", name: "New" })),
+            {},
+            fakeContext,
+        );
+        await worker.fetch(
+            post(`${AUTH}/organizations/roles/create`, { organizationId: "o1", permission: { doc: ["read"] }, role: "editor" }),
+            {},
+            fakeContext,
+        );
+
+        expect(writer.rows[0]).toMatchObject({ ip: "203.0.113.9", targetEmail: "saved@example.com", userAgent: "ops-cli/1" });
+        expect(writer.rows[1]?.detail).toMatchObject({ roleId: "r9", roleName: "editor" });
+        expect(writer.rows[1]?.detail).not.toHaveProperty("role");
+    });
+
+    it("records the role a member was added or invited with when the request named none", async () => {
+        expect.assertions(2);
+
+        const plane: AuthAdmin = {
+            ...auditedAuthAdmin(),
+            addMember: vi.fn<NonNullable<AuthAdmin["addMember"]>>(async () => {
+                return { id: "m9", organizationId: "o1", role: "member", userId: "u1" };
+            }),
+            inviteMember: vi.fn<NonNullable<AuthAdmin["inviteMember"]>>(async () => {
+                return { id: "i9", role: "member" };
+            }),
+        };
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        await worker.fetch(post(`${AUTH}/organizations/members/add`, { organizationId: "o1", userId: "u1" }), {}, fakeContext);
+        await worker.fetch(post(`${AUTH}/organizations/members/invite`, { email: "guest@example.com", organizationId: "o1" }), {}, fakeContext);
+
+        expect(writer.rows[0]?.detail).toMatchObject({ memberId: "m9", role: "member" });
+        expect(writer.rows[1]?.detail).toMatchObject({ invitationId: "i9", role: "member" });
     });
 
     it("records the role a created user was saved with when `data` overrides it", async () => {
