@@ -3065,8 +3065,8 @@ export const backfillNames = defineMigration({
                 expect(puts.every((call) => /^[a-f0-9]{64}$/u.test(call.descriptor.input ?? ""))).toBe(true);
             });
 
-            it("records every key a failed bulk push carried when the per-key retry also stops, naming the uncertain ones", async () => {
-                expect.assertions(6);
+            it("records the keys a failed bulk push carried, keeps an existing local value, and names the uncertain ones", async () => {
+                expect.assertions(7);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="local"\n', "utf8");
@@ -3107,8 +3107,9 @@ export const backfillNames = defineMigration({
                 expect(result.code).not.toBe(0);
                 expect(Object.keys(bulkBody).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["AUTH_SECRET", "LUNORA_ADMIN_TOKEN"]);
                 expect(recorded).toContain(`LUNORA_ADMIN_TOKEN="${bulkBody.LUNORA_ADMIN_TOKEN ?? "missing"}"`);
-                // The key whose put failed may still be live from the bulk request: its value is recorded too.
-                expect(recorded).toContain(`AUTH_SECRET="${bulkBody.AUTH_SECRET ?? "missing"}"`);
+                // The key whose put failed may or may not be live: a local value it already had is left as it was.
+                expect(recorded).toContain('AUTH_SECRET="local"');
+                expect(recorded).not.toContain(`AUTH_SECRET="${bulkBody.AUTH_SECRET ?? "missing"}"`);
                 expect(warns.join("\n")).toMatch(/AUTH_SECRET: the failed bulk push may already have set/u);
                 expect(warns.join("\n")).not.toMatch(/LUNORA_ADMIN_TOKEN[^\n]*may already have set/u);
             });

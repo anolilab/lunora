@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -331,7 +331,8 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
         const schemaPath = join(workdir, "lunora", "schema.ts");
         const schemaBefore = readFileSync(schemaPath);
 
-        rmSync(functionPath, { force: true });
+        // unlinkSync, not rmSync: Node 24.11's rmSync({ force }) leaves a dangling link in place.
+        unlinkSync(functionPath);
 
         const second = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
 

@@ -257,7 +257,12 @@ const pushMintableSecrets = async (
  * log this function prints immediately (a single trailing line naming every
  * minted key once, rather than repeating the file per key).
  */
-const persistMintedSecrets = (cwd: string, options: DeployCommandOptions, minted: ReadonlyArray<{ key: string; value: string }>): string | undefined => {
+const persistMintedSecrets = (
+    cwd: string,
+    options: DeployCommandOptions,
+    minted: ReadonlyArray<{ key: string; value: string }>,
+    keepExisting: ReadonlySet<string> = new Set(),
+): string | undefined => {
     if (minted.length === 0) {
         return undefined;
     }
@@ -278,17 +283,32 @@ const persistMintedSecrets = (cwd: string, options: DeployCommandOptions, minted
 
     const devVariablesPath = join(cwd, targetFile);
     let raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
+    const present = new Set(parseDevVariableEntries(raw).map((entry) => entry.key));
+    // A value whose push may not have landed must not displace one the file already holds:
+    // nothing proves the minted value is the live one, and the local one would be lost.
+    const kept = minted.filter((entry) => keepExisting.has(entry.key) && present.has(entry.key)).map((entry) => entry.key);
+    const written = minted.filter((entry) => !kept.includes(entry.key));
 
-    for (const entry of minted) {
+    for (const entry of written) {
         raw = upsertDevVariableLine(raw, entry.key, entry.value);
+    }
+
+    if (kept.length > 0) {
+        options.logger.warn(`${kept.join(", ")}: left the existing value in ${targetFile} as it was — the failed push may not have set the minted one.`);
+    }
+
+    if (written.length === 0) {
+        return undefined;
     }
 
     writeDevVariablesFileAtomically(devVariablesPath, raw);
 
+    const writtenKeys = written.map((entry) => entry.key).join(", ");
+
     options.logger.success(
         options.env === undefined
-            ? `${keys}: value(s) recorded in ${targetFile}`
-            : `${keys}: value(s) recorded in ${targetFile} (kept separate from ${DEV_VARS_FILE} so \`lunora dev\` and a plain \`lunora env push\` don't inherit the --env ${options.env} value)`,
+            ? `${writtenKeys}: value(s) recorded in ${targetFile}`
+            : `${writtenKeys}: value(s) recorded in ${targetFile} (kept separate from ${DEV_VARS_FILE} so \`lunora dev\` and a plain \`lunora env push\` don't inherit the --env ${options.env} value)`,
     );
 
     return targetFile;
@@ -374,7 +394,7 @@ const failedPushOutcome = (logger: Logger, uncertain: ReadonlyArray<string>, min
 
     logger.warn(
         `${uncertain.join(", ")}: the failed bulk push may already have set these on the target — their values are recorded ` +
-            `${mintedSecretsFile === undefined ? "nowhere (see above)" : `in ${mintedSecretsFile}`} in case it did. The next deploy re-checks the target ` +
+            `${mintedSecretsFile === undefined ? "nowhere (see above)" : `in ${mintedSecretsFile}`} in case it did, except where a local value already existed. The next deploy re-checks the target ` +
             `and replaces the record of any that are still missing with a fresh value.`,
     );
 
@@ -474,7 +494,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         // rest of the batch succeeding. Its path is threaded into the returned
         // outcome even when `ok` is `false`, so an abort never drops a secret
         // that DID get recorded from the caller's view.
-        const mintedSecretsFile = persistMintedSecrets(cwd, options, minted);
+        const mintedSecretsFile = persistMintedSecrets(cwd, options, minted, new Set(uncertain));
 
         if (!ok) {
             return failedPushOutcome(logger, uncertain, mintedSecretsFile);
