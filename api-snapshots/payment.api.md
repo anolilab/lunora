@@ -672,6 +672,7 @@ interface Subscription {
     readonly currentPeriodStart?: number;
     readonly id: string;
     readonly lastEventAt?: number;
+    readonly priceEventAt?: number;
     readonly priceId: string;
     readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
