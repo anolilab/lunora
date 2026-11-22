@@ -273,8 +273,9 @@ class MemoryPaymentStore implements PaymentStore {
     listUnreportedUsage(provider: ProviderId, limit: number, now: number): Promise<UsageEvent[]>;
     getReferenceRevision(referenceId: string): Promise<number>;
     bumpReferenceRevision(referenceId: string, ifRevision: number): Promise<boolean>;
-    markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean>;
-    releaseEvent(provider: ProviderId, eventId: string): Promise<void>;
+    markEventProcessed(provider: ProviderId, eventId: string, type: string): Promise<boolean>;
+    releaseEvent(provider: ProviderId, eventId: string, ifType?: string): Promise<void>;
+    getEventClaim(provider: ProviderId, eventId: string): Promise<string | undefined>;
     deferUsageReport(provider: ProviderId, idempotencyKey: string, retryAt: number): Promise<void>;
     markUsageReported(provider: ProviderId, idempotencyKey: string): Promise<void>;
     recordUsage(event: UsageEvent): Promise<boolean>;
@@ -506,6 +507,7 @@ interface PaymentStore {
     bumpReferenceRevision: (referenceId: string, ifRevision: number) => Promise<boolean>;
     deferUsageReport: (provider: ProviderId, idempotencyKey: string, retryAt: number) => Promise<void>;
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
+    getEventClaim: (provider: ProviderId, eventId: string) => Promise<string | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
     getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
     getReferenceRevision: (referenceId: string) => Promise<number>;
@@ -515,7 +517,7 @@ interface PaymentStore {
     markEventProcessed: (provider: ProviderId, eventId: string, type: string) => Promise<boolean>;
     markUsageReported: (provider: ProviderId, idempotencyKey: string) => Promise<void>;
     recordUsage: (event: UsageEvent) => Promise<boolean>;
-    releaseEvent: (provider: ProviderId, eventId: string) => Promise<void>;
+    releaseEvent: (provider: ProviderId, eventId: string, ifType?: string) => Promise<void>;
     sumUsage: (referenceId: string, featureId: string, since: number) => Promise<number>;
     sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, since: number) => Promise<ReadonlyMap<string, number>>;
     upsertCustomer: (customer: Customer) => Promise<void>;

@@ -1474,6 +1474,7 @@ describe("createPayment", () => {
 
             const { events, payment, providerRefunds, refundPayment, store } = await settleSetup("polar");
 
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
             // What reconcile's merge leaves: the provider's refunded total on the row, no per-refund marker.
             await store.upsertPaymentSession({
                 ...paymentSession("user_1"),
@@ -1482,7 +1483,6 @@ describe("createPayment", () => {
                 refundedAmount: money(300, "USD"),
                 state: "partially_refunded",
             });
-            await store.markEventProcessed("polar", "pending-refund:ord_1", "marker.pending_refund");
             providerRefunds.push({ amount: money(300, "USD"), refundId: "ref_1", status: "succeeded" });
 
             await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
@@ -1505,7 +1505,7 @@ describe("createPayment", () => {
             // The hold is released: the next refund reaches the provider.
             await payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" });
 
-            expect(refundPayment).toHaveBeenCalledTimes(1);
+            expect(refundPayment).toHaveBeenCalledTimes(2);
         });
 
         it("books only up to the provider's settled total when the ledger already holds part of it", async () => {
@@ -1513,6 +1513,7 @@ describe("createPayment", () => {
 
             const { payment, providerRefunds, store } = await settleSetup("polar");
 
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
             await store.upsertPaymentSession({
                 ...paymentSession("user_1"),
                 id: "ord_1",
@@ -1520,7 +1521,6 @@ describe("createPayment", () => {
                 refundedAmount: money(100, "USD"),
                 state: "partially_refunded",
             });
-            await store.markEventProcessed("polar", "pending-refund:ord_1", "marker.pending_refund");
             providerRefunds.push(
                 { amount: money(100, "USD"), refundId: "ref_0", status: "succeeded" },
                 { amount: money(300, "USD"), refundId: "ref_1", status: "succeeded" },
@@ -1583,6 +1583,114 @@ describe("createPayment", () => {
             expect(listRefunds).not.toHaveBeenCalled();
             // The hold is untouched.
             await expect(store.markEventProcessed("polar", "pending-refund:ord_1", "marker.pending_refund")).resolves.toBe(false);
+        });
+
+        it("never releases the hold of a refund call still in flight", async () => {
+            expect.assertions(2);
+
+            const { listRefunds, payment, refundPayment } = await settleSetup("polar");
+            let answer: (() => void) | undefined;
+            let markReached: () => void = () => {};
+            const reachedProvider = new Promise<void>((resolve) => {
+                markReached = resolve;
+            });
+
+            refundPayment.mockImplementationOnce(async () => {
+                markReached();
+
+                return new Promise((resolve) => {
+                    answer = () => {
+                        resolve({ ...paymentSession("user_1"), id: "ord_1", pending: true, provider: "polar", refundId: "ref_1" });
+                    };
+                });
+            });
+
+            const inFlight = payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            await reachedProvider;
+            // The provider has nothing to report yet, which would release a settled-as-pending hold.
+            await payment.settlePendingRefund({ sessionId: "ord_1" });
+
+            await expect(payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            answer?.();
+            await inFlight;
+
+            expect(listRefunds).not.toHaveBeenCalled();
+        });
+
+        it("keeps a newer call's hold when an earlier call settles after a webhook released its own", async () => {
+            expect.assertions(1);
+
+            const { payment, refundPayment, store } = await settleSetup("polar");
+            let answer: (() => void) | undefined;
+            // The first call answers settled, late; the second answers pending.
+            let markReached: () => void = () => {};
+            const reachedProvider = new Promise<void>((resolve) => {
+                markReached = resolve;
+            });
+
+            refundPayment.mockImplementationOnce(async () => {
+                markReached();
+
+                return new Promise((resolve) => {
+                    answer = () => {
+                        resolve({ ...paymentSession("user_1"), id: "ord_1", provider: "polar", refundedAmount: money(300, "USD"), refundId: "ref_1" });
+                    };
+                });
+            });
+
+            const first = payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            await reachedProvider;
+            // The first refund's webhook lands while its call is still in flight and releases the hold.
+            await applyWebhookAction(store, {
+                amount: money(300, "USD"),
+                eventId: "evt_1",
+                provider: "polar",
+                refundId: "ref_1",
+                sessionId: "ord_1",
+                type: "payment.refunded",
+            });
+            await payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+
+            answer?.();
+            await first;
+
+            await expect(payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        });
+
+        it("keeps the hold after a provider call that failed without an answer, until settlePendingRefund reads the outcome", async () => {
+            expect.assertions(3);
+
+            const { payment, refundPayment } = await settleSetup("polar");
+
+            refundPayment.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+            await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({
+                code: "PROVIDER_ERROR",
+                message: expect.stringContaining("settlePendingRefund"),
+            });
+            await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            // The provider reports no refund: the call never reached it, so the hold is released.
+            await payment.settlePendingRefund({ sessionId: "ord_1" });
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
+        });
+
+        it("releases the hold when the provider definitely rejected the refund", async () => {
+            expect.assertions(1);
+
+            const { payment, refundPayment } = await settleSetup("polar");
+
+            refundPayment.mockRejectedValueOnce(Object.assign(new Error("refund amount too high"), { statusCode: 422 }));
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" }).catch(() => undefined);
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
         });
 
         it("changes nothing on a session that holds no pending refund", async () => {

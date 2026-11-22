@@ -14,9 +14,11 @@ import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } f
 import { LunoraPaymentError } from "./errors";
 import {
     derivedIdempotencyKey,
+    heldClaimFor,
     LOCAL_REFUND_CLAIM_TYPE,
     localRefundKey,
     PENDING_REFUND_CLAIM_TYPE,
+    pendingRefundHeldKey,
     pendingRefundKey,
     refundNeedsPendingGuard,
 } from "./idempotency";
@@ -159,6 +161,22 @@ const nextUsageStamp = (): number => {
     return lastUsageStamp;
 };
 
+/**
+ * Whether a refund call failed with a definite answer: the facade's or adapter's own refusal (thrown before
+ * any request), or a 4xx the provider sent back (`statusCode` on Polar's SDK errors, `status` on Dodo's).
+ * Anything else (a network failure, a timeout, a 5xx) leaves open whether the provider took the refund.
+ */
+const refundDefinitelyRejected = (error: unknown): boolean => {
+    if (error instanceof LunoraPaymentError) {
+        return true;
+    }
+
+    const { status, statusCode } = (typeof error === "object" && error !== null ? error : {}) as { status?: unknown; statusCode?: unknown };
+    const code = statusCode ?? status;
+
+    return typeof code === "number" && code >= 400 && code < 500;
+};
+
 /** The amount, as stable idempotency-key parts — a full-amount operation is its own distinct part. */
 const amountPart = (amount: Money | undefined): string => (amount ? `${amount.currency}:${String(amount.minorUnits)}` : "full");
 
@@ -292,7 +310,9 @@ export interface LunoraPayment {
      * any further `refundPayment` on it, retry or a different amount, raises INVALID_TRANSITION
      * before the provider is called, until the `payment.refunded` or `payment.refund_failed`
      * webhook settles it. Nothing else clears the hold on its own: an app that does not receive those
-     * webhooks calls {@link LunoraPayment.settlePendingRefund}.
+     * webhooks calls {@link LunoraPayment.settlePendingRefund}. A call the provider did not answer (a
+     * network failure, a timeout, a 5xx) may have issued the refund, so it keeps the hold too and raises
+     * PROVIDER_ERROR saying so; a definite rejection (a 4xx) releases it.
      */
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
 
@@ -317,7 +337,8 @@ export interface LunoraPayment {
      * without per-refund markers) is not added again. Every such refund's marker is claimed, so a late
      * webhook adds nothing, and the hold is released with a `refund.hold_released` observer event; a refund
      * that failed, or none at all, releases it with nothing booked. A session holding nothing is returned as
-     * it stands, without asking the provider; so is a session on any other provider. Returns the stored row.
+     * it stands, without asking the provider; so is a session on any other provider, and one whose
+     * `refundPayment` call is still waiting on the provider. Returns the stored row.
      */
     settlePendingRefund: (input: { sessionId: string }) => Promise<PaymentSession>;
     readonly store: PaymentStore;
@@ -748,6 +769,24 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return { booked, unrecorded };
     };
 
+    // Marks a refundPayment call's pending-refund marker as held, which is what lets settlePendingRefund release it.
+    const holdPendingRefund = async (sessionId: string, pendingClaim: string): Promise<void> => {
+        const heldMarker = pendingRefundHeldKey(sessionId);
+        const heldClaim = heldClaimFor(pendingClaim);
+
+        // A webhook that settled the refund during the call released the marker already; nothing is left to hold.
+        if ((await store.getEventClaim(adapter.identifier, pendingRefundKey(sessionId))) !== pendingClaim) {
+            return;
+        }
+
+        // Only the marker's owner writes the held marker, so one already there is stale: written by an earlier
+        // call after the webhook that settled its refund had cleared both.
+        if (!(await store.markEventProcessed(adapter.identifier, heldMarker, heldClaim))) {
+            await store.releaseEvent(adapter.identifier, heldMarker);
+            await store.markEventProcessed(adapter.identifier, heldMarker, heldClaim);
+        }
+    };
+
     // Copies, not the adapter's own objects: nothing reachable from `provider` can call an operation or change
     // what the facade reads from the adapter.
     const provider = Object.freeze({
@@ -1061,21 +1100,36 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // webhook can land while the call is in flight, and would find no marker to release.
             const pendingGuarded = refundNeedsPendingGuard(adapter.identifier);
             const pendingMarker = pendingRefundKey(input.sessionId);
+            // The claim names this call: a webhook can release the marker while the call is in flight and a
+            // newer call re-claim it, and only the newer call may then release it.
+            const pendingClaim = `${PENDING_REFUND_CLAIM_TYPE}:${crypto.randomUUID()}`;
 
-            if (pendingGuarded && !(await store.markEventProcessed(adapter.identifier, pendingMarker, PENDING_REFUND_CLAIM_TYPE))) {
+            if (pendingGuarded && !(await store.markEventProcessed(adapter.identifier, pendingMarker, pendingClaim))) {
                 throw new LunoraPaymentError("INVALID_TRANSITION", "a refund on this session is still pending; retry once it settles");
             }
 
-            let keepPendingMarker = false;
-
             try {
-                const issuedRefund = await adapter.refundPayment({ ...input, amount: providerAmount, idempotencyKey: key });
+                const issuedRefund = await adapter.refundPayment({ ...input, amount: providerAmount, idempotencyKey: key }).catch(async (error: unknown) => {
+                    if (!pendingGuarded || refundDefinitelyRejected(error)) {
+                        throw error;
+                    }
+
+                    // No answer: the provider may have taken the refund, and its call carries no key, so a retry
+                    // could issue it twice. Hold the session as for a pending answer.
+                    await holdPendingRefund(input.sessionId, pendingClaim);
+
+                    throw new LunoraPaymentError(
+                        "PROVIDER_ERROR",
+                        "refundPayment(): the provider did not answer, so the refund may have been issued; the session stays held until its refund webhook arrives or settlePendingRefund reads what the provider did",
+                        { cause: error },
+                    );
+                });
 
                 // An unsettled (pending) refund moves no money yet: leave the row and add no refund marker, so
                 // the confirming `payment.refunded` webhook books it (or `payment.refund_failed` leaves
-                // nothing to undo). The pending marker stays until one of those two settles it.
+                // nothing to undo). The pending marker stays until one of those two, or settlePendingRefund, settles it.
                 if (issuedRefund.pending) {
-                    keepPendingMarker = true;
+                    await holdPendingRefund(input.sessionId, pendingClaim);
 
                     return existing;
                 }
@@ -1139,9 +1193,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                     throw error;
                 }
             } finally {
-                // A settled refund is on the ledger by now, and a failed call is retried as before.
-                if (pendingGuarded && !keepPendingMarker) {
-                    await store.releaseEvent(adapter.identifier, pendingMarker);
+                // A settled refund is on the ledger by now, and a rejected call is retried as before; a held one
+                // stays held. Only this call's own claim is released: the marker may be a newer call's by now.
+                if (pendingGuarded && (await store.getEventClaim(adapter.identifier, pendingRefundHeldKey(input.sessionId))) !== heldClaimFor(pendingClaim)) {
+                    await store.releaseEvent(adapter.identifier, pendingMarker, pendingClaim);
                 }
             }
         },
@@ -1160,12 +1215,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
 
             const marker = pendingRefundKey(sessionId);
+            const heldMarker = pendingRefundHeldKey(sessionId);
+            const pendingClaim = await store.getEventClaim(adapter.identifier, marker);
 
-            // The store has no read for a marker, so the hold is probed by claiming it: a claim that lands
-            // means nothing was held, and it is handed straight back.
-            if (await store.markEventProcessed(adapter.identifier, marker, PENDING_REFUND_CLAIM_TYPE)) {
-                await store.releaseEvent(adapter.identifier, marker);
+            if (pendingClaim === undefined) {
+                return existing;
+            }
 
+            const heldClaim = heldClaimFor(pendingClaim);
+
+            // A marker not yet held belongs to a refundPayment call still waiting on the provider: what the
+            // provider reports now says nothing about that call's refund, and releasing it would let a second
+            // refund start beside it.
+            if ((await store.getEventClaim(adapter.identifier, heldMarker)) !== heldClaim) {
                 return existing;
             }
 
@@ -1192,7 +1254,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 return (await store.getPaymentSession(adapter.identifier, sessionId)) ?? existing;
             }
 
-            await store.releaseEvent(adapter.identifier, marker);
+            await store.releaseEvent(adapter.identifier, marker, pendingClaim);
+            await store.releaseEvent(adapter.identifier, heldMarker, heldClaim);
             notifyObserver(options.observability, {
                 booked,
                 provider: adapter.identifier,

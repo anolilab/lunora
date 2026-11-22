@@ -7,7 +7,7 @@
  * that reports `"orphaned"`, which the HTTP layer answers with a 500 for ONE bounded redelivery.
  */
 import { LunoraPaymentError } from "./errors";
-import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
+import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundHeldKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
 import { addMoney, compareMoney, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -134,6 +134,7 @@ const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existi
 const releasePendingRefund = async (store: PaymentStore, action: WebhookAction): Promise<void> => {
     if (action.sessionId && refundNeedsPendingGuard(action.provider)) {
         await store.releaseEvent(action.provider, pendingRefundKey(action.sessionId));
+        await store.releaseEvent(action.provider, pendingRefundHeldKey(action.sessionId));
     }
 };
 

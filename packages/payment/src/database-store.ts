@@ -509,15 +509,22 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             return true;
         },
 
-        releaseEvent: async (provider, eventId) => {
+        releaseEvent: async (provider, eventId, ifType) => {
             // Roll back a claim whose apply threw, so the provider's retry re-processes it. The
             // delete races nothing the insert-claim doesn't already serialize: only the caller that
             // won the claim reaches the failing apply, and only it releases its own row.
             const existing = await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId });
 
-            if (existing) {
+            if (existing && (ifType === undefined || existing["type"] === ifType)) {
                 await database.delete(PAYMENT_TABLES.events, existing._id);
             }
+        },
+
+        getEventClaim: async (provider, eventId) => {
+            const existing = await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId });
+            const type = existing?.["type"];
+
+            return typeof type === "string" ? type : undefined;
         },
 
         deferUsageReport: async (provider, idempotencyKey, retryAt) => {

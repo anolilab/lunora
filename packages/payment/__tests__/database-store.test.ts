@@ -10,6 +10,7 @@ import { money } from "../src/money";
 import type { CreemClientLike } from "../src/providers/creem";
 import { createCreemAdapter } from "../src/providers/creem";
 import paymentExtension from "../src/schema";
+import type { PaymentStore } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
 import type { Customer, PaymentSession, Subscription } from "../src/types";
 import { USAGE_NEVER_DUE } from "../src/usage-due";
@@ -834,6 +835,28 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(true);
         // Releasing an unknown id is a harmless no-op.
         await expect(store.releaseEvent("stripe", "never_claimed")).resolves.toBeUndefined();
+    });
+
+    it.each([
+        ["database", () => createDatabasePaymentStore(makeDb())],
+        ["memory", () => new MemoryPaymentStore()],
+    ] as const)("releases a claim only for its own type when asked, and reads it back (%s)", async (_store, build) => {
+        expect.assertions(4);
+
+        const store: PaymentStore = build();
+
+        await store.markEventProcessed("polar", "hold", "marker.a");
+
+        await expect(store.getEventClaim("polar", "hold")).resolves.toBe("marker.a");
+
+        await store.releaseEvent("polar", "hold", "marker.b");
+
+        await expect(store.getEventClaim("polar", "hold")).resolves.toBe("marker.a");
+
+        await store.releaseEvent("polar", "hold", "marker.a");
+
+        await expect(store.getEventClaim("polar", "hold")).resolves.toBeUndefined();
+        await expect(store.markEventProcessed("polar", "hold", "marker.b")).resolves.toBe(true);
     });
 
     it("stores money as a number column the schema accepts", async () => {

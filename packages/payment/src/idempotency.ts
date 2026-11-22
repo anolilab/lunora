@@ -149,5 +149,18 @@ export const refundNeedsPendingGuard = (provider: ProviderId): boolean => UNKEYE
  */
 export const pendingRefundKey = (sessionId: string): string => `pending-refund:${sessionId}`;
 
-/** Claim `type` recorded for a {@link pendingRefundKey} marker. */
+/** Claim `type` prefix for a {@link pendingRefundKey} marker; the claim appends the token of the `refundPayment` call that holds it. */
 export const PENDING_REFUND_CLAIM_TYPE = "marker.pending_refund";
+
+/**
+ * Set beside a {@link pendingRefundKey} marker once its refund is held as pending (the provider answered
+ * `pending`, or did not answer at all), carrying the same call token. A marker without it belongs to a
+ * call still waiting on the provider, which `settlePendingRefund` must leave alone.
+ */
+export const pendingRefundHeldKey = (sessionId: string): string => `pending-refund-held:${sessionId}`;
+
+/** Claim `type` prefix for a {@link pendingRefundHeldKey} marker. */
+export const PENDING_REFUND_HELD_CLAIM_TYPE = "marker.pending_refund_held";
+
+/** The held claim that matches a pending-refund marker's claim: same call token, held prefix. */
+export const heldClaimFor = (pendingClaim: string): string => PENDING_REFUND_HELD_CLAIM_TYPE + pendingClaim.slice(PENDING_REFUND_CLAIM_TYPE.length);
