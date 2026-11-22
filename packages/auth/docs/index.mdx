@@ -181,10 +181,10 @@ and `longLived` leave it to this default.
 so a ban takes effect on the user's next request: `banUser` deletes their
 sessions, and with no cache every resolution reads the session from the store.
 The cost is that read, one per identity resolution, for apps that install
-`admin()`. The worker's identity cache (`LUNORA_IDENTITY_CACHE_MS`, 60 seconds by
-default) still memoises a cookie session's identity, so a ban can lag by up to
-that window there; set it lower if that matters. An explicit `cookieCache` wins
-here too.
+`admin()`. The worker's identity cache follows the same decision
+(`effectiveCookieCache`), so it memoises per request only and a ban is not held
+there either. An explicit `cookieCache`, or an explicit
+`LUNORA_IDENTITY_CACHE_MS`, wins here too and brings its window back.
 
 <Callout type="warn">
     **A revoked session keeps authenticating for up to `maxAge` (60 seconds by default).** A sign-out on another device, a ban, a session deletion, or a role

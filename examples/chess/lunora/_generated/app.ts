@@ -381,7 +381,7 @@ class AppBuilder<Env extends object> {
         // Captured before the branch so the narrowing survives — reading
         // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
-        const { authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
+        const { authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, effectiveCookieCache, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -505,12 +505,14 @@ class AppBuilder<Env extends object> {
                 let defaultMs: number;
 
                 try {
-                    const cookieCache = authDeclaration?.options(env).session?.cookieCache;
-                    // better-auth's `maxAge` is in SECONDS; createAuth fills 60 when it is unset.
+                    const declared = authDeclaration?.options(env);
+                    // The cache createAuth actually runs with, which an unset `cookieCache` alone does not say: with
+                    // `admin()` it is off, and the memo must not hold a banned user's identity in its place.
+                    const cookieCache = declared === undefined ? undefined : effectiveCookieCache(declared);
+                    // better-auth's `maxAge` is in SECONDS; its own default is longer, so an unset one reads as 60.
                     const cookieCacheSeconds = typeof cookieCache?.maxAge === "number" && cookieCache.maxAge >= 0 ? cookieCache.maxAge : 60;
 
-                    // createAuth fills `{ enabled: true, maxAge: 60 }` only when `cookieCache` is absent; a partial
-                    // object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
+                    // A partial object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
                     defaultMs = cookieCache === undefined || cookieCache.enabled === true ? Math.min(60_000, cookieCacheSeconds * 1000) : 0;
                 } catch {
                     // The policy is unreadable. Fall back to PER-REQUEST memoisation, not the 60s

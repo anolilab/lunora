@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { transformSync } from "esbuild";
 import { afterAll, describe, expect, it } from "vitest";
 
+import { effectiveCookieCache } from "../../auth/src/cookie-cache";
 import { memoizeIdentity } from "../../runtime/src/memoize-identity";
 import { emitApp } from "../src/emit-app";
 import baseOptions from "./emit-app-options";
@@ -27,7 +28,7 @@ interface Built {
     build: (inner: Resolver, env?: object, store?: WeakMap<object, unknown>) => Resolver;
 }
 
-type Declaration = { options: (env: unknown) => { session?: { cookieCache?: { enabled?: boolean; maxAge?: number } } } };
+type Declaration = { options: (env: unknown) => { plugins?: { id: string }[]; session?: { cookieCache?: { enabled?: boolean; maxAge?: number } } } };
 
 const defaultEnv = {};
 
@@ -40,7 +41,7 @@ const prepare = async (memo: typeof memoizeIdentity = memoizeIdentity, authDecla
     }
 
     // codeql[js/bad-code-sanitization] -- test-local literal rendered by codegen and compiled in-process, not user input
-    const program = `export const build = (memoizeIdentity, identityMemos, options, env, authDeclaration) => { ${match[1]} return options.resolveIdentity; };`;
+    const program = `export const build = (memoizeIdentity, identityMemos, options, env, authDeclaration, effectiveCookieCache) => { ${match[1]} return options.resolveIdentity; };`;
     // codeql[js/bad-code-sanitization] -- test-local literal rendered by codegen and compiled in-process, not user input
     const compiled = transformSync(program, { loader: "ts" }).code;
     const file = join(scratch, `memo-${randomUUID()}.mjs`);
@@ -53,13 +54,17 @@ const prepare = async (memo: typeof memoizeIdentity = memoizeIdentity, authDecla
             identityMemos: WeakMap<object, unknown>,
             options: { resolveIdentity: Resolver },
             env: object,
-            authDeclaration?: Declaration,
+            authDeclaration: Declaration | undefined,
+            cookieCacheOf: typeof effectiveCookieCache,
         ) => Resolver;
     };
     // One store per `assemble()` call; a test passes its own to model a second assembled worker.
     const assembled = new WeakMap<object, unknown>();
 
-    return { build: (inner, env = defaultEnv, store = assembled) => loaded.build(memo, store, { resolveIdentity: inner }, env, authDeclaration) };
+    return {
+        build: (inner, env = defaultEnv, store = assembled) =>
+            loaded.build(memo, store, { resolveIdentity: inner }, env, authDeclaration, effectiveCookieCache),
+    };
 };
 
 const wrap = async (
@@ -299,6 +304,43 @@ describe("emitApp — identity memoisation", () => {
                     {},
                 ),
             ).resolves.toBe(ttlMs);
+        });
+
+        describe("with the admin() plugin", () => {
+            const withAdmin = (cookieCache?: { enabled?: boolean; maxAge?: number }): Declaration => {
+                return {
+                    options: () => {
+                        return { plugins: [{ id: "admin" }], ...(cookieCache === undefined ? {} : { session: { cookieCache } }) };
+                    },
+                };
+            };
+
+            it("memoises per request only when no cookie cache is set, as createAuth then runs without one", async () => {
+                expect.assertions(1);
+
+                await expect(ttlFor(withAdmin(), {})).resolves.toBe(0);
+            });
+
+            it("still follows an explicit cookie cache or LUNORA_IDENTITY_CACHE_MS", async () => {
+                expect.assertions(2);
+
+                await expect(ttlFor(withAdmin({ enabled: true, maxAge: 30 }), {})).resolves.toBe(30_000);
+                await expect(ttlFor(withAdmin(), { LUNORA_IDENTITY_CACHE_MS: "5000" })).resolves.toBe(5000);
+            });
+
+            it("resolves a banned user's next request as anonymous", async () => {
+                expect.assertions(2);
+
+                // The store's answer flips when the ban deletes the user's sessions.
+                let banned = false;
+                const resolve = await wrap(async () => (banned ? null : { userId: "u1" }), {}, memoizeIdentity, withAdmin());
+
+                await expect(resolve(withCookie("s=a"))).resolves.toStrictEqual({ userId: "u1" });
+
+                banned = true;
+
+                await expect(resolve(withCookie("s=a"))).resolves.toBeNull();
+            });
         });
 
         it("lets an explicit env value override a short cookie-cache max age", async () => {

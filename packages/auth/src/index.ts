@@ -42,6 +42,8 @@ export {
     RESOLVE_SESSION_PATH as AUTH_DO_SESSION_PATH,
     LunoraAuthDO,
 } from "./auth-do";
+export type { CookieCache } from "./cookie-cache";
+export { effectiveCookieCache } from "./cookie-cache";
 export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 export { createAuth, resolveAuthOptions } from "./create-auth";
 export type { AuthDataPortLike, AuthImportResult, AuthReplaceResult } from "./data-port";

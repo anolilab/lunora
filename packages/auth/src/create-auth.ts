@@ -4,6 +4,7 @@ import { getIP } from "better-auth/api";
 import { betterAuth } from "better-auth/minimal";
 
 import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
+import { effectiveCookieCache } from "./cookie-cache";
 import { authDiscoveryPaths } from "./discovery";
 import { withOrgSessionRefresh } from "./org-session-refresh";
 import { validateSessionPolicy } from "./session";
@@ -327,11 +328,6 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
     };
 };
 
-const defaultCookieCache = (options: LunoraAuthOptions): { enabled: false } | { enabled: true; maxAge: number } =>
-    // The cache serves the pre-ban user, and `banUser` deletes sessions the cache does not consult, so with the
-    // admin plugin a ban would wait out the cache window. Off, a ban holds from the next request.
-    (options.plugins ?? []).some((plugin) => plugin.id === "admin") ? { enabled: false } : { enabled: true, maxAge: 60 };
-
 /**
  * Lunora's options pass straight through to better-auth — the only thing we add
  * is requiring `secret` up front so a misconfigured deployment fails loudly
@@ -496,7 +492,7 @@ export const resolveAuthOptions = (options: LunoraAuthOptions): LunoraAuthOption
     return withOrgSessionRefresh({
         ...hardened,
         ...rateLimit,
-        ...(hardened.session?.cookieCache === undefined ? { session: { ...hardened.session, cookieCache: defaultCookieCache(hardened) } } : {}),
+        ...(hardened.session?.cookieCache === undefined ? { session: { ...hardened.session, cookieCache: effectiveCookieCache(hardened) } } : {}),
     });
 };
 

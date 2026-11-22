@@ -689,6 +689,12 @@ interface AuthUserFieldSpec {
 type AuthWhereClause = NonNullable<Parameters<CustomAdapter["findOne"]>[0]["where"]>[number];
 ```
 
+### `CookieCache` (type)
+
+```ts
+type CookieCache = NonNullable<NonNullable<BetterAuthOptions["session"]>["cookieCache"]>;
+```
+
 ### `CreateAuthAdminOptions` (interface)
 
 ```ts
@@ -1146,6 +1152,12 @@ const createSqlAuthStore: (executor: SqlExecutor) => AuthStore;
 
 ```ts
 const d1Executor: (database: D1Like) => SqlExecutor;
+```
+
+### `effectiveCookieCache` (const)
+
+```ts
+const effectiveCookieCache: (options: Pick<BetterAuthOptions, "plugins" | "session">) => CookieCache;
 ```
 
 ### `emailGateDatabaseHooks` (const)
@@ -2020,6 +2032,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `d1Executor` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `effectiveCookieCache` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 

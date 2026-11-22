@@ -2,6 +2,7 @@ import { resolveBaseURL } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import { effectiveCookieCache } from "../src/cookie-cache";
 import type { LunoraAuthOptions } from "../src/create-auth";
 import { createAuth as createLunoraAuth, resolveAuthOptions } from "../src/create-auth";
 import { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "../src/handler";
@@ -98,6 +99,16 @@ describe("createAuth", () => {
 
         expect(withAdmin.options.session?.cookieCache).toStrictEqual({ enabled: false });
         expect(explicit.options.session?.cookieCache).toStrictEqual({ enabled: true, maxAge: 30 });
+    });
+
+    it("gives createAuth's resolved options and effectiveCookieCache the same answer", () => {
+        expect.assertions(3);
+
+        const cases = [{ plugins: [admin()] }, {}, { plugins: [admin()], session: { cookieCache: { enabled: true, maxAge: 30 } } }];
+
+        for (const options of cases) {
+            expect(createAuth({ ...options, secret: "s".repeat(32) }).options.session?.cookieCache).toStrictEqual(effectiveCookieCache(options));
+        }
     });
 
     it("forwards a caller-disabled cookie cache verbatim (does not re-enable it)", () => {
