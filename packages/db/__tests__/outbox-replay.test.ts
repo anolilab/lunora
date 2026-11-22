@@ -1722,6 +1722,37 @@ describe("durable replay while the connection is down", () => {
         expect(rejected).not.toHaveBeenCalled();
     });
 
+    // Composed before election, the action runs once, unstored; its write then
+    // reaches the sink after this tab has won, and is stored there. The action's
+    // transaction must stay pending until that write is sent, or its row
+    // vanishes from the collection while the device is still offline.
+    it("keeps an early action's transaction pending until the write the outbox stored for it is sent", async () => {
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const { client, sent } = offlineClient({ outbox: () => sink as ReturnType<typeof createExecutorOutboxSink> });
+        const database = notesDatabase(client) as unknown as {
+            actions: { notes: (input: { text: string }) => { id: string; transaction: { state: string } } };
+            executor: OfflineExecutor;
+        };
+
+        sink = createExecutorOutboxSink(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        const { transaction } = database.actions.notes({ text: "early, stored" });
+
+        await awaitInit(database.executor);
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(database.executor.isOfflineEnabled).toBe(true);
+        expect(sent).toStrictEqual([]);
+        expect(transaction.state).not.toBe("completed");
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual(["early, stored"]);
+        expect(transaction.state).toBe("completed");
+    });
+
     // The sink cannot store a write on a follower, so it declines it, and the
     // client keeps the write in its own queue instead.
     it("keeps a follower tab's raw offline write in the client's queue when the outbox is wired", async () => {

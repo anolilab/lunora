@@ -179,6 +179,16 @@ const outboxUnstoredReporters = new WeakMap<OutboxExecutor, (event: { collection
  */
 const outboxReplaysStarted = new WeakSet<object>();
 
+/**
+ * Each raw write the sink stored, by idempotency key, until its transaction settles: sent, or given
+ * up for good. A one-shot collection write that reaches the sink only after this tab won the outbox
+ * is stored rather than sent, and waits on this so its row stays on screen until then.
+ */
+const outboxSettlements = new Map<string, Promise<void>>();
+
+/** Settles once the raw write the sink stored under `idempotencyKey` is sent or dropped; `undefined` when it stored none. */
+const outboxWriteSettled = (idempotencyKey: string): Promise<void> | undefined => outboxSettlements.get(idempotencyKey);
+
 /** Record that a raw write reached its replay handler (called by `defineCollections`). */
 const noteOutboxReplayStarted = (metadata: OutboxMutationMetadata): void => {
     outboxReplaysStarted.add(metadata);
@@ -348,7 +358,19 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
             // executor failed to store (storage quota at write time) never reaches
             // that handler and nothing retries it, while the client has already
             // shown it as saved — so it is rolled back and reported here.
-            transaction.commit?.().catch((error: unknown) => {
+            const committed = transaction.commit?.();
+
+            if (committed === undefined) {
+                return;
+            }
+
+            // Runs after the `set` below: a promise reaction never runs synchronously.
+            const forget = (): void => {
+                outboxSettlements.delete(mutation.idempotencyKey);
+            };
+            const settled = committed.then(forget, (error: unknown) => {
+                forget();
+
                 if (outboxReplaysStarted.has(metadata)) {
                     return;
                 }
@@ -359,6 +381,8 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
                     error: new Error(`offline write could not be stored: ${error instanceof Error ? error.message : String(error)}`, { cause: error }),
                 });
             });
+
+            outboxSettlements.set(mutation.idempotencyKey, settled);
         },
     };
 };
@@ -583,6 +607,7 @@ export {
     makeDiffEmit,
     noteOutboxReplayStarted,
     OUTBOX_MUTATION_FN_NAME,
+    outboxWriteSettled,
     registerOutboxCarrier,
     registerOutboxUnstoredReporter,
     runOutboxMutation,

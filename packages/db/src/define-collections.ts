@@ -13,6 +13,7 @@ import {
     createOutboxCarrier,
     noteOutboxReplayStarted,
     OUTBOX_MUTATION_FN_NAME,
+    outboxWriteSettled,
     registerOutboxCarrier,
     registerOutboxUnstoredReporter,
     runOutboxMutation,
@@ -500,7 +501,13 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
                             // client samples now is the composing one, and the write is free
                             // to wait in the client's own queue while offline.
                             // eslint-disable-next-line no-await-in-loop -- sequential keeps the transaction's writes in order
-                            await runOutboxMutation(async () => client.mutation(insert.mutation, insert.toArgs(row), { mutationId, shardKey }));
+                            await runOutboxMutation(async () => {
+                                await client.mutation(insert.mutation, insert.toArgs(row), { mutationId, shardKey });
+                                // Composed before this tab won the outbox, it can reach the sink after
+                                // and be stored rather than sent: held until that write settles, or the
+                                // transaction would complete and take its row off screen while offline.
+                                await outboxWriteSettled(mutationId);
+                            });
                         } else {
                             // Re-checked per mutation, not once per transaction: a batched
                             // transaction awaits between its writes, which is exactly where a
