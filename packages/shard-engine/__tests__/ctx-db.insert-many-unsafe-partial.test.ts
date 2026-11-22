@@ -7,9 +7,10 @@ import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * Outside a transaction (an action) every `insertManyUnsafe` chunk is its own
- * commit, so a later chunk failing cannot take the earlier ones back. Whatever
- * did land has to carry its companions and its write notification, or the
- * aggregate, rank and search indexes disagree with the table for good.
+ * commit, and inside one a mutation that catches the failure commits the
+ * earlier chunks too. Whatever lands has to carry its companions and its write
+ * notification, or the aggregate, rank and search indexes disagree with the
+ * table for good.
  */
 const schema: SchemaLike = {
     tables: {
@@ -29,7 +30,7 @@ const DUPLICATE_AT = 35;
 
 const sortedIds = (ids: ReadonlyArray<unknown>): string[] => ids.map(String).toSorted((left, right) => left.localeCompare(right));
 
-describe("insertManyUnsafe — a later chunk fails outside a transaction", () => {
+describe("insertManyUnsafe — a later chunk fails", () => {
     let harness: ReturnType<typeof createSqliteExec>;
 
     beforeEach(() => {
@@ -80,8 +81,8 @@ describe("insertManyUnsafe — a later chunk fails outside a transaction", () =>
         expect(sortedIds(reported)).toStrictEqual(sortedIds(onDisk));
     });
 
-    it("leaves a transaction's failed batch to the rollback: nothing is caught up or reported", async () => {
-        expect.assertions(4);
+    it("indexes the committed rows when a mutation catches the failure and its transaction commits", async () => {
+        expect.assertions(5);
 
         runShardMigrations(harness.sql, schema);
 
@@ -102,14 +103,24 @@ describe("insertManyUnsafe — a later chunk fails outside a transaction", () =>
 
         harness.sql.exec("BEGIN");
 
+        // The handler swallows the error, so nothing rolls the first chunk back.
         await expect(writer.insertManyUnsafe?.("items", documents, { allowExplicitId: true })).rejects.toThrow('unique constraint violation on "items"');
 
-        harness.sql.exec("ROLLBACK");
+        harness.sql.exec("COMMIT");
 
-        // The storage transaction undoes the first chunk; the writer must not have announced it.
-        expect(reported).toStrictEqual([]);
-        expect(harness.sql.exec("SELECT COUNT(*) AS n FROM items").toArray()[0]?.["n"]).toBe(0);
-        expect(harness.sql.exec(`SELECT COUNT(*) AS n FROM ${aggregateTableName("items", "count_by_bucket")}`).toArray()[0]?.["n"]).toBe(0);
+        const onDisk = harness.sql
+            .exec("SELECT id FROM items")
+            .toArray()
+            .map((row) => row["id"] as string);
+        const counted = harness.sql.exec(`SELECT SUM(__value__) AS total FROM ${aggregateTableName("items", "count_by_bucket")}`).toArray()[0]?.["total"];
+
+        expect(onDisk).toHaveLength(33);
+        expect(Number(counted)).toBe(onDisk.length);
+
+        const ranked = await writer.rankPage("items", "by_score", { take: ROWS });
+
+        expect(sortedIds(ranked.page.map((row) => row["_id"]))).toStrictEqual(sortedIds(onDisk));
+        expect(sortedIds(reported)).toStrictEqual(sortedIds(onDisk));
     });
 
     it("keeps the insert error and catches up every committed row when one row's catch-up fails", async () => {

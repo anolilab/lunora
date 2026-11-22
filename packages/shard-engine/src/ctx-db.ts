@@ -4747,11 +4747,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             } catch (error) {
                 // A committed chunk without its companions would leave the aggregate,
                 // rank and search indexes and every subscriber disagreeing with the
-                // table for good. Inside a transaction the throw rolls every chunk
-                // back, so there is nothing to catch up.
-                if (!inTransaction()) {
-                    await catchUpCommittedRows(tableName, rows.slice(0, written));
-                }
+                // table for good. Inside a transaction too: a mutation that catches
+                // this error commits the earlier chunks. The companion writes ride the
+                // same transaction, so a rollback takes them back with the rows; only
+                // the write reports for those rows go out regardless, which is accepted.
+                await catchUpCommittedRows(tableName, rows.slice(0, written));
 
                 throw error;
             }

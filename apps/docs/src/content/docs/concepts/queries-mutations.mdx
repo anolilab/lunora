@@ -156,7 +156,10 @@ secure-by-default and your table's insert policy apply exactly as for `insertMan
 An id that contains a NUL character (U+0000) is refused with `BAD_REQUEST`, on every store.
 Use it only for data you control; reach for `insertMany` for anything user-supplied.
 
-In a mutation a failed batch rolls back whole. In an action there is no surrounding
+In a mutation a failed batch rolls back whole when the error leaves the handler. A
+handler that catches it commits the rows written before the failure, indexed like any
+other; their change notifications go out either way, even for a batch that then rolls
+back. In an action there is no surrounding
 transaction: a large batch is written in several statements, so when a later one
 fails (a duplicate `_id`, say) the rows before it stay, fully indexed and broadcast,
 and the call still rejects. A `.global()` table is the exception in both: its rows go
