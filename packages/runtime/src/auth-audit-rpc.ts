@@ -87,7 +87,7 @@ interface AuthAuditWrite {
 
 /**
  * The audit write plane the worker's auth admin routes record their mutations through, into the same trail the
- * reader serves. The host wires it with `@lunora/auth`'s `createAuthAuditWriter(d1Executor(env.DB))`; omit it and the
+ * reader serves. The host wires it with `@lunora/auth`'s `createAuthAuditWriter(d1Executor(env.DB), auth)`; omit it and the
  * admin plane records nothing.
  */
 interface AuthAuditWriter {

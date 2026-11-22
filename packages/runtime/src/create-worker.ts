@@ -1195,9 +1195,9 @@ interface WorkerOptions {
     /**
      * Where the `/_lunora/admin/auth/*` mutations are recorded: each successful one writes a row to the same
      * "Security / audit" trail {@link WorkerOptions.authAuditReader} serves, naming the acting admin token
-     * (`admin:root` or `admin:<tokenName>`). The admin plane calls better-auth's adapter directly, so the
-     * better-auth audit hook never sees these operations. Wire it with `@lunora/auth`'s
-     * `createAuthAuditWriter(d1Executor(env.DB))`. Omit it and the admin plane records nothing; a failed
+     * (`admin:root`, or `admin:token:<tokenName>` for a named token). The admin plane calls better-auth's adapter
+     * directly, so the better-auth audit hook never sees these operations. Wire it with `@lunora/auth`'s
+     * `createAuthAuditWriter(d1Executor(env.DB), auth)`, which also applies the audit hook's `retention` and `onRecord`. Omit it and the admin plane records nothing; a failed
      * write is logged and does not fail the operation.
      */
     authAuditWriter?: AuthAuditWriter;
@@ -6885,7 +6885,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             adminActor: (request) => {
                 const tokenName = adminGrants.get(request)?.tokenName;
 
-                return tokenName === undefined ? "admin:root" : `admin:${tokenName}`;
+                // Named tokens get their own prefix: a token may be named `root`, and must not read as the root credential.
+                return tokenName === undefined ? "admin:root" : `admin:token:${tokenName}`;
             },
             assertAdmin: assertAdminAuthorized,
             assertRootAdmin,

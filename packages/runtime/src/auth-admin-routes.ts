@@ -179,7 +179,7 @@ interface AuthAdmin {
 
 /** Closure-scoped worker helpers the auth routes borrow (so this module stays out of the worker's god-closure). */
 interface AuthAdminRouteDeps {
-    /** The audit actor for an admin request: `admin:<tokenName>` for a named token, else `admin:root`. Never the token's value. */
+    /** The audit actor for an admin request: `admin:token:<tokenName>` for a named token, else `admin:root`. Never the token's value. */
     adminActor: (request: Request) => string;
     /** Throw 403 unless the request carries a valid admin bearer. */
     assertAdmin: (request: Request) => void;

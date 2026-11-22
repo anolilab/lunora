@@ -2304,7 +2304,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             // The `$auth` export section's data port loads with the rest of auth.
             expect(result.generated.authModule).toContain("createSqlAuthDataPort");
             expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(authAuditExecutor);");
-            expect(result.generated.app).toContain("options.authAuditWriter = createAuthAuditWriter(authAuditExecutor);");
+            expect(result.generated.app).toContain("options.authAuditWriter = createAuthAuditWriter(authAuditExecutor, authInstance);");
             // The OAuth discovery documents (plan 461 B): served by the auth instance
             // as the worker's last matcher, after the app's own routes.
             expect(result.generated.app).toContain("return auth ? handleAuthDiscoveryRequest(auth, request) : Promise.resolve(undefined);");

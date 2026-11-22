@@ -701,8 +701,44 @@ describe("named admin tokens", () => {
             status(call(worker, `${ORIGIN}/_lunora/admin/auth/users/ban`, token, { body: JSON.stringify({ userId: "u1" }), method: "POST" })),
         ).resolves.toBe(200);
 
-        expect(rows).toStrictEqual([expect.objectContaining({ actorId: "admin:oncall", event: "admin-user-ban" })]);
+        expect(rows).toStrictEqual([expect.objectContaining({ actorId: "admin:token:oncall", event: "admin-user-ban" })]);
         expect(JSON.stringify(rows)).not.toContain(token);
+    });
+
+    it("never records a token named root as the root credential", async () => {
+        expect.assertions(1);
+
+        const { namespace } = fakeShards();
+        const rows: { actorId?: string }[] = [];
+        const worker = createBareWorker({
+            adminRevocations: fakeRevocations(),
+            adminToken: ROOT,
+            authAdmin: {
+                banUser: async () => {
+                    return { banned: true, id: "u1" };
+                },
+                listSessions: async () => {
+                    return { rows: [], total: 0 };
+                },
+                listUsers: async () => {
+                    return { rows: [], total: 0 };
+                },
+            },
+            authAuditWriter: {
+                write: async (entry) => {
+                    rows.push(entry);
+                },
+            },
+            functions: REGISTRY,
+            shardDO: namespace,
+        });
+        const created = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "root" }), method: "POST" });
+        const { token } = await created.json<{ token: string }>();
+
+        await call(worker, `${ORIGIN}/_lunora/admin/auth/users/ban`, token, { body: JSON.stringify({ userId: "u1" }), method: "POST" });
+        await call(worker, `${ORIGIN}/_lunora/admin/auth/users/ban`, ROOT, { body: JSON.stringify({ userId: "u1" }), method: "POST" });
+
+        expect(rows.map((row) => row.actorId)).toStrictEqual(["admin:token:root", "admin:root"]);
     });
 
     it("refuses a scoped create that the store did not keep, and removes the row it wrote", async () => {

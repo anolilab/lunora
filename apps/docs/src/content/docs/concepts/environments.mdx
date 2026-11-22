@@ -277,7 +277,9 @@ through the Studio's auth pages or `/_lunora/admin/auth/*` (creating, updating,
 banning or removing a user, setting a role or password, impersonating, revoking
 sessions, API keys or passkeys, disabling two-factor, unlinking an account,
 organization, member, team, role and sign-up invitation changes) is recorded on
-the **Security** page beside sign-ins. The actor is `admin:root` or
-`admin:<token name>` for a named admin token. The row holds the ids of what
-changed, never the request body, a password or a session token. Reads are not
+the **Security** page beside sign-ins. The actor is `admin:root`, or
+`admin:token:<token name>` for a named admin token, so a token named `root`
+never reads as the root credential. The row holds the ids of what changed, never
+the request body, a password or a session token. The row goes through the audit
+hook's `retention` and `onRecord` like any other. Reads are not
 recorded, and a failed write does not fail the operation.

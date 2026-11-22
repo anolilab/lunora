@@ -1125,7 +1125,13 @@ const createAuthAuditReader: (executor: SqlExecutor) => AuthAuditReader;
 ### `createAuthAuditWriter` (const)
 
 ```ts
-const createAuthAuditWriter: (executor: SqlExecutor) => AuthAuditWriter;
+const createAuthAuditWriter: (executor: SqlExecutor, auth?: {
+    options: {
+        hooks?: {
+            after?: unknown;
+        };
+    };
+}) => AuthAuditWriter;
 ```
 
 ### `createDoAuthWiring` (const)

@@ -458,8 +458,9 @@ class AppBuilder<Env extends object> {
             const authAuditExecutor = d1Executor(authD1(env) as never);
 
             options.authAuditReader = createAuthAuditReader(authAuditExecutor);
-            // `authAdmin` writes the auth tables directly, past the audit hook; its routes record through this.
-            options.authAuditWriter = createAuthAuditWriter(authAuditExecutor);
+            // `authAdmin` writes the auth tables directly, past the audit hook; its routes record through this,
+            // with the hook's own retention and `onRecord`, found through the instance.
+            options.authAuditWriter = createAuthAuditWriter(authAuditExecutor, authInstance);
             // better-auth's tables for the admin export / import (`$auth`). A table the
             // schema declares (`authTables(...)`) already travels as a `.global()` row.
             options.authData = authInstance

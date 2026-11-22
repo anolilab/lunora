@@ -27,6 +27,7 @@ import { piiRules, redact, standardRules } from "@visulima/redact";
 
 import { maskCredentials } from "../../../shared/credential-redaction";
 import { importHmacKey } from "../../../shared/hmac-key";
+import { auditHookConfigOf } from "./audit-hook-configs";
 import type { SqlExecutor } from "./sql-store";
 
 /** Reserved append-only table backing the Studio "Security / audit" page. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -580,12 +581,25 @@ interface AuthAuditWriter {
 /**
  * Build the writer the runtime's `authAuditWriter` option accepts, closing over the auth D1 `executor`
  * so admin-plane rows land in the same `__lunora_auth_audit__` table the hook writes, with the same
- * `detail` redaction.
+ * `detail` redaction. Pass the auth instance and, when its `hooks.after` is the audit hook (directly or
+ * through `withAuthAudit`), each row also goes through that hook's `retention`, `redactDetail` and
+ * `onRecord`, so a SIEM tap sees the admin plane as well as sign-ins.
  */
-const createAuthAuditWriter = (executor: SqlExecutor): AuthAuditWriter => {
+const createAuthAuditWriter = (executor: SqlExecutor, auth?: { options: { hooks?: { after?: unknown } } }): AuthAuditWriter => {
+    const after = auth?.options.hooks?.after;
+    const config = typeof after === "function" ? auditHookConfigOf(after) : undefined;
+
     return {
         write: async (entry) => {
-            await appendAuthAuditEntry(executor, entry);
+            const persisted = await appendAuthAuditEntry(executor, entry, { redactDetail: config?.redactDetail, retention: config?.retention });
+
+            try {
+                await config?.onRecord?.(persisted);
+            } catch (error) {
+                // The row is stored; a failing export tap must not report the write as failed, as in the hook.
+                // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+                console.error("@lunora/auth: audit onRecord failed for an admin-plane row", error);
+            }
         },
     };
 };

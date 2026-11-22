@@ -1,8 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { memoryAdapter } from "better-auth/adapters/memory";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createAuthAuditReader, createAuthAuditWriter } from "../src/audit";
+import { authAuditHook, withAuthAudit } from "../src/audit-hooks";
+import { createAuth } from "../src/create-auth";
 import type { SqlExecutor } from "../src/sql-store";
 
 const executorFor = (database: DatabaseSync): SqlExecutor => {
@@ -68,5 +71,70 @@ describe(createAuthAuditWriter, () => {
                 ts: 1,
             },
         ]);
+    });
+
+    it("forwards an admin-plane row to the audit hook's onRecord and trims it to the hook's retention", async () => {
+        expect.assertions(2);
+
+        const recorded: string[] = [];
+        const after = authAuditHook({
+            executor,
+            onRecord: (entry) => {
+                recorded.push(entry.event);
+            },
+            retention: 1,
+        });
+        const writer = createAuthAuditWriter(executor, { options: { hooks: { after } } });
+
+        await writer.write({ actorId: "admin:root", detail: {}, event: "admin-user-ban", outcome: "success", ts: 1 });
+        await writer.write({ actorId: "admin:root", detail: {}, event: "admin-user-unban", outcome: "success", ts: 2 });
+
+        expect(recorded).toStrictEqual(["admin-user-ban", "admin-user-unban"]);
+        await expect(createAuthAuditReader(executor).read({})).resolves.toStrictEqual([expect.objectContaining({ event: "admin-user-unban" })]);
+    });
+
+    it("finds the hook config withAuthAudit installed on a createAuth instance", async () => {
+        expect.assertions(1);
+
+        const recorded: string[] = [];
+        const options = {
+            baseURL: "http://localhost",
+            database: memoryAdapter({ account: [], session: [], user: [], verification: [] }),
+            hooks: {},
+            secret: "x".repeat(32),
+        };
+        const auth = createAuth(
+            withAuthAudit(options, {
+                executor,
+                onRecord: (entry) => {
+                    recorded.push(entry.event);
+                },
+            }),
+        );
+
+        await createAuthAuditWriter(executor, auth).write({ actorId: "admin:root", detail: {}, event: "admin-user-ban", outcome: "success", ts: 1 });
+
+        expect(recorded).toStrictEqual(["admin-user-ban"]);
+    });
+
+    it("keeps a row whose onRecord throws, as the hook does", async () => {
+        expect.assertions(1);
+
+        const after = authAuditHook({
+            executor,
+            onRecord: () => {
+                throw new Error("sink down");
+            },
+        });
+
+        await createAuthAuditWriter(executor, { options: { hooks: { after } } }).write({
+            actorId: "admin:root",
+            detail: {},
+            event: "admin-user-ban",
+            outcome: "success",
+            ts: 1,
+        });
+
+        await expect(createAuthAuditReader(executor).read({})).resolves.toHaveLength(1);
     });
 });
