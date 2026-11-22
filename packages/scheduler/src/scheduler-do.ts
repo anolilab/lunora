@@ -581,6 +581,11 @@ class SchedulerDO {
      * `<id>-<enqueuedAt>`: `-` keeps it inside the workflow engine's instance-id grammar
      * (`^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`), and a 64-char id plus a millisecond stamp stays well
      * under its 100-char ceiling. A row without a usable `enqueuedAt` keeps the bare id.
+     *
+     * Known one-time window, accepted: a record whose attempt ran under the bare id on a build
+     * before this key, and whose response was lost, is retried after the upgrade under the new key,
+     * which the receiver has never seen, so that one job can run twice. Only records in flight
+     * across that deploy are exposed; no key-version field is kept to close it.
      */
     private static dedupKey(record: ScheduleRecord): string {
         return Number.isSafeInteger(record.enqueuedAt) && record.enqueuedAt > 0 ? `${record.id}-${String(record.enqueuedAt)}` : record.id;
