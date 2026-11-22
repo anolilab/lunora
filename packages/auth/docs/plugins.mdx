@@ -184,7 +184,7 @@ and only its own endpoint can remove it; revoke through `authClient.apiKey.delet
 also refuses when `apiKey` was imported from `@better-auth/api-key` directly instead of
 `@lunora/auth/plugins`, since its storage cannot be read back then.
 
-**Bans.** A user banned through the `admin` plugin resolves to no identity for as long as the ban is in force when they present an API key, from their next call. A ban also deletes their sessions, but a cookie session can keep resolving for up to the session cookie cache window plus the identity cache window above, because both serve the pre-ban user. Their keys are kept, so lifting the ban restores them.
+**Bans.** A user banned through the `admin` plugin resolves to no identity for as long as the ban is in force when they present an API key, from their next call. A ban also deletes their sessions, and because `createAuth` turns the session cookie cache off by default when `admin()` is installed, a cookie session stops resolving once the store has no session for it. The worker's identity cache window above can still delay that for a cookie session, and an app that turns the cookie cache back on waits out its window too. Their keys are kept, so lifting the ban restores them.
 
 **The studio** lists a user's keys in the user drawer, with name, the leading
 characters of the key, creation time and expiry, and a Revoke action per row. The

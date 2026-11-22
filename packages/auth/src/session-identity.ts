@@ -133,8 +133,10 @@ const forwardedClaims = (user: SessionLike["user"], claims: ReadonlyArray<string
  * Whether the `admin()` plugin's ban is in force. better-auth enforces a ban only
  * when a session row is created, so an API key (which never creates one) outlives
  * it unless the resolver checks too. A cookie-cached session carries the pre-ban
- * user, so this check cannot see the ban until the cookie cache lapses. A lapsed
- * `banExpires` reads as not banned, matching the plugin.
+ * user, which is why `createAuth` defaults the cookie cache off when the admin
+ * plugin is installed: the session is then read from the store, which `banUser`
+ * has emptied. An app that turns the cache on again waits out its window. A
+ * lapsed `banExpires` reads as not banned, matching the plugin.
  */
 const isBanned = (user: SessionLike["user"], now: number): boolean => {
     if (user["banned"] !== true) {

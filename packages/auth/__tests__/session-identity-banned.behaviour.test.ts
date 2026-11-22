@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createAuthAdmin } from "../src/admin";
 import { createAuth } from "../src/create-auth";
 import { admin, apiKey } from "../src/plugins";
-import { identityFromSession } from "../src/session-identity";
+import { identityFromSession, resolveSessionIdentity } from "../src/session-identity";
 
 /**
  * better-auth enforces a ban only when a session row is created, so the resolver has to
@@ -84,5 +84,34 @@ describe("identityFromSession with a banned user", () => {
         await adminApi.unbanUser({ userId: created.id });
 
         expect(identityFromSession({ session: { expiresAt: new Date(Date.now() + HOUR_MS) }, user: row() })).toMatchObject({ userId: created.id });
+    });
+
+    it("stops resolving a signed-in session on the next request once banUser runs, with admin() and default settings", async () => {
+        expect.assertions(2);
+
+        const auth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter({ account: [], session: [], user: [], verification: [] }),
+            emailAndPassword: { enabled: true },
+            plugins: [admin()],
+            secret: "x".repeat(32),
+        });
+        const signUp = await auth.api.signUpEmail({
+            body: { email: "ban@example.com", name: "Ban", password: "correct horse battery staple" },
+            returnHeaders: true,
+        });
+        // Every cookie sign-up set, the cookie-cache one included, as a browser would send them back.
+        const headers = new Headers({
+            cookie: signUp.headers
+                .getSetCookie()
+                .map((cookie) => cookie.split(";")[0])
+                .join("; "),
+        });
+
+        await expect(resolveSessionIdentity(auth, headers)).resolves.toMatchObject({ userId: signUp.response.user.id });
+
+        await createAuthAdmin(auth).banUser({ userId: signUp.response.user.id });
+
+        await expect(resolveSessionIdentity(auth, headers)).resolves.toBeNull();
     });
 });

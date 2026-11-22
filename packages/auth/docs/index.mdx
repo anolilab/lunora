@@ -174,7 +174,17 @@ for the full list.
 `createAuth` fills `session.cookieCache` with `{ enabled: true, maxAge: 60 }`
 whenever the caller does not set it — on **every** wiring, not just the DO
 scaffold. Sessions are then served from the signed cookie instead of a database
-read, which is what keeps `ctx.auth` off the hot path.
+read, which is what keeps `ctx.auth` off the hot path. `sessionPresets.rolling`
+and `longLived` leave it to this default.
+
+**With better-auth's `admin()` plugin the default is off** (`{ enabled: false }`),
+so a ban takes effect on the user's next request: `banUser` deletes their
+sessions, and with no cache every resolution reads the session from the store.
+The cost is that read, one per identity resolution, for apps that install
+`admin()`. The worker's identity cache (`LUNORA_IDENTITY_CACHE_MS`, 60 seconds by
+default) still memoises a cookie session's identity, so a ban can lag by up to
+that window there; set it lower if that matters. An explicit `cookieCache` wins
+here too.
 
 <Callout type="warn">
     **A revoked session keeps authenticating for up to `maxAge` (60 seconds by default).** A sign-out on another device, a ban, a session deletion, or a role
@@ -493,7 +503,7 @@ reports "not configured" rather than returning empty data.
 
 Identity resolution costs a round-trip to the object on requests that touch `ctx.auth`.
 `createAuth` already serves most of them from the signed cookie instead: `session.cookieCache`
-is filled with `{ enabled: true, maxAge: 60 }` unless you set it, so a revoked session keeps
+is filled with `{ enabled: true, maxAge: 60 }` unless you set it (or install `admin()`, which turns it off), so a revoked session keeps
 authenticating for up to 60 seconds from the cookie cache, and the worker's identity cache can add up to another 60 seconds on top of that — see
 [the session cookie cache](#the-session-cookie-cache-is-on-by-default).
 
