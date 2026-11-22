@@ -1,3 +1,7 @@
+## @lunora/d1 [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.238...@lunora/d1@1.0.0-alpha.239) (2026-11-22)
+
+- Republish with the `@lunora/sql-store` floor the source already declares (`^1.0.0-alpha.239`). The 1.0.0-alpha.238 tarball shipped the pre-release `^1.0.0-alpha.237`, which admits sql-store 237 and 238; neither exports `prepareGlobalImportRow`, so loading `@lunora/d1` failed with an ESM link error (#1666).
+
 ## @lunora/d1 [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.237...@lunora/d1@1.0.0-alpha.238) (2026-11-20)
 
 - feat(cloud)!: lunora cloud control plane on workers for platforms (#85)

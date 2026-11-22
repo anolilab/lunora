@@ -1,3 +1,7 @@
+## @lunora/react [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.301...@lunora/react@1.0.0-alpha.302) (2026-11-22)
+
+- fix: publish correct dependency ranges and stop typing absent global columns as null (#1669)
+
 ## @lunora/react [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.300...@lunora/react@1.0.0-alpha.301) (2026-11-12)
 
 - fix(react): depend on the workspace client so the release pins the matching one (#1555)

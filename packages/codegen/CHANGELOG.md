@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.429](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.428...@lunora/codegen@1.0.0-alpha.429) (2026-11-22)
+
+- fix: publish correct dependency ranges and stop typing absent global columns as null (#1669)
+
 ## @lunora/codegen [1.0.0-alpha.428](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.427...@lunora/codegen@1.0.0-alpha.428) (2026-11-20)
 
 - feat(cloud)!: lunora cloud control plane on workers for platforms (#85)
