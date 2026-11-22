@@ -4,7 +4,7 @@
  * This file is YOURS: it's a normal Lunora module, copied into your project so
  * you own and edit it. Re-export these from your `lunora/` entry (or rely on
  * file-based discovery) so codegen picks them up — they surface in the generated
- * `api` as `presence/heartbeat`, `presence/listPresent`, `presence/sweep`.
+ * `api` as `presence/heartbeat`, `presence/leave`, `presence/listPresent`, `presence/sweep`.
  *
  * Rooms are tenant-scoped: the client names a room, and the server files it under
  * the caller's tenant ({@link presenceTenant}), so the same `roomId` in two
@@ -16,6 +16,9 @@
  *     insert/delete churn that would re-send the whole present list. A session
  *     that joins the room also reclaims a batch of its tenant's expired rows in that
  *     room, so closed tabs cannot pile up between sweeps nobody scheduled.
+ *   - **leave** (mutation) — delete the caller's own row for a room at once, for a
+ *     room the client leaves with its socket still open; a row owned by another
+ *     identity is left alone.
  *   - **listPresent** (query) — the non-expired members of the caller's room, newest
  *     heartbeat first. Subscribe to it for a reactive "who's here" list; the TTL
  *     filter ({@link PRESENCE_TTL_MS}) drops members that stopped heart-beating,
@@ -28,7 +31,7 @@
  *     (server-only) so a client can't trigger bulk deletes.
  *
  * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
- * on an interval and subscribes to `listPresent`.
+ * on an interval, subscribes to `listPresent`, and calls `leave` when given it.
  */
 import { LunoraError } from "@lunora/errors";
 import { RateLimiter, rateLimit, createMemoryStore } from "lunorash/ratelimit";
@@ -205,6 +208,30 @@ export const heartbeat = mutation
         }
 
         return { lastSeen };
+    });
+
+/**
+ * Drop the caller's own presence row for `roomId` now, instead of letting it age out. Pass it as
+ * `usePresence`'s `leave` option: the hook calls it as a room is left with the socket still open (a
+ * room switch, an unmount), which no disconnect sees. Only the identity that owns the row may
+ * remove it (an anonymous row only by an anonymous caller); otherwise it is left alone.
+ */
+export const leave = mutation
+    .input({ roomId: v.string().max(256), sessionId: v.string().max(256) })
+    .mutation(async ({ args: { roomId, sessionId }, ctx }): Promise<{ left: boolean }> => {
+        const tenantId = presenceTenant(await ctx.auth.getIdentity());
+        const existing = await ctx.db
+            .query(PRESENCE_TABLE)
+            .withIndex("byTenantRoomSession", (q) => q.eq("tenantId", tenantId).eq("roomId", roomId).eq("sessionId", sessionId))
+            .first();
+
+        if (!existing || existing["userId"] !== (ctx.auth.userId ?? undefined)) {
+            return { left: false };
+        }
+
+        await ctx.db.delete(PRESENCE_TABLE, existing["_id"] as never);
+
+        return { left: true };
     });
 
 /**
