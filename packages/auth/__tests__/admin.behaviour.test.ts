@@ -99,6 +99,55 @@ describe("createAuthAdmin", () => {
         expect(userRow(taken.id)?.["email"]).toBe("taken@example.com");
     });
 
+    it("refuses an address another account holds in mixed case, on create and on change", async () => {
+        expect.assertions(2);
+
+        // An account written before addresses were lowercased, or imported as it was.
+        database["user"]?.push({
+            createdAt: new Date(),
+            email: "Legacy@Example.com",
+            emailVerified: false,
+            id: "legacy",
+            name: "Legacy",
+            updatedAt: new Date(),
+        });
+
+        const user = await adminApi.createUser({ email: "mover@example.com", name: "Mover" });
+
+        await expect(adminApi.createUser({ email: "legacy@example.com", name: "Twin" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+        await expect(adminApi.updateUser({ data: { email: "legacy@example.com" }, userId: user.id })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+    });
+
+    it("reports a write that lost a race for the address as USER_ALREADY_EXISTS, not a backend failure", async () => {
+        expect.assertions(2);
+
+        const context = await auth.$context;
+        const user = await adminApi.createUser({ email: "mover@example.com", name: "Mover" });
+        // The other request's write lands between this one's check and its write, and the unique index refuses it.
+        const losesRace = (): never => {
+            database["user"]?.push({
+                createdAt: new Date(),
+                email: "race@example.com",
+                emailVerified: false,
+                id: "winner",
+                name: "Winner",
+                updatedAt: new Date(),
+            });
+
+            throw new Error("UNIQUE constraint failed: user.email");
+        };
+
+        vi.spyOn(context.internalAdapter, "updateUser").mockImplementationOnce(losesRace);
+        vi.spyOn(context.internalAdapter, "createUser").mockImplementationOnce(() => {
+            database["user"] = (database["user"] ?? []).filter((row) => (row as { id: string }).id !== "winner");
+
+            return losesRace();
+        });
+
+        await expect(adminApi.updateUser({ data: { email: "race@example.com" }, userId: user.id })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+        await expect(adminApi.createUser({ email: "race@example.com", name: "Loser" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+    });
+
     it("lets a user keep its own address in another casing, and leaves an update without an email alone", async () => {
         expect.assertions(3);
 

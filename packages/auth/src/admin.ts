@@ -760,6 +760,45 @@ const deleteOrganizationTeamMemberships = async (context_: Awaited<LunoraAuth["$
  * better-auth `APIError`'s `body.code` when present so the caller sees a stable
  * machine code rather than an opaque message.
  */
+
+/**
+ * Refuse `email` (already lowercased) when an account other than `exceptUserId` holds it in any casing.
+ * better-auth's `findUserByEmail` matches the stored address exactly, so an account written before addresses
+ * were lowercased, or imported as it was, would slip past it.
+ */
+const assertEmailFree = async (context_: AuthContext, email: string, exceptUserId: string | undefined): Promise<void> => {
+    const holders = await context_.adapter.findMany<{ id: string }>({
+        limit: 2,
+        model: "user",
+        where: [{ field: "email", mode: "insensitive", value: email }],
+    });
+
+    if (holders.some((holder) => holder.id !== exceptUserId)) {
+        throw new LunoraAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");
+    }
+};
+
+/**
+ * Run a write that sets `email`, reporting a lost race for the address as USER_ALREADY_EXISTS: the check before
+ * it cannot see a concurrent write, and a store's unique index refusing this one surfaces as a backend error.
+ */
+const writeClaimingEmail = async <R>(
+    context_: AuthContext,
+    email: string | undefined,
+    exceptUserId: string | undefined,
+    write: () => Promise<R>,
+): Promise<R> => {
+    try {
+        return await write();
+    } catch (error) {
+        if (email !== undefined) {
+            await assertEmailFree(context_, email, exceptUserId);
+        }
+
+        throw error;
+    }
+};
+
 const asAdminError = (error: unknown): LunoraAuthAdminError => {
     if (error instanceof LunoraAuthAdminError) {
         return error;
@@ -1220,9 +1259,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
             withContext(async (context_) => {
                 const normalizedEmail = email.toLowerCase();
 
-                if (await context_.internalAdapter.findUserByEmail(normalizedEmail)) {
-                    throw new LunoraAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");
-                }
+                await assertEmailFree(context_, normalizedEmail, undefined);
 
                 // `data` carries app-defined `additionalFields`. It is spread last and so
                 // can override `role` (matching the better-auth admin plugin's `createUser`);
@@ -1238,17 +1275,19 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
                 delete safeData["isAnonymous"];
 
-                const user = await context_.internalAdapter.createUser(
-                    {
-                        email: normalizedEmail,
-                        name,
-                        role: role === undefined ? undefined : serializeRole(role),
-                        ...safeData,
-                    } as Parameters<typeof context_.internalAdapter.createUser>[0],
-                    // better-auth 1.7 takes the caller's provenance as a second argument
-                    // (it reaches database hooks); this whole plane is admin-token gated,
-                    // so it reports itself the same way better-auth's own admin plugin does.
-                    { method: "admin" },
+                const user = await writeClaimingEmail(context_, normalizedEmail, undefined, async () =>
+                    context_.internalAdapter.createUser(
+                        {
+                            email: normalizedEmail,
+                            name,
+                            role: role === undefined ? undefined : serializeRole(role),
+                            ...safeData,
+                        } as Parameters<typeof context_.internalAdapter.createUser>[0],
+                        // better-auth 1.7 takes the caller's provenance as a second argument
+                        // (it reaches database hooks); this whole plane is admin-token gated,
+                        // so it reports itself the same way better-auth's own admin plugin does.
+                        { method: "admin" },
+                    ),
                 );
 
                 if (password !== undefined && password !== "") {
@@ -1595,14 +1634,12 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
                 if (normalizedEmail !== undefined) {
                     // A user keeping its own address in another casing is not a conflict.
-                    const existing = await context_.internalAdapter.findUserByEmail(normalizedEmail);
-
-                    if (existing && existing.user.id !== userId) {
-                        throw new LunoraAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");
-                    }
+                    await assertEmailFree(context_, normalizedEmail, userId);
                 }
 
-                const user = await context_.internalAdapter.updateUser(userId, normalizedEmail === undefined ? data : { ...data, email: normalizedEmail });
+                const user = await writeClaimingEmail(context_, normalizedEmail, userId, async () =>
+                    context_.internalAdapter.updateUser(userId, normalizedEmail === undefined ? data : { ...data, email: normalizedEmail }),
+                );
 
                 return toUser(user as Record<string, unknown>);
             }),
