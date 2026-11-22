@@ -160,6 +160,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `LeaveReference` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `ListPresentReference` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

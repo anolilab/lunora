@@ -176,6 +176,15 @@ type HeartbeatReference = FunctionReference<"mutation", {
 const LUNORA_INJECTION_KEY: InjectionKey<LunoraClient>;
 ```
 
+### `LeaveReference` (type)
+
+```ts
+type LeaveReference = FunctionReference<"mutation", {
+    roomId: string;
+    sessionId: string;
+}>;
+```
+
 ### `ListPresentReference` (type)
 
 ```ts
@@ -509,6 +518,7 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     data?: Record<string, unknown>;
     heartbeat: H;
     intervalMs?: number;
+    leave?: LeaveReference;
     listPresent: L;
     onError?: SubscriptionErrorCallback;
     sessionId?: string;

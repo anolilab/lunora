@@ -366,6 +366,7 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
     data?: Record<string, unknown>;
     heartbeat: H;
     intervalMs?: number;
+    leave?: LeaveReference;
     listPresent: L;
     onError?: SubscriptionErrorCallback;
     sessionId?: string;
@@ -502,6 +503,15 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ```ts
 type HeartbeatReference = FunctionReference<"mutation", {
     data?: Record<string, unknown>;
+    roomId: string;
+    sessionId: string;
+}>;
+```
+
+### `LeaveReference` (type)
+
+```ts
+type LeaveReference = FunctionReference<"mutation", {
     roomId: string;
     sessionId: string;
 }>;

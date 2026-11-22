@@ -360,6 +360,15 @@ interface InfiniteQueryOptions {
 }
 ```
 
+### `LeaveReference` (type)
+
+```ts
+type LeaveReference = FunctionReference<"mutation", {
+    roomId: string;
+    sessionId: string;
+}>;
+```
+
 ### `ListPresentReference` (type)
 
 ```ts
@@ -476,6 +485,7 @@ interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentRef
     data?: Record<string, unknown>;
     heartbeat: H;
     intervalMs?: number;
+    leave?: LeaveReference;
     listPresent: L;
     onError?: SubscriptionErrorCallback;
     sessionId?: string;
