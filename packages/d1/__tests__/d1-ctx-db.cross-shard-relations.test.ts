@@ -101,6 +101,50 @@ describe("d1 reverse cross-backend relation loading", () => {
         expect(seen?.["relationPolicies"]).toEqual({ local: { ownerId: "u1" } });
     });
 
+    it("asks the relation filter only for tables the hop can reach, so an unrelated table cannot fail it", async () => {
+        expect.assertions(3);
+
+        const schema: SchemaLike = {
+            tables: {
+                ...reverseSchema.tables,
+                local: { ...reverseSchema.tables["local"]!, relationMap: { tags: { field: "localId", kind: "many", references: "_id", table: "tags" } } },
+                secrets: { indexes: [], shape: { body: col("string") }, shardMode: { kind: "root" } },
+                tags: { indexes: [], shape: { localId: col("string") }, shardMode: { kind: "root" } },
+            },
+        };
+        let seen: Record<string, unknown> | undefined;
+        const writer = createD1ContextDatabase({
+            crossShardReader: async (_table, args) => {
+                seen = args as unknown as Record<string, unknown>;
+
+                return { continueCursor: null, isDone: true, page: [] };
+            },
+            exec: harness.exec,
+            schema,
+        });
+        const asked: string[] = [];
+        // Stands in for an rls() filter that refuses a protected table no policy reads.
+        const relationBaseWhere = (closed: string) => (table: string) => {
+            asked.push(table);
+
+            if (table === closed) {
+                throw new Error(`RLS_REQUIRED: ${table}`);
+            }
+
+            return undefined;
+        };
+
+        await seedParent(writer);
+        await writer.findMany("globals", { relationBaseWhere: relationBaseWhere("secrets"), with: { items: { with: { tags: true } } } });
+
+        expect(asked).not.toContain("secrets");
+        expect(seen?.["relationPolicies"]).toStrictEqual({});
+        // A table the nested `with` does reach still fails closed.
+        await expect(writer.findMany("globals", { relationBaseWhere: relationBaseWhere("tags"), with: { items: { with: { tags: true } } } })).rejects.toThrow(
+            "RLS_REQUIRED: tags",
+        );
+    });
+
     it("rEFUSES a masked read with a nested `with` across the hop instead of serving it unmasked", async () => {
         expect.assertions(2);
 

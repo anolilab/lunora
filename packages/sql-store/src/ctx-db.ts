@@ -132,6 +132,7 @@ import createPointReadBatcher from "./point-read-batcher";
 import { afterBaseRowCommitted } from "./post-commit-error";
 import type { QueryTimer } from "./query-timeout";
 import { abandonedWork, DEFAULT_QUERY_TIMEOUT_MS, SqlQueryTimeoutError, withQueryTimeout } from "./query-timeout";
+import relationReachableTables from "./relation-reach";
 import type { SqlCtxExec } from "./sql-exec";
 import {
     BACKFILL_BATCH_SIZE,
@@ -3403,8 +3404,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         const relationPolicies: Record<string, WhereInput> = {};
 
+        // Only the tables the serving shard can read on this hop's behalf: the filter refuses a
+        // protected table no policy reads, and asking it about every table in the schema made an
+        // unrelated one fail a read that never touches it.
         if (childArgs?.relationBaseWhere) {
-            for (const table of Object.keys(schema.tables)) {
+            for (const table of relationReachableTables(childTable, childArgs.with, childArgs.where, schema)) {
                 const policy = childArgs.relationBaseWhere(table);
 
                 if (policy !== undefined) {
