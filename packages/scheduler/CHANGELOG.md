@@ -1,3 +1,7 @@
+## @lunora/scheduler [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.171...@lunora/scheduler@1.0.0-alpha.172) (2026-11-22)
+
+- Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).
+
 ## @lunora/scheduler [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.170...@lunora/scheduler@1.0.0-alpha.171) (2026-11-18)
 
 - feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)

@@ -1,3 +1,7 @@
+## @lunora/astro [1.0.0-alpha.313](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.312...@lunora/astro@1.0.0-alpha.313) (2026-11-22)
+
+- Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).
+
 ## @lunora/astro [1.0.0-alpha.312](https://github.com/anolilab/lunora/compare/@lunora/astro@1.0.0-alpha.311...@lunora/astro@1.0.0-alpha.312) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

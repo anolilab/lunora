@@ -1,3 +1,7 @@
+## @lunora/studio [1.0.0-alpha.389](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.388...@lunora/studio@1.0.0-alpha.389) (2026-11-22)
+
+- Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).
+
 ## @lunora/studio [1.0.0-alpha.388](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.387...@lunora/studio@1.0.0-alpha.388) (2026-11-20)
 
 - feat(cloud)!: lunora cloud control plane on workers for platforms (#85)

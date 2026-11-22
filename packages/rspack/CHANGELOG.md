@@ -1,3 +1,7 @@
+## @lunora/rspack [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.151...@lunora/rspack@1.0.0-alpha.152) (2026-11-22)
+
+- Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).
+
 ## @lunora/rspack [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.150...@lunora/rspack@1.0.0-alpha.151) (2026-11-05)
 
 - feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)

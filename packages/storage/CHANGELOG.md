@@ -1,3 +1,7 @@
+## @lunora/storage [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.173...@lunora/storage@1.0.0-alpha.174) (2026-11-22)
+
+- Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).
+
 ## @lunora/storage [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.172...@lunora/storage@1.0.0-alpha.173) (2026-11-18)
 
 - Updated dependency @lunora/platform@1.0.0-alpha.81

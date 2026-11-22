@@ -1,3 +1,7 @@
+## @lunora/observability [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.204...@lunora/observability@1.0.0-alpha.205) (2026-11-22)
+
+- Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).
+
 ## @lunora/observability [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.203...@lunora/observability@1.0.0-alpha.204) (2026-11-14)
 
 - fix: land five small audit fixes (#1538)
