@@ -42,6 +42,7 @@ import { Project } from "ts-morph";
 import { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationTable } from "../../../../../shared/reprojection-id";
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { adminFetch, normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
+import { acquirePidLock } from "../../util/checkout-lock";
 import type { Refusal } from "../../util/exit-code";
 import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
@@ -129,18 +130,8 @@ const loadSnapshot = (path: string): SchemaSnapshot | undefined => {
     }
 };
 
-const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): MigrateGenerateCommandResult => {
-    const cwd = options.cwd ?? process.cwd();
-    const schemaPath = join(cwd, "lunora", "schema.ts");
-
-    if (!existsSync(schemaPath)) {
-        const error = `schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`;
-
-        options.logger.error(error);
-
-        return { code: EXIT_CODE.NOT_FOUND, empty: true, error, migrationFile: "" };
-    }
-
+/** The diff, the migration file and the snapshot update; runs holding the generate lock. */
+const generateMigration = (options: MigrateGenerateCommandOptions, cwd: string, schemaPath: string): MigrateGenerateCommandResult => {
     // Parse the current schema with ts-morph (reusing the codegen discoverer).
     const project = new Project({ skipAddingFilesFromTsConfig: true });
     const schemaIr = discoverSchema(project, schemaPath);
@@ -224,6 +215,35 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     }
 
     return { code: 0, empty: false, migrationFile };
+};
+
+const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): MigrateGenerateCommandResult => {
+    const cwd = options.cwd ?? process.cwd();
+    const schemaPath = join(cwd, "lunora", "schema.ts");
+
+    if (!existsSync(schemaPath)) {
+        const error = `schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`;
+
+        options.logger.error(error);
+
+        return { code: EXIT_CODE.NOT_FOUND, empty: true, error, migrationFile: "" };
+    }
+
+    // Two runs that read the same snapshot would both emit its diff, and the second rename would
+    // drop the first's change from the snapshot: generation is serialized per migrations directory.
+    const lock = acquirePidLock(join(cwd, "lunora", "migrations", `${SNAPSHOT_FILENAME}.lock`), "`migrate generate`");
+
+    if (lock.error !== undefined) {
+        options.logger.error(lock.error);
+
+        return { code: EXIT_CODE.USAGE, empty: true, error: lock.error, migrationFile: "" };
+    }
+
+    try {
+        return generateMigration(options, cwd, schemaPath);
+    } finally {
+        lock.release();
+    }
 };
 
 const DATA_MIGRATIONS_FILENAME = "migrations.ts";

@@ -421,6 +421,59 @@ export const schema = defineSchema({
             expect(readFileSync(third.migrationFile, "utf8")).toContain("ALTER TABLE");
         });
 
+        it("refuses to generate while another live run holds the lock, and writes nothing", () => {
+            expect.assertions(4);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({ email: v.string() }).global(),
+});
+`,
+            );
+
+            const migrations = join(workdir, "lunora", "migrations");
+            const lockPath = join(migrations, ".snapshot.json.lock");
+
+            mkdirSync(migrations, { recursive: true });
+            // This test's own process: alive for as long as the run lasts.
+            writeFileSync(lockPath, String(process.pid), "utf8");
+
+            const result = runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(result.error).toMatch(/another `migrate generate` is running/u);
+            expect(readdirSync(migrations).filter((name) => name.endsWith(".sql") || name === ".snapshot.json")).toStrictEqual([]);
+            expect(readFileSync(lockPath, "utf8")).toBe(String(process.pid));
+        });
+
+        it("replaces a lock whose process is gone, and releases its own when done", () => {
+            expect.assertions(3);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({ email: v.string() }).global(),
+});
+`,
+            );
+
+            const migrations = join(workdir, "lunora", "migrations");
+            const lockPath = join(migrations, ".snapshot.json.lock");
+
+            mkdirSync(migrations, { recursive: true });
+            // Above any platform's pid range, so no process can hold it.
+            writeFileSync(lockPath, "2147483646", "utf8");
+
+            const result = runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
+
+            expect(result.code).toBe(0);
+            expect(existsSync(result.migrationFile)).toBe(true);
+            expect(existsSync(lockPath)).toBe(false);
+        });
+
         it("never writes the snapshot through a link planted at a temporary-file path", () => {
             expect.assertions(2);
 

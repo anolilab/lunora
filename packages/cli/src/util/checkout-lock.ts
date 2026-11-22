@@ -70,13 +70,11 @@ const retire = (path: string, dead: number): boolean => {
 };
 
 /**
- * A deploy rewrites the checkout's wrangler config and restores it afterwards, so a second one in the same
- * checkout would read the first's env block or restore the file from under it. The lock is a file holding the
- * owner's pid, published whole (written to a temporary name, then linked into place, so no reader sees it empty).
- * One whose process is gone is retired and replaced. Returns the release, or the reason the lock is held.
+ * A cross-process lock at `path`: a file holding the owner's pid, published whole (written to a temporary name,
+ * then linked into place, so no reader sees it empty). One whose process is gone is retired and replaced. Returns
+ * the release, or the reason the lock is held; `holder` names the command in that reason.
  */
-const acquireCheckoutLock = (cwd: string, hooks: LockHooks = {}): CheckoutLock => {
-    const path = join(cwd, ".lunora", "preview.lock");
+const acquirePidLock = (path: string, holder: string, hooks: LockHooks = {}): CheckoutLock => {
     const staged = `${path}.${String(process.pid)}.${randomUUID()}`;
 
     mkdirSync(dirname(path), { recursive: true });
@@ -109,23 +107,30 @@ const acquireCheckoutLock = (cwd: string, hooks: LockHooks = {}): CheckoutLock =
             }
 
             if (isAlive(owner)) {
-                return { error: `another preview command is running in this checkout (pid ${String(owner)}); wait for it, or remove ${path} if it is not` };
+                return { error: `another ${holder} is running in this checkout (pid ${String(owner)}); wait for it, or remove ${path} if it is not` };
             }
 
             hooks.afterReadingOwner?.();
 
             if (!retire(path, owner)) {
                 return {
-                    error: `another preview command is taking over the lock at ${path}; run this again in a moment. If none is running, remove ${path}.retire-${String(owner)}`,
+                    error: `another ${holder} is taking over the lock at ${path}; run this again in a moment. If none is running, remove ${path}.retire-${String(owner)}`,
                 };
             }
         }
 
-        return { error: `could not take the preview lock ${path}` };
+        return { error: `could not take the ${holder} lock ${path}` };
     } finally {
         rmSync(staged, { force: true });
     }
 };
 
+/**
+ * A deploy rewrites the checkout's wrangler config and restores it afterwards, so a second one in the same
+ * checkout would read the first's env block or restore the file from under it.
+ */
+const acquireCheckoutLock = (cwd: string, hooks: LockHooks = {}): CheckoutLock =>
+    acquirePidLock(join(cwd, ".lunora", "preview.lock"), "preview command", hooks);
+
 export type { LockHooks };
-export { acquireCheckoutLock };
+export { acquireCheckoutLock, acquirePidLock };
