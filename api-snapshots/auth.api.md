@@ -1131,7 +1131,7 @@ const createAuthAuditWriter: (executor: SqlExecutor, auth?: {
             after?: unknown;
         };
     };
-}) => AuthAuditWriter;
+} | null) => AuthAuditWriter;
 ```
 
 ### `createDoAuthWiring` (const)
