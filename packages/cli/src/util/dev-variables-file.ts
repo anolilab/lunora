@@ -10,7 +10,10 @@ import type { Logger } from "./logger";
 /** The name is spliced into a filename, so anything but a plain fragment (`../x`) is refused. */
 const SAFE_ENV_NAME = /^[\w-]+$/u;
 
-/** `.dev.vars.example` is the committed template the ignore patterns keep visible, so no secret may be written to it. */
+/**
+ * `.dev.vars.example` is the committed template the ignore patterns keep visible, so no secret may be written to it.
+ * Compared case-insensitively: on a case-insensitive filesystem `.dev.vars.Example` is that same file.
+ */
 const RESERVED_ENV_NAMES: ReadonlySet<string> = new Set(["example"]);
 
 /**
@@ -35,7 +38,7 @@ const devVariablesFileFor = (environment: string | undefined): string | undefine
         return DEV_VARS_FILE;
     }
 
-    return SAFE_ENV_NAME.test(environment) && !RESERVED_ENV_NAMES.has(environment) ? `${DEV_VARS_FILE}.${environment}` : undefined;
+    return SAFE_ENV_NAME.test(environment) && !RESERVED_ENV_NAMES.has(environment.toLowerCase()) ? `${DEV_VARS_FILE}.${environment}` : undefined;
 };
 
 /**

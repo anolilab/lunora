@@ -613,6 +613,32 @@ describe("lunora env", () => {
             expect(existsSync(join(workdir, "..", "escape"))).toBe(false);
         });
 
+        it("refuses --env Example, which names the committed .dev.vars.example on a case-insensitive filesystem", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "Example", key: "AUTH_SECRET", logger, subcommand: "set", value: "s3cret" });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(existsSync(join(workdir, ".dev.vars.Example"))).toBe(false);
+        });
+
+        it("push --env staging names --env staging in the commands that fix a placeholder", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, ".dev.vars.staging"), 'AUTH_SECRET="replace-me"\n', "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const { spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", logger, spawner, subcommand: "push", yes: true });
+            const message = recorded.errors.join("\n");
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(message).toContain("lunora env doctor --env staging");
+            expect(message).toContain("lunora env generate --set --env staging");
+            expect(message).toContain("lunora env set --env staging");
+        });
+
         it("set --env staging writes .dev.vars.staging, leaves .dev.vars alone and git-ignores the sibling", async () => {
             expect.assertions(4);
 

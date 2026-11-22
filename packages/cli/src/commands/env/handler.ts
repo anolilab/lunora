@@ -337,11 +337,14 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     }
 
     const placeholders = [...map.values()].filter((entry) => isPlaceholderValue(entry.value)).map((entry) => entry.key);
+    // The fix-up commands must edit the file just read, not the bare `.dev.vars`.
+    const environmentFlag = environment === undefined ? "" : ` --env ${environment}`;
 
     if (placeholders.length > 0) {
         logger.error(
             `env push: refusing to upload placeholder value(s) for ${placeholders.join(", ")} — ` +
-                `run \`lunora env doctor\` to review, and \`lunora env generate --set\` (or \`lunora env set <KEY> <VALUE>\`) to fill them, then re-run.`,
+                `run \`lunora env doctor${environmentFlag}\` to review, and \`lunora env generate --set${environmentFlag}\` (or \`lunora env set${environmentFlag} <KEY> <VALUE>\`) ` +
+                `to fill them, then re-run.`,
         );
 
         return { code: EXIT_CODE.USAGE, descriptors: [] };

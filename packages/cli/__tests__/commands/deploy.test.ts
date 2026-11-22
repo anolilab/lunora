@@ -3480,6 +3480,73 @@ export default defineNotify({ fcm: ${fcmValue}, webPush: (env) => webPushFromEnv
                 expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: STRIPE_API_KEY\./u);
             });
 
+            it("refuses to mint for an environment whose values cannot be recorded locally, before asking or pushing", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("example"), "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+                const confirm = vi.fn<(message: string) => Promise<boolean>>(() => Promise.resolve(true));
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "example",
+                    interactive: true,
+                    logger,
+                    secretConfirm: confirm,
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).not.toBe(0);
+                expect(result.error).toMatch(/cannot be recorded/u);
+                expect(confirm).not.toHaveBeenCalled();
+                expect(calls.some((call) => /secret (?:put|bulk)/u.test(call.descriptor.args.join(" ")))).toBe(false);
+            });
+
+            it("records the pushed value and keeps the local one when a per-key retry after a failed bulk push throws", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="local"\n', "utf8");
+
+                const calls: RecordedSpawn[] = [];
+                let puts = 0;
+                // Bulk exits non-zero, then the spawner itself rejects on the second put (a spawn error).
+                const spawner: Spawner = (descriptor) => {
+                    calls.push({ descriptor });
+
+                    if (descriptor.args.includes("bulk")) {
+                        return Promise.resolve({ code: 1 });
+                    }
+
+                    if (descriptor.args.join(" ").includes("secret put")) {
+                        puts += 1;
+
+                        return puts === 2 ? Promise.reject(new Error("spawn EAGAIN")) : Promise.resolve({ code: 0 });
+                    }
+
+                    return Promise.resolve({ code: 0 });
+                };
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+                const bulkBody = JSON.parse(calls.find((call) => call.descriptor.args.includes("bulk"))?.descriptor.input ?? "{}") as Record<string, string>;
+                const recorded = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+                expect(result.code).not.toBe(0);
+                expect(recorded).toContain(`LUNORA_ADMIN_TOKEN="${bulkBody.LUNORA_ADMIN_TOKEN ?? "missing"}"`);
+                expect(recorded).toContain('AUTH_SECRET="local"');
+            });
+
             it("a staging deploy's missing-secret remediation names --env staging, not --prod", async () => {
                 expect.assertions(2);
 

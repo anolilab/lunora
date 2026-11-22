@@ -177,6 +177,17 @@ const pushMintableSecrets = async (
     const pending = keys.map((key) => {
         return { key, value: generateSecretValue() };
     });
+    // A spawn that rejects (the binary could not start, the child errored) is a failed push like a
+    // non-zero exit: thrown out of here, the values already pushed would never be recorded.
+    const exitCodeOf = async (descriptor: Parameters<typeof spawner>[0]): Promise<number | string> => {
+        try {
+            const result = await spawner(descriptor);
+
+            return result.code;
+        } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+        }
+    };
     const secretBulk = driver.toolchain?.secretBulk;
     let bulkFailed = false;
 
@@ -185,14 +196,14 @@ const pushMintableSecrets = async (
     // gives the precise per-key error and the partial `minted` list.
     if (secretBulk !== undefined && pending.length >= 2) {
         const bulkExec = toolchainExecArgs(manager, secretBulk({ environment: options.env, temporary: options.temporary }));
-        const bulkResult = await spawner({
+        const bulkCode = await exitCodeOf({
             args: bulkExec.args,
             command: bulkExec.command,
             cwd,
             input: JSON.stringify(Object.fromEntries(pending.map((entry) => [entry.key, entry.value]))),
         });
 
-        if (bulkResult.code === 0) {
+        if (bulkCode === 0) {
             for (const { key } of pending) {
                 logger.success(`generated + pushed ${key}`);
             }
@@ -201,7 +212,7 @@ const pushMintableSecrets = async (
         }
 
         bulkFailed = true;
-        logger.warn(`bulk secret push failed (exit ${String(bulkResult.code)}); retrying one key at a time`);
+        logger.warn(`bulk secret push failed (exit ${String(bulkCode)}); retrying one key at a time`);
     }
 
     const minted: { key: string; value: string }[] = [];
@@ -213,12 +224,10 @@ const pushMintableSecrets = async (
         // `wrangler secret put <name>` reads the value from stdin, so the value
         // never lands on the command line, in env, or in shell history.
         // eslint-disable-next-line no-await-in-loop -- push sequentially so a failure aborts before the rest.
-        const pushResult = await spawner({ args: exec.args, command: exec.command, cwd, input: value });
+        const pushCode = await exitCodeOf({ args: exec.args, command: exec.command, cwd, input: value });
 
-        if (pushResult.code !== 0) {
-            logger.error(
-                `failed to push secret ${key} (exit ${String(pushResult.code)}); set it manually with \`wrangler secret put ${key}${environmentFlag}\`.`,
-            );
+        if (pushCode !== 0) {
+            logger.error(`failed to push secret ${key} (exit ${String(pushCode)}); set it manually with \`wrangler secret put ${key}${environmentFlag}\`.`);
 
             if (bulkFailed) {
                 return { minted: pending, ok: false, uncertain: pending.slice(index).map((entry) => entry.key) };
@@ -474,6 +483,16 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
 
     if (mintable.length === 0) {
         return {};
+    }
+
+    // Cloudflare secrets are write-only: a value minted for an environment with no recordable file
+    // would be pushed and then lost, so refuse before asking or pushing anything.
+    if (devVariablesFileFor(options.env) === undefined) {
+        return {
+            error:
+                `missing required secret(s) on the deploy target: ${mintable.join(", ")}. --env ${String(options.env)} names no file their values can be recorded in, ` +
+                `so they cannot be recorded locally and none were generated. Set them with \`wrangler secret put <KEY>${environmentFlag}\`, then re-deploy.`,
+        };
     }
 
     const confirm = options.secretConfirm ?? createTuiConfirm();
