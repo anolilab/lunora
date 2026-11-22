@@ -1347,6 +1347,29 @@ describe("shardDO subscription re-execution", () => {
         expect(JSON.parse(ws.sent[1]!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
     });
 
+    it("leaves the request scope of a dispatch that ran while a cold query loaded", async () => {
+        expect.assertions(1);
+
+        // Another dispatch takes the shard's per-request fields while this subscribe waits on the load.
+        class InterleavedShard extends ReexecShard {
+            protected override async prepareFunction(functionPath: string): Promise<void> {
+                if (functionPath === "cursors:listCursors") {
+                    Reflect.set(this, "currentRequestUserId", "user-b");
+                }
+            }
+        }
+
+        const shard = new InterleavedShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        await subscribe(shard, ws);
+
+        // The subscribe set no scope of its own, so it has nothing to put back over that dispatch's.
+        expect(Reflect.get(shard, "currentRequestUserId")).toBe("user-b");
+    });
+
     it("drops a hibernated per-dispatch subscription on a cold isolate without running it once", async () => {
         expect.assertions(3);
 

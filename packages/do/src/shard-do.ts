@@ -9849,16 +9849,16 @@ abstract class ShardDO {
      * Load `functionPath`'s module before a live-query gate reads its registry entry: a lazy
      * registry's stub carries no `perDispatch` until then, so the gate would wave a cold per-dispatch
      * query through and run it once. A failed load is left to the run that follows, which reports it.
+     *
+     * The per-request fields are left alone: a socket path pins its identity around each run it
+     * makes, so it holds no scope here, and putting a snapshot back after the wait would overwrite
+     * those of a dispatch that ran meanwhile.
      */
     private async prepareForLiveQueryGate(functionPath: string): Promise<void> {
-        const requestScope = this.captureRequestScope();
-
         try {
             await this.prepareFunction(functionPath, "subscription");
         } catch {
             // Reported by the run that follows: see above.
-        } finally {
-            this.restoreRequestScope(requestScope);
         }
     }
 
