@@ -1306,8 +1306,9 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     throw new LunoraAuthAdminError("api key not found", "API_KEY_NOT_FOUND");
                 }
 
-                // Mirrors the plugin's own resolution: no `configId` and `"default"` are the same configuration.
-                const isDefault = (configId: string | null | undefined): boolean => configId === undefined || configId === null || configId === "default";
+                // Mirrors the plugin's own resolution, which tests `!configId`: no `configId`, `""` and `"default"` are the same configuration.
+                const isDefault = (configId: string | null | undefined): boolean =>
+                    configId === undefined || configId === null || configId === "" || configId === "default";
                 const configuration = configurations.find((config) =>
                     isDefault(existing.configId) ? isDefault(config.configId) : config.configId === existing.configId,
                 );

@@ -170,6 +170,18 @@ describe("createAuthAdmin API keys", () => {
         await expect(adminApi.deleteApiKey({ apiKeyId: id })).rejects.toMatchObject({ code: "API_KEY_NOT_FOUND" });
     });
 
+    it("revokes a key minted under a configuration whose configId is empty, which the plugin treats as the default", async () => {
+        expect.assertions(2);
+
+        const { adminApi, auth } = buildLiveAuth([apiKey({ configId: "", rateLimit: { enabled: false } })]);
+        const { id, key } = await mintKey(adminApi, auth);
+
+        await adminApi.deleteApiKey({ apiKeyId: id });
+
+        await expect(keyApi(auth).verifyApiKey({ body: { key } })).resolves.toMatchObject({ valid: false });
+        await expect(adminApi.deleteApiKey({ apiKeyId: id })).rejects.toMatchObject({ code: "API_KEY_NOT_FOUND" });
+    });
+
     it("refuses to revoke a key the plugin also holds in its own storage, and never reports success over a verifying copy", async () => {
         expect.assertions(2);
 
