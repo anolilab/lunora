@@ -1197,8 +1197,8 @@ interface WorkerOptions {
      * "Security / audit" trail {@link WorkerOptions.authAuditReader} serves, naming the acting admin token
      * (`admin:root`, or `admin:token:<tokenName>` for a named token). The admin plane calls better-auth's adapter
      * directly, so the better-auth audit hook never sees these operations. Wire it with `@lunora/auth`'s
-     * `createAuthAuditWriter(d1Executor(env.DB), auth)`, which also applies the audit hook's `retention` and `onRecord`. Omit it and the admin plane records nothing; a failed
-     * write is logged and does not fail the operation.
+     * `createAuthAuditWriter(d1Executor(env.DB), auth)`, which also applies the audit hook's `retention` and
+     * `onRecord`. Omit it and the admin plane records nothing; a failed write is logged and does not fail the operation.
      */
     authAuditWriter?: AuthAuditWriter;
 

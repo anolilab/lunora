@@ -230,9 +230,9 @@ interface ReadAuthAuditOptions {
 const AUDIT_REDACT_RULES = [...standardRules, ...piiRules];
 
 /**
- * Detail keys that carry an identifier the hooks or the worker's admin plane copied from a request, allow-listed by name. Value-based redaction
- * would replace a numeric id (a five-digit user id reads as a phone or code), so these keys skip it. Credentials and
- * emails never reach these keys: the hooks copy only the id fields named here.
+ * Detail keys that carry an identifier the hooks or the worker's admin plane copied from a request, allow-listed by
+ * name. Value-based redaction would replace a numeric id (a five-digit user id reads as a phone or code), so these keys
+ * skip it. Credentials and emails never reach these keys: the hooks copy only the id fields named here.
  */
 const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
     "accountId",
