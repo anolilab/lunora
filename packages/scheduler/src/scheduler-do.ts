@@ -1371,7 +1371,7 @@ class SchedulerDO {
     private async drainRecord(record: ScheduleRecord): Promise<boolean> {
         const reserved = await this.reservePoolSlot(record);
 
-        if (!reserved) {
+        if (reserved === false) {
             // Pool at capacity — re-armed by reservePoolSlot(); skip dispatch.
             return false;
         }
@@ -1384,6 +1384,10 @@ class SchedulerDO {
         // re-fire does). Freeing it now would let another job take it while that attempt runs
         // past `maxConcurrency`. A record cancelled meanwhile will not re-fire, so it is freed.
         const declined = outcome === "in-progress" && !this.cancelledLeases.has(record.id);
+        // A re-fire through the slot an earlier attempt kept learns nothing from a failed kick
+        // about whether that attempt ended, so the slot stays; parkDead() frees it if the job
+        // runs out of retries, and a re-fire that goes through keeps it until /complete.
+        const keptSlot = reserved === "reentered" && !ok && !this.cancelledLeases.has(record.id);
 
         if (ok && poolName !== undefined) {
             // Before the header goes: once it does, the id is free for a new job, which must not
@@ -1398,7 +1402,7 @@ class SchedulerDO {
             }).catch(() => undefined);
         }
 
-        if (!ok && !declined && poolName !== undefined) {
+        if (!ok && !declined && !keptSlot && poolName !== undefined) {
             // The kick itself failed: no completion callback is coming, so free
             // the reserved slot immediately. recordRetry() then re-arms the job.
             // Re-load the pool row FRESH from storage rather than reusing a copy
@@ -1473,8 +1477,9 @@ class SchedulerDO {
     /**
      * Concurrency gate for a pooled record. Returns `false` (and re-arms the
      * job via {@link requeuePooled}) when the pool is at `maxConcurrency`;
-     * otherwise reserves a slot durably and returns `true`. Non-pooled records
-     * always return `true` without touching any pool state.
+     * `"reentered"` when the record already holds a slot an earlier attempt kept;
+     * otherwise reserves a slot durably and returns `"reserved"`. Non-pooled
+     * records always return `"reserved"` without touching any pool state.
      *
      * The pool row is read FRESH from storage on every call — never cached
      * across the drain — and the read-modify-write runs under
@@ -1487,11 +1492,11 @@ class SchedulerDO {
      * `maxConcurrency` and one holder's id is dropped from `inFlightIds`, so its
      * slot is never released.
      */
-    private async reservePoolSlot(record: ScheduleRecord): Promise<boolean> {
+    private async reservePoolSlot(record: ScheduleRecord): Promise<"reentered" | "reserved" | false> {
         const poolName = record.pool;
 
         if (poolName === undefined) {
-            return true;
+            return "reserved";
         }
 
         const reserved = await this.withPoolLock(async () => {
@@ -1504,7 +1509,7 @@ class SchedulerDO {
             // re-fire forever — and that re-fire is what releases the slot when the first
             // attempt's receiver never reports back.
             if (pool.inFlightIds?.includes(record.id) === true && pool.kickedIds?.includes(record.id) !== true) {
-                return true;
+                return "reentered" as const;
             }
 
             if (pool.inFlight >= pool.maxConcurrency) {
@@ -1523,10 +1528,10 @@ class SchedulerDO {
             pool.inFlight = ids.length;
             await this.savePool(poolName, pool);
 
-            return true;
+            return "reserved" as const;
         });
 
-        if (!reserved) {
+        if (reserved === false) {
             // Backpressure, not failure: re-arm outside the lock — it writes only
             // this record's own rows, so holding the pool lock for it would stall
             // every other lane's reservation for nothing.
@@ -1768,6 +1773,11 @@ class SchedulerDO {
      * schedulable time (see {@link isIndexableTime}).
      */
     private async parkDead(record: ScheduleRecord, attempts: number, reason: string): Promise<void> {
+        // A parked job never re-fires, so a slot it kept through failed re-fires is freed here —
+        // first, so a failed release leaves the job pending and re-fireable rather than parked
+        // with the slot stranded.
+        await this.releaseHeldSlot(record);
+
         const completedAt = Date.now();
 
         // Indexed in `dt:` like any other outcome, so `/history` lists the failure

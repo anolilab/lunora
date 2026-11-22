@@ -816,3 +816,56 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
         expect(poolIds(state, "p")).toStrictEqual([]);
     });
 });
+
+describe("schedulerDO — a failed re-fire through a slot it already holds", () => {
+    const scheduleHeld = async (scheduler: SchedulerDO, state: ReturnType<typeof createFakeState>): Promise<string> => {
+        const id = await scheduledId(
+            await scheduler.fetch(
+                post("/schedule", {
+                    args: {},
+                    functionPath: "job",
+                    maxConcurrency: 1,
+                    pool: "p",
+                    retry: { baseMs: 0, maxAttempts: 1 },
+                    scheduledFor: Date.now() - 1000,
+                }),
+            ),
+        );
+
+        // An earlier attempt was declined in-progress (or lost with its instance): the record still holds the slot.
+        state.storageMap.set("pool:p", { inFlight: 1, inFlightIds: [id], maxConcurrency: 1 });
+
+        return id;
+    };
+
+    it("keeps the slot when the re-fire's kick fails, and re-arms the job", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduleHeld(scheduler, state);
+
+        await scheduler.alarm();
+
+        // A failed kick says nothing about whether the earlier attempt ended; another job must not take its slot.
+        expect(scheduler.attempts).toBe(1);
+        expect(poolIds(state, "p")).toStrictEqual([id]);
+        expect(state.storageMap.has(`id:${id}`)).toBe(true);
+    });
+
+    it("releases the kept slot when the job is dead-lettered", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduleHeld(scheduler, state);
+
+        await scheduler.alarm();
+        await scheduler.alarm();
+
+        // Parked, the job never re-fires, so this is the slot's last release.
+        expect(scheduler.attempts).toBe(2);
+        expect(state.storageMap.has(`dead:${id}`)).toBe(true);
+        expect(poolIds(state, "p")).toStrictEqual([]);
+    });
+});
