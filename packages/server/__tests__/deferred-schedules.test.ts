@@ -476,6 +476,35 @@ const budgetOutbox = (limit: number, deferTo: number) => {
     };
 };
 
+describe("withDeferredSchedules — replay dedup key", () => {
+    it("hands the live call and its custody record the same dedupKey, so a replay is deduped at the receiver", async () => {
+        expect.assertions(3);
+
+        const liveOptions: Record<string, unknown>[] = [];
+        const record = async (_when: number, _target: unknown, _args: unknown, options?: Record<string, unknown>): Promise<string> => {
+            liveOptions.push(options ?? {});
+
+            return String(options?.["id"]);
+        };
+        const outbox = budgetOutbox(10, 0);
+        const facade = withDeferredSchedules({ cancel: async () => undefined, runAfter: record, runAt: record } as never, outbox) as unknown as {
+            runAfter: (delayMs: number, target: string) => Promise<string>;
+        };
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "jobs:send");
+        await settle(true);
+
+        const recorded = outbox.record.mock.calls[0]?.[1] as { options?: { dedupKey?: unknown } } | undefined;
+        const live = liveOptions[0];
+
+        expect(typeof live?.["dedupKey"]).toBe("string");
+        // The replay runs from the recorded options, so it must carry the live call's key.
+        expect(recorded?.options?.dedupKey).toBe(live?.["dedupKey"]);
+        expect(String(live?.["dedupKey"]).startsWith(`${String(live?.["id"])}-`)).toBe(true);
+    });
+});
+
 describe("withDeferredSchedules — schedule-rate budget", () => {
     const NOW = 1_700_000_000_000;
     const WINDOW = 60_000;

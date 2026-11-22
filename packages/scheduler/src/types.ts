@@ -116,6 +116,15 @@ export interface RetryPolicy {
 
 export interface RunOptions {
     /**
+     * The key the job's receiver dedups a re-delivery on (the shard's mutation replay row, or the
+     * workflow instance id). Defaults to one minted per scheduling. Set it when the same logical
+     * job may be scheduled more than once and must run once: `@lunora/server`'s deferred-schedule
+     * facade passes its own, so a replay of a hand-off that did land is answered from the first
+     * run. Must match `^[A-Za-z0-9_][A-Za-z0-9_-]{0,99}$` (`400 INVALID_INPUT` otherwise).
+     */
+    dedupKey?: string;
+
+    /**
      * Job id to store the record under, instead of one the SchedulerDO mints.
      *
      * Exists for `@lunora/server`'s deferred-schedule facade: inside a mutation a
@@ -170,6 +179,9 @@ export interface ScheduleRecord {
      * the studio see the field the storage layer actually writes.
      */
     attempts?: number;
+
+    /** The key every dispatch of this record is deduped on at its receiver; see {@link RunOptions.dedupKey}. */
+    dedupKey?: string;
     enqueuedAt: number;
     /** Why the job was dead-lettered. Set only on a parked (`/dead`) record. */
     error?: string;

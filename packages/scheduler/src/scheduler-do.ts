@@ -306,10 +306,16 @@ const padTime = (n: number): string => String(n).padStart(TIME_PAD, "0");
  * {@link SchedulerDO.rescheduleAlarm} reads back as `8` — arming the alarm at a
  * permanently past instant that the runtime then re-delivers in a tight loop.
  */
+/** A replay-dedup key the workflow engine accepts as an instance id: its grammar, and its 100-char ceiling. */
+const DEDUP_KEY_PATTERN = /^\w[\w-]{0,99}$/;
+
 const isIndexableTime = (value: number): boolean => Number.isInteger(value) && value > 0 && value <= MAX_SCHEDULED_FOR_MS;
 
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
+
+    /** The receivers' replay-dedup key, when the caller fixed one (see `RunOptions.dedupKey`). */
+    dedupKey?: string;
 
     /**
      * The `ns:fn` path of the function to dispatch on fire. Absent when the job
@@ -578,9 +584,10 @@ class SchedulerDO {
     }
 
     /**
-     * `<id>-<enqueuedAt>`: `-` keeps it inside the workflow engine's instance-id grammar
-     * (`^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`), and a 64-char id plus a millisecond stamp stays well
-     * under its 100-char ceiling. A row without a usable `enqueuedAt` keeps the bare id.
+     * The key the record was scheduled with (`<id>-<32 random hex>` unless the caller fixed one:
+     * `-` keeps it inside the workflow engine's instance-id grammar `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`,
+     * and a 64-char id plus the suffix stays under its 100-char ceiling). A row scheduled before the
+     * key was stored falls back to `<id>-<enqueuedAt>`, or the bare id without a usable stamp.
      *
      * Known one-time window, accepted: a record whose attempt ran under the bare id on a build
      * before this key, and whose response was lost, is retried after the upgrade under the new key,
@@ -588,6 +595,10 @@ class SchedulerDO {
      * across that deploy are exposed; no key-version field is kept to close it.
      */
     private static dedupKey(record: ScheduleRecord): string {
+        if (record.dedupKey !== undefined) {
+            return record.dedupKey;
+        }
+
         return Number.isSafeInteger(record.enqueuedAt) && record.enqueuedAt > 0 ? `${record.id}-${String(record.enqueuedAt)}` : record.id;
     }
 
@@ -705,14 +716,6 @@ class SchedulerDO {
      * the write. Cleared with the lease in `drainRecordGuarded()`.
      */
     private readonly cancelledLeases = new Set<string>();
-
-    /**
-     * The last `enqueuedAt` stamped here. Stamps are kept strictly increasing because `enqueuedAt`
-     * is a record's generation in its dedup key: a reused id scheduled within the millisecond of
-     * its previous job would otherwise be answered from that job's result. In memory is enough —
-     * an evicted instance comes back later than the millisecond it last stamped.
-     */
-    private lastEnqueuedAt = 0;
 
     public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
@@ -2022,6 +2025,13 @@ class SchedulerDO {
         const instanceName = optionalName(body.instanceName);
         const retry = SchedulerDO.normalizeRetry(body.retry);
 
+        const { dedupKey } = body;
+
+        // Spent verbatim as a workflow instance id, so it must fit the engine's grammar and ceiling.
+        if (dedupKey !== undefined && (typeof dedupKey !== "string" || !DEDUP_KEY_PATTERN.test(dedupKey))) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "dedupKey must match ^[A-Za-z0-9_][A-Za-z0-9_-]{0,99}$");
+        }
+
         const resolved = await this.resolveId(body.id);
 
         if (resolved instanceof Response) {
@@ -2043,16 +2053,16 @@ class SchedulerDO {
         // not also cost the old outcome.
         const dropOutcome = body.id === undefined ? undefined : this.state.storage.delete([`${DONE_PREFIX}${id}`, `${REPAIR_PREFIX}${id}`]);
 
-        const enqueuedAt = Math.max(Date.now(), this.lastEnqueuedAt + 1);
-
-        this.lastEnqueuedAt = enqueuedAt;
-
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime
             // despite the type, so the ?? fallback is a real guard.
             // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- parsed wire data can omit args
             args: body.args ?? {},
-            enqueuedAt,
+            // Fixed here, once per scheduling, and carried by every retry; random rather than
+            // derived from the clock, so a reused id never meets its previous job's key however
+            // close together the two are scheduled, or whether this instance was recreated between.
+            dedupKey: dedupKey ?? `${id}-${crypto.randomUUID().replaceAll("-", "")}`,
+            enqueuedAt: Date.now(),
             id,
             ...(functionPath === undefined ? {} : { functionPath }),
             ...(instanceName === undefined ? {} : { instanceName }),

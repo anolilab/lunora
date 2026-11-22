@@ -75,6 +75,7 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
             // shard's for a function target and `handleSchedulerDispatch`'s
             // workflow branch (before `create({ params })`) for a workflow one.
             args: encodeArgsOrThrow("ctx.scheduler.runAt", targetLabel(target), args),
+            dedupKey: options_.dedupKey,
             // Pre-minted id, when the caller decided it before the call could be
             // made (see `RunOptions.id`). Absent for an ordinary schedule, and the
             // DO mints one.

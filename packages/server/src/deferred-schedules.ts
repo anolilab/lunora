@@ -312,6 +312,9 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
         // SchedulerDO applies, so the id answered here is the id the record is
         // stored under, and an id already taken still reaches the DO's refusal.
         const id = resolveScheduleId(options?.id);
+        // Fixed with the custody record, so the live call and every replay of it carry one key: a
+        // replay of a hand-off that did land (its answer lost) is then answered from the first run.
+        const custodied = { ...options, dedupKey: options?.["dedupKey"] ?? `${id}-${crypto.randomUUID().replaceAll("-", "")}` };
 
         // Durable custody, taken HERE — while the handler is still inside its
         // transaction. That placement is the whole point: the entry commits with
@@ -327,7 +330,7 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
         // back, which is the answer a caller can act on.
         const token = queue.outbox?.record(id, {
             args: encodeArgsOrThrow(`ctx.scheduler.${method}`, scheduleTargetLabel(target), args),
-            options,
+            options: custodied,
             target,
             // Whole milliseconds, rounded up — the instant `@lunora/scheduler`'s
             // `runAt` stores, so the replay and the live call agree. `due` already
@@ -337,7 +340,7 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
 
         // Buffered against the window that is innermost RIGHT NOW, so it is
         // dropped only if THAT transaction rolls back.
-        open.pending.push({ id, run: async () => call(method, due, target, args, { ...options, id }), token });
+        open.pending.push({ id, run: async () => call(method, due, target, args, { ...custodied, id }), token });
 
         return Promise.resolve(id);
     };
