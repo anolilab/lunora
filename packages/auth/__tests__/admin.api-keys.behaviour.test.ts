@@ -1,3 +1,4 @@
+import { apiKey as upstreamApiKey } from "@better-auth/api-key";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { describe, expect, it } from "vitest";
 
@@ -20,6 +21,66 @@ const seedDatabase = (): Record<string, unknown[]> => {
 /** An admin plane over a fresh in-memory database, with the given plugins. */
 const buildAdmin = (database: Record<string, unknown[]>, plugins: Parameters<typeof createAuth>[0]["plugins"] = [apiKey()]) =>
     createAuthAdmin(createAuth({ baseURL: "http://localhost", database: memoryAdapter(database), plugins, secret: SECRET }));
+
+/** A key-value store backed by a `Map`, the shape both `secondaryStorage` and the plugin's `customStorage` take. */
+const mapStorage = () => {
+    const entries = new Map<string, string>();
+
+    return {
+        delete: async (key: string) => {
+            entries.delete(key);
+        },
+        get: async (key: string) => entries.get(key) ?? null,
+        getAndDelete: async (key: string) => {
+            const value = entries.get(key) ?? null;
+
+            entries.delete(key);
+
+            return value;
+        },
+        increment: async (key: string) => {
+            const next = Number(entries.get(key) ?? 0) + 1;
+
+            entries.set(key, String(next));
+
+            return next;
+        },
+        set: async (key: string, value: string) => {
+            entries.set(key, value);
+        },
+    };
+};
+
+/** The auth instance alongside its admin plane, for specs that mint and verify real keys. */
+const buildLiveAuth = (plugins: Parameters<typeof createAuth>[0]["plugins"], extra: Partial<Parameters<typeof createAuth>[0]> = {}) => {
+    const auth = createAuth({
+        baseURL: "http://localhost",
+        database: memoryAdapter(seedDatabase()),
+        plugins: [admin(), ...(plugins ?? [])],
+        secret: SECRET,
+        ...extra,
+    });
+
+    return { adminApi: createAuthAdmin(auth), auth };
+};
+
+/**
+ * The plugin's server endpoints. `createAuth` returns the plugin-agnostic `LunoraAuth`, so
+ * the endpoints the plugin adds are not on its type.
+ */
+const keyApi = (auth: ReturnType<typeof createAuth>) =>
+    auth.api as unknown as {
+        createApiKey: (input: { body: { userId: string } }) => Promise<{ id: string; key: string }>;
+        verifyApiKey: (input: { body: { key: string } }) => Promise<{ valid: boolean }>;
+    };
+
+/** Mint a key for a fresh user through the plugin's own server-side create, so it can be verified. */
+const mintKey = async (adminApi: ReturnType<typeof createAuthAdmin>, auth: ReturnType<typeof createAuth>) => {
+    const user = await adminApi.createUser({ email: "owner@example.com", name: "Owner" });
+    const created = await keyApi(auth).createApiKey({ body: { userId: user.id } });
+
+    return { id: created.id, key: created.key };
+};
 
 const keyRow = (id: string, referenceId: string): Record<string, unknown> => {
     return {
@@ -95,25 +156,38 @@ describe("createAuthAdmin API keys", () => {
         expect((database["apikey"] ?? []).map((row) => (row as { id: string }).id)).toStrictEqual(["k1"]);
     });
 
-    it("refuses to revoke when secondary storage is configured, and deletes nothing", async () => {
+    it("revokes a database-stored key while sessions live in secondary storage, and the key stops verifying", async () => {
+        expect.assertions(3);
+
+        const { adminApi, auth } = buildLiveAuth([apiKey({ rateLimit: { enabled: false } })], { secondaryStorage: mapStorage() });
+        const { id, key } = await mintKey(adminApi, auth);
+
+        await expect(keyApi(auth).verifyApiKey({ body: { key } })).resolves.toMatchObject({ valid: true });
+
+        await adminApi.deleteApiKey({ apiKeyId: id });
+
+        await expect(keyApi(auth).verifyApiKey({ body: { key } })).resolves.toMatchObject({ valid: false });
+        await expect(adminApi.deleteApiKey({ apiKeyId: id })).rejects.toMatchObject({ code: "API_KEY_NOT_FOUND" });
+    });
+
+    it("refuses to revoke a key the plugin also holds in its own storage, and never reports success over a verifying copy", async () => {
+        expect.assertions(2);
+
+        const { adminApi, auth } = buildLiveAuth([
+            apiKey({ customStorage: mapStorage(), fallbackToDatabase: true, rateLimit: { enabled: false }, storage: "secondary-storage" }),
+        ]);
+        const { id, key } = await mintKey(adminApi, auth);
+
+        await expect(adminApi.deleteApiKey({ apiKeyId: id })).rejects.toMatchObject({ code: "API_KEY_STORAGE_UNSUPPORTED" });
+        // Refused outright, so the key is exactly as revoked as before the call: not at all.
+        await expect(keyApi(auth).verifyApiKey({ body: { key } })).resolves.toMatchObject({ valid: true });
+    });
+
+    it("refuses to revoke when the api-key plugin was not added through @lunora/auth/plugins", async () => {
         expect.assertions(2);
 
         const database = seedDatabase();
-        const adminApi = createAuthAdmin(
-            createAuth({
-                baseURL: "http://localhost",
-                database: memoryAdapter(database),
-                plugins: [apiKey()],
-                secondaryStorage: {
-                    delete: async () => undefined,
-                    get: async () => null,
-                    getAndDelete: async () => null,
-                    increment: async () => 1,
-                    set: async () => undefined,
-                },
-                secret: SECRET,
-            }),
-        );
+        const adminApi = buildAdmin(database, [upstreamApiKey()]);
 
         database["apikey"]?.push(keyRow("k1", "alice"));
 

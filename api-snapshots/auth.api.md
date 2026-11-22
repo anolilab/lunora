@@ -1544,9 +1544,11 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 Re-exported from `better-auth` — signature tracked at its source.
 
-### `apiKey` (function)
+### `apiKey` (const)
 
-Re-exported from `@better-auth/api-key` — signature tracked at its source.
+```ts
+const apiKey: (...parameters: Parameters<typeof apiKey$1>) => ReturnType<typeof apiKey$1>;
+```
 
 ### `bearer` (const)
 
