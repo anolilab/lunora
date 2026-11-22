@@ -75,6 +75,7 @@ export interface Doc_payment_subscriptions {
     lastEventAt?: number;
     priceId: string;
     priceIds?: Array<string>;
+    priceEventAt?: number;
     provider: string;
     providerSubscriptionId: string;
     quantity: number;
@@ -230,6 +231,7 @@ export interface Insert_payment_subscriptions {
     lastEventAt?: number;
     priceId: string;
     priceIds?: Array<string>;
+    priceEventAt?: number;
     provider: string;
     providerSubscriptionId: string;
     quantity: number;

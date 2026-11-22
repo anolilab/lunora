@@ -230,6 +230,7 @@ const subscriptionToRow = (subscription: Subscription): Record<string, unknown> 
         // Left absent when the adapter reported no set, so the column stays unwritten for the
         // single-price providers and the round-trip below falls back to `[priceId]`.
         ...(subscription.priceIds === undefined ? {} : { priceIds: [...subscription.priceIds] }),
+        ...(subscription.priceEventAt === undefined ? {} : { priceEventAt: subscription.priceEventAt }),
         provider: subscription.provider,
         providerSubscriptionId: subscription.id,
         quantity: subscription.quantity,
@@ -253,6 +254,7 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
         // carries a single price id). `undefined` is what makes the entitlement read fall back to
         // `[priceId]`, so no backfill is needed — see `Subscription.priceIds`.
         priceIds: readStringArray(row, "priceIds"),
+        priceEventAt: readOptionalNumber(row, "priceEventAt"),
         provider: readString(row, "provider") as ProviderId,
         quantity: readNumber(row, "quantity"),
         referenceId: readString(row, "referenceId"),

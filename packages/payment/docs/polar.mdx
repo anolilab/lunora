@@ -437,7 +437,7 @@ await ctx.payments.refundPayment({ sessionId: orderId, amount: money(500n, "USD"
     releases it on its own. If that delivery is lost, or you do not subscribe, call `ctx.payments.settlePendingRefund({ sessionId: orderId })`: it lists the
     order's refunds from Polar (the token needs `refunds:read`, which `refunds:write` includes), books a refund that succeeded exactly as the webhook would, so
     a late webhook adds nothing, and releases the hold. A refund that failed, or none at all, releases it with nothing booked. One still pending keeps it.
-    A refund call that gets no answer from the provider (a network failure, a timeout, a 5xx) may still have issued the refund, so it holds the session the same way and raises `PROVIDER_ERROR` saying so; `settlePendingRefund` is the way out. A definite rejection (a 4xx) releases it. `settlePendingRefund` never releases a hold whose `refundPayment` call is still waiting on the provider.
+    A refund call that gets no answer from the provider (a network failure, a timeout, a 5xx) may still have issued the refund, so it holds the session the same way and raises `PROVIDER_ERROR` saying so; `settlePendingRefund` is the way out. A definite rejection (a 4xx) releases it. `settlePendingRefund` never releases a hold whose `refundPayment` call is still waiting on the provider. When the provider answered `pending` with a refund id, only an event about that refund releases the hold; a restated or failed earlier refund on the same session does not.
 </Callout>
 
 ## Billing portal

@@ -100,6 +100,15 @@ export interface Subscription {
      * Absent until an event that carries a time lands; `reconcile` and the facade leave it as stored.
      */
     readonly lastEventAt?: number;
+
+    /**
+     * Provider time of the stale event that filled in a price the row was created without (see
+     * `lastEventAt`). A later stale event that is newer than this one may still replace it, so the row ends
+     * on the newest plan whatever order the late events arrive in. Absent once a current event or a
+     * `reconcile` sets the price, which a stale event then never overrides.
+     */
+    readonly priceEventAt?: number;
+
     /** The primary (first) price/product id — `priceIds[0]`. Display and single-item plan changes. */
     readonly priceId: string;
 
@@ -112,6 +121,7 @@ export interface Subscription {
      * reads as `[priceId]`, which is exactly right for the single-item case every other provider has.
      */
     readonly priceIds?: ReadonlyArray<string>;
+
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;

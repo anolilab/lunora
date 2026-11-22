@@ -7,7 +7,7 @@
  * that reports `"orphaned"`, which the HTTP layer answers with a 500 for ONE bounded redelivery.
  */
 import { LunoraPaymentError } from "./errors";
-import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundHeldKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
+import { heldRefundIdOf, LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundHeldKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
 import { addMoney, compareMoney, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -128,11 +128,19 @@ const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existi
 };
 
 /**
- * Settle the facade's pending-refund marker for the action's session. Any refund event on the session
- * settles it — the marker is per session because the event cannot name the request that issued it.
+ * Settle the facade's pending-refund marker for the action's session. A hold that names its refund (the
+ * provider answered `pending` with an id) is settled only by an event about that refund; one held without an
+ * id, or a call still waiting on the provider, is settled by any refund event on the session.
  */
 const releasePendingRefund = async (store: PaymentStore, action: WebhookAction): Promise<void> => {
     if (action.sessionId && refundNeedsPendingGuard(action.provider)) {
+        const held = await store.getEventClaim(action.provider, pendingRefundHeldKey(action.sessionId));
+        const heldRefundId = held === undefined ? undefined : heldRefundIdOf(held);
+
+        if (heldRefundId !== undefined && action.refundId !== heldRefundId) {
+            return;
+        }
+
         await store.releaseEvent(action.provider, pendingRefundKey(action.sessionId));
         await store.releaseEvent(action.provider, pendingRefundHeldKey(action.sessionId));
     }
@@ -421,6 +429,8 @@ const mergeSubscriptionEvent = (existing: Subscription, action: WebhookAction, n
         // A reported set REPLACES the stored one (a plan change can remove an item); `undefined`
         // means "unknown", not "empty", so the stored set stands.
         priceIds: action.priceIds ?? existing.priceIds,
+        // A current event's price is authoritative, so no stale event may replace it any more.
+        priceEventAt: action.priceId === undefined ? existing.priceEventAt : undefined,
         quantity: action.quantity ?? existing.quantity,
         referenceId: ownerOf(existing.referenceId, action.referenceId),
         updatedAt: now,
@@ -454,12 +464,15 @@ const isStaleSubscriptionEvent = (existing: Subscription, action: WebhookAction)
  * its state or `lastEventAt`. A Stripe subscription-mode checkout creates the row with no price, and
  * the `customer.subscription.*` events that carry it are often stamped earlier, so without this the
  * row matches no plan until the next renewal. A priceless row's quantity and period start are
- * creation defaults, not provider data, so they come along with the price. Returns `existing`
- * itself when there is nothing to fill.
+ * creation defaults, not provider data, so they come along with the price. A price a stale event
+ * filled can be replaced by a NEWER stale event (`priceEventAt`): a subscription changed plan before
+ * its checkout landed sends both events late, and the row must end on the second plan whatever order
+ * they arrive in. Returns `existing` itself when there is nothing to fill.
  */
 const fillBlankSubscription = (existing: Subscription, action: WebhookAction): Subscription => {
     const referenceId = ownerOf(existing.referenceId, action.referenceId);
-    const priced = existing.priceId === "" && Boolean(action.priceId);
+    const refill = existing.priceEventAt !== undefined && action.occurredAt !== undefined && action.occurredAt > existing.priceEventAt;
+    const priced = (existing.priceId === "" || refill) && Boolean(action.priceId);
 
     if (referenceId === existing.referenceId && !priced) {
         return existing;
@@ -471,10 +484,11 @@ const fillBlankSubscription = (existing: Subscription, action: WebhookAction): S
 
     return {
         ...existing,
-        currentPeriodEnd: existing.currentPeriodEnd ?? action.currentPeriodEnd,
+        currentPeriodEnd: refill ? (action.currentPeriodEnd ?? existing.currentPeriodEnd) : (existing.currentPeriodEnd ?? action.currentPeriodEnd),
         currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
+        priceEventAt: action.occurredAt,
         priceId: action.priceId ?? existing.priceId,
-        priceIds: existing.priceIds ?? action.priceIds,
+        priceIds: refill ? (action.priceIds ?? existing.priceIds) : (existing.priceIds ?? action.priceIds),
         quantity: action.quantity ?? existing.quantity,
         referenceId,
     };

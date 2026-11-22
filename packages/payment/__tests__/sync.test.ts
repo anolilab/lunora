@@ -366,6 +366,46 @@ describe("applyWebhookAction", () => {
         expect(hasActivePrice([(await store.getSubscription("stripe", "sub_1"))!], "price_pro")).toBe(false);
     });
 
+    it.each([
+        ["in order", [9000, 9500]],
+        ["out of order", [9500, 9000]],
+    ] as const)("ends a priceless row on the newest stale event's plan when stale events arrive %s", async (_order, times) => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+        const priceAt = (occurredAt: number): string => (occurredAt === 9500 ? "price_new" : "price_old");
+
+        await applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 10_000, type: "subscription.active" });
+
+        for (const occurredAt of times) {
+            // eslint-disable-next-line no-await-in-loop -- delivery order is the subject of the test
+            await applyWebhookAction(store, {
+                ...event,
+                eventId: `e${String(occurredAt)}`,
+                occurredAt,
+                priceId: priceAt(occurredAt),
+                type: "subscription.updated",
+            });
+        }
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 10_000, priceId: "price_new", state: "active" });
+    });
+
+    it("keeps a price a current event set over a stale event's, however recent the stale one", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+
+        await applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 10_000, type: "subscription.active" });
+        await applyWebhookAction(store, { ...event, eventId: "e2", occurredAt: 8000, priceId: "price_old", type: "subscription.updated" });
+        await applyWebhookAction(store, { ...event, eventId: "e3", occurredAt: 11_000, priceId: "price_current", type: "subscription.updated" });
+        await applyWebhookAction(store, { ...event, eventId: "e4", occurredAt: 9000, priceId: "price_stale", type: "subscription.updated" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_current" });
+    });
+
     it("keeps a priced row's price when a stale event names a different one", async () => {
         expect.assertions(2);
 

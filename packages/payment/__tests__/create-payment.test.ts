@@ -1380,8 +1380,7 @@ describe("createPayment", () => {
     describe("settlePendingRefund", () => {
         const PENDING_MESSAGE = "a refund on this session is still pending; retry once it settles";
 
-        const settleSetup = async (provider: "dodopayments" | "polar", owner = "user_1") => {
-            const store = new MemoryPaymentStore();
+        const settleSetup = async (provider: "dodopayments" | "polar", owner = "user_1", store: MemoryPaymentStore = new MemoryPaymentStore()) => {
             const session = { ...paymentSession(owner), id: "ord_1", provider };
 
             await store.upsertPaymentSession(session);
@@ -1691,6 +1690,123 @@ describe("createPayment", () => {
             await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
 
             expect(refundPayment).toHaveBeenCalledTimes(2);
+        });
+
+        it("keeps a pending refund's hold through events for an earlier, already-booked refund", async () => {
+            expect.assertions(3);
+
+            const { payment, refundPayment, store } = await settleSetup("polar");
+
+            // Refund A settles at once and is booked; refund B (`ref_1`, the mock's first own id) is answered pending.
+            refundPayment.mockImplementationOnce(async () => {
+                return { ...paymentSession("user_1"), id: "ord_1", provider: "polar", refundedAmount: money(300, "USD"), refundId: "ref_a" };
+            });
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+            await payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+
+            // A restated confirmation for A, and a late failure report for A.
+            await applyWebhookAction(store, {
+                amount: money(300, "USD"),
+                eventId: "evt_a2",
+                provider: "polar",
+                refundId: "ref_a",
+                sessionId: "ord_1",
+                type: "payment.refunded",
+            });
+            await applyWebhookAction(store, { eventId: "evt_a3", provider: "polar", refundId: "ref_a", sessionId: "ord_1", type: "payment.refund_failed" });
+
+            await expect(payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            // B's own confirmation releases it.
+            await applyWebhookAction(store, {
+                amount: money(200, "USD"),
+                eventId: "evt_b",
+                provider: "polar",
+                refundId: "ref_1",
+                sessionId: "ord_1",
+                type: "payment.refunded",
+            });
+            await payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(3);
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(500, "USD") });
+        });
+
+        it("books no money twice when a reconcile records the provider's total while the settlement books it", async () => {
+            expect.assertions(1);
+
+            /** Runs `onRead` once, right after a read: the reconcile landing between the settlement's read and its write. */
+            class RacingStore extends MemoryPaymentStore {
+                public onRead: (() => Promise<unknown>) | undefined;
+
+                public override async getPaymentSession(provider: PaymentSession["provider"], id: string): Promise<PaymentSession | undefined> {
+                    const row = await super.getPaymentSession(provider, id);
+                    const hook = this.onRead;
+
+                    this.onRead = undefined;
+                    await hook?.();
+
+                    return row;
+                }
+            }
+
+            const racing = new RacingStore();
+            const { listRefunds, payment, providerRefunds, store } = await settleSetup("polar", "user_1", racing);
+
+            await payment.refundPayment({ amount: money(500, "USD"), sessionId: "ord_1" });
+            providerRefunds.push({ amount: money(500, "USD"), refundId: "ref_1", status: "succeeded" });
+            listRefunds.mockImplementationOnce(async () => {
+                // Reconcile writes the provider's refunded total, with no per-refund marker.
+                racing.onRead = async () => {
+                    const row = await MemoryPaymentStore.prototype.getPaymentSession.call(racing, "polar", "ord_1");
+
+                    await racing.upsertPaymentSession({ ...row!, refundedAmount: money(500, "USD"), state: "partially_refunded" });
+                };
+
+                return [...providerRefunds];
+            });
+
+            await payment.settlePendingRefund({ sessionId: "ord_1" });
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(500, "USD") });
+        });
+
+        it("never leaves the hold released over a ledger short of the provider's settled total", async () => {
+            expect.assertions(1);
+
+            const { payment, providerRefunds, store } = await settleSetup("polar");
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+            providerRefunds.push(
+                { amount: money(300, "USD"), refundId: "ref_1", status: "succeeded" },
+                { amount: money(200, "USD"), refundId: "ref_0", status: "succeeded" },
+            );
+
+            // The store fails a write partway through the settlement.
+            const upsert = store.upsertPaymentSession.bind(store);
+            let writes = 0;
+
+            vi.spyOn(store, "upsertPaymentSession").mockImplementation(async (session, guard) => {
+                writes += 1;
+
+                if (writes === 2) {
+                    throw new Error("store unavailable");
+                }
+
+                return upsert(session, guard);
+            });
+
+            await payment.settlePendingRefund({ sessionId: "ord_1" }).catch(() => undefined);
+
+            const settled = await store.getPaymentSession("polar", "ord_1");
+            const ledger = settled?.refundedAmount;
+            const released = await payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" }).then(
+                () => true,
+                () => false,
+            );
+
+            // Released only once the ledger holds all 500.
+            expect(released ? ledger : money(500, "USD")).toStrictEqual(money(500, "USD"));
         });
 
         it("changes nothing on a session that holds no pending refund", async () => {

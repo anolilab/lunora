@@ -428,6 +428,20 @@ describe("createDatabasePaymentStore", () => {
         expect(reminted?.email).toBeUndefined();
     });
 
+    it("round-trips the time of the stale event that filled a price, and reads an absent column as undefined", async () => {
+        expect.assertions(2);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertSubscription({ ...subscription, priceEventAt: 9000 });
+
+        await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.priceEventAt)).resolves.toBe(9000);
+
+        await store.upsertSubscription({ ...subscription, id: "sub_2" });
+
+        await expect(store.getSubscription("stripe", "sub_2").then((row) => row?.priceEventAt)).resolves.toBeUndefined();
+    });
+
     it("round-trips the multi-item price set, and reads an absent column as undefined (regression)", async () => {
         expect.assertions(3);
 

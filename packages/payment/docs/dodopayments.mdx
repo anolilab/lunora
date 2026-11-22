@@ -468,7 +468,7 @@ await ctx.payments.refundPayment({ sessionId: paymentId, reason: "customer_reque
     hold on its own. If those deliveries are lost, call `ctx.payments.settlePendingRefund({ sessionId: paymentId })`: it reads the payment's refunds from Dodo,
     books one that succeeded exactly as the webhook would, so a late webhook adds nothing, and releases the hold. A refund that failed, or none at all,
     releases it with nothing booked. One still `pending` or in `review` keeps it.
-    A refund call that gets no answer from the provider (a network failure, a timeout, a 5xx) may still have issued the refund, so it holds the session the same way and raises `PROVIDER_ERROR` saying so; `settlePendingRefund` is the way out. A definite rejection (a 4xx) releases it. `settlePendingRefund` never releases a hold whose `refundPayment` call is still waiting on the provider.
+    A refund call that gets no answer from the provider (a network failure, a timeout, a 5xx) may still have issued the refund, so it holds the session the same way and raises `PROVIDER_ERROR` saying so; `settlePendingRefund` is the way out. A definite rejection (a 4xx) releases it. `settlePendingRefund` never releases a hold whose `refundPayment` call is still waiting on the provider. When the provider answered `pending` with a refund id, only an event about that refund releases the hold; a restated or failed earlier refund on the same session does not.
 </Callout>
 
 ## Billing portal

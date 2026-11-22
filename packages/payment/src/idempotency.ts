@@ -164,3 +164,22 @@ export const PENDING_REFUND_HELD_CLAIM_TYPE = "marker.pending_refund_held";
 
 /** The held claim that matches a pending-refund marker's claim: same call token, held prefix. */
 export const heldClaimFor = (pendingClaim: string): string => PENDING_REFUND_HELD_CLAIM_TYPE + pendingClaim.slice(PENDING_REFUND_CLAIM_TYPE.length);
+
+/**
+ * The held claim with the provider's id for the refund it holds appended, when the provider named one. A
+ * refund event then releases the hold only when it is about that refund: a restatement or a late failure of an
+ * earlier refund on the session must not let a retry of the pending one reach the provider.
+ */
+export const heldClaimWithRefund = (heldClaim: string, refundId: string | undefined): string =>
+    refundId === undefined || refundId === "" ? heldClaim : `${heldClaim}:${refundId}`;
+
+/** Whether `stored` is `heldClaim`, with or without the refund id {@link heldClaimWithRefund} appends. */
+export const isHeldClaim = (stored: string | undefined, heldClaim: string): boolean => stored === heldClaim || (stored?.startsWith(`${heldClaim}:`) ?? false);
+
+/** The refund id a held claim names, or `undefined` for one held without it. The call token before it holds no `:`. */
+export const heldRefundIdOf = (stored: string): string | undefined => {
+    const rest = stored.slice(PENDING_REFUND_HELD_CLAIM_TYPE.length + 1);
+    const separator = rest.indexOf(":");
+
+    return separator === -1 ? undefined : rest.slice(separator + 1);
+};
