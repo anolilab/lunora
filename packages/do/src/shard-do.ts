@@ -11584,7 +11584,10 @@ abstract class ShardDO {
                         await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table }, headroom);
                         applied += 1;
                     } catch (error) {
-                        if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND") {
+                        // Only the target's own absence is the race above. A `NOT_FOUND` while the row is
+                        // still there came from a write the patch set off (an after-update trigger
+                        // patching a missing document), after this row was written: a failure to report.
+                        if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND" || this.shardRowExists(parsed.table, id)) {
                             throw error;
                         }
                     }
@@ -17332,6 +17335,15 @@ abstract class ShardDO {
         _cursorOnly?: boolean,
     ): Promise<{ bookmark?: string; cursor: number; floor?: number; tables: string[] } | undefined> {
         return Promise.resolve(undefined);
+    }
+
+    /** Whether `table` holds a row with `id`; a missing table holds none. */
+    private shardRowExists(table: string, id: string): boolean {
+        try {
+            return (this.sql as SqlExec).exec(`SELECT 1 FROM ${quoteIdentifier(table)} WHERE "id" = ? LIMIT 1`, id).toArray().length > 0;
+        } catch {
+            return false;
+        }
     }
 
     /**
