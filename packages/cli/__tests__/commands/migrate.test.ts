@@ -434,9 +434,11 @@ export const schema = defineSchema({
             );
 
             const migrations = join(workdir, "lunora", "migrations");
-            const lockPath = join(migrations, ".snapshot.json.lock");
+            // Under the gitignored `.lunora/`, so a lock an interrupted run leaves is never committed.
+            const lockPath = join(workdir, ".lunora", "migrate-generate.lock");
 
             mkdirSync(migrations, { recursive: true });
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
             // This test's own process: alive for as long as the run lasts.
             writeFileSync(lockPath, String(process.pid), "utf8");
 
@@ -461,9 +463,11 @@ export const schema = defineSchema({
             );
 
             const migrations = join(workdir, "lunora", "migrations");
-            const lockPath = join(migrations, ".snapshot.json.lock");
+            // Under the gitignored `.lunora/`, so a lock an interrupted run leaves is never committed.
+            const lockPath = join(workdir, ".lunora", "migrate-generate.lock");
 
             mkdirSync(migrations, { recursive: true });
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
             // Above any platform's pid range, so no process can hold it.
             writeFileSync(lockPath, "2147483646", "utf8");
 

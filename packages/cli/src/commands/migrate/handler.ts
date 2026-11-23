@@ -251,8 +251,10 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     }
 
     // Two runs that read the same snapshot would both emit its diff, and the second rename would
-    // drop the first's change from the snapshot: generation is serialized per migrations directory.
-    const lock = acquirePidLock(join(cwd, "lunora", "migrations", `${SNAPSHOT_FILENAME}.lock`), "`migrate generate`");
+    // drop the first's change from the snapshot: generation is serialized per project. The lock
+    // lives in the gitignored `.lunora/`, beside the preview lock, so one an interrupted run leaves
+    // can never be committed with the migrations.
+    const lock = acquirePidLock(join(cwd, ".lunora", "migrate-generate.lock"), "`migrate generate`");
 
     if (lock.error !== undefined) {
         options.logger.error(lock.error);

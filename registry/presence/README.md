@@ -27,7 +27,7 @@ The functions surface in the generated `api` as `presence/heartbeat`, `presence/
 ## How it works
 
 - **heartbeat** (mutation) upserts the caller's row for `(tenant, roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats _patch_ the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
-- **leave** (mutation) deletes the caller's own row for a room at once, so a room switch or an unmount does not leave the session listed until the TTL. A row owned by another identity is left alone.
+- **leave** (mutation) deletes the signed-in caller's own row for a room at once, so a room switch or an unmount does not leave the session listed until the TTL. A row owned by another identity, or an anonymous row (its `sessionId` is visible to the room), is left to age out.
 - **listPresent** (query) returns the non-expired members of the caller's room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
 - **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; the table's `.ttl()` already deletes expired rows in every shard, so it is an on-demand tool, not something to schedule (see [Expired rows](#expired-rows)).
 

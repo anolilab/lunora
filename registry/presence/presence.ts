@@ -16,9 +16,9 @@
  *     insert/delete churn that would re-send the whole present list. A session
  *     that joins the room also reclaims a batch of its tenant's expired rows in that
  *     room, so closed tabs cannot pile up between sweeps nobody scheduled.
- *   - **leave** (mutation) — delete the caller's own row for a room at once, for a
- *     room the client leaves with its socket still open; a row owned by another
- *     identity is left alone.
+ *   - **leave** (mutation) — delete the signed-in caller's own row for a room at once,
+ *     for a room the client leaves with its socket still open. Anonymous rows and rows
+ *     owned by another identity are left to age out.
  *   - **listPresent** (query) — the non-expired members of the caller's room, newest
  *     heartbeat first. Subscribe to it for a reactive "who's here" list; the TTL
  *     filter ({@link PRESENCE_TTL_MS}) drops members that stopped heart-beating,
@@ -213,8 +213,9 @@ export const heartbeat = mutation
 /**
  * Drop the caller's own presence row for `roomId` now, instead of letting it age out. Pass it as
  * `usePresence`'s `leave` option: the hook calls it as a room is left with the socket still open (a
- * room switch, an unmount), which no disconnect sees. Only the identity that owns the row may
- * remove it (an anonymous row only by an anonymous caller); otherwise it is left alone.
+ * room switch, an unmount), which no disconnect sees. Only the signed-in user who owns the row may
+ * remove it. An anonymous row is never removed here: `listPresent` shows every member's
+ * `sessionId` to the room, so an anonymous caller naming one proves nothing; it ages out instead.
  */
 export const leave = mutation
     .input({ roomId: v.string().max(256), sessionId: v.string().max(256) })
@@ -225,7 +226,7 @@ export const leave = mutation
             .withIndex("byTenantRoomSession", (q) => q.eq("tenantId", tenantId).eq("roomId", roomId).eq("sessionId", sessionId))
             .first();
 
-        if (!existing || existing["userId"] !== (ctx.auth.userId ?? undefined)) {
+        if (!existing || existing["userId"] === undefined || existing["userId"] !== ctx.auth.userId) {
             return { left: false };
         }
 
