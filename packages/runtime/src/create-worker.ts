@@ -4957,6 +4957,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             const { id } = await post<{ id: string }>("/schedule", {
                 args: encodeArgsOrThrow("ctx.scheduler", String(fields["functionPath"] ?? fields["workflow"]), args),
+                // Validated by the SchedulerDO, which refuses a key the receivers cannot carry (400).
+                dedupKey: runOptions?.dedupKey,
                 // Whole milliseconds, rounded up: the SchedulerDO refuses a
                 // fractional instant (`runAfter(1500.5)`), as `@lunora/scheduler`'s
                 // `runAt` also rounds.
