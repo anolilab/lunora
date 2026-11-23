@@ -1,3 +1,11 @@
+## @lunora/svelte [1.0.0-alpha.322](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.321...@lunora/svelte@1.0.0-alpha.322) (2026-11-23)
+
+- security(agent)!: stop a reused tool-call id skipping approval (#1657)
+
+## @lunora/svelte [1.0.0-alpha.321](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.320...@lunora/svelte@1.0.0-alpha.321) (2026-11-23)
+
+- Updated dependency @lunora/ratelimit@1.0.0-alpha.197
+
 ## @lunora/svelte [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.319...@lunora/svelte@1.0.0-alpha.320) (2026-11-10)
 
 - fix(react): pass the provider's query client to TanStack; extend the cross-copy fix to other frameworks (#1524)

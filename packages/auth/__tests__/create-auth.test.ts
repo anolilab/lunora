@@ -2,9 +2,11 @@ import { resolveBaseURL } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import { effectiveCookieCache } from "../src/cookie-cache";
 import type { LunoraAuthOptions } from "../src/create-auth";
 import { createAuth as createLunoraAuth, resolveAuthOptions } from "../src/create-auth";
 import { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "../src/handler";
+import { admin } from "../src/plugins";
 import { sessionPresets } from "../src/session";
 
 const SECRET_PATTERN = /secret/i;
@@ -87,6 +89,26 @@ describe("createAuth", () => {
 
         expect(auth.options.session?.cookieCache?.enabled).toBe(true);
         expect(auth.options.session?.cookieCache?.maxAge).toBe(60);
+    });
+
+    it("defaults the cookie cache off when the admin plugin is installed, so a ban is not hidden behind it", () => {
+        expect.assertions(2);
+
+        const withAdmin = createAuth({ plugins: [admin()], secret: "s".repeat(32) });
+        const explicit = createAuth({ plugins: [admin()], secret: "s".repeat(32), session: { cookieCache: { enabled: true, maxAge: 30 } } });
+
+        expect(withAdmin.options.session?.cookieCache).toStrictEqual({ enabled: false });
+        expect(explicit.options.session?.cookieCache).toStrictEqual({ enabled: true, maxAge: 30 });
+    });
+
+    it("gives createAuth's resolved options and effectiveCookieCache the same answer", () => {
+        expect.assertions(3);
+
+        const cases = [{ plugins: [admin()] }, {}, { plugins: [admin()], session: { cookieCache: { enabled: true, maxAge: 30 } } }];
+
+        for (const options of cases) {
+            expect(createAuth({ ...options, secret: "s".repeat(32) }).options.session?.cookieCache).toStrictEqual(effectiveCookieCache(options));
+        }
     });
 
     it("forwards a caller-disabled cookie cache verbatim (does not re-enable it)", () => {

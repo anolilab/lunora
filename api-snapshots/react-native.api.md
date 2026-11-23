@@ -23,6 +23,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `AgentApprovalTarget` (type)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `AgentChatMessage` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.

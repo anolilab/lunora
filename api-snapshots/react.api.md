@@ -44,10 +44,17 @@ interface AgentApprovalGrant {
 }
 ```
 
+### `AgentApprovalTarget` (type)
+
+```ts
+type AgentApprovalTarget = Pick<AgentChatMessage, "approvalSlot" | "toolCallId">;
+```
+
 ### `AgentChatMessage` (interface)
 
 ```ts
 interface AgentChatMessage {
+    approvalSlot?: string;
     content: string;
     createdAt?: number;
     optimistic?: boolean;
@@ -134,6 +141,7 @@ type AgentToolEvent = {
     toolName?: string;
     type: "result";
 } | {
+    approvalSlot?: string;
     seq: number;
     toolCallId?: string;
     toolName?: string;
@@ -330,6 +338,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ```ts
 interface PendingApproval {
     agent: string;
+    approvalSlot: string;
     content: string;
     instanceId: string;
     requestedAt: number;
@@ -464,13 +473,13 @@ interface UseAgentChatOptions {
 ```ts
 interface UseAgentChatResult {
     approvalGrants: ReadonlyArray<AgentApprovalGrant>;
-    approve: (toolCallId: string, note?: string) => Promise<void>;
-    approveForThread: (toolCallId: string, note?: string) => Promise<void>;
+    approve: (approval: AgentApprovalTarget, note?: string) => Promise<void>;
+    approveForThread: (approval: AgentApprovalTarget, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
     declineSecret: (toolCallId: string) => Promise<void>;
     error: Error | undefined;
     messages: ReadonlyArray<AgentChatMessage>;
-    reject: (toolCallId: string, note?: string) => Promise<void>;
+    reject: (approval: AgentApprovalTarget, note?: string) => Promise<void>;
     revokeGrant: (toolName: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: AgentThreadStatus | undefined;
@@ -1484,6 +1493,7 @@ type AgentApprovalGrantsReference = FunctionReference<"query", {
 
 ```ts
 type AgentApprovalReference = FunctionReference<"mutation", {
+    approvalSlot: string;
     decision: "approve" | "approve_for_thread" | "reject";
     instanceId: string;
     note?: string;

@@ -10,7 +10,9 @@ export interface RateLimitConfig {
      * Maximum tokens that can accumulate (the rollover ceiling). Defaults to
      * `rate`: for a token bucket that caps a burst at one period's worth of
      * tokens, and for a fixed window it disables cross-window rollover. Ignored
-     * by sliding windows, which always cap at `rate` per `period`.
+     * by sliding windows, which always cap at `rate` per `period`. Must be at
+     * least 1 where it is enforced (as must `rate` where it is the ceiling): a
+     * request counts at least 1, so a lower ceiling admits nothing.
      */
     capacity?: number;
     kind: RateLimitKind;

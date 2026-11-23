@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { getAuthTables } from "better-auth/db";
 
 import { SENSITIVE_FIELDS } from "../../../shared/identity-claims";
+import { apiKeyStorage } from "./api-key-storage";
 import type { LunoraAuth } from "./create-auth";
 // Aliased: this module exposes methods of the same names, and a method body
 // calling an identically-named import is a needless double-take.
@@ -334,7 +335,12 @@ interface AuthAdmin {
     /** Create a team under an organization. */
     createTeam: (input: { name: string; organizationId: string }) => Promise<AuthTeam>;
     createUser: (input: { data?: Record<string, unknown>; email: string; name: string; password?: string; role?: string | string[] }) => Promise<AuthAdminUser>;
-    /** Revoke (delete) one API key by id. Needs the `apiKey()` plugin. */
+
+    /**
+     * Revoke (delete) one API key by id. Needs the `apiKey()` plugin from `@lunora/auth/plugins`;
+     * refuses with `API_KEY_STORAGE_UNSUPPORTED` for a key whose configuration uses
+     * `storage: "secondary-storage"`, or when the plugin's storage is unknown.
+     */
     deleteApiKey: (input: { apiKeyId: string }) => Promise<void>;
     /** Delete an organization and cascade-delete its members, invitations, teams, and custom roles. */
     deleteOrganization: (input: { organizationId: string }) => Promise<void>;
@@ -1307,12 +1313,55 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 return toUser(user as Record<string, unknown>);
             }),
 
-        // Deletes the row directly, like the other admin ops. That revokes the key only
-        // while the `apikey` table is the store, the default `storage: "database"`. Under
-        // secondary storage better-auth keeps keys elsewhere and this does not reach them.
+        // Never report a revoke that left a verifying copy behind. A key whose configuration
+        // uses `storage: "secondary-storage"` is read from that storage first, under keys the
+        // plugin derives privately, so only the plugin's own owner-session endpoint can remove
+        // it; this refuses rather than delete the row and leave the stored copy verifying.
         deleteApiKey: ({ apiKeyId }) =>
             withContext(async (context_) => {
-                await context_.adapter.delete({ model: "apikey", where: [{ field: "id", value: apiKeyId }] });
+                const unsupported = (): LunoraAuthAdminError =>
+                    new LunoraAuthAdminError(
+                        "this api key may be held outside the database; revoke it through better-auth's api-key endpoint",
+                        "API_KEY_STORAGE_UNSUPPORTED",
+                    );
+                const configurations = apiKeyStorage(context_.options.plugins);
+
+                if (configurations === undefined) {
+                    throw unsupported();
+                }
+
+                const existing = await context_.adapter.findOne<{ configId?: string | null }>({
+                    model: "apikey",
+                    where: [{ field: "id", value: apiKeyId }],
+                });
+
+                if (existing === null) {
+                    // A key held only in secondary storage has no row to find.
+                    if (configurations.some((config) => config.storage !== "database")) {
+                        throw unsupported();
+                    }
+
+                    throw new LunoraAuthAdminError("api key not found", "API_KEY_NOT_FOUND");
+                }
+
+                // Mirrors the plugin's own resolution, which tests `!configId`: no `configId`, `""` and `"default"` are the same configuration.
+                const isDefault = (configId: string | null | undefined): boolean =>
+                    configId === undefined || configId === null || configId === "" || configId === "default";
+                const configuration = configurations.find((config) =>
+                    isDefault(existing.configId) ? isDefault(config.configId) : config.configId === existing.configId,
+                );
+
+                if (configuration?.storage !== "database") {
+                    throw unsupported();
+                }
+
+                // A count, not `delete`: a concurrent revoke can remove the row between the read above and here, and
+                // only the one that removed it may report success.
+                const removed = await context_.adapter.deleteMany({ model: "apikey", where: [{ field: "id", value: apiKeyId }] });
+
+                if (removed === 0) {
+                    throw new LunoraAuthAdminError("api key not found", "API_KEY_NOT_FOUND");
+                }
             }),
 
         deletePasskey: ({ passkeyId }) =>

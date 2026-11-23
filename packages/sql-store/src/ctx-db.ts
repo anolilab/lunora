@@ -132,6 +132,7 @@ import createPointReadBatcher from "./point-read-batcher";
 import { afterBaseRowCommitted } from "./post-commit-error";
 import type { QueryTimer } from "./query-timeout";
 import { abandonedWork, DEFAULT_QUERY_TIMEOUT_MS, SqlQueryTimeoutError, withQueryTimeout } from "./query-timeout";
+import projectRelationPolicies from "./relation-reach";
 import type { SqlCtxExec } from "./sql-exec";
 import {
     BACKFILL_BATCH_SIZE,
@@ -340,6 +341,18 @@ interface SqlCtxDbOptions {
      * key cap when omitted.
      */
     maxRelationKeys?: number;
+
+    /**
+     * Called with the table each time a row write through this writer is stored, including a write a
+     * trigger makes through the writer it is handed. The shard routes it to the same changed-table set its
+     * own `.global()` writes broadcast to: a trigger's write to another global table happens inside this
+     * writer, where the shard engine's broadcast never sees it, so without this a live query on that
+     * table kept the pre-trigger row.
+     *
+     * `settledLate` is true for a statement abandoned at its deadline that settled afterwards: it may
+     * have committed after the caller saw it fail, so its table is announced once it settles either way.
+     */
+    onWrite?: (table: string, settledLate?: boolean) => void;
 
     /**
      * Object identifying the database this store provisions, so the one-shot
@@ -2857,6 +2870,56 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         ).catch(() => undefined);
     };
 
+    /** Run `apply` in one transaction and announce its row through `onWrite` once the transaction has committed. */
+    const commitAnnounced = async (
+        tableName: string,
+        apply: (on: SqlCtxExec) => Promise<boolean>,
+        transaction: NonNullable<SqlCtxExec["transaction"]>,
+    ): Promise<boolean> => {
+        const written = await transaction(apply).catch(mapTransactionConflict);
+
+        if (written) {
+            options.onWrite?.(tableName);
+        }
+
+        return written;
+    };
+
+    /**
+     * Follow a row write abandoned at its deadline to wherever it settles: it may still land.
+     *
+     * Without a transaction the companion memo is dropped now and again once it settles, since the write may
+     * land after a rebuild that ran in the meantime and so did not count it; if it never settles, the first
+     * eviction is the only one. Where the row commits on its own (`rowCommitsAlone`), its table is announced
+     * through `onWrite` once it settles, either way: the caller saw it fail, so nothing else would.
+     */
+    const settleAbandonedWrite = (failure: unknown, tableName: string, rowCommitsAlone: boolean): void => {
+        if (!(failure instanceof SqlQueryTimeoutError)) {
+            return;
+        }
+
+        const late = abandonedWork(failure);
+        const evicts = exec.transaction === undefined;
+
+        if (evicts) {
+            evictCompanionBackfills(tableName);
+        }
+
+        const settle = (): undefined => {
+            if (evicts) {
+                evictCompanionBackfills(tableName);
+            }
+
+            if (rowCommitsAlone) {
+                options.onWrite?.(tableName, true);
+            }
+
+            return undefined;
+        };
+
+        late?.then(settle, settle).catch(() => undefined);
+    };
+
     /**
      * One row write and its aggregate, rank and CDC companion statements, as one unit wherever the exec can make
      * them one. An exec with `transaction` (Postgres, MySQL) runs the row write, the companion reads (a min/max
@@ -2890,27 +2953,19 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             try {
                 wrote = await write(on);
             } catch (error) {
-                if (exec.transaction === undefined && error instanceof SqlQueryTimeoutError) {
-                    evictCompanionBackfills(tableName);
-
-                    // The abandoned write may land after a rebuild that ran in the meantime and so did not count it:
-                    // drop the memo again once it settles. If it never settles, the eviction above is the only one.
-                    const evictOnceSettled = (): undefined => {
-                        evictCompanionBackfills(tableName);
-
-                        return undefined;
-                    };
-
-                    abandonedWork(error)
-                        ?.then(evictOnceSettled, evictOnceSettled)
-                        .catch(() => undefined);
-                }
+                settleAbandonedWrite(error, tableName, rowCommitsAlone);
 
                 throw error;
             }
 
             if (!wrote) {
                 return false;
+            }
+
+            // A row that commits on its own is stored now; one inside a transaction is announced once that commits,
+            // below: announced earlier, a read made before the commit could be cached past the invalidation it drives.
+            if (rowCommitsAlone) {
+                options.onWrite?.(tableName);
             }
 
             const progress = { batched: false, dispatched: false };
@@ -2955,7 +3010,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const skippedBefore = skippedDeltas;
 
         try {
-            written = exec.transaction !== undefined && hasCompanions ? await exec.transaction(apply).catch(mapTransactionConflict) : await apply(exec);
+            written = exec.transaction === undefined || !hasCompanions ? await apply(exec) : await commitAnnounced(tableName, apply, exec.transaction);
 
             // A delta skipped inside the transaction assumed the next rebuild would count this row, but it was not yet
             // committed: a rebuild that settled before the commit tallied the table without it and would be trusted.
@@ -3380,9 +3435,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      *
      * - `baseWhere` (this hop's policy filter) is ANDed into `where`.
      * - `relationBaseWhere` (a function, for NESTED `with` levels) is projected
-     *   into a table → filter map. Projecting every schema table is cheaper than
-     *   walking the `with` tree and can't miss a hop; `readBase` is memoized
-     *   upstream, and tables with no restricting policy simply don't appear.
+     *   into a table → filter map over the tables the hop can reach: its `with`,
+     *   `where` and `baseWhere`, and the relations each projected policy filters by
+     *   (see `projectRelationPolicies`). Tables with no restricting policy simply
+     *   don't appear; a reached protected table with none refuses.
      *
      * `relationMask` has the same problem and NO such projection: a mask policy
      * isn't serializable (a custom `MaskFn` is a closure over the request, and
@@ -3401,22 +3457,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             );
         }
 
-        const relationPolicies: Record<string, WhereInput> = {};
-
-        if (childArgs?.relationBaseWhere) {
-            for (const table of Object.keys(schema.tables)) {
-                const policy = childArgs.relationBaseWhere(table);
-
-                if (policy !== undefined) {
-                    relationPolicies[table] = policy;
-                }
-            }
-        }
+        const where = mergeWhere(childArgs?.baseWhere, childArgs?.where);
+        const relationPolicies = childArgs?.relationBaseWhere
+            ? projectRelationPolicies(childTable, childArgs.with, where, schema, childArgs.relationBaseWhere)
+            : {};
 
         return {
             orderBy: childArgs?.orderBy,
             relationPolicies,
-            where: mergeWhere(childArgs?.baseWhere, childArgs?.where),
+            where,
             with: childArgs?.with,
         };
     };

@@ -31,6 +31,17 @@ pub const WS_PATH: &str = "/_lunora/ws";
 /// that subscription's `data`/`delta` payload.
 pub const CODE_INVALID_FRAME: &str = "INVALID_FRAME";
 
+/// How many re-sent `subscribe` frames [`Client::resend_subscriptions`] keeps unanswered at
+/// once. Each one runs its query server-side to build a snapshot, and most land on the one
+/// default-shard Durable Object, so an unpaced burst can knock it over
+/// (`RESUBSCRIBE_CONCURRENCY` in `packages/client/src/client-tuning.ts`, issue #796).
+pub const RESUBSCRIBE_CONCURRENCY: usize = 3;
+
+/// How long an unanswered re-subscribe holds its slot before the next one goes out without
+/// it. A slot no reply ever frees would stop every queued re-subscribe until the next
+/// reconnect, which is worse than the burst the pacing avoids.
+pub const RESUBSCRIBE_ACK_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Which RPC method a call dispatches to. Generated code emits these variants
 /// rather than raw strings, so a typo in a target template is a compile error
 /// instead of a read silently sent over the write path.
@@ -567,6 +578,11 @@ pub struct Client {
     /// The monotonic deadline of the one re-subscribe a retry hint asked for, per query
     /// subscription id. See [`Client::retry_due_subscriptions`].
     pending_retries: HashMap<String, Instant>,
+    /// Query subscription ids [`Client::resend_subscriptions`] has yet to send, in order.
+    resubscribe_queue: VecDeque<String>,
+    /// The re-sent ids not yet heard back about, each with the deadline after which it stops
+    /// holding a slot.
+    resubscribe_slots: HashMap<String, Instant>,
     pub(crate) closed: bool,
     pub(crate) settled_listeners: Vec<SettledHandler>,
     /// The WebSocket session credential, sent as `connect.token` on every open.
@@ -608,6 +624,8 @@ impl Client {
             closed: false,
             flush_not_before: None,
             pending_retries: HashMap::new(),
+            resubscribe_queue: VecDeque::new(),
+            resubscribe_slots: HashMap::new(),
             identity: None,
             next_id: 0,
             next_shape_id: 0,
@@ -649,6 +667,7 @@ impl Client {
         // Until this open has written its frames, nothing routes to the new socket.
         self.send = None;
         self.pending_retries.clear();
+        self.clear_resubscribes();
         // A run is one socket's stream; a failed open never delivered the rest of it.
         self.discard_pending_runs();
 
@@ -678,6 +697,7 @@ impl Client {
     pub fn detach_socket(&mut self, close_code: Option<u16>, reason: Option<&str>) {
         self.send = None;
         self.pending_retries.clear();
+        self.clear_resubscribes();
         self.discard_pending_runs();
 
         let opened = self.socket_generation.take();
@@ -847,6 +867,7 @@ impl Client {
         self.report_discarded(discarded);
         self.subscriptions.clear();
         self.pending_retries.clear();
+        self.clear_resubscribes();
         self.shapes.clear();
         self.pokes.clear();
         self.poke_order.clear();
@@ -1193,35 +1214,29 @@ impl Client {
     /// BOTH registries. A resend that walked only the queries left every shape
     /// view subscribed to a socket that no longer exists — silently, and for the
     /// rest of the process's life.
+    ///
+    /// Query subscriptions go out at most [`RESUBSCRIBE_CONCURRENCY`] at a time, as the
+    /// reference client sends them. Each of the rest goes out once [`Client::handle_frame`]
+    /// sees a frame bearing the id of one already sent, once that one is unsubscribed, or once
+    /// [`Client::retry_due_subscriptions`] finds it unanswered past [`RESUBSCRIBE_ACK_TIMEOUT`]
+    /// — a deadline [`Client::next_subscription_retry_at`] includes. Shape views all go out here.
     pub fn resend_subscriptions(&mut self) -> Result<(), ClientError> {
-        let Some(send) = &self.send else {
+        if self.send.is_none() {
             return Ok(());
-        };
-
-        // Every frame is built BEFORE any is sent, so a shape whose args no
-        // longer encode fails the whole resend rather than leaving the socket
-        // half re-subscribed.
-        let mut frames = Vec::with_capacity(self.subscriptions.len() + self.shapes.len());
-
-        for (id, entry) in &mut self.subscriptions {
-            // The resend replays from the old cursor, which re-applies the dropped
-            // change; if it is still unmergeable the flag is set again.
-            entry.poisoned = false;
-            // The resend resumes from the cursor before the run, so the server replays it.
-            entry.pending_run = None;
-
-            frames.push(build_subscribe_frame(
-                id,
-                &entry.function_path,
-                &entry.args,
-                None,
-                entry.cursor.as_ref(),
-                entry.epoch.as_ref(),
-            )?);
         }
 
+        // Every frame is built BEFORE any is sent, so a subscription or shape whose args no
+        // longer encode fails the whole resend rather than leaving the socket half
+        // re-subscribed. A query's frame is built again when its turn comes, from the cursor
+        // it holds then.
+        for (id, entry) in &self.subscriptions {
+            build_subscribe_frame(id, &entry.function_path, &entry.args, None, entry.cursor.as_ref(), entry.epoch.as_ref())?;
+        }
+
+        let mut shapes = Vec::with_capacity(self.shapes.len());
+
         for (id, shape) in &self.shapes {
-            frames.push(build_shape_subscribe_frame(
+            shapes.push(build_shape_subscribe_frame(
                 id,
                 &shape.name,
                 shape.args.as_ref(),
@@ -1230,11 +1245,60 @@ impl Client {
             )?);
         }
 
-        for frame in &frames {
-            send(frame);
+        self.resubscribe_slots.clear();
+        self.resubscribe_queue = self.subscriptions.keys().cloned().collect();
+        self.drain_resubscribes(Instant::now());
+
+        if let Some(send) = &self.send {
+            for frame in &shapes {
+                send(frame);
+            }
         }
 
         Ok(())
+    }
+
+    /// Sends queued re-subscribes until the window is full, and returns how many went out.
+    fn drain_resubscribes(&mut self, now: Instant) -> usize {
+        let Some(send) = &self.send else {
+            return 0;
+        };
+
+        let mut sent = 0;
+
+        while self.resubscribe_slots.len() < RESUBSCRIBE_CONCURRENCY {
+            let Some(id) = self.resubscribe_queue.pop_front() else {
+                break;
+            };
+
+            // Unsubscribed while it waited its turn: nothing to re-send.
+            let Some(entry) = self.subscriptions.get_mut(&id) else {
+                continue;
+            };
+
+            // Its args encoded when the resend validated them, and they never change.
+            let Ok(frame) = build_subscribe_frame(&id, &entry.function_path, &entry.args, None, entry.cursor.as_ref(), entry.epoch.as_ref()) else {
+                continue;
+            };
+
+            // The resend replays from the old cursor, which re-applies the dropped
+            // change; if it is still unmergeable the flag is set again.
+            entry.poisoned = false;
+            // The resend resumes from the cursor before the run, so the server replays it.
+            entry.pending_run = None;
+
+            send(&frame);
+            self.resubscribe_slots.insert(id, now + RESUBSCRIBE_ACK_TIMEOUT);
+            sent += 1;
+        }
+
+        sent
+    }
+
+    /// Forgets the paced re-subscribe; the next resend queues every subscription again.
+    fn clear_resubscribes(&mut self) {
+        self.resubscribe_queue.clear();
+        self.resubscribe_slots.clear();
     }
 
     /// Re-subscribes every subscription whose retry hint has elapsed, and returns how many
@@ -1244,6 +1308,10 @@ impl Client {
     ///
     /// Each re-subscribe is cold: the hint asks for a fresh snapshot, so the stored resume
     /// cursor and epoch are cleared first.
+    ///
+    /// It also frees each slot of [`Client::resend_subscriptions`]' pacing that is unanswered
+    /// at `now`, and sends (and counts) the queued re-subscribes that then fit. Those keep
+    /// their resume cursor.
     pub fn retry_due_subscriptions(&mut self, now: Instant) -> Result<usize, ClientError> {
         let Some(send) = &self.send else {
             return Ok(0);
@@ -1276,13 +1344,15 @@ impl Client {
             send(frame);
         }
 
-        Ok(frames.len())
+        self.resubscribe_slots.retain(|_, deadline| *deadline > now);
+
+        Ok(frames.len() + self.drain_resubscribes(now))
     }
 
-    /// The earliest pending retry deadline, or `None` when none is pending. The caller
-    /// calls [`Client::retry_due_subscriptions`] at or after it.
+    /// The earliest pending retry or paced re-subscribe deadline, or `None` when none is
+    /// pending. The caller calls [`Client::retry_due_subscriptions`] at or after it.
     pub fn next_subscription_retry_at(&self) -> Option<Instant> {
-        self.pending_retries.values().min().copied()
+        self.pending_retries.values().chain(self.resubscribe_slots.values()).min().copied()
     }
 
     pub fn unsubscribe(&mut self, id: &str) {
@@ -1291,6 +1361,11 @@ impl Client {
 
         if let Some(send) = &self.send {
             send(&build_unsubscribe_frame(id));
+        }
+
+        // Its frame will never be answered now, so the slot it holds goes to the next one.
+        if self.resubscribe_slots.remove(id).is_some() {
+            self.drain_resubscribes(Instant::now());
         }
     }
 
@@ -1344,6 +1419,14 @@ impl Client {
         // applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
         if kind == "ack" {
             self.pending_retries.remove(&id);
+        }
+
+        // ANY frame bearing a re-sent subscription's id proves the server has taken it off its
+        // plate: an `ack`, but equally the `error` that refuses it or a `data` that overtakes
+        // its ack. Releasing here rather than per type keeps an unanticipated frame from
+        // stalling the drain.
+        if self.resubscribe_slots.remove(&id).is_some() {
+            self.drain_resubscribes(Instant::now());
         }
 
         match kind.as_str() {

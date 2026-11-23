@@ -43,6 +43,7 @@ export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions
 export { useAgent } from "./use-agent";
 export type {
     AgentApprovalGrant,
+    AgentApprovalTarget,
     AgentChatMessage,
     AgentLiveEvent,
     AgentProgressEvent,

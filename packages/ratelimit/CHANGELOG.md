@@ -1,3 +1,7 @@
+## @lunora/ratelimit [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.196...@lunora/ratelimit@1.0.0-alpha.197) (2026-11-23)
+
+- fix(ratelimit): charge cached queries and reject limits nothing can pass (#1641)
+
 ## @lunora/ratelimit [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.195...@lunora/ratelimit@1.0.0-alpha.196) (2026-11-03)
 
 ### Build System

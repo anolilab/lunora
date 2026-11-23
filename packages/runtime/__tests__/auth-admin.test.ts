@@ -303,6 +303,29 @@ describe("createWorker — auth admin mutation endpoints", () => {
         expect(response.status).toBe(409);
     });
 
+    it("maps the api-key revoke refusals to 404 and 409", async () => {
+        expect.assertions(2);
+
+        const plane = authAdmin();
+        const deleteApiKey = vi.mocked(plane.deleteApiKey as NonNullable<AuthAdmin["deleteApiKey"]>);
+
+        deleteApiKey.mockImplementationOnce(async () => {
+            throw new LunoraError("API_KEY_NOT_FOUND", "nope");
+        });
+        deleteApiKey.mockImplementationOnce(async () => {
+            throw new LunoraError("API_KEY_STORAGE_UNSUPPORTED", "nope");
+        });
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, shardDO: noopNamespace });
+        const url = "https://app.example/_lunora/admin/auth/api-keys/delete";
+
+        const missing = await worker.fetch(post(url, { apiKeyId: "k1" }), {}, fakeContext);
+        const unsupported = await worker.fetch(post(url, { apiKeyId: "k1" }), {}, fakeContext);
+
+        expect(missing.status).toBe(404);
+        expect(unsupported.status).toBe(409);
+    });
+
     it("reports AUTH_OP_NOT_SUPPORTED when the plane omits the mutation", async () => {
         expect.assertions(2);
 

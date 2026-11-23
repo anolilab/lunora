@@ -17,6 +17,7 @@ import type { ExecutionContextLike, GlobalImportStaging, ShardingInfo, WorkerOpt
 import { createWorker } from "../src/create-worker";
 import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
+import { STORAGE_UPLOAD_MAX_BODY_BYTES } from "../src/storage-admin-routes";
 import { createStores } from "./helpers/section-stores";
 
 const ADMIN_TOKEN = "replace-admin";
@@ -1005,6 +1006,9 @@ const stageLines = async (worker: ReturnType<typeof createWorker>, session: stri
 describe("admin import — staged replace of chunked sections", () => {
     afterEach(closeCluster);
 
+    // Moves 32 MiB through export, sealed staging and a multipart commit, all production code: 1.2 s locally, 4.3 s
+    // under v8 coverage, and CI's coverage leg ran these files about 15 times slower again, past 60 s. Timing out also
+    // leaks this test's work into the next one, which then counts that work's assertions as its own.
     it("restores a chunked KV value and an object over 32 MiB exactly, staging only sealed chunks under its own prefix", async () => {
         expect.assertions(8);
 
@@ -1012,7 +1016,8 @@ describe("admin import — staged replace of chunked sections", () => {
 
         const source = createStores();
         const value = randomBytes(1024 * 1024 + 5);
-        const big = randomBytes(33 * 1024 * 1024 + 3);
+        // Just past the in-memory ceiling, so the commit takes the multipart path with no more bytes than that needs.
+        const big = randomBytes(STORAGE_UPLOAD_MAX_BODY_BYTES + 3);
 
         source.kv.get("CACHE")!.set("big", { value });
         source.buckets.get("default")!.set("big.bin", { bytes: big, contentType: "application/zip" });
@@ -1050,7 +1055,7 @@ describe("admin import — staged replace of chunked sections", () => {
         expect(Buffer.from(bucket.get("big.bin")!.bytes).equals(Buffer.from(big))).toBe(true);
         // The session's chunks are gone; the append session it never owned is still there.
         expect([...bucket.keys()].filter((key) => key.startsWith("_lunora/"))).toStrictEqual([appendKey]);
-    }, 60_000);
+    }, 180_000);
 
     it("keeps the staged chunks until the commit is recorded, so a retry after a lost step record re-assembles", async () => {
         expect.assertions(3);

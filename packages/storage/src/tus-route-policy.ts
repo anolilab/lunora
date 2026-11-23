@@ -1,8 +1,8 @@
 /**
  * The per-protocol checks an upload route makes around `@visulima/storage`'s
  * handler, and the TUS ones: `Upload-Metadata` parsed by upstream's parser,
- * `Upload-Checksum` refused where the provider verifies none, and an `OPTIONS`
- * answer that then offers no checksums.
+ * `Upload-Checksum` refused where the provider verifies none, `Upload-Concat`
+ * refused always, and an `OPTIONS` answer that offers neither.
  */
 import { ERRORS, parseTusMetadata } from "@visulima/storage";
 
@@ -46,21 +46,23 @@ const tusMetadata = (header: string): { error: string } | { metadata: Record<str
 };
 
 /**
- * A TUS `OPTIONS` answer that offers no checksums, for a route that refuses
- * `Upload-Checksum`. Every other extension is kept.
+ * A TUS `OPTIONS` answer that offers none of the `refused` extensions, and no
+ * checksum algorithms when `checksum` is among them. Every other extension is kept.
  */
-const withoutChecksumAlgorithms = (response: Response): Response => {
+const withoutExtensions = (response: Response, refused: ReadonlySet<string>): Response => {
     const headers = new Headers(response.headers);
     const extensions = headers.get("Tus-Extension");
 
-    headers.delete("Tus-Checksum-Algorithm");
+    if (refused.has("checksum")) {
+        headers.delete("Tus-Checksum-Algorithm");
+    }
 
     if (extensions !== null) {
         headers.set(
             "Tus-Extension",
             extensions
                 .split(",")
-                .filter((extension) => extension.trim() !== "checksum")
+                .filter((extension) => !refused.has(extension.trim()))
                 .join(","),
         );
     }
@@ -78,8 +80,15 @@ const NO_METADATA: RouteCheck = { declared: { contentType: undefined, metadata: 
  * request carrying bytes with `Upload-Checksum` is refused too: upstream would
  * buffer the chunk to verify it, about twice its size at peak, which a few
  * concurrent requests could use to exhaust an isolate.
+ *
+ * `Upload-Concat` is refused on every route: `final;<url> …` names the uploads
+ * it assembles in a header, not in the request URL, so an `authorize` that
+ * checks ownership by URL would let one caller build a file from another
+ * caller's partial upload. `@visulima/storage-client` never sends it.
  */
 const tusRoutePolicy = (verifiesChecksums: boolean): RoutePolicy => {
+    const refused = new Set(verifiesChecksums ? ["concatenation"] : ["checksum", "concatenation"]);
+
     return {
         check: (request) => {
             if (request.method !== "POST" && request.method !== "PATCH") {
@@ -102,9 +111,19 @@ const tusRoutePolicy = (verifiesChecksums: boolean): RoutePolicy => {
                 };
             }
 
+            if (request.headers.has("Upload-Concat")) {
+                return {
+                    refusal: tusErrorResponse(400, {
+                        code: "BadRequestError",
+                        message: "Upload-Concat is not supported on this upload route: it does not assemble uploads from other uploads",
+                        name: "BadRequestError",
+                    }),
+                };
+            }
+
             return { declared: { contentType: undefined, metadata: parsed.metadata } };
         },
-        finish: (request, response) => (request.method === "OPTIONS" && !verifiesChecksums ? withoutChecksumAlgorithms(response) : response),
+        finish: (request, response) => (request.method === "OPTIONS" ? withoutExtensions(response, refused) : response),
     };
 };
 

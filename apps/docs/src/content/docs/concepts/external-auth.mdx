@@ -134,7 +134,7 @@ import { jwtIdentityResolver } from "@lunora/jwt-auth";
 
 const resolveIdentity = jwtIdentityResolver({
     issuer: "https://auth.example.com/", // JWKS discovered from /.well-known/openid-configuration
-    audience: "https://api.example.com", // set it whenever your issuer stamps one
+    audience: "https://api.example.com", // required; `false` only when the issuer stamps no `aud`
     algorithms: ["RS256"],
     claims: (payload) => ({ roles: payload["https://example.com/roles"] }),
 });
@@ -143,8 +143,10 @@ const resolveIdentity = jwtIdentityResolver({
 Pass `jwksUrl` to skip discovery. Discovery needs an https issuer, and the
 discovery document must name that issuer exactly. With several issuers, only
 the first is discovered; pass `jwksUrl` when they do not share a key set.
-Without `audience`, a token the same issuer minted for any other application
-verifies too, so set it whenever the provider issues one.
+`audience` is required: without it, a token the same issuer minted for any
+other application verifies too, so the resolver refuses to start without one.
+For a provider that issues no `aud`, pass `audience: false` and check the claim
+that binds the token to your app in `claims`.
 
 `keySet` takes a public key or a key-set getter, never an HMAC secret: the
 default algorithms are asymmetric only.

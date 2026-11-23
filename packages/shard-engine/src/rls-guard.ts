@@ -18,6 +18,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { isRelationPredicate } from "../../../shared/relation-operators";
+import { normalizeCountArgument } from "./aggregate-sql";
 import { findRelated } from "./relation-graph";
 import type { DatabaseWriterLike, RelatedOptions, RelatedStart, RelationEdge } from "./schema-types";
 
@@ -33,6 +35,25 @@ import type { DatabaseWriterLike, RelatedOptions, RelatedStart, RelationEdge } f
  * {@link guardWriter}).
  */
 const RLS_UNWRAP_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-unwrap");
+
+/**
+ * Well-known symbol the guard hangs its relation gate off of, keyed and hidden for
+ * the reasons {@link RLS_UNWRAP_SYMBOL} gives. A policied parent read routes
+ * around the guard to the unwrapped writer, so the relation children that read
+ * loads never reach a gated method; the `rls()` middleware calls `gate` from
+ * its relation read filter for every child table it has no read policy for, and
+ * registers that filter through `trust` so the guard lets it stand in for its own.
+ */
+const RLS_RELATION_GATE_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-relation-gate");
+
+/**
+ * Reads whose args can load relation children (`with`, `_count`) or filter by
+ * them, all through the args' `relationBaseWhere`. `explain` is one: it compiles
+ * the same predicate as `findMany`, and its `params` carry what a relation
+ * predicate resolved to. `count` is gated separately because its argument may
+ * be a bare `where` rather than an options bag.
+ */
+const RELATION_READ_METHODS: ReadonlySet<string> = new Set(["aggregate", "explain", "findFirst", "findFirstOrThrow", "findMany", "groupBy"]);
 
 /**
  * Thrown when a raw (non-RLS) handler touches a protected table under a
@@ -58,7 +79,14 @@ class RlsRequiredError extends LunoraError {
 /** Minimal schema projection the guard reads: the RLS mode + per-table opt-out and shard mode. */
 interface GuardableSchema {
     readonly rlsMode?: "required";
-    readonly tables: Record<string, { readonly isPublic?: boolean; readonly shardMode?: { readonly kind?: string } }>;
+    readonly tables: Record<
+        string,
+        {
+            readonly isPublic?: boolean;
+            readonly relationMap?: Record<string, { readonly table: string; readonly through?: { readonly table: string } }>;
+            readonly shardMode?: { readonly kind?: string };
+        }
+    >;
 }
 
 /**
@@ -329,6 +357,34 @@ const installReboundMethods = (guarded: Record<string, unknown>, base: Guardable
     }
 };
 
+/** The tables one relation node reads: its target, its join table, and whatever its inner filters reach. */
+const relationNodeTargets = (schema: GuardableSchema, relation: { table: string; through?: { table: string } }, node: Record<string, unknown>): string[] => [
+    ...(relation.through === undefined ? [] : [relation.through.table]),
+    relation.table,
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with relationTargetsOf
+    ...Object.values(node).flatMap((inner) => relationTargetsOf(schema, relation.table, inner)),
+];
+
+/**
+ * Every table a `where` on `tableName` reads through a relation predicate, by the engine's own test
+ * for a relation node (every key an operator), through `AND`/`OR`/`NOT` and nested predicates.
+ */
+const relationTargetsOf = (schema: GuardableSchema, tableName: string, where: unknown): string[] => {
+    if (where === null || typeof where !== "object") {
+        return [];
+    }
+
+    return Object.entries(where).flatMap(([key, value]) => {
+        if (key === "AND" || key === "OR" || key === "NOT") {
+            return (Array.isArray(value) ? value : [value]).flatMap((branch) => relationTargetsOf(schema, tableName, branch));
+        }
+
+        const relation = schema.tables[tableName]?.relationMap?.[key];
+
+        return relation !== undefined && isRelationPredicate(value) ? relationNodeTargets(schema, relation, value) : [];
+    });
+};
+
 /**
  * Wrap `raw` in the secure-by-default guard. A no-op (returns `raw` untouched)
  * unless the schema is `.rls("required")` — so non-secure schemas pay nothing
@@ -364,6 +420,15 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
     const guardTable = (tableName: string): void => {
         if (isProtected(tableName)) {
             throw new RlsRequiredError(tableName);
+        }
+    };
+    // `deleteWhere`/`patchWhere` resolve their `where` through the raw writer, which carries no
+    // relation gate (only the `rls()` middleware's reads do, and it never calls these). A relation
+    // predicate there reads the child to decide which rows to write, and the count it returns
+    // tells the caller what matched, so every relation table it names is gated like a direct read.
+    const guardRelationTargets = (tableName: string, where: unknown): void => {
+        for (const target of relationTargetsOf(schema, tableName, where)) {
+            guardTable(target);
         }
     };
 
@@ -406,6 +471,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
                   // Where-based: gate the table, then delegate. Per-row policy
                   // checks happen in the RLS middleware layer above this guard.
                   guardTable(tableName);
+                  guardRelationTargets(tableName, where);
 
                   return await base.deleteWhere?.(tableName, where, options);
               }
@@ -444,6 +510,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
                   // Where-based: gate the table, then delegate. Per-row policy
                   // checks happen in the RLS middleware layer above this guard.
                   guardTable(tableName);
+                  guardRelationTargets(tableName, args.where);
 
                   return await base.patchWhere?.(tableName, args, options);
               }
@@ -471,14 +538,80 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
     // by the delegated writer.
     const methods = base as unknown as Record<string, ((...args: unknown[]) => unknown) | undefined>;
 
+    // The engine resolves a read's relation children against the unwrapped
+    // writer, so gating the parent table alone would let a `.public()` parent
+    // carry a protected child out. Only the `rls()` middleware's filter, which
+    // gates through {@link RLS_RELATION_GATE_SYMBOL} itself, replaces that gate:
+    // any other value in the args (a handler's own callback, a forwarded `null`)
+    // could answer "no filter" for a protected child.
+    const trustedFilters = new WeakSet<object>();
+
+    const relationGate =
+        (callerFilter: unknown) =>
+        (tableName: string): unknown => {
+            guardTable(tableName);
+
+            return typeof callerFilter === "function" ? (callerFilter as (table: string) => unknown)(tableName) : undefined;
+        };
+
+    const withRelationGate = (rest: unknown[]): unknown[] => {
+        const [args, ...more] = rest;
+
+        // Only a `with` or a filter can name a relation; anything else passes through untouched.
+        if (args === null || typeof args !== "object" || !("with" in args || "where" in args || "baseWhere" in args)) {
+            return rest;
+        }
+
+        const { relationBaseWhere } = args as { relationBaseWhere?: unknown };
+
+        if (typeof relationBaseWhere === "function" && trustedFilters.has(relationBaseWhere)) {
+            return rest;
+        }
+
+        return [{ ...args, relationBaseWhere: relationGate(relationBaseWhere) }, ...more];
+    };
+
+    // Normalized the way the writer will read it, so a bare `where` becomes the
+    // options bag that can carry the gate.
+    const withCountRelationGate = (rest: unknown[]): unknown[] => {
+        const [whereOrArgs, ...more] = rest;
+
+        if (whereOrArgs === undefined) {
+            return rest;
+        }
+
+        const countArgs = normalizeCountArgument(whereOrArgs as Parameters<typeof normalizeCountArgument>[0]);
+
+        const { relationBaseWhere } = countArgs as { relationBaseWhere?: unknown };
+
+        if (
+            (typeof relationBaseWhere === "function" && trustedFilters.has(relationBaseWhere)) ||
+            (countArgs.where === undefined && countArgs.baseWhere === undefined)
+        ) {
+            return rest;
+        }
+
+        return [{ ...countArgs, relationBaseWhere: relationGate(relationBaseWhere) }, ...more];
+    };
+
+    const gateRelationsFor = (name: string): ((rest: unknown[]) => unknown[]) | undefined => {
+        if (name === "count") {
+            return withCountRelationGate;
+        }
+
+        return RELATION_READ_METHODS.has(name) ? withRelationGate : undefined;
+    };
+
     for (const name of LOOP_GATED_METHODS) {
         const method = methods[name];
 
         if (typeof method === "function") {
+            const gateRelations = gateRelationsFor(name);
+
             guarded[name] = (tableName: string, ...rest: unknown[]) => {
                 guardTable(tableName);
 
-                return method.call(base, tableName, ...rest);
+                return method.call(base, tableName, ...(gateRelations ? gateRelations(rest) : rest));
             };
         }
     }
@@ -511,6 +644,17 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
     // enumerable. Direct property reads (the middleware's own lookup, the test
     // harness's `rawDatabase`) are unaffected.
     Object.defineProperty(guarded, RLS_UNWRAP_SYMBOL, { configurable: true, enumerable: false, value: raw, writable: false });
+    Object.defineProperty(guarded, RLS_RELATION_GATE_SYMBOL, {
+        configurable: true,
+        enumerable: false,
+        value: {
+            gate: guardTable,
+            trust: (filter: object): void => {
+                trustedFilters.add(filter);
+            },
+        },
+        writable: false,
+    });
 
     return guarded as unknown as W;
 };

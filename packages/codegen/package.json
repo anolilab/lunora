@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.429",
+    "version": "1.0.0-alpha.433",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -64,7 +64,7 @@
     },
     "dependencies": {
         "@lunora/advisor": "^1.0.0-alpha.295",
-        "@lunora/agent": "^1.0.0-alpha.284",
+        "@lunora/agent": "^1.0.0-alpha.286",
         "@lunora/container": "1.0.0-alpha.108",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/platform": "^1.0.0-alpha.83",
@@ -81,10 +81,10 @@
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/bindings": "^1.0.0-alpha.153",
         "@lunora/client": "^1.0.0-alpha.299",
-        "@lunora/do": "^1.0.0-alpha.289",
+        "@lunora/do": "^1.0.0-alpha.292",
         "@lunora/payment": "^1.0.0-alpha.274",
-        "@lunora/server": "^1.0.0-alpha.275",
-        "@lunora/shard-engine": "^1.0.0-alpha.202",
+        "@lunora/server": "^1.0.0-alpha.277",
+        "@lunora/shard-engine": "^1.0.0-alpha.204",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
@@ -95,7 +95,7 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@lunora/auth": ">=1.0.0-alpha.267 <2.0.0-0",
+        "@lunora/auth": ">=1.0.0-alpha.269 <2.0.0-0",
         "@lunora/d1": ">=1.0.0-alpha.236 <2.0.0-0",
         "@lunora/server": ">=1.0.0-alpha.91 <2.0.0-0",
         "@lunora/shard-engine": ">=1.0.0-alpha.45 <2.0.0-0"

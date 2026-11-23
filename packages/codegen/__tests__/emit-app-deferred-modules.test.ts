@@ -45,6 +45,7 @@ const STUBS: Record<string, string> = {
         export const createAuth = () => ({});
         export const createAuthAdmin = () => ({});
         export const createAuthAuditReader = () => ({});
+        export const effectiveCookieCache = () => ({});
         export const d1Executor = () => ({});
         export const handleAuthDiscoveryRequest = async () => undefined;
         export const handleAuthRequest = async () => undefined;

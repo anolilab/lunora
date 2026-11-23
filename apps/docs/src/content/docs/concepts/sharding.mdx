@@ -156,6 +156,25 @@ authoritative. It applies to the top-level rows of a `.global()` read; a
 users: defineTable({ email: v.string(), name: v.string() }).global().index("by_email", ["email"], { unique: true });
 ```
 
+### Live queries on other shards
+
+A write to a `.global()` table re-runs the live queries that read it on the shard
+that made the write, straight away. Live queries held by other shards learn of the
+write from the global changelog, which each shard polls every 2 seconds while it
+holds a live query that reads a `.global()` table. Expect the update on another
+shard within one poll interval plus the time it takes to re-run the query. Every
+30 seconds the poll re-runs those queries even if the changelog names no change,
+which also picks up a write made outside this deployment. The shard that made the
+write sees the change again on its own next poll, so its live queries run once
+more. A result that has not changed is not pushed again.
+
+The changelog exists only with change data capture on, so call `.cdc()` on the
+app. Without it, nothing tells another shard about the write. A live query there
+updates when its own shard next writes that table, or when the client
+resubscribes. The first time a shard serves such a live query it logs one
+warning that names the `.global()` tables it reads and points at `.cdc()`; the
+warning appears in the shard's logs in Studio.
+
 ### Migrating a populated table to D1
 
 Adding `.global()` to a table that already has rows moves it to D1, and — like

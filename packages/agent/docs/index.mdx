@@ -255,7 +255,7 @@ chargeCard: defineAgentTool({
 ```
 
 When the gate resolves truthy the run **pauses**: the thread moves to
-`"awaiting_input"` and the workflow **hibernates** on `approval:<toolCallId>`, so
+`"awaiting_input"` and the workflow **hibernates** on `approval:<approvalSlot>`, so
 no compute is billed while it waits. A client resolves it via the
 auto-registered `agents:agentResolveApproval` (the framework `approve`/`reject`
 helpers dispatch it). On approve the tool runs exactly as normal; on reject it
@@ -289,7 +289,11 @@ Monday.
 
 **The approvals inbox.** `agents:agentPendingApprovals` lists the caller's own
 paused approvals (newest thread first, default 50), each carrying the
-`threadKey`, `instanceId` and `toolCallId` that `agentResolveApproval` takes.
+`threadKey`, `instanceId`, `toolCallId` and `approvalSlot` that `agentResolveApproval`
+takes. The slot is the key the run waits on: a provider can reuse a tool-call id in a
+later turn, so a decision names the slot of the approval it answers, and one naming
+another call's slot is refused with `CONFLICT`. A late decision on an earlier call
+therefore cannot approve a later call's arguments.
 It is owner-scoped: an anonymous caller gets `[]`, and ownerless threads are
 never listed. The React `useAgentApprovals` hook subscribes to it. The inbox is not
 exposed over the Model Context Protocol (MCP): MCP clients authenticate with a static deployment token, so a run
@@ -467,7 +471,9 @@ references your app exposes.
 - **`useAgentChat`** is the batteries-included chat surface:
   `{ send, approve, approveForThread, reject, supplySecret, declineSecret, approvalGrants, revokeGrant, cancel, messages, status, streamingText }`.
   `send` appends an optimistic user turn then starts/continues the run;
-  `approve`/`reject` resolve a pending tool approval; `messages` is the live thread.
+  `approve`/`reject` take the pending approval itself (its `awaiting_approval` message,
+  its `awaiting-approval` tool event or its inbox item) and send its `toolCallId` and
+  `approvalSlot`; `messages` is the live thread.
   `approveForThread` is `approve` plus a thread grant for that tool. `approvalGrants`
   is the live list of the thread's grants, and `revokeGrant(toolName)` removes one,
   so a grant is never visible without a way out. `supplySecret(toolCallId, value)`
@@ -480,7 +486,8 @@ references your app exposes.
 // React
 const chat = useAgentChat({ api, cancel: api.chat.cancelRun, send: api.chat.startRun, threadKey });
 chat.send("Refund my last order");
-if (chat.status === "awaiting_input") chat.approve(toolCallId);
+const pending = chat.messages.find((message) => message.status === "awaiting_approval");
+if (pending) await chat.approve(pending);
 // A secret request: supply the value (online-only) or refuse it.
 await chat.supplySecret(toolCallId, apiKeyFromTheForm);
 await chat.declineSecret(toolCallId);
@@ -663,9 +670,11 @@ export const operator = defineAgent({
   tool result is capped at 4000 characters before it is persisted, and base64 of
   even a small PNG is several times that, so inline bytes arrived truncated
   mid-string after the render had already been billed. Each render lands at
-  `<root>/<threadKey>/<toolCallId>.<ext>`, derived only from replay-stable
+  `<root>/<threadKey>/<callKey>.<ext>`, derived only from replay-stable
   identifiers, so a retried step overwrites its own object instead of leaking one
-  per attempt. Without a `bucket` those two ops are refused as a tool result and
+  per attempt. The call key is the tool-call id, turn-scoped when a provider
+  reuses the id in a later turn, so a reused id never overwrites an earlier
+  render. Without a `bucket` those two ops are refused as a tool result and
   never dispatched, so nothing is billed. The
   model picks the `url` with no allowlist, so this is a **server-side request forgery (SSRF) surface**: a
   prompt-injected model can aim it at an internal/link-local endpoint. It runs
@@ -1534,7 +1543,10 @@ when the workflow replays.
 
 The second argument to a tool's `execute`. It carries `env`, `run` for calling
 Lunora functions, `setState` and `getState` for the thread's synced state,
-`reportProgress`, `threadKey`, `toolCallId`, `owner` and `shardKey`.
+`reportProgress`, `threadKey`, `toolCallId`, `owner` and `shardKey`. `callKey` is the key
+the call's durable steps use: the tool-call id on its first use in a run, turn-scoped when a provider
+reuses the id later. Key anything you derive per call (a sub-run, a stored object) on `callKey`;
+`agent.asTool` and `browserTool` do.
 
 #### `defineSkill(config)`
 

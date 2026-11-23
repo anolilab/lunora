@@ -1,3 +1,11 @@
+## @lunora/d1 [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.240...@lunora/d1@1.0.0-alpha.241) (2026-11-23)
+
+- security(server)!: close two row-level-security gaps on shapes and relations (#1637)
+
+## @lunora/d1 [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.239...@lunora/d1@1.0.0-alpha.240) (2026-11-23)
+
+- fix(d1): stop an expired replace import wiping its tables (#1663)
+
 ## @lunora/d1 [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.238...@lunora/d1@1.0.0-alpha.239) (2026-11-22)
 
 - Republish with the `@lunora/sql-store` floor the source already declares (`^1.0.0-alpha.239`). The 1.0.0-alpha.238 tarball shipped the pre-release `^1.0.0-alpha.237`, which admits sql-store 237 and 238; neither exports `prepareGlobalImportRow`, so loading `@lunora/d1` failed with an ESM link error (#1666).

@@ -521,7 +521,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;
         }
 
-        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity, readBookmark?: string): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -534,7 +534,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
             // subscription caller — never read from the shared per-request field
             // here — so a concurrent RPC can't leak its identity into this re-run.
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange, readBookmark });
             const result = await registered.handler(ctx, args);
 
             // Ranges come from THIS run's reads, never a shared field on the DO:
@@ -994,7 +994,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
         }
 
-        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; replayKey?: boolean | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; readBookmark?: string | undefined; replayKey?: boolean | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -1387,7 +1387,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                         reference.__lunoraRef,
                         fnArgs,
                         runOptions?.untracked === true
-                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", scope: options.scope, sensitive: options.sensitive })
+                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", readBookmark: options.readBookmark, scope: options.scope, sensitive: options.sensitive })
                             : queryContext(),
                         kind,
                     );

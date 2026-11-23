@@ -852,6 +852,153 @@ describe("d1 admin export/import globals", () => {
             await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "edited since" });
         });
 
+        describe("a sweep by another session's call landing mid-commit", () => {
+            const TTL = 24 * 60 * 60 * 1000;
+
+            /** The writer, with another session's stage call (and so its sweep, at `sweepAt`) run after the commit's first write. */
+            const sweepingWriter = (sweepAt: number): DatabaseWriterLike => {
+                let swept = false;
+                const sweepOnce = async (): Promise<void> => {
+                    if (!swept) {
+                        swept = true;
+                        await stageGlobalRows(harness.exec, schema, { generation: "g1", rows: [], session: "other", tables: ["settings"] }, sweepAt);
+                    }
+                };
+
+                return {
+                    ...writer,
+                    insert: async (...args: Parameters<DatabaseWriterLike["insert"]>) => {
+                        const id = await writer.insert(...args);
+
+                        await sweepOnce();
+
+                        return id;
+                    },
+                    replace: async (...args: Parameters<DatabaseWriterLike["replace"]>) => {
+                        await writer.replace(...args);
+                        await sweepOnce();
+                    },
+                };
+            };
+
+            const markers = async (session: string): Promise<unknown[]> => {
+                const rows = await harness.exec.all(`SELECT state FROM "__lunora_import_session__" WHERE session = ?`, [session]);
+
+                return rows.map((row) => row["state"]);
+            };
+
+            it("cannot take the staged rows once the commit started, as the commit extends their lease first", async () => {
+                expect.assertions(2);
+
+                await stageGlobalRows(
+                    harness.exec,
+                    schema,
+                    { generation: "g1", rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }], session: "s12", tables: ["settings"] },
+                    0,
+                );
+
+                // Past the lease staging set, inside the one the commit (at 2) extends it to.
+                const result = await commitStagedGlobalRows(
+                    sweepingWriter(TTL + 1),
+                    harness.exec,
+                    schema,
+                    { generation: "g1", session: "s12", staged: true, tables: ["settings"] },
+                    2,
+                );
+
+                expect(result).toStrictEqual({ conflicts: 0, deleted: { settings: 1 }, errors: [], inserted: { settings: 1 } });
+                await expect(values()).resolves.toStrictEqual({ kept: "v" });
+            });
+
+            it("still empties a scoped table the session staged no row for, while it holds rows of another", async () => {
+                expect.assertions(3);
+
+                const twoTables: SchemaLike = {
+                    tables: { ...schema.tables, prefs: { indexes: [], shape: { value: col("string") }, shardMode: { kind: "global" } as never } },
+                };
+                const twoTableWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: twoTables });
+
+                harness.ddl(`CREATE TABLE "prefs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "value" TEXT)`);
+                await twoTableWriter.insert("prefs", { _id: "p1", value: "old" }, { allowExplicitId: true });
+                await stageGlobalRows(harness.exec, twoTables, {
+                    generation: "g1",
+                    rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }],
+                    session: "s14",
+                    tables: ["settings", "prefs"],
+                });
+
+                const result = await commitStagedGlobalRows(twoTableWriter, harness.exec, twoTables, {
+                    generation: "g1",
+                    session: "s14",
+                    staged: true,
+                    tables: ["settings", "prefs"],
+                });
+
+                expect(result).toStrictEqual({ conflicts: 0, deleted: { prefs: 1, settings: 1 }, errors: [], inserted: { settings: 1 } });
+                await expect(values()).resolves.toStrictEqual({ kept: "v" });
+                await expect(harness.exec.all(`SELECT "id" FROM "prefs"`, [])).resolves.toStrictEqual([]);
+            });
+
+            it("refuses to prune against a swept stage, rather than emptying the table", async () => {
+                expect.assertions(3);
+
+                await stageGlobalRows(
+                    harness.exec,
+                    schema,
+                    { generation: "g1", rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }], session: "s13", tables: ["settings"] },
+                    0,
+                );
+
+                // Past even the extended lease, so the sweep takes the rows and only the prune's re-check stands.
+                await expect(
+                    commitStagedGlobalRows(
+                        sweepingWriter(3 * TTL),
+                        harness.exec,
+                        schema,
+                        { generation: "g1", session: "s13", staged: true, tables: ["settings"] },
+                        1,
+                    ),
+                ).rejects.toMatchObject({ code: "IMPORT_SESSION_EXPIRED" });
+                await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "v" });
+                await expect(markers("s13")).resolves.not.toContain("committed");
+            });
+
+            it("prunes nothing when the sweep lands between the stage re-check and the prune's read", async () => {
+                expect.assertions(2);
+
+                await stageGlobalRows(
+                    harness.exec,
+                    schema,
+                    { generation: "g1", rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }], session: "s15", tables: ["settings"] },
+                    0,
+                );
+
+                let checks = 0;
+                const exec: typeof harness.exec = {
+                    ...harness.exec,
+                    all: async (sql, params) => {
+                        const rows = await harness.exec.all(sql, params);
+
+                        // The second stage probe is the per-table re-check; the other session sweeps right after it.
+                        if (sql.startsWith('SELECT 1 FROM "__lunora_import_stage__"')) {
+                            checks += 1;
+
+                            if (checks === 2) {
+                                await stageGlobalRows(harness.exec, schema, { generation: "g1", rows: [], session: "other", tables: ["settings"] }, 3 * TTL);
+                            }
+                        }
+
+                        return rows;
+                    },
+                };
+
+                await expect(
+                    commitStagedGlobalRows(writer, exec, schema, { generation: "g1", session: "s15", staged: true, tables: ["settings"] }, 1),
+                ).rejects.toMatchObject({ code: "IMPORT_SESSION_EXPIRED" });
+                await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "v" });
+            });
+        });
+
         it("sweeps an expired session's rows and marker in one batch, so a failed sweep drops neither", async () => {
             expect.assertions(2);
 

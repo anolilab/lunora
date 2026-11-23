@@ -180,6 +180,7 @@ interface SqlCtxDbOptions {
     exec: SqlCtxExec;
     idGenerator?: () => string;
     maxRelationKeys?: number;
+    onWrite?: (table: string, settledLate?: boolean) => void;
     provisionScope?: object;
     queryTimeoutMs?: number;
     queryTimer?: QueryTimer;

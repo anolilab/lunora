@@ -109,6 +109,17 @@ import type { IndexFieldsByTable } from "../schema";
 import { tagMaskMiddleware } from "./policy-tag";
 import type { MaskColumns, MaskContext, MaskOptions, MaskPolicies } from "./types";
 
+/**
+ * The `.rls("required")` guard's relation gate, keyed as `@lunora/shard-engine`
+ * keys it. Forwarded onto the mask wrapper so an `rls()` step below this one
+ * still refuses an unpoliced protected relation child: the spread that copies
+ * `base` drops non-enumerable keys, and without the gate that step reads such a
+ * child as unrestricted. The guard's unwrap key is deliberately NOT forwarded —
+ * an `rls()` step that recovered the raw writer would route its policy tables
+ * around this mask.
+ */
+const RLS_RELATION_GATE_SYMBOL = Symbol.for("lunora.ctxdb.rls-relation-gate");
+
 interface QueryPage {
     continueCursor: null | string;
     isDone: boolean;
@@ -1139,6 +1150,13 @@ const wrapDatabase = <Context>(
                 defineLazyFacade(wrapped, tableName);
             }
         }
+    }
+
+    const relationGate = (base as unknown as Record<PropertyKey, unknown>)[RLS_RELATION_GATE_SYMBOL];
+
+    if (relationGate !== undefined) {
+        // Non-enumerable for the reason the guard gives: the next wrapper republishes this one by spread.
+        Object.defineProperty(wrapped, RLS_RELATION_GATE_SYMBOL, { configurable: true, enumerable: false, value: relationGate, writable: false });
     }
 
     return wrapped;

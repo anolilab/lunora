@@ -26,13 +26,11 @@ describe("sessionPresets", () => {
         expect(sessionPresets.rolling.expiresIn).toBeLessThan(sessionPresets.longLived.expiresIn ?? 0);
     });
 
-    it("enables a 60s cookie cache on `rolling` and `longLived`", () => {
-        expect.assertions(4);
+    it("leaves the cookie cache on `rolling` and `longLived` to createAuth's default, which knows the plugins", () => {
+        expect.assertions(2);
 
-        expect(sessionPresets.rolling.cookieCache?.enabled).toBe(true);
-        expect(sessionPresets.rolling.cookieCache?.maxAge).toBe(60);
-        expect(sessionPresets.longLived.cookieCache?.enabled).toBe(true);
-        expect(sessionPresets.longLived.cookieCache?.maxAge).toBe(60);
+        expect(sessionPresets.rolling.cookieCache).toBeUndefined();
+        expect(sessionPresets.longLived.cookieCache).toBeUndefined();
     });
 
     it("disables the cookie cache on `strict` (fast revocation)", () => {

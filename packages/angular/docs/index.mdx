@@ -275,7 +275,7 @@ Each event discriminates on `type`:
 | ------------------- | ------------------------------------------------------ | ----------- |
 | `call`              | `toolCallId`, `toolName`, `input`, `seq`               | durable     |
 | `result`            | `toolCallId?`, `toolName?`, `output`, `status?`, `seq` | durable     |
-| `awaiting-approval` | `toolCallId?`, `toolName?`, `seq`                      | durable     |
+| `awaiting-approval` | `approvalSlot?`, `toolCallId?`, `toolName?`, `seq`     | durable     |
 | `awaiting-secret`   | `toolCallId?`, `toolName?`, `seq`                      | durable     |
 | `progress`          | `toolCallId`, `data`                                   | live stream |
 
