@@ -1,5 +1,5 @@
 import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
-import { encodeWire } from "@lunora/wire";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";
@@ -140,7 +140,7 @@ describe("createCrossShardRelationCapabilities", () => {
             userId: "user_42",
         });
 
-        const total = await capabilities.crossShardCounter("local", { globalId: "g1" });
+        const total = await capabilities.crossShardCounter("local", { where: { globalId: "g1" } });
 
         expect(total).toBe(5);
     });
@@ -161,6 +161,40 @@ describe("createCrossShardRelationCapabilities", () => {
 
         expect(reads).toHaveLength(2);
         expect(reads[0]?.args).toMatchObject({ table: "local", where: { globalId: { in: ["g1"] } } });
+    });
+
+    it("forwards a count's `relationPolicies` to each shard", async () => {
+        expect.assertions(1);
+
+        const cluster = createShardCluster({}, { s1: 0, s2: 0 });
+        const worker = buildWorker(cluster);
+        const capabilities = createCrossShardRelationCapabilities({
+            fetch: ((request: Request) => worker.fetch(request, {}, fakeContext)) as typeof globalThis.fetch,
+            origin: "https://worker.test",
+        });
+
+        await capabilities.crossShardCounter("local", { relationPolicies: { users: { name: "visible" } }, where: { globalId: "g1" } });
+
+        const count = cluster.seen.find((entry) => entry.functionPath === "__lunora_relation__:count");
+
+        expect(count?.args).toMatchObject({ relationPolicies: { users: { name: "visible" } }, table: "local", where: { globalId: "g1" } });
+    });
+
+    it("wire-encodes a bigint policy value instead of failing to serialize the request", async () => {
+        expect.assertions(1);
+
+        const cluster = createShardCluster({}, { s1: 1, s2: 0 });
+        const worker = buildWorker(cluster);
+        const capabilities = createCrossShardRelationCapabilities({
+            fetch: ((request: Request) => worker.fetch(request, {}, fakeContext)) as typeof globalThis.fetch,
+            origin: "https://worker.test",
+        });
+
+        await capabilities.crossShardCounter("local", { relationPolicies: { users: { tenantKey: 42n } }, where: { globalId: 7n } });
+
+        const count = cluster.seen.find((entry) => entry.functionPath === "__lunora_relation__:count");
+
+        expect(decodeWire(count?.args)).toMatchObject({ relationPolicies: { users: { tenantKey: 42n } }, table: "local", where: { globalId: 7n } });
     });
 
     it("rejects the reserved relation RPC dispatched to a single shard (fan-out-only)", async () => {

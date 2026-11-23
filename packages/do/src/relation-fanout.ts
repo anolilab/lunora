@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { CrossShardReadArgs, DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
+import type { CrossShardReadArgs, DatabaseWriterLike, SchemaLike, WhereInput } from "@lunora/shard-engine";
 import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
 
 /**
@@ -49,18 +49,21 @@ export const serveRelationFanout = async (
 
     const { orderBy, relationPolicies = {}, where, with: withInput } = args;
 
-    if (functionPath === `${RELATION_FUNCTION_PREFIX}count`) {
-        return database.count(table, where);
-    }
-
     // SECURITY: `database` is the RAW ctx-db — it applies no read policy of its
     // own. The caller's policy for THIS hop is already folded into `where`; the
-    // policies for the nested `with` hops arrive as the `relationPolicies` map and
-    // are rebuilt here into the `relationBaseWhere` the relation loader threads
-    // down each level. Skipping this returns children the caller cannot read.
+    // policies for the tables it reaches (nested `with` hops, and relations a
+    // policy filters by) arrive as the `relationPolicies` map and are rebuilt here
+    // into the `relationBaseWhere` the engine threads down. Skipping this returns
+    // or counts rows the caller cannot read.
+    const relationBaseWhere = (relationTable: string): WhereInput | undefined => relationPolicies[relationTable];
+
+    if (functionPath === `${RELATION_FUNCTION_PREFIX}count`) {
+        return database.count(table, { relationBaseWhere, where });
+    }
+
     const result = await database.findMany(table, {
         orderBy,
-        relationBaseWhere: (relationTable: string) => relationPolicies[relationTable],
+        relationBaseWhere,
         where,
         with: withInput,
     });

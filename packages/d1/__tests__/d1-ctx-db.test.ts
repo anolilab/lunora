@@ -725,6 +725,25 @@ describe("d1 ctx-db", () => {
             expect((page[2]!["_count"] as Record<string, number>)["reactions"]).toBe(0);
         });
 
+        it("_count resolves a relation predicate in the child policy under that relation's own policy", async () => {
+            expect.assertions(1);
+
+            const writer = setupRelations();
+
+            await seedRelations(writer);
+
+            // The messages policy filters by author; the users policy hides every user. Counting
+            // Ada's messages would confirm a user named "Ada" exists, which the caller cannot read.
+            const policies: Record<string, Record<string, unknown>> = { messages: { author: { is: { name: "Ada" } } }, users: { name: "nobody" } };
+            const { page } = await writer.findMany("users", {
+                relationBaseWhere: (table) => policies[table],
+                where: { _id: "u1" },
+                with: { _count: { messages: true } },
+            });
+
+            expect((page[0]!["_count"] as Record<string, number>)["messages"]).toBe(0);
+        });
+
         it("onDelete cascade removes holder rows and chains", async () => {
             expect.assertions(2);
 

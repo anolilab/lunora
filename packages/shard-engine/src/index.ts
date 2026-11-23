@@ -409,6 +409,7 @@ export type {
     AggregateResult,
     BroadcastDelta,
     ColumnMetaLike,
+    CrossShardCountArgs,
     CrossShardReadArgs,
     DatabaseWriterLike,
     FanOutBudget,

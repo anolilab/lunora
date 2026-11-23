@@ -259,6 +259,48 @@ const containsRelationPredicate = (where: WhereInput, schema: ResolveContext["sc
     });
 };
 
+/** The tables a relation predicate reads: its target, and a many-to-many's join table. */
+const relationTargets = (relation: RelationDefinitionLike): string[] =>
+    relation.through === undefined ? [relation.table] : [relation.table, relation.through.table];
+
+/**
+ * Every table resolving `where` against `tableName` reads: each relation target
+ * (and a many-to-many's join table), descending into the operator's nested where
+ * and into the read policy `relationBaseWhere` applies to each table reached,
+ * since that policy may cross relations of its own. A backend that resolves the
+ * predicate on its own (the D1 writer) reports none of these reads, so its
+ * caller records them as dependencies from this list.
+ */
+const relationPredicateTables = (
+    where: WhereInput | undefined,
+    schema: ResolveContext["schema"],
+    tableName: string,
+    relationBaseWhere: ((table: string) => undefined | WhereInput) | undefined,
+    reached: Set<string> = new Set(),
+): Set<string> => {
+    const relationMap = schema.tables[tableName]?.relationMap ?? {};
+
+    for (const [key, value] of Object.entries(where ?? {})) {
+        const relation = relationMap[key];
+        const branches = key === "NOT" ? [(value ?? {}) as WhereInput] : branchesOf(value);
+
+        if (key === "AND" || key === "OR" || key === "NOT") {
+            branches.forEach((branch) => relationPredicateTables(branch, schema, tableName, relationBaseWhere, reached));
+        } else if (relation && isRelationPredicate(value)) {
+            // A table already reached has had its policy walked; skipping it also ends a policy cycle.
+            relationTargets(relation)
+                .filter((table) => !reached.has(table))
+                .forEach((table) => {
+                    reached.add(table);
+                    relationPredicateTables(relationBaseWhere?.(table), schema, table, relationBaseWhere, reached);
+                });
+            Object.values(value).forEach((nested) => relationPredicateTables(nested, schema, relation.table, relationBaseWhere, reached));
+        }
+    }
+
+    return reached;
+};
+
 /**
  * Reject a relation-crossing predicate on a path that compiles `where` directly
  * (aggregate / count / groupBy / rank) instead of resolving it. Such a node
@@ -945,6 +987,7 @@ export {
     DEFAULT_MAX_RELATION_KEYS,
     findManyPage,
     isRelationPredicate,
+    relationPredicateTables,
     resolveRelationPredicates,
 };
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions };

@@ -288,7 +288,19 @@ export const FAN_OUT_BUDGET = Symbol.for("lunora.relations.fanOutBudget");
 export interface ResolveWithOptions {
     fanOutBudget?: FanOutBudget;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
-    groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
+
+    /**
+     * `relationBaseWhere` is the read filter for the tables a relation predicate in `policyWhere` reaches:
+     * a child policy can filter by a relation, and counting through it without that table's policy
+     * would let the count probe rows the caller cannot read.
+     */
+    groupedCounter: (
+        tableName: string,
+        whereField: string,
+        values: unknown[],
+        policyWhere?: WhereInput,
+        relationBaseWhere?: (table: string) => undefined | WhereInput,
+    ) => Promise<Map<unknown, number>>;
     parents: Record<string, unknown>[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
     relationMask?: RelationMask;
@@ -386,6 +398,17 @@ export interface CrossShardReadArgs {
     /** The child filter with the caller's `baseWhere` (the read policy) ALREADY folded in. */
     where?: WhereInput;
     with?: WithInput;
+}
+
+/**
+ * Args for a **cross-shard relation count**, the `_count` twin of {@link CrossShardReadArgs}.
+ * A count has no nested `with`, but the counted child's policy (folded into `where`) can filter by
+ * a relation, and the serving shard resolves that predicate: `relationPolicies` carries the read
+ * policy of each table it reaches, or the count probes rows the caller cannot read.
+ */
+export interface CrossShardCountArgs {
+    relationPolicies?: Record<string, WhereInput>;
+    where?: WhereInput;
 }
 
 /**

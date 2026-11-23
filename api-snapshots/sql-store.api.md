@@ -174,7 +174,7 @@ interface SqlCtxDbOptions {
     cdc?: boolean;
     cdcRetentionMs?: number;
     clock?: () => number;
-    crossShardCounter?: DatabaseWriterLike["count"];
+    crossShardCounter?: (table: string, args: CrossShardCountArgs) => Promise<number>;
     crossShardReader?: (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
     dialect: SqlDialect;
     exec: SqlCtxExec;
