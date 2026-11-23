@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.434](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.433...@lunora/codegen@1.0.0-alpha.434) (2026-11-23)
+
+- security(auth): record admin operations in the audit trail (#1660)
+
 ## @lunora/codegen [1.0.0-alpha.433](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.432...@lunora/codegen@1.0.0-alpha.433) (2026-11-23)
 
 - security(agent)!: stop a reused tool-call id skipping approval (#1657)

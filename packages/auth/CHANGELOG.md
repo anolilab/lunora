@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.270...@lunora/auth@1.0.0-alpha.271) (2026-11-23)
+
+- security(auth): record admin operations in the audit trail (#1660)
+
 ## @lunora/auth [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.269...@lunora/auth@1.0.0-alpha.270) (2026-11-23)
 
 - security(runtime)!: require the root token to export or import auth tables (#1658)
