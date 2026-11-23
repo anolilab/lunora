@@ -671,10 +671,12 @@ abstract class ShardDO {
         cdcRetentionMs?: number;
     };
     protected readGlobalChangedTables(_sinceSeq: number, _cursorOnly?: boolean): Promise<{
+        bookmark?: string;
         cursor: number;
         floor?: number;
         tables: string[];
     } | undefined>;
+    protected polledGlobalTables(): ReadonlySet<string>;
 }
 ```
 
