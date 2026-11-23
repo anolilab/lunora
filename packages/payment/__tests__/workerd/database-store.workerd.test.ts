@@ -236,21 +236,22 @@ describe("database payment store on workerd", () => {
         });
     });
 
-    it("lets only one of two interleaved claims of the same event win", async () => {
+    it("lets only one of two interleaved claims of the same event win, and tells the loser it is claimed", async () => {
         expect.assertions(3);
 
-        await withStore(async (store) => {
-            const results = await Promise.allSettled([
+        await withStore(async (store, db) => {
+            // Both read "unclaimed" before either inserts; the unique index refuses the second insert, which the store
+            // reports as the id already being claimed rather than as the index error.
+            const results = await Promise.all([
                 store.markEventProcessed("stripe", "evt_race", "payment.captured"),
                 store.markEventProcessed("stripe", "evt_race", "payment.captured"),
             ]);
-            const won = results.filter((result) => result.status === "fulfilled" && result.value);
-            const lost = results.find((result) => result.status === "rejected");
 
-            // Both read "unclaimed" before either inserts; the unique index refuses the second.
-            expect(won).toHaveLength(1);
-            expect(lost?.reason).toEqual(expect.objectContaining({ message: expect.stringMatching(UNIQUE_VIOLATION) }));
+            expect(results.toSorted()).toStrictEqual([false, true]);
             await expect(store.markEventProcessed("stripe", "evt_race", "payment.captured")).resolves.toBe(false);
+            await expect(
+                db.findMany("payment_events", { where: { provider: "stripe", providerEventId: "evt_race" } }).then((result) => result.page),
+            ).resolves.toHaveLength(1);
         });
     });
 
