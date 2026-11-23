@@ -5,7 +5,7 @@ import { money } from "../src/money";
 import type { PaymentEvent } from "../src/observability";
 import { reconcile } from "../src/reconcile";
 import { MemoryPaymentStore } from "../src/store";
-import { applyWebhookAction } from "../src/sync";
+import applyWebhookAction from "../src/sync";
 import type { Subscription, WebhookAction } from "../src/types";
 
 describe("observability hook", () => {

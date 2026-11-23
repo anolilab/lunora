@@ -31,8 +31,8 @@ import { SUBSCRIPTION_TERMINAL_STATES } from "./state-machine";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
 import type { SubscriptionWrite } from "./subscription-policy";
-import { ENTITLING_STATES, hasOtherLiveSubscription, restoreSubscription, storeSubscription } from "./subscription-policy";
-import { applyWebhookAction } from "./sync";
+import { ENTITLING_STATES, hasOtherLiveSubscription, restoreSubscription, storeSubscription, swapPrimaryPrice } from "./subscription-policy";
+import applyWebhookAction from "./sync";
 import type {
     AttachInput,
     CancelSubscriptionOptions,
@@ -75,14 +75,6 @@ import { readWebhookBody } from "./webhook-body";
 let lastUsageStamp = 0;
 
 /**
- * The price set after an operation that changes only the primary price, from the stored set it started from. The old
- * primary leaves the set and the new one joins it; every other price the stored set held stays.
- */
-const swapPrimaryPrice = (stored: Subscription, answer: Subscription): ReadonlyArray<string> => [
-    ...new Set([answer.priceId, ...(stored.priceIds ?? []).filter((id) => id !== stored.priceId)]),
-];
-
-/**
  * How far before a plan change or resume the floor for later webhooks sits. Provider event times come from the provider's
  * clock (Stripe's in whole seconds), so a floor at the call itself would drop a genuine event created just after it, such
  * as the move to past due when the proration charge fails. A redelivered event from before the change is minutes old, so
@@ -107,7 +99,8 @@ const answerRow = (
     answer: { calledAt: number; moved: boolean; readFailed: boolean; setsQuantity: boolean; settled: Subscription; verb: "resumed" | "updated" },
 ): Subscription => {
     const { calledAt, moved, readFailed, settled } = answer;
-    const priceIds = !moved && settled.priceIds === undefined && existing.priceIds !== undefined ? swapPrimaryPrice(existing, settled) : settled.priceIds;
+    const priceIds =
+        !moved && settled.priceIds === undefined && existing.priceIds !== undefined ? swapPrimaryPrice(existing, settled.priceId) : settled.priceIds;
     const quantity = readFailed && !answer.setsQuantity ? existing.quantity : settled.quantity;
     const cancelAtPeriodEnd = answer.verb === "resumed" ? false : settled.cancelAtPeriodEnd;
     const overlaid = overlayProviderSubscription(target, { ...settled, cancelAtPeriodEnd, priceIds, quantity });
@@ -357,12 +350,11 @@ export interface LunoraPayment {
      * refunds is pending, by asking the provider what became of it — the way out when the refund webhook
      * never arrives. Authorized like `refundPayment` (unknown and not-owner both raise NOT_FOUND).
      *
-     * While the provider still reports a refund pending, the hold stays. Otherwise the refunds the provider
-     * reports succeeded are booked through the `payment.refunded` webhook's own path, but only up to the
-     * provider's succeeded total: money the ledger already holds (reconcile writes the provider's total
-     * without per-refund markers) is not added again. Every such refund's marker is claimed, so a late
-     * webhook adds nothing, and the hold is released with a `refund.hold_released` observer event; a refund
-     * that failed, or none at all, releases it with nothing booked. A session holding nothing is returned as
+     * While the provider still reports a refund pending, the hold stays. Otherwise the ledger is raised to the
+     * provider's succeeded refund total, never past the captured amount: money the ledger already holds
+     * (reconcile writes the provider's total without per-refund markers) is not added again. Every succeeded
+     * refund's marker is claimed first, so a late webhook adds nothing, and the hold is released with a
+     * `refund.hold_released` observer event; a refund that failed, or none at all, releases it with nothing booked. A session holding nothing is returned as
      * it stands, without asking the provider; so is a session on any other provider, and one whose
      * `refundPayment` call is still waiting on the provider. Returns the stored row.
      */
@@ -785,24 +777,27 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return { booked: 0, unrecorded: true };
     };
 
-    // Claims refundPayment's pending-refund marker, or refuses while another call holds it. The over-refund check read the
-    // row before the claim: a refund booked, and its marker released, in between is on the ledger now, and an unkeyed
-    // refund must not be issued on top of it, so the row is checked again once claimed and the claim given back on refusal.
-    const claimPendingRefund = async (existing: PaymentSession, issued: Money, pendingClaim: string, requested: Money | undefined): Promise<void> => {
+    // Claims refundPayment's pending-refund marker, or refuses while another call holds it, and returns the row as it
+    // stands once claimed. The over-refund check read the row before the claim: a refund booked, and its marker released,
+    // in between is on the ledger now, and an unkeyed refund must not be issued on top of it, so an explicit amount is
+    // checked again once claimed and the claim given back on refusal. A full refund is resized by the caller instead.
+    const claimPendingRefund = async (existing: PaymentSession, pendingClaim: string, requested: Money | undefined): Promise<PaymentSession> => {
         if (!(await store.markEventProcessed(adapter.identifier, pendingRefundKey(existing.id), pendingClaim))) {
             throw new LunoraPaymentError("INVALID_TRANSITION", "a refund on this session is still pending; retry once it settles");
         }
 
         const current = (await store.getPaymentSession(adapter.identifier, existing.id)) ?? existing;
 
-        if (compareMoney(addMoney(current.refundedAmount, issued), current.capturedAmount) > 0) {
+        if (requested !== undefined && compareMoney(addMoney(current.refundedAmount, requested), current.capturedAmount) > 0) {
             await store.releaseEvent(adapter.identifier, pendingRefundKey(existing.id), pendingClaim);
 
             throw new LunoraPaymentError(
                 "VALIDATION_ERROR",
-                `refundPayment(): refunding ${String(requested?.minorUnits)} would exceed the captured amount on session "${existing.id}"`,
+                `refundPayment(): refunding ${String(requested.minorUnits)} would exceed the captured amount on session "${existing.id}"`,
             );
         }
+
+        return current;
     };
 
     // Marks a refundPayment call's pending-refund marker as held, which is what lets settlePendingRefund release it.
@@ -1109,16 +1104,17 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         },
 
         refundPayment: async (input) => {
-            const existing = await ownedSession(input.sessionId);
+            const read = await ownedSession(input.sessionId);
 
             // Resolve the resulting refunded total BEFORE moving money: a mismatched currency or an
             // over-refund must fail with nothing issued, not leave a refund the ledger can't record.
             // A full refund issues whatever is left unrefunded, which is also the amount the provider
             // will report on the confirming webhook.
-            const issued = input.amount ?? subtractMoney(existing.capturedAmount, existing.refundedAmount);
-            const refunded = addMoney(existing.refundedAmount, issued);
+            const remainderOf = (session: PaymentSession): Money => input.amount ?? subtractMoney(session.capturedAmount, session.refundedAmount);
+            const firstIssued = remainderOf(read);
+            const refunded = addMoney(read.refundedAmount, firstIssued);
 
-            if (compareMoney(refunded, existing.capturedAmount) > 0) {
+            if (compareMoney(refunded, read.capturedAmount) > 0) {
                 throw new LunoraPaymentError(
                     "VALIDATION_ERROR",
                     `refundPayment(): refunding ${String(input.amount?.minorUnits)} would exceed the captured amount on session "${input.sessionId}"`,
@@ -1129,7 +1125,25 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // row as it stands instead of asking the provider to move zero (Polar would read the order
             // total and refund it a second time; the guard above cannot catch that, because `issued` is
             // zero and the total does not move).
+            if (isZeroMoney(firstIssued)) {
+                return read;
+            }
+
+            // Polar and Dodo refunds carry no key, and a pending refund is not on the ledger, so nothing
+            // else stops a retry from issuing it again. Claimed before the provider call: the confirming
+            // webhook can land while the call is in flight, and would find no marker to release.
+            const pendingGuarded = refundNeedsPendingGuard(adapter.identifier);
+            const pendingMarker = pendingRefundKey(input.sessionId);
+            // The claim names this call: a webhook can release the marker while the call is in flight and a
+            // newer call re-claim it, and only the newer call may then release it.
+            const pendingClaim = `${PENDING_REFUND_CLAIM_TYPE}:${crypto.randomUUID()}`;
+            // A full refund is the remainder of the row as claimed: a refund booked since the first read shrinks it.
+            const existing = pendingGuarded ? await claimPendingRefund(read, pendingClaim, input.amount) : read;
+            const issued = remainderOf(existing);
+
             if (isZeroMoney(issued)) {
+                await store.releaseEvent(adapter.identifier, pendingMarker, pendingClaim);
+
                 return existing;
             }
 
@@ -1140,19 +1154,6 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // Keyed on the amount sent and the reason, so partial refunds don't collide. Two intentional
             // same-amount refunds need distinct caller keys (see `LunoraPayment.refundPayment`).
             const key = await outboundKey("refund_payment", [input.sessionId], input.idempotencyKey, () => [amountPart(providerAmount), input.reason ?? ""]);
-
-            // Polar and Dodo refunds carry no key, and a pending refund is not on the ledger, so nothing
-            // else stops a retry from issuing it again. Claimed before the provider call: the confirming
-            // webhook can land while the call is in flight, and would find no marker to release.
-            const pendingGuarded = refundNeedsPendingGuard(adapter.identifier);
-            const pendingMarker = pendingRefundKey(input.sessionId);
-            // The claim names this call: a webhook can release the marker while the call is in flight and a
-            // newer call re-claim it, and only the newer call may then release it.
-            const pendingClaim = `${PENDING_REFUND_CLAIM_TYPE}:${crypto.randomUUID()}`;
-
-            if (pendingGuarded) {
-                await claimPendingRefund(existing, issued, pendingClaim, input.amount);
-            }
 
             try {
                 const issuedRefund = await adapter.refundPayment({ ...input, amount: providerAmount, idempotencyKey: key }).catch(async (error: unknown) => {

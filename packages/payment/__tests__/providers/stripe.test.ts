@@ -6,7 +6,7 @@ import { money } from "../../src/money";
 import type { StripeClientLike } from "../../src/providers/stripe";
 import { createStripeAdapter } from "../../src/providers/stripe";
 import { MemoryPaymentStore } from "../../src/store";
-import { applyWebhookAction } from "../../src/sync";
+import applyWebhookAction from "../../src/sync";
 
 interface RecordedCall {
     args: unknown[];

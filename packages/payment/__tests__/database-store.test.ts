@@ -12,7 +12,7 @@ import { createCreemAdapter } from "../src/providers/creem";
 import paymentExtension from "../src/schema";
 import type { PaymentStore } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
-import { applyWebhookAction } from "../src/sync";
+import applyWebhookAction from "../src/sync";
 import type { Customer, PaymentSession, Subscription } from "../src/types";
 import { USAGE_NEVER_DUE } from "../src/usage-due";
 

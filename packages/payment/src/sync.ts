@@ -15,7 +15,7 @@ import type { PaymentAction, SubscriptionAction } from "./state-machine";
 import { nextPaymentState, nextSubscriptionState } from "./state-machine";
 import type { PaymentStore } from "./store";
 import { ownerOf } from "./store";
-import { ENTITLING_STATES, storeSubscription } from "./subscription-policy";
+import { ENTITLING_STATES, storeSubscription, swapPrimaryPrice } from "./subscription-policy";
 import type { ApplyResult, Money, PaymentSession, PaymentState, Subscription, SubscriptionState, WebhookAction, WebhookActionType } from "./types";
 
 const PAYMENT_ACTION_BY_TYPE: Partial<Record<WebhookActionType, PaymentAction>> = {
@@ -426,6 +426,21 @@ const resolveSubscriptionAction = (from: SubscriptionState, targetState: Subscri
     return SUBSCRIPTION_ACTION_BY_TYPE[type];
 };
 
+/**
+ * The price set after an event. A reported set REPLACES the stored one (a plan change can remove an item); `undefined`
+ * means "unknown" (Stripe embeds only the first page of a longer item list), so the stored set stands — but with the
+ * event's new primary price swapped in, or a plan change would keep granting the plan it left.
+ */
+const eventPriceIds = (existing: Subscription, action: WebhookAction): ReadonlyArray<string> | undefined => {
+    if (action.priceIds !== undefined) {
+        return action.priceIds;
+    }
+
+    return action.priceId !== undefined && action.priceId !== existing.priceId && existing.priceIds !== undefined
+        ? swapPrimaryPrice(existing, action.priceId)
+        : existing.priceIds;
+};
+
 /** Overlay an event's fields on the stored row; an absent field leaves the stored value standing. */
 const mergeSubscriptionEvent = (existing: Subscription, action: WebhookAction, now: number): Subscription => {
     return {
@@ -435,9 +450,7 @@ const mergeSubscriptionEvent = (existing: Subscription, action: WebhookAction, n
         currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
         lastEventAt: action.occurredAt ?? existing.lastEventAt,
         priceId: action.priceId ?? existing.priceId,
-        // A reported set REPLACES the stored one (a plan change can remove an item); `undefined`
-        // means "unknown", not "empty", so the stored set stands.
-        priceIds: action.priceIds ?? existing.priceIds,
+        priceIds: eventPriceIds(existing, action),
         // A current event's price is authoritative: stamped with its time, which every stale event is older than,
         // so none may replace it. Stamped rather than cleared, because a store that patches leaves an absent field as it was.
         priceEventAt: action.priceId === undefined ? existing.priceEventAt : (action.occurredAt ?? now),
@@ -498,7 +511,7 @@ const fillBlankSubscription = (existing: Subscription, action: WebhookAction): S
         currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
         priceEventAt: action.occurredAt,
         priceId: action.priceId ?? existing.priceId,
-        priceIds: refill ? (action.priceIds ?? existing.priceIds) : (existing.priceIds ?? action.priceIds),
+        priceIds: refill ? eventPriceIds(existing, action) : (existing.priceIds ?? action.priceIds),
         quantity: action.quantity ?? existing.quantity,
         referenceId,
     };
@@ -625,12 +638,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction, sin
     return transitionSubscription(store, action, existing, targetState, singleSubscriptionPerReference, now);
 };
 
-/**
- * Route a claimed event to the row it changes. A throw here releases the claim, so the provider retries.
- *
- * `settlePendingRefund` calls this directly for a refund it read from the provider: no event id was
- * delivered, so there is none to claim, and the refund still has to go through the same per-refund marker.
- */
+/** Route a claimed event to the row it changes. A throw here releases the claim, so the provider retries. */
 const applyClaimedAction = async (
     store: PaymentStore,
     action: WebhookAction,
@@ -743,4 +751,4 @@ const applyWebhookAction = async (
     return result;
 };
 
-export { applyClaimedAction, applyWebhookAction };
+export default applyWebhookAction;

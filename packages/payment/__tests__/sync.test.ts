@@ -5,7 +5,7 @@ import { LunoraPaymentError } from "../src/errors";
 import { money } from "../src/money";
 import type { PaymentObserver } from "../src/observability";
 import { MemoryPaymentStore } from "../src/store";
-import { applyWebhookAction } from "../src/sync";
+import applyWebhookAction from "../src/sync";
 import type { PaymentSession, ProviderId, WebhookAction } from "../src/types";
 
 const captureEvent = (eventId: string): WebhookAction => {
@@ -390,6 +390,53 @@ describe("applyWebhookAction", () => {
         }
 
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 10_000, priceId: "price_new", state: "active" });
+    });
+
+    it("swaps the plan out of a stored price set when a newer stale event changes plan without its set", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+
+        await applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 10_000, type: "subscription.active" });
+        await applyWebhookAction(store, {
+            ...event,
+            eventId: "e2",
+            occurredAt: 9000,
+            priceId: "price_old",
+            priceIds: ["price_old", "price_addon"],
+            type: "subscription.updated",
+        });
+        // Stripe reports no set when the embedded item list has `has_more: true`; the primary still travels.
+        await applyWebhookAction(store, { ...event, eventId: "e3", occurredAt: 9500, priceId: "price_new", type: "subscription.updated" });
+
+        const stored = await store.getSubscription("stripe", "sub_1");
+
+        expect(stored?.priceIds).toStrictEqual(["price_new", "price_addon"]);
+        expect(hasActivePrice(stored ? [stored] : [], "price_old")).toBe(false);
+        expect(hasActivePrice(stored ? [stored] : [], "price_addon")).toBe(true);
+    });
+
+    it("swaps the plan out of a stored price set when a current event changes plan without its set", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+
+        await applyWebhookAction(store, {
+            ...event,
+            eventId: "e1",
+            occurredAt: 10_000,
+            priceId: "price_old",
+            priceIds: ["price_old", "price_addon"],
+            type: "subscription.active",
+        });
+        await applyWebhookAction(store, { ...event, eventId: "e2", occurredAt: 11_000, priceId: "price_new", type: "subscription.updated" });
+
+        const stored = await store.getSubscription("stripe", "sub_1");
+
+        expect(stored?.priceIds).toStrictEqual(["price_new", "price_addon"]);
+        expect(hasActivePrice(stored ? [stored] : [], "price_old")).toBe(false);
     });
 
     it("keeps a price a current event set over a stale event's, however recent the stale one", async () => {

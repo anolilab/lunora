@@ -202,5 +202,13 @@ const restoreSubscription = async (
     return true;
 };
 
-export { ENTITLING_STATES, hasOtherLiveSubscription, restoreSubscription, storeSubscription };
+/**
+ * The price set after a change to only the primary price, from the stored set it started from. The old primary leaves the
+ * set and the new one joins it; every other price the stored set held stays.
+ */
+const swapPrimaryPrice = (stored: Subscription, priceId: string): ReadonlyArray<string> => [
+    ...new Set([priceId, ...(stored.priceIds ?? []).filter((id) => id !== stored.priceId)]),
+];
+
+export { ENTITLING_STATES, hasOtherLiveSubscription, restoreSubscription, storeSubscription, swapPrimaryPrice };
 export type { SubscriptionWrite };

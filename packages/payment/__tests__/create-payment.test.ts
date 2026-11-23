@@ -11,7 +11,7 @@ import type { StripeClientLike } from "../src/providers/stripe";
 import { createStripeAdapter } from "../src/providers/stripe";
 import type { PaymentStore, RevisionGuard } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
-import { applyWebhookAction } from "../src/sync";
+import applyWebhookAction from "../src/sync";
 import type { CheckoutRequest, PaymentSession, ProviderRefund, Subscription, WebhookAction } from "../src/types";
 import { MAX_WEBHOOK_BODY_BYTES } from "../src/webhook-body";
 
@@ -1867,6 +1867,36 @@ describe("createPayment", () => {
 
             await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
             expect(refundPayment).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ["refunds the new remainder when a partial refund is booked before it claims", 300, 700],
+            ["refunds nothing, and holds nothing, when the whole amount is booked before it claims", 1000, 0],
+        ] as const)("a full refund %s", async (_case, bookedMeanwhile, expectedIssued) => {
+            expect.assertions(3);
+
+            const { payment, refundPayment, store } = await settleSetup("polar");
+            const mark = store.markEventProcessed.bind(store);
+
+            // Another call's refund is booked, and its marker released, between this call's first read and its claim.
+            vi.spyOn(store, "markEventProcessed").mockImplementation(async (provider, eventId, type) => {
+                if (eventId === pendingRefundKey("ord_1")) {
+                    const row = await store.getPaymentSession("polar", "ord_1");
+
+                    await store.upsertPaymentSession({
+                        ...row!,
+                        refundedAmount: money(bookedMeanwhile, "USD"),
+                        state: bookedMeanwhile === 1000 ? "refunded" : "partially_refunded",
+                    });
+                }
+
+                return mark(provider, eventId, type);
+            });
+
+            await expect(payment.refundPayment({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(bookedMeanwhile, "USD") });
+            expect(refundPayment.mock.calls.map(([input]) => input.amount)).toStrictEqual(expectedIssued === 0 ? [] : [money(expectedIssued, "USD")]);
+            // Held only while the provider reports the issued refund pending.
+            await expect(store.getEventClaim("polar", pendingRefundKey("ord_1")).then((claim) => claim !== undefined)).resolves.toBe(expectedIssued !== 0);
         });
 
         it("changes nothing on a session that holds no pending refund", async () => {
