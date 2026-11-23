@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.432](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.431...@lunora/codegen@1.0.0-alpha.432) (2026-11-23)
+
+- fix(do): close the gaps reviewers found in the global refresh (#1674)
+
 ## @lunora/codegen [1.0.0-alpha.431](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.430...@lunora/codegen@1.0.0-alpha.431) (2026-11-23)
 
 - fix(auth)!: stop banned users and failed key revokes passing silently (#1634)
