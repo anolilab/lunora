@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -3252,6 +3253,35 @@ export const backfillNames = defineMigration({
                 expect(result.code).toBe(0);
                 expect(existsSync(join(workdir, ".dev.vars.production"))).toBe(true);
                 expect(readFileSync(join(workdir, ".gitignore"), "utf8")).toContain(".dev.vars.*");
+            });
+
+            it("does not record a minted secret in a file git already tracks", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+                writeFileSync(join(workdir, ".dev.vars.production"), "OK=1\n", "utf8");
+                // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+                execFileSync("git", ["init", "-q"], { cwd: workdir });
+                // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+                execFileSync("git", ["add", ".dev.vars.production"], { cwd: workdir });
+
+                const { spawner } = createRecordingSpawner();
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                // `.gitignore` does not cover a tracked file, so the secret stays out of it.
+                expect(result.code).toBe(0);
+                expect(readFileSync(join(workdir, ".dev.vars.production"), "utf8")).toBe("OK=1\n");
+                expect(warns.join("\n")).toContain("git rm --cached .dev.vars.production");
             });
 
             it("keeps the .dev.vars.example negation LAST when it appends a wider ignore above it", async () => {

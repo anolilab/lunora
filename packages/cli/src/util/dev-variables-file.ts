@@ -3,6 +3,8 @@
  * the secrets it mints for a named environment here and `env` reads and writes
  * the same file, so the two must resolve it identically.
  */
+import { spawnSync } from "node:child_process";
+
 import { DEV_VARS_FILE, ensureGitignoreEntries } from "@lunora/config";
 
 import type { Logger } from "./logger";
@@ -65,4 +67,13 @@ const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
     }
 };
 
-export { devVariablesFileFor, ensureDevVariablesIgnored };
+/**
+ * Whether git already tracks `file`: an ignore pattern does not apply to a tracked file, so a
+ * secret written there shows up as a change the next `git commit -a` records. Outside a repository,
+ * or without git, nothing is tracked.
+ */
+const isDevVariablesFileTracked = (cwd: string, file: string): boolean =>
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH (install location varies); args are fixed and no shell is involved
+    spawnSync("git", ["ls-files", "--error-unmatch", "--", file], { cwd, stdio: "ignore" }).status === 0;
+
+export { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked };

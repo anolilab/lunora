@@ -1,4 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain secret-like strings */
+import { execFileSync } from "node:child_process";
 import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -698,6 +699,27 @@ describe("lunora env", () => {
             expect(readFileSync(join(workdir, ".dev.vars.staging"), "utf8")).toContain("FOO=");
             expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
             expect(readFileSync(join(workdir, ".gitignore"), "utf8")).toContain(".dev.vars.*");
+        });
+
+        it.each([
+            ["set", { key: "FOO", subcommand: "set", value: "bar" }],
+            ["generate --set", { key: "AUTH_SECRET", set: true, subcommand: "generate" }],
+        ] as const)("%s --env staging refuses a .dev.vars.staging that git already tracks", async (_name, command) => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars.staging"), "OK=1\n", "utf8");
+            // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+            execFileSync("git", ["init", "-q"], { cwd: workdir });
+            // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+            execFileSync("git", ["add", ".dev.vars.staging"], { cwd: workdir });
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", logger, ...command });
+
+            // An ignore pattern does not apply to a tracked file, so the secret would be committable.
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(readFileSync(join(workdir, ".dev.vars.staging"), "utf8")).toBe("OK=1\n");
+            expect(recorded.errors.join("\n")).toContain("git rm --cached .dev.vars.staging");
         });
 
         it("generate --set --prod writes .dev.vars.production, the file push --prod reads", async () => {

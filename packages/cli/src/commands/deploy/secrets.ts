@@ -23,7 +23,7 @@ import { join } from "@visulima/path";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
-import { devVariablesFileFor, ensureDevVariablesIgnored } from "../../util/dev-variables-file";
+import { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked } from "../../util/dev-variables-file";
 import type { Logger } from "../../util/logger";
 import { defaultSpawner } from "../../util/spawn";
 import { createTuiConfirm } from "../../util/tui-prompts";
@@ -283,6 +283,15 @@ const persistMintedSecrets = (
     if (targetFile === undefined) {
         options.logger.warn(
             `${keys}: minted and pushed for --env ${String(options.env)}, but "${String(options.env)}" isn't a safe filename fragment — the value could not be recorded. Capture it manually if you need it again.`,
+        );
+
+        return undefined;
+    }
+
+    // Same outcome as an unsafe name: a secret in a tracked file is one `git commit -a` from the repository.
+    if (isDevVariablesFileTracked(cwd, targetFile)) {
+        options.logger.warn(
+            `${keys}: minted and pushed, but ${targetFile} is tracked by git, so the value was not recorded there. Capture it manually if you need it again, and run \`git rm --cached ${targetFile}\` before the next deploy.`,
         );
 
         return undefined;

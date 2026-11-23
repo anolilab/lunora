@@ -23,7 +23,7 @@ import {
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
-import { devVariablesFileFor, ensureDevVariablesIgnored } from "../../util/dev-variables-file";
+import { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked } from "../../util/dev-variables-file";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
@@ -163,11 +163,27 @@ interface EnvContext {
  */
 const resolveEnvironment = (options: EnvCommandOptions): string | undefined => options.env ?? (options.prod === true ? "production" : undefined);
 
-/** A named environment's file holds deployed secrets; keep it out of git before the first write. */
-const ignoreNamedEnvironmentFile = (context: EnvContext): void => {
-    if (context.devVariablesFile !== DEV_VARS_FILE) {
-        ensureDevVariablesIgnored(context.cwd, context.logger);
+/**
+ * A named environment's file holds deployed secrets; keep it out of git before the first write.
+ * A file git already tracks stays committable whatever `.gitignore` says, so that write is refused.
+ */
+const ignoreNamedEnvironmentFile = (context: EnvContext): EnvCommandResult | undefined => {
+    if (context.devVariablesFile === DEV_VARS_FILE) {
+        return undefined;
     }
+
+    if (isDevVariablesFileTracked(context.cwd, context.devVariablesFile)) {
+        context.logger.error(
+            `env: ${context.devVariablesFile} is tracked by git, so a secret written to it could be committed. ` +
+                `Run \`git rm --cached ${context.devVariablesFile}\` and re-run.`,
+        );
+
+        return { code: EXIT_CODE.USAGE, descriptors: [] };
+    }
+
+    ensureDevVariablesIgnored(context.cwd, context.logger);
+
+    return undefined;
 };
 
 const runEnvList = (context: EnvContext): EnvCommandResult => {
@@ -255,7 +271,11 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
         return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
-    ignoreNamedEnvironmentFile(context);
+    const refused = ignoreNamedEnvironmentFile(context);
+
+    if (refused !== undefined) {
+        return refused;
+    }
 
     const raw = readDevVariablesRaw(devVariablesPath);
 
@@ -646,7 +666,11 @@ const writeGeneratedSecrets = (context: EnvContext, generated: ReadonlyArray<{ k
         logger.warn(`env generate --set: left ${live.join(", ")} untouched (already set) — re-run with --yes to rotate them too`);
     }
 
-    ignoreNamedEnvironmentFile(context);
+    const refused = ignoreNamedEnvironmentFile(context);
+
+    if (refused !== undefined) {
+        return refused;
+    }
 
     let raw = readDevVariablesRaw(devVariablesPath);
 
