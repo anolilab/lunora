@@ -11581,18 +11581,22 @@ abstract class ShardDO {
             const result = await this.runShardBulkRowOp(
                 parsed,
                 async (id) => {
+                    // Probed right before the write, which reaches its own row read without an
+                    // `await` (see `runShardWrite`), so nothing lands between the two: a row that is
+                    // there now is the write's to fail on, and any error after this — a trigger's
+                    // `NOT_FOUND` included, even one that removed this row first — is reported. A
+                    // probe that cannot run is not an absence, so the write goes ahead.
+                    if (this.shardRowExists(parsed.table, id) === false) {
+                        return;
+                    }
+
                     try {
                         await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table }, headroom);
                         applied += 1;
                     } catch (error) {
-                        // Only the target's own absence is the race above. A `NOT_FOUND` while the row is
-                        // still there came from a write the patch set off (an after-update trigger
-                        // patching a missing document), after this row was written: a failure to report.
-                        if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND" || this.shardRowExists(parsed.table, id) !== false) {
-                            failedRow = id;
+                        failedRow = id;
 
-                            throw error;
-                        }
+                        throw error;
                     }
                 },
                 parsed.after,

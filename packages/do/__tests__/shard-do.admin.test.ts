@@ -4412,15 +4412,26 @@ describe("shardDO admin bulk delete", () => {
 
     describe("patchRows — a NOT_FOUND mid-batch", () => {
         /** Deletes `victim` under the batch just before its own write, as a concurrent mutation would. */
+        /** Deletes `victim` while another row of the batch is written, as a concurrent mutation between rows would. */
         class RacingDeleteShard extends BulkOpsShard {
             public victim: string | undefined;
 
             protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
-                if (args.id === this.victim) {
-                    (this.sql as SqlExec).exec(`DELETE FROM "todos" WHERE "id" = ?`, args.id);
+                if (args.id !== this.victim && this.victim !== undefined) {
+                    (this.sql as SqlExec).exec(`DELETE FROM "todos" WHERE "id" = ?`, this.victim);
                 }
 
                 return super.runShardWrite(args, headroom);
+            }
+        }
+
+        /** Writes the row, then deletes it and raises `NOT_FOUND`, as an after-update trigger that removes its own row and then patches a missing one does. */
+        class TriggerDeletesTargetShard extends BulkOpsShard {
+            protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
+                await super.runShardWrite(args, headroom);
+                (this.sql as SqlExec).exec(`DELETE FROM "todos" WHERE "id" = ?`, args.id);
+
+                throw new LunoraError("NOT_FOUND", "document not found: some-other-row");
             }
         }
 
@@ -4511,6 +4522,24 @@ describe("shardDO admin bulk delete", () => {
 
         const p1Ids = (): string[] =>
             database.raw(`SELECT "id" FROM "todos" WHERE json_extract("__doc__", '$.projectId') = 'p1' ORDER BY "id"`).map((row) => String(row["id"]));
+
+        it("fails the batch when a row's write raises NOT_FOUND after removing its own target", async () => {
+            expect.assertions(1);
+
+            await seedProject(createShardContextDatabase({ schema: todosSchema, sql: database.sql }), "p1", 2);
+
+            const shard = new TriggerDeletesTargetShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(
+                bulkRequest(ADMIN_FUNCTIONS.patchRows, {
+                    doc: { done: true },
+                    filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                    table: "todos",
+                }),
+            );
+
+            // The target was there when its write started, so the NOT_FOUND is the write's own failure.
+            expect(response.ok).toBe(false);
+        });
 
         it("skips a row a concurrent write deleted before its turn", async () => {
             expect.assertions(2);
