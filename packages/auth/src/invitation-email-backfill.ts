@@ -110,7 +110,10 @@ const rewritePage = function* rewritePage(
     }
 };
 
-/** Recorded once a pass has read every invitation: new ones are written in canonical form, so none can need it again. */
+/**
+ * Recorded once a pass has read every invitation and left none for a collision: new ones are
+ * written in canonical form, so none can need it again.
+ */
 const DONE = "done";
 
 /**
@@ -126,8 +129,8 @@ const DONE = "done";
  *
  * That read keeps matching a non-ASCII address once it is canonical, and an invitation left
  * unchanged, so each page records where it stopped and a run cut short resumes there, and a
- * pass that reaches the end records that it is done. Without either, every run would re-read
- * the same newest rows. A resumed run finds a holder on the table, not in the cut-short
+ * whole pass that reaches the end leaving nothing unchanged records that it is done. Without
+ * either, every run would re-read the same newest rows. A resumed run finds a holder on the table, not in the cut-short
  * run's memory, so resuming loses nothing.
  * @returns The ids of the invitations left unchanged because another holds their folded address.
  */
@@ -159,7 +162,9 @@ const invitationBackfillSteps = function* invitationBackfillSteps(columns: Invit
         const last = rows.at(-1);
 
         if (rows.length < BACKFILL_PAGE_ROWS || last === undefined) {
-            yield* writeBackfillState(state, DONE);
+            // An invitation left for a collision is rewritten once its holder is revoked, so the next pass (a later cold
+            // start) starts over; so does one after a resumed run, which cannot see what the cut-short run left.
+            yield* writeBackfillState(state, unchanged.length === 0 && !Array.isArray(resumed) ? DONE : undefined);
 
             return unchanged;
         }

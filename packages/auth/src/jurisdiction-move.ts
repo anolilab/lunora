@@ -53,6 +53,7 @@ import { decodeWire, encodeWire } from "@lunora/wire";
 import { contentDigest } from "../../../shared/content-digest";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { CanonicalEmailColumn } from "./canonical-email";
+import { BACKFILL_STATE_TABLE } from "./canonical-email";
 import type { CredentialColumns } from "./data-port";
 import { insertAuthRows, isUnmovableAuthTable, redactCredentials, replaceAuthRows } from "./data-port";
 import type { DoStorageLike } from "./do-store";
@@ -90,9 +91,18 @@ const MAX_BOUND_PARAMETERS = 100;
 /** Fingerprint sums wrap at 64 bits. */
 const DIGEST_MODULUS = 2n ** 64n;
 
-/** Internal and reserved tables: SQLite's own, Cloudflare's `_cf_*`, and the move's own. */
+/**
+ * Internal and reserved tables: SQLite's own, Cloudflare's `_cf_*`, the move's own, and the
+ * backfill's position. That one describes this database's rows, so it never travels: a target
+ * runs its own backfill, and a SQL auth store would refuse it as no auth table.
+ */
 const isReservedTable = (name: string): boolean =>
-    name.startsWith("sqlite_") || name.startsWith("_cf_") || name === MARKER_TABLE || name === COPIED_TABLE || name === PURGED_TABLE;
+    name.startsWith("sqlite_") ||
+    name.startsWith("_cf_") ||
+    name === MARKER_TABLE ||
+    name === COPIED_TABLE ||
+    name === PURGED_TABLE ||
+    name === BACKFILL_STATE_TABLE;
 
 type Row = Record<string, unknown>;
 

@@ -13,6 +13,7 @@
  * every path that derives the schema from better-auth sees it: the Durable Object DDL,
  * better-auth's kysely migrator, `authTables(...)`, and the schema check.
  */
+import { APIError, BASE_ERROR_CODES } from "@better-auth/core/error";
 import type { BetterAuthOptions } from "better-auth";
 import { getAuthTables } from "better-auth/db";
 
@@ -35,6 +36,10 @@ type UserUpdateBefore = NonNullable<NonNullable<UserHooks["update"]>["before"]>;
 const replacedData = (result: unknown): Record<string, unknown> | undefined =>
     typeof result === "object" && result !== null && "data" in result ? (result as { data: Record<string, unknown> }).data : undefined;
 
+/** The address a hook's write leaves in place: the hook's own when it set the key (even to `undefined`), else the caller's. */
+const writtenEmail = (replaced: Record<string, unknown> | undefined, data: Record<string, unknown>): unknown =>
+    replaced !== undefined && "email" in replaced ? replaced["email"] : data["email"];
+
 /**
  * The data a `before` hook hands back once the caller's own hook has run over `data` and
  * replaced `replaced`: theirs, plus the canonical value of the address it leaves in place.
@@ -51,9 +56,45 @@ const replacedData = (result: unknown): Record<string, unknown> | undefined =>
  * store a canonical value for an address that was never written.
  */
 const withCanonicalData = (replaced: Record<string, unknown> | undefined, data: Record<string, unknown>): Record<string, unknown> => {
-    const email = replaced !== undefined && "email" in replaced ? replaced["email"] : data["email"];
+    const email = writtenEmail(replaced, data);
 
     return { ...replaced, [CANONICAL_EMAIL_FIELD]: typeof email === "string" ? canonicalEmail(email) : undefined };
+};
+
+type HookContext = Parameters<UserCreateBefore>[1];
+
+/**
+ * Refuse a write whose canonical address another account holds, with the error better-auth gives
+ * a plain duplicate. Its own check (`findUserByEmail`) matches the stored address, so a variant in
+ * another case or Unicode form gets past it, and the unique index's refusal reaches the caller as
+ * a server error. On a sign-up that answers duplicates generically (email verification required,
+ * or no auto sign-in) the error is the `FORBIDDEN` the route turns into that generic answer.
+ *
+ * Needs an endpoint's adapter: a write outside one (the admin plane, which checks for itself) is
+ * left to the index. A holder of the exact address is left to `email`'s own unique index too: it
+ * is this same account rewriting its address unchanged as often as another one. `self` is the
+ * account being written, from whichever of the session, a `userId` body field or path parameter
+ * the route names; it may change its own address to another case.
+ */
+const assertCanonicalFree = async (email: unknown, context: HookContext, self: ReadonlyArray<unknown>): Promise<void> => {
+    // Absent, not only `null`, on a write made outside an endpoint.
+    if (typeof email !== "string" || !context) {
+        return;
+    }
+
+    const holder = await context.context.adapter.findOne<{ email: unknown; id: string }>({
+        model: "user",
+        where: [{ field: CANONICAL_EMAIL_FIELD, value: canonicalEmail(email) }],
+    });
+
+    if (holder === null || holder.email === email || self.includes(holder.id)) {
+        return;
+    }
+
+    const { emailAndPassword } = context.context.options;
+    const generic = context.path === "/sign-up/email" && (emailAndPassword?.requireEmailVerification === true || emailAndPassword?.autoSignIn === false);
+
+    throw APIError.from(generic ? "FORBIDDEN" : "UNPROCESSABLE_ENTITY", BASE_ERROR_CODES.USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL);
 };
 
 /**
@@ -85,12 +126,26 @@ const withCanonicalEmail = <O extends BetterAuthOptions>(options: O): O => {
     const createBefore: UserCreateBefore = async (user, context) => {
         const result = await create?.before?.(user, context);
 
-        return result === false ? false : { data: withCanonicalData(replacedData(result), user) };
+        if (result === false) {
+            return false;
+        }
+
+        await assertCanonicalFree(writtenEmail(replacedData(result), user), context, []);
+
+        return { data: withCanonicalData(replacedData(result), user) };
     };
     const updateBefore: UserUpdateBefore = async (patch, context) => {
         const result = await update?.before?.(patch, context);
 
-        return result === false ? false : { data: withCanonicalData(replacedData(result), patch) };
+        if (result === false) {
+            return false;
+        }
+
+        const named = [context?.context.session?.user.id, (context?.body as { userId?: unknown } | undefined)?.userId, context?.params?.["userId"]];
+
+        await assertCanonicalFree(writtenEmail(replacedData(result), patch), context, named);
+
+        return { data: withCanonicalData(replacedData(result), patch) };
     };
 
     installedHooks.add(createBefore);

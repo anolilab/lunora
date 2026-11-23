@@ -226,6 +226,86 @@ describe("canonical email", () => {
         await expect(adminApi.createUser({ email: LOWER, name: "Twin" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
     });
 
+    const signUp = async (instance: ReturnType<typeof createAuth>, email: string): Promise<Response> =>
+        instance.handler(
+            new Request("http://localhost/api/auth/sign-up/email", {
+                body: JSON.stringify({ email, name: "Twin", password: "correct horse battery staple" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+    // better-auth's own check lowercases the address and matches the stored one exactly, so an
+    // account stored in mixed case (imported, or written before addresses were lowercased) is
+    // missed and the canonical index refuses the write. Its email validator takes ASCII only.
+    const STORED = "Alice@Example.com";
+
+    it("answers a public sign-up for an address held in another case like a plain duplicate", async () => {
+        expect.assertions(3);
+
+        await port.importRows([userRow("imported", STORED)]);
+        await signUp(auth, "bob@example.com");
+
+        const plain = await signUp(auth, "bob@example.com");
+        const twin = await signUp(auth, "alice@example.com");
+
+        expect(twin.status).toBe(plain.status);
+        await expect(twin.json()).resolves.toStrictEqual(await plain.json());
+        expect(userCount()).toBe(2);
+    });
+
+    it("answers it generically when duplicates are answered generically", async () => {
+        expect.assertions(3);
+
+        const generic = createAuth({
+            ...options,
+            database: lunoraAuthAdapter(createSqlAuthStore(executor)),
+            emailAndPassword: { enabled: true, requireEmailVerification: true },
+        });
+
+        await port.importRows([userRow("imported", STORED)]);
+        await signUp(generic, "bob@example.com");
+
+        const plain = await signUp(generic, "bob@example.com");
+        const twin = await signUp(generic, "alice@example.com");
+
+        expect(twin.status).toBe(plain.status);
+        expect(twin.status).toBe(200);
+        expect(userCount()).toBe(2);
+    });
+
+    it("answers an email change to an address held in another case as a duplicate, and lets one to a free address through", async () => {
+        expect.assertions(4);
+
+        const changing = createAuth({
+            ...options,
+            database: lunoraAuthAdapter(createSqlAuthStore(executor)),
+            user: { changeEmail: { enabled: true, updateEmailWithoutVerification: true } },
+        });
+
+        await port.importRows([userRow("imported", STORED)]);
+
+        const mover = await signUp(changing, "mover@example.com");
+        const cookie = mover.headers.get("set-cookie") ?? "";
+        const change = async (newEmail: string): Promise<Response> =>
+            changing.handler(
+                new Request("http://localhost/api/auth/change-email", {
+                    body: JSON.stringify({ newEmail }),
+                    headers: { "content-type": "application/json", cookie },
+                    method: "POST",
+                }),
+            );
+        const twin = await change("alice@example.com");
+
+        expect(twin.status).toBe(422);
+        await expect(twin.json()).resolves.toMatchObject({ code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" });
+
+        const moved = await change("moved@example.com");
+
+        expect(moved.status).toBe(200);
+        expect(database.prepare(`SELECT "email" FROM "user" WHERE "emailCanonical" = 'moved@example.com'`).get()).toMatchObject({ email: "moved@example.com" });
+    });
+
     it("never lets an internal-adapter update set or clear the canonical address without changing the address", async () => {
         expect.assertions(2);
 
@@ -553,7 +633,7 @@ describe("invitation addresses stored before canonical form", () => {
         warn.mockRestore();
     });
 
-    it("resumes a run cut short past newer rows already in canonical form, and stops reading once a pass is done", async () => {
+    it("resumes a run cut short past newer rows already in canonical form, and stops reading once a whole pass is done", async () => {
         expect.assertions(5);
 
         const database = new DatabaseSync(":memory:");
@@ -590,12 +670,38 @@ describe("invitation addresses stored before canonical form", () => {
         // The resumed run starts after the 600 rows the cut-short one read.
         expect(all.mock.calls.filter(([sql]) => sql.includes(`WHERE ("email" GLOB`))).toHaveLength(3);
 
+        // A resumed run cannot vouch for the rows before it, so one more whole pass runs; then none.
+        await backfillInvitationEmails({ all }, columns);
         all.mockClear();
         await backfillInvitationEmails({ all }, columns);
 
         // Creating and reading the resume point; no invitation is read again.
         expect(all).toHaveBeenCalledTimes(2);
         expect(all.mock.calls.some(([sql]) => sql.includes(`WHERE ("email" GLOB`))).toBe(false);
+    });
+
+    it("rewrites an invitation left for a collision once its holder is revoked", async () => {
+        expect.assertions(2);
+
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(
+            `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "createdAt" integer NOT NULL, "expiresAt" integer NOT NULL)`,
+        );
+        invitation(database, "older", "émile@example.com", 1);
+        invitation(database, "newer", "émile@example.com", 2);
+
+        const columns = invitationEmailColumns(resolveAuthOptions(inviteOptions))!;
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await expect(backfillInvitationEmails(executorFor(database), columns)).resolves.toStrictEqual(["older"]);
+
+        database.prepare(`DELETE FROM "signUpInvitation" WHERE "id" = 'newer'`).run();
+        await backfillInvitationEmails(executorFor(database), columns);
+
+        expect(emails(database)).toStrictEqual({ older: "émile@example.com" });
+
+        warn.mockRestore();
     });
 
     it("rewrites them on a Durable Object's cold start", async () => {

@@ -6,9 +6,12 @@ import { describe, expect, it } from "vitest";
 
 import { AUTH_AUDIT_TABLE } from "../src/audit";
 import { LunoraAuthDO } from "../src/auth-do";
+import { resolveAuthOptions } from "../src/create-auth";
 import type { AuthDataPortLike } from "../src/data-port";
 import { authCredentialColumns, authCredentialTableNames, authTableNames, createDoAuthDataPort, createSqlAuthDataPort } from "../src/data-port";
+import { authDoSchemaStatements } from "../src/do-schema";
 import { createDoAuthWiring } from "../src/do-wiring";
+import { inviteOnly } from "../src/invite-only";
 import { MOVE_PATH } from "../src/jurisdiction-move";
 import { deviceAuthorization, jwt, oauthProvider } from "../src/plugins";
 import type { SqlExecutor } from "../src/sql-store";
@@ -382,6 +385,56 @@ describe("auth data port", () => {
         const { rows } = page;
 
         expect(rows.find((row) => row["id"] === "a1")).toMatchObject({ accessToken: "gho_live", refreshToken: "ghr_live" });
+    });
+
+    it("never exports the backfill's position, so a DO-backed snapshot restores into a D1 auth store", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+        const object = new LunoraAuthDO(
+            { storage: createDoStorage(database) },
+            () => {
+                return { plugins: [inviteOnly()], secret: SECRET };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
+        const { dataPort } = createDoAuthWiring({
+            internalSecret: INTERNAL_SECRET,
+            namespace: {
+                get: () => {
+                    return { fetch: async (request: Request) => object.fetch(request) };
+                },
+                idFromName: (name) => name,
+            },
+        });
+
+        await collect(dataPort!);
+        database
+            .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('u1', 'Ada', 'ada@example.test', 1, 1, 1)`)
+            .run();
+
+        // The cold start's invitation backfill left its position behind.
+        expect(database.prepare(`SELECT COUNT(*) AS "n" FROM "__lunora_auth_backfill__"`).get()).toEqual({ n: 1 });
+
+        const exported = await collect(dataPort!);
+
+        expect(exported.map((row) => row.table)).toStrictEqual(["user"]);
+
+        const target = new DatabaseSync(":memory:");
+        const resolved = resolveAuthOptions({ plugins: [inviteOnly()], secret: SECRET });
+
+        for (const statement of authDoSchemaStatements(resolved)) {
+            target.exec(statement);
+        }
+
+        const port = createSqlAuthDataPort(
+            batchingExecutorOver(target),
+            authTableNames(resolved),
+            authCredentialTableNames(resolved),
+            authCredentialColumns(resolved),
+        );
+
+        await expect(port.replaceRows!(exported)).resolves.toMatchObject({ errors: [], inserted: 1 });
     });
 
     it("names the live credential tables a replace clears", () => {
