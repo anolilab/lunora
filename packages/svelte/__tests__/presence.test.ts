@@ -526,12 +526,25 @@ describe("presence (Svelte)", () => {
         stopPresent();
     });
 
-    it("leaves each room it stops showing, and the last one on teardown, through the leave mutation", () => {
+    it("leaves each room it stops showing, and the last one on teardown, through the leave mutation", async () => {
         expect.assertions(1);
 
         const fake = createPresenceFakeClient();
         const room = writable("a");
         const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const leftB = Promise.withResolvers<undefined>();
+        const record = fake.client.mutation.bind(fake.client);
+
+        // A leave waits for its room's heartbeat to settle, so the last one is awaited, not assumed.
+        (fake.client as unknown as { mutation: unknown }).mutation = async (...args: Parameters<typeof record>) => {
+            await record(...args);
+
+            if (args[0]["__lunoraRef"] === "presence:leave" && (args[1] as { roomId: string }).roomId === "b") {
+                leftB.resolve(undefined);
+            }
+
+            return undefined;
+        };
         const handle = presence(fake.client, room, {
             heartbeat: HEARTBEAT,
             intervalMs: 60_000,
@@ -542,11 +555,50 @@ describe("presence (Svelte)", () => {
 
         room.set("b");
         handle.teardown();
+        await leftB.promise;
 
         expect(fake.mutationCalls.filter((call) => call.functionPath === "presence:leave").map((call) => call.args)).toStrictEqual([
             { roomId: "a", sessionId: "sess-fixed" },
             { roomId: "b", sessionId: "sess-fixed" },
         ]);
+    });
+
+    it("sends a room's leave only after the heartbeat still in flight for it has settled", async () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const heartbeatLanded = Promise.withResolvers<undefined>();
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const record = fake.client.mutation.bind(fake.client);
+
+        const leaveSent = Promise.withResolvers<undefined>();
+
+        (fake.client as unknown as { mutation: unknown }).mutation = async (...args: Parameters<typeof record>) => {
+            await record(...args);
+
+            if (args[0]["__lunoraRef"] === "presence:leave") {
+                leaveSent.resolve(undefined);
+            }
+
+            return args[0]["__lunoraRef"] === "presence:heartbeat" ? heartbeatLanded.promise : undefined;
+        };
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 60_000,
+            leave: LEAVE,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        handle.teardown();
+
+        expect(fake.mutationCalls.map((call) => call.functionPath)).toStrictEqual(["presence:heartbeat"]);
+
+        heartbeatLanded.resolve(undefined);
+        await leaveSent.promise;
+
+        expect(fake.mutationCalls.map((call) => call.functionPath)).toStrictEqual(["presence:heartbeat", "presence:leave"]);
     });
 
     it("never queues a heartbeat for offline replay", () => {

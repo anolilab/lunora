@@ -110,6 +110,16 @@ describe("usePresence (Vue)", () => {
         const scope = effectScope();
         const room = ref("a");
         const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const leftB = Promise.withResolvers<undefined>();
+
+        // A leave waits for its room's heartbeat to settle, so the last one is awaited, not assumed.
+        fake.mutationSpy.mockImplementation((reference: unknown, args: unknown): unknown => {
+            if ((reference as Record<string, unknown>)["__lunoraRef"] === "presence:leave" && (args as { roomId: string }).roomId === "b") {
+                leftB.resolve(undefined);
+            }
+
+            return Promise.resolve(undefined);
+        });
 
         scope.run(() =>
             fake.provide(() =>
@@ -120,6 +130,7 @@ describe("usePresence (Vue)", () => {
         room.value = "b";
         await flushAsync();
         scope.stop();
+        await leftB.promise;
 
         expect(
             fake.mutationSpy.mock.calls
@@ -129,6 +140,42 @@ describe("usePresence (Vue)", () => {
             { roomId: "a", sessionId: "sess-fixed" },
             { roomId: "b", sessionId: "sess-fixed" },
         ]);
+    });
+
+    it("sends a room's leave only after the heartbeat still in flight for it has settled", async () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const scope = effectScope();
+        const heartbeatLanded = Promise.withResolvers<undefined>();
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const sent = (): unknown[] => fake.mutationSpy.mock.calls.map((call) => (call[0] as Record<string, unknown>)["__lunoraRef"]);
+
+        const leaveSent = Promise.withResolvers<undefined>();
+
+        fake.mutationSpy.mockImplementation((reference: unknown): unknown => {
+            const name = (reference as Record<string, unknown>)["__lunoraRef"];
+
+            if (name === "presence:leave") {
+                leaveSent.resolve(undefined);
+            }
+
+            return name === "presence:heartbeat" ? heartbeatLanded.promise : Promise.resolve(undefined);
+        });
+
+        scope.run(() =>
+            fake.provide(() =>
+                usePresence("a", { heartbeat: HEARTBEAT, intervalMs: 60_000, leave: LEAVE, listPresent: LIST_PRESENT, sessionId: "sess-fixed" }),
+            ),
+        );
+        scope.stop();
+
+        expect(sent()).toStrictEqual(["presence:heartbeat"]);
+
+        heartbeatLanded.resolve(undefined);
+        await leaveSent.promise;
+
+        expect(sent()).toStrictEqual(["presence:heartbeat", "presence:leave"]);
     });
 
     it("never queues a heartbeat for offline replay", async () => {

@@ -5,6 +5,7 @@ import { readable, writable } from "svelte/store";
 
 import { isBrowser } from "../../../shared/is-browser";
 import { assertPresenceInterval } from "../../../shared/presence-interval";
+import { createPresenceWrites } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { getLunoraClient } from "./context";
 import { subscribeReactiveArgs } from "./subscribe-reactive-args";
@@ -105,6 +106,10 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     // The room the armed wiring belongs to; only read while `mounted`.
     let currentRoom = "";
 
+    // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
+
+    const presenceWrites = createPresenceWrites();
+
     const sendHeartbeat = (): void => {
         const args = {
             roomId: currentRoom,
@@ -113,7 +118,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         } as ArgsOf<H>;
 
         // Never queued: a heartbeat replayed after reconnect would mark a room this session has since left.
-        client.mutation(heartbeat, args, { onlineOnly: true, shardKey }).catch(() => undefined);
+        presenceWrites.heartbeat(currentRoom, async () => client.mutation(heartbeat, args, { onlineOnly: true, shardKey }));
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -174,7 +179,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
 
                 // The old room stops listing this session now, instead of when its last heartbeat ages out.
                 if (leave !== undefined) {
-                    client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }).catch(() => undefined);
+                    presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
                 }
             };
         });

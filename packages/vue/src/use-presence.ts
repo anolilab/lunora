@@ -4,6 +4,7 @@ import { shallowRef, toValue, watch } from "vue";
 
 import { isBrowser } from "../../../shared/is-browser";
 import { assertPresenceInterval } from "../../../shared/presence-interval";
+import { createPresenceWrites } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 import onScopeDisposeOrWarn from "./scope-dispose";
@@ -108,6 +109,10 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     // Set by `arm`, never read here: a getter such as `() => window.location.hash` throws during SSR.
     let currentRoom = "";
 
+    // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
+
+    const presenceWrites = createPresenceWrites();
+
     const sendHeartbeat = (): void => {
         const args = {
             roomId: currentRoom,
@@ -117,7 +122,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
 
         // Fire-and-forget — a dropped heartbeat self-heals on the next tick. Never queued: a
         // heartbeat replayed after reconnect would mark a room this session has since left.
-        client.mutation(heartbeat, args, { onlineOnly: true, shardKey }).catch(() => undefined);
+        presenceWrites.heartbeat(currentRoom, async () => client.mutation(heartbeat, args, { onlineOnly: true, shardKey }));
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -188,7 +193,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
 
                 // The old room stops listing this session now, instead of when its last heartbeat ages out.
                 if (leave !== undefined) {
-                    client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }).catch(() => undefined);
+                    presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
                 }
             };
 

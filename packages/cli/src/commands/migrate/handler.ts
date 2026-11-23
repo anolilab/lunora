@@ -191,17 +191,27 @@ const generateMigration = (options: MigrateGenerateCommandOptions, cwd: string, 
         return { code: EXIT_CODE.USAGE, empty: true, error: message, migrationFile: "" };
     }
 
+    // A partial or unclosed file left here would be applied as-is and could never be rewritten. A
+    // close is attempted once: retrying one can close a descriptor another open has since reused.
+    let closeAttempted = false;
+
     try {
         writeFileSync(descriptor, body, "utf8");
-    } catch (error: unknown) {
-        // A partial file left here would be applied as-is and could never be rewritten.
+        closeAttempted = true;
         closeSync(descriptor);
+    } catch (error: unknown) {
+        if (!closeAttempted) {
+            try {
+                closeSync(descriptor);
+            } catch {
+                // The write error is the one to report.
+            }
+        }
+
         rmSync(migrationFile, { force: true });
 
         throw error;
     }
-
-    closeSync(descriptor);
 
     // Temp file + rename so a crash cannot leave a torn snapshot; on failure the migration file is
     // removed so the retry diffs against the old snapshot instead of emitting the same diff twice.

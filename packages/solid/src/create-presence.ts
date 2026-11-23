@@ -1,8 +1,9 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import type { Accessor } from "solid-js";
-import { createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
+import { createPresenceWrites } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
 import { trackedEffect } from "./solid-compat";
@@ -104,6 +105,10 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     // The room the armed wiring belongs to; only read while `mounted`.
     let currentRoom = "";
 
+    // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
+
+    const presenceWrites = createPresenceWrites();
+
     const sendHeartbeat = (): void => {
         const args = {
             roomId: currentRoom,
@@ -112,7 +117,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         } as ArgsOf<H>;
 
         // Never queued: a heartbeat replayed after reconnect would mark a room this session has since left.
-        client.mutation(heartbeat, args, { onlineOnly: true, shardKey }).catch(() => undefined);
+        presenceWrites.heartbeat(currentRoom, async () => client.mutation(heartbeat, args, { onlineOnly: true, shardKey }));
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -129,6 +134,18 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     if ((globalThis as { window?: unknown }).window === undefined) {
         return { error, present, sessionId, setData };
     }
+
+    // The room teardown is handed to the effect only once `apply` returns, but a replayed refusal can
+    // dispose the owner from inside `subscribe` before that. The owner's own cleanup covers that window:
+    // it tears the room being armed down, and `apply` unsubscribes as soon as `subscribe` returns.
+    let ownerDisposed = false;
+    let disposeArming: (() => void) | undefined;
+    const isOwnerDisposed = (): boolean => ownerDisposed;
+
+    onCleanup(() => {
+        ownerDisposed = true;
+        disposeArming?.();
+    });
 
     // Memoised: Solid 1.x's `on` re-runs on every dependency notification, so an accessor that
     // re-computes the same room string would otherwise leave and rejoin the room.
@@ -186,6 +203,8 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
 
         let unsubscribe: () => void;
 
+        disposeArming = dispose;
+
         // Subscribe to the live present-list for the room; a throw rolls this room's setup back.
         try {
             unsubscribe = client.subscribe(
@@ -211,6 +230,15 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
             dispose();
 
             throw subscribeError;
+        } finally {
+            disposeArming = undefined;
+        }
+
+        // A read through a call: `subscribe` can flip the flag, which control-flow narrowing cannot see.
+        if (isOwnerDisposed()) {
+            unsubscribe();
+
+            return undefined;
         }
 
         return () => {
@@ -219,7 +247,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
 
             // The old room stops listing this session now, instead of when its last heartbeat ages out.
             if (leave !== undefined) {
-                client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }).catch(() => undefined);
+                presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
             }
         };
     });

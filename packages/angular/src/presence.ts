@@ -3,6 +3,7 @@ import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
+import { createPresenceWrites } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { resolveLunoraClient } from "./client";
 import { attachReactiveArgs, outsideAngularRunner, shouldOpenSubscription } from "./platform";
@@ -147,6 +148,10 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     // Resolved here, in the injection context: the arm below can run later from an effect.
     const runInZone = outsideAngularRunner(fromInjectionContext);
 
+    // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
+
+    const presenceWrites = createPresenceWrites();
+
     const sendHeartbeat = (): void => {
         const args: ArgsOf<H> = { roomId: currentRoom, sessionId } as ArgsOf<H>;
 
@@ -156,7 +161,7 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
 
         // Fire-and-forget — a dropped heartbeat self-heals on the next tick. Never queued: a
         // heartbeat replayed after reconnect would mark a room this session has since left.
-        client.mutation(heartbeat, args, { onlineOnly: true, shardKey }).catch(() => undefined);
+        presenceWrites.heartbeat(currentRoom, async () => client.mutation(heartbeat, args, { onlineOnly: true, shardKey }));
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -232,7 +237,7 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
 
                 // The old room stops listing this session now, instead of when its last heartbeat ages out.
                 if (leave !== undefined) {
-                    client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }).catch(() => undefined);
+                    presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
                 }
             };
 

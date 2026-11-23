@@ -8,7 +8,7 @@ import { runMigrateGenerateCommand } from "../../src/commands/migrate/handler";
 import type { Logger } from "../../src/util/logger";
 
 const failSqlWrite = vi.hoisted(() => {
-    return { enabled: false, openFails: false, sqlDescriptors: new Set<number>() };
+    return { closeFails: false, enabled: false, openFails: false, sqlDescriptors: new Set<number>() };
 });
 
 const isSqlPath = (path: unknown): path is string => typeof path === "string" && path.endsWith(".sql");
@@ -24,6 +24,13 @@ vi.mock(import("node:fs"), async (importOriginal) => {
 
     return {
         ...actual,
+        closeSync: (...args: Parameters<typeof actual.closeSync>) => {
+            actual.closeSync(...args);
+
+            if (failSqlWrite.closeFails && failSqlWrite.sqlDescriptors.has(args[0])) {
+                throw Object.assign(new Error("EIO: i/o error, close"), { code: "EIO" });
+            }
+        },
         openSync: (...args: Parameters<typeof actual.openSync>) => {
             if (failSqlWrite.openFails && isSqlPath(args[0])) {
                 throw enfile();
@@ -91,8 +98,40 @@ export const schema = defineSchema({
     afterEach(() => {
         failSqlWrite.enabled = false;
         failSqlWrite.openFails = false;
+        failSqlWrite.closeFails = false;
         failSqlWrite.sqlDescriptors.clear();
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("removes the migration it wrote when closing it fails, so a retry is not refused or doubled", () => {
+        expect.assertions(4);
+
+        const now = (): Date => new Date("2024-04-01T12:34:56.000Z");
+        const migrations = join(workdir, "lunora", "migrations");
+
+        failSqlWrite.closeFails = true;
+
+        expect(() => runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now })).toThrow(/EIO/u);
+        expect(readdirSync(migrations).filter((name) => name.endsWith(".sql"))).toStrictEqual([]);
+
+        failSqlWrite.closeFails = false;
+
+        const retry = runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now });
+
+        expect(retry.code).toBe(0);
+        expect(readFileSync(retry.migrationFile, "utf8")).toContain("CREATE TABLE");
+    });
+
+    it("keeps the write error, not a close error, and removes the partial file", () => {
+        expect.assertions(2);
+
+        const now = (): Date => new Date("2024-04-01T12:34:56.000Z");
+
+        failSqlWrite.enabled = true;
+        failSqlWrite.closeFails = true;
+
+        expect(() => runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now })).toThrow(/ENOSPC/u);
+        expect(readdirSync(join(workdir, "lunora", "migrations")).filter((name) => name.endsWith(".sql"))).toStrictEqual([]);
     });
 
     it("leaves a same-name migration alone when the exclusive open fails before checking it exists", () => {

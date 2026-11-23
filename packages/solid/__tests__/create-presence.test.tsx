@@ -1,7 +1,7 @@
 /* eslint-disable no-underscore-dangle -- `__lunoraRef` is the Lunora function-reference field */
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
-import { createSignal } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HeartbeatReference, ListPresentReference } from "../src/create-presence";
@@ -477,7 +477,15 @@ describe("createPresence (Solid)", () => {
         expect.assertions(1);
 
         const fake = createPresenceFakeClient();
-        const mutation = vi.spyOn(fake.client, "mutation");
+        const leftB = Promise.withResolvers<undefined>();
+        // A leave waits for its room's heartbeat to settle, so the last one is awaited, not assumed.
+        const mutation = vi.spyOn(fake.client, "mutation").mockImplementation(async (reference, args) => {
+            if ((reference as unknown as Record<string, string>)["__lunoraRef"] === "presence:leave" && (args as { roomId: string }).roomId === "b") {
+                leftB.resolve(undefined);
+            }
+
+            return undefined;
+        });
         const [room, setRoom] = createSignal("a");
         const LEAVE = { __lunoraRef: "presence:leave" } as never;
 
@@ -494,6 +502,7 @@ describe("createPresence (Solid)", () => {
         setRoom("b");
         await flushAsync();
         view.unmount();
+        await leftB.promise;
 
         expect(
             mutation.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === "presence:leave").map((call) => call[1]),
@@ -501,6 +510,86 @@ describe("createPresence (Solid)", () => {
             { roomId: "a", sessionId: "sess-fixed" },
             { roomId: "b", sessionId: "sess-fixed" },
         ]);
+    });
+
+    it("sends a room's leave only after the heartbeat still in flight for it has settled", async () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const heartbeatLanded = Promise.withResolvers<undefined>();
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const leaveSent = Promise.withResolvers<undefined>();
+        const mutation = vi.spyOn(fake.client, "mutation").mockImplementation(async (reference) => {
+            const name = (reference as unknown as Record<string, string>)["__lunoraRef"];
+
+            if (name === "presence:leave") {
+                leaveSent.resolve(undefined);
+            }
+
+            return name === "presence:heartbeat" ? heartbeatLanded.promise : undefined;
+        });
+        const sent = (): string[] => mutation.mock.calls.map((call) => (call[0] as unknown as Record<string, string>)["__lunoraRef"] ?? "");
+
+        const view = render(
+            () => {
+                createPresence("a", { heartbeat: HEARTBEAT, intervalMs: 60_000, leave: LEAVE, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+        view.unmount();
+
+        expect(sent()).toStrictEqual(["presence:heartbeat"]);
+
+        heartbeatLanded.resolve(undefined);
+        await leaveSent.promise;
+
+        expect(sent()).toStrictEqual(["presence:heartbeat", "presence:leave"]);
+    });
+
+    it("releases a room whose root is disposed while its subscription replays a refusal", async () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const original = fake.client.subscribe.bind(fake.client);
+        let disposeRoot = (): void => {};
+
+        // A replayed refusal reaches onError before subscribe returns.
+        vi.spyOn(fake.client, "subscribe").mockImplementation((...args: Parameters<typeof original>) => {
+            const unsubscribe = original(...args);
+
+            fake.subscribeCalls.at(-1)?.onError?.({ code: "FORBIDDEN", message: "no" });
+
+            return unsubscribe;
+        });
+
+        const Presence = (): null => {
+            createPresence("a", {
+                heartbeat: HEARTBEAT,
+                intervalMs: 60_000,
+                listPresent: LIST_PRESENT,
+                onError: () => {
+                    disposeRoot();
+                },
+                sessionId: "sess-fixed",
+            });
+
+            return null;
+        };
+
+        createRoot((dispose) => {
+            disposeRoot = dispose;
+
+            return <LunoraProvider client={fake.client}>{<Presence />}</LunoraProvider>;
+        });
+
+        await flushAsync();
+
+        expect(fake.connectionContextHolders.map((holder) => holder.released)).toStrictEqual([true]);
+        expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true]);
     });
 
     it("never queues a heartbeat for offline replay", async () => {

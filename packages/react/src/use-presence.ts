@@ -4,6 +4,7 @@ import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, Subscripti
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
+import { createPresenceWrites } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 
@@ -148,6 +149,9 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     // Stash the live inputs so the heartbeat callback stays stable (its identity
     // doesn't churn the interval effect) while still seeing the latest values.
     const inputsRef = useRef({ client, heartbeat, roomId, sessionId: generatedSessionId, shardKey });
+    // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
+    // Per hook instance: Strict Mode's effect replay keeps it, so its leave and rejoin stay ordered.
+    const [presenceWrites] = useState(createPresenceWrites);
 
     useEffect(() => {
         inputsRef.current = { client, heartbeat, roomId, sessionId: generatedSessionId, shardKey };
@@ -164,8 +168,8 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
 
         // Fire-and-forget — a dropped heartbeat self-heals on the next tick. Never queued: a
         // heartbeat replayed after reconnect would mark a room this session has since left.
-        c.mutation(hb, args, { onlineOnly: true, shardKey: sk }).catch(() => undefined);
-    }, []);
+        presenceWrites.heartbeat(room, async () => c.mutation(hb, args, { onlineOnly: true, shardKey: sk }));
+    }, [presenceWrites]);
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `setData` is part of the hook's public return and builds on the stable `sendHeartbeat`; keeping it explicitly memoized preserves a steady identity for consumers that place it in their own effect deps.
     const setData = useCallback(
@@ -245,7 +249,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
             const leaving = leaveRef.current;
 
             if (leaving !== undefined) {
-                client.mutation(leaving, { roomId, sessionId: generatedSessionId }, { onlineOnly: true, shardKey }).catch(() => undefined);
+                presenceWrites.leave(roomId, async () => client.mutation(leaving, { roomId, sessionId: generatedSessionId }, { onlineOnly: true, shardKey }));
             }
         };
     }, [client, roomId, generatedSessionId, shardKey]);

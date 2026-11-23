@@ -81,13 +81,26 @@ describe("presence — teardown and platform edges", () => {
 
     const refusal: SubscriptionError = { code: "FORBIDDEN", message: "no" };
 
-    it("leaves each room it stops showing, and the last one on destroy, through the leave mutation", () => {
+    it("leaves each room it stops showing, and the last one on destroy, through the leave mutation", async () => {
         expect.assertions(1);
 
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();
         const room = signal("a");
         const leaveRef = { __lunoraRef: "presence:leave" } as FunctionReference<"mutation", { roomId: string; sessionId: string }>;
+        const leftB = Promise.withResolvers<undefined>();
+        const record = fake.asClient.mutation.bind(fake.asClient);
+
+        // A leave waits for its room's heartbeat to settle, so the last one is awaited, not assumed.
+        (fake.asClient as unknown as { mutation: unknown }).mutation = async (...args: Parameters<typeof record>) => {
+            const result = await record(...args);
+
+            if ((args[0] as unknown as Record<string, unknown>)["__lunoraRef"] === "presence:leave" && (args[1] as { roomId: string }).roomId === "b") {
+                leftB.resolve(undefined);
+            }
+
+            return result;
+        };
 
         presence(() => room(), {
             client: fake.asClient,
@@ -104,11 +117,45 @@ describe("presence — teardown and platform edges", () => {
         room.set("b");
         TestBed.tick();
         destroy.destroy();
+        await leftB.promise;
 
         expect(fake.mutationCalls.filter((call) => call.functionPath === "presence:leave").map((call) => call.args)).toStrictEqual([
             { roomId: "a", sessionId: "sess-1" },
             { roomId: "b", sessionId: "sess-1" },
         ]);
+    });
+
+    it("sends a room's leave only after the heartbeat still in flight for it has settled", async () => {
+        expect.assertions(2);
+
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const heartbeatLanded = Promise.withResolvers<undefined>();
+        const leaveRef = { __lunoraRef: "presence:leave" } as FunctionReference<"mutation", { roomId: string; sessionId: string }>;
+        const client = fake.asClient;
+        const record = client.mutation.bind(client);
+
+        const leaveSent = Promise.withResolvers<undefined>();
+
+        (client as unknown as { mutation: unknown }).mutation = async (...args: Parameters<typeof record>) => {
+            await record(...args);
+
+            if ((args[0] as unknown as Record<string, unknown>)["__lunoraRef"] === "presence:leave") {
+                leaveSent.resolve(undefined);
+            }
+
+            return (args[0] as unknown as Record<string, unknown>)["__lunoraRef"] === "presence:heartbeat" ? heartbeatLanded.promise : undefined;
+        };
+
+        presence("a", { client, destroyRef: destroy.asDestroyRef, heartbeat: heartbeatRef, leave: leaveRef, listPresent: listPresentRef, sessionId: "sess-1" });
+        destroy.destroy();
+
+        expect(fake.mutationCalls.map((call) => call.functionPath)).toStrictEqual(["presence:heartbeat"]);
+
+        heartbeatLanded.resolve(undefined);
+        await leaveSent.promise;
+
+        expect(fake.mutationCalls.map((call) => call.functionPath)).toStrictEqual(["presence:heartbeat", "presence:leave"]);
     });
 
     it("never queues a heartbeat for offline replay", () => {
