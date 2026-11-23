@@ -812,7 +812,10 @@ authorizes a subscription when it opens.
 **Type:** `(options?: DefinePresenceOptions) => PresenceComponent`
 
 Creates the presence component, which tracks connected sessions. A session drops out
-after its TTL unless it is refreshed.
+after its TTL unless it is refreshed. Its `functions` are `heartbeat`, `listPresent`,
+`disconnect`, `sweep` and `leave`; re-export `leave` and pass it to a client adapter's
+presence `leave` option so a room switch or unmount drops the session's row at once instead
+of after the TTL. `leave` removes only a row the caller owns.
 
 #### `DefinePresenceOptions`
 

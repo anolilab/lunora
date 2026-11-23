@@ -417,11 +417,13 @@ signals. `reset()` clears the error.
 
 ### `presence(roomId, options)`
 
-**Type:** `<H, L>(roomId: string, options: PresenceOptions<H, L>) => PresenceResult<L>`
+**Type:** `<H, L>(roomId: string | (() => string), options: PresenceOptions<H, L>) => PresenceResult<L>`
 
-Joins a presence room. `heartbeat` and `listPresent` are required. Options
-also take `client`, `data`, `destroyRef`, `intervalMs`, `onError`, `sessionId`
-and `shardKey`. Returns the `present` and `error` signals, the `sessionId`, and
+Joins a presence room. `heartbeat` and `listPresent` are required. `roomId` may be
+a function or `Signal`; presence follows it, leaving the old room and joining the new
+one when it changes. Pass `leave` (the preset's `leave` mutation) to drop the old room's row at once; without it the old room lists this session until its row ages out (`ttlMs`). Options also take `client`, `data`, `destroyRef`, `injector`
+(for a reactive `roomId` called outside an injection context), `intervalMs`, `onError`,
+`sessionId` and `shardKey`. Returns the `present` and `error` signals, the `sessionId`, and
 `setData(data)`.
 
 ### `rateLimit(config, options?)`

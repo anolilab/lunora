@@ -24,8 +24,17 @@ import { stableWireKey } from "@lunora/wire";
  * "attach" rather than throwing, and compared against the literal `"server"`
  * (Angular's `PLATFORM_SERVER_ID`) to keep this free of an `@angular/common`
  * dependency.
+ *
+ * A reactive primitive passes its `injector`: that injector is what its effect runs
+ * in, so a server one must gate the socket too. A static call creates no effect and
+ * passes none, so a differing injector cannot open a socket during server rendering
+ * or suppress one in the browser.
  */
-export const shouldOpenSubscription = (fromInjectionContext: boolean): boolean => {
+export const shouldOpenSubscription = (fromInjectionContext: boolean, injector?: Injector): boolean => {
+    if (injector !== undefined) {
+        return injector.get(PLATFORM_ID, undefined, { optional: true }) !== "server";
+    }
+
     if (!fromInjectionContext) {
         return true;
     }

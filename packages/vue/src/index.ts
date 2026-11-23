@@ -77,7 +77,7 @@ export type {
     UsePaginatedQueryResult,
 } from "./use-paginated-query";
 export { useInfiniteQuery, usePaginatedQuery } from "./use-paginated-query";
-export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence";
+export type { HeartbeatReference, LeaveReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence";
 export { usePresence } from "./use-presence";
 export { subscribeToQuery, useQuery } from "./use-query";
 export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit";

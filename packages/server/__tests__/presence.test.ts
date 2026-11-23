@@ -537,6 +537,36 @@ describe("definePresence", () => {
         ).rejects.toThrow(/limit/u);
     });
 
+    it("leave deletes the caller's own row at once, so the old room stops listing it", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ disconnectGraceMs: 5000, ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), { roomId: "room-1", sessionId: "sess-1" });
+
+        const result = await presence.functions.leave.handler(makeMutationContext(db, "user-1"), { roomId: "room-1", sessionId: "sess-1" });
+
+        expect(result).toStrictEqual({ left: true });
+        await expect(presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" })).resolves.toStrictEqual([]);
+    });
+
+    it("leave does not evict a row owned by a different identity", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "victim"), { roomId: "room-1", sessionId: "sess-1" });
+
+        const result = await presence.functions.leave.handler(makeMutationContext(db, "attacker"), { roomId: "room-1", sessionId: "sess-1" });
+
+        expect(result).toStrictEqual({ left: false });
+        await expect(presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" })).resolves.toHaveLength(1);
+    });
+
     it("disconnect does not evict a row owned by a different identity", async () => {
         expect.assertions(1);
 

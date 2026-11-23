@@ -29,7 +29,8 @@
  * snapshot it writes alongside is what makes the next diff see a dropped table
  * at all.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { discoverMigrations, discoverSchema, readPackageDependencies } from "@lunora/codegen";
@@ -41,6 +42,7 @@ import { Project } from "ts-morph";
 import { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationTable } from "../../../../../shared/reprojection-id";
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { adminFetch, normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
+import { acquirePidLock } from "../../util/checkout-lock";
 import type { Refusal } from "../../util/exit-code";
 import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
@@ -128,18 +130,8 @@ const loadSnapshot = (path: string): SchemaSnapshot | undefined => {
     }
 };
 
-const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): MigrateGenerateCommandResult => {
-    const cwd = options.cwd ?? process.cwd();
-    const schemaPath = join(cwd, "lunora", "schema.ts");
-
-    if (!existsSync(schemaPath)) {
-        const error = `schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`;
-
-        options.logger.error(error);
-
-        return { code: EXIT_CODE.NOT_FOUND, empty: true, error, migrationFile: "" };
-    }
-
+/** The diff, the migration file and the snapshot update; runs holding the generate lock. */
+const generateMigration = (options: MigrateGenerateCommandOptions, cwd: string, schemaPath: string): MigrateGenerateCommandResult => {
     // Parse the current schema with ts-morph (reusing the codegen discoverer).
     const project = new Project({ skipAddingFilesFromTsConfig: true });
     const schemaIr = discoverSchema(project, schemaPath);
@@ -179,8 +171,63 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
 
     const body = renderMigrationFile(slug, diff, now.toISOString());
 
-    writeFileSync(migrationFile, body, "utf8");
-    writeFileSync(snapshotPath, `${JSON.stringify(nextSnapshot, undefined, 4)}\n`, "utf8");
+    // "wx": the file name has one-second resolution, so a same-second rerun must not replace a
+    // migration whose diff the snapshot has already absorbed. The open is separate from the write:
+    // an open can fail before it checks whether the file exists (ENFILE), so only a successful
+    // exclusive open proves the file is this run's to remove after a failed write.
+    let descriptor: number;
+
+    try {
+        descriptor = openSync(migrationFile, "wx");
+    } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+            throw error;
+        }
+
+        const message = `${filename} already exists — a migration with this name was generated in the same second; re-run, or pass a different --name`;
+
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, empty: true, error: message, migrationFile: "" };
+    }
+
+    // A partial or unclosed file left here would be applied as-is and could never be rewritten. A
+    // close is attempted once: retrying one can close a descriptor another open has since reused.
+    let closeAttempted = false;
+
+    try {
+        writeFileSync(descriptor, body, "utf8");
+        closeAttempted = true;
+        closeSync(descriptor);
+    } catch (error: unknown) {
+        if (!closeAttempted) {
+            try {
+                closeSync(descriptor);
+            } catch {
+                // The write error is the one to report.
+            }
+        }
+
+        rmSync(migrationFile, { force: true });
+
+        throw error;
+    }
+
+    // Temp file + rename so a crash cannot leave a torn snapshot; on failure the migration file is
+    // removed so the retry diffs against the old snapshot instead of emitting the same diff twice.
+    // A per-run name created with "wx" never follows a link planted in the project, and two runs
+    // never rename each other's file into place.
+    const temporarySnapshotPath = `${snapshotPath}.${randomUUID()}.tmp`;
+
+    try {
+        writeFileSync(temporarySnapshotPath, `${JSON.stringify(nextSnapshot, undefined, 4)}\n`, { encoding: "utf8", flag: "wx" });
+        renameSync(temporarySnapshotPath, snapshotPath);
+    } catch (error: unknown) {
+        rmSync(migrationFile, { force: true });
+        rmSync(temporarySnapshotPath, { force: true });
+
+        throw error;
+    }
 
     options.logger.success(`wrote ${migrationFile}`);
 
@@ -189,6 +236,37 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     }
 
     return { code: 0, empty: false, migrationFile };
+};
+
+const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): MigrateGenerateCommandResult => {
+    const cwd = options.cwd ?? process.cwd();
+    const schemaPath = join(cwd, "lunora", "schema.ts");
+
+    if (!existsSync(schemaPath)) {
+        const error = `schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`;
+
+        options.logger.error(error);
+
+        return { code: EXIT_CODE.NOT_FOUND, empty: true, error, migrationFile: "" };
+    }
+
+    // Two runs that read the same snapshot would both emit its diff, and the second rename would
+    // drop the first's change from the snapshot: generation is serialized per project. The lock
+    // lives in the gitignored `.lunora/`, beside the preview lock, so one an interrupted run leaves
+    // can never be committed with the migrations.
+    const lock = acquirePidLock(join(cwd, ".lunora", "migrate-generate.lock"), "`migrate generate`");
+
+    if (lock.error !== undefined) {
+        options.logger.error(lock.error);
+
+        return { code: EXIT_CODE.USAGE, empty: true, error: lock.error, migrationFile: "" };
+    }
+
+    try {
+        return generateMigration(options, cwd, schemaPath);
+    } finally {
+        lock.release();
+    }
 };
 
 const DATA_MIGRATIONS_FILENAME = "migrations.ts";

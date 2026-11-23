@@ -134,6 +134,8 @@ describe("usePresence", () => {
 
         expect(mock.mutation.mock.calls[0]?.[0]).toMatchObject({ __lunoraRef: "presence:heartbeat" });
         expect(mock.mutation.mock.calls[0]?.[1]).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed" });
+        // Never queued: a heartbeat replayed after reconnect would mark a room this session has since left.
+        expect(mock.mutation.mock.calls[0]?.[2]).toMatchObject({ onlineOnly: true });
 
         // Two interval ticks → two more heartbeats.
         await act(async () => {

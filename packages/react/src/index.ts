@@ -127,7 +127,7 @@ export { useMutator } from "./use-mutator";
 export type { PageItemOf, PaginatedArgs } from "./use-paginated-query";
 export { usePaginatedQuery } from "./use-paginated-query";
 export { hydratePreloaded, usePreloadedQuery } from "./use-preloaded-query";
-export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence";
+export type { HeartbeatReference, LeaveReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence";
 export { usePresence } from "./use-presence";
 export { default as useQuery } from "./use-query";
 export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit";

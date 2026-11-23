@@ -46,6 +46,10 @@ interface ParityClient {
     /** Pretend the client already holds `value` as the `lastValue` of the subscription `ref` + `args` (+ `shardKey`) names. */
     hold: (ref: string, value: unknown, args: Record<string, unknown>, shardKey?: string) => void;
     mutation: MutationMock;
+    /** The `args` of the next `mutation` call on `ref`: a milestone to await. */
+    nextMutation: (ref: string) => Promise<unknown>;
+    /** Report a new aggregate connection status to every `onConnectionStatus` listener. */
+    setStatus: (status: string) => void;
     subscribeCalls: SubscribeCall[];
 }
 
@@ -60,14 +64,19 @@ interface AdapterDriver {
     /** Run `fn` inside the framework's update batch (React's `act`); a plain call elsewhere. */
     act: (fn: () => Promise<void> | void) => Promise<void>;
     mutation: (client: unknown, ref: FakeRef) => Mounted<(args: Record<string, unknown>) => Promise<unknown>>;
-    /** Mounts presence on {@link PRESENCE}'s room; must throw synchronously when the adapter rejects `intervalMs`. */
-    presence: (client: unknown, options: { intervalMs: number }) => Mounted<unknown>;
+
+    /**
+     * Mounts presence on {@link PRESENCE}'s room, as {@link PRESENCE}'s session unless `sessionId` names another;
+     * must throw synchronously when the adapter rejects `intervalMs`.
+     */
+    presence: (client: unknown, options: { intervalMs: number; leave?: FakeRef; sessionId?: string }) => Mounted<unknown>;
     query: (client: unknown, ref: FakeRef, args: Record<string, unknown>, options?: { shardKey?: string }) => Mounted<unknown>;
     subscription: (client: unknown, ref: FakeRef, args: Record<string, unknown>, options: { onError: (error: unknown) => void }) => Mounted<unknown>;
 }
 
 const PRESENCE = {
     heartbeat: { __lunoraRef: "presence:heartbeat" } as FakeRef,
+    leave: { __lunoraRef: "presence:leave" } as FakeRef,
     listPresent: { __lunoraRef: "presence:listPresent" } as FakeRef,
     roomId: "room-1",
     sessionId: "sess-fixed",
@@ -90,7 +99,17 @@ const createParityClient = (): ParityClient => {
     };
     const held = new Map<string, unknown>();
     const subscribeCalls: SubscribeCall[] = [];
-    const mutation: MutationMock = vi.fn<(ref: FakeRef, args: unknown, options?: unknown) => Promise<unknown>>(async () => undefined);
+    const mutationWaiters: { ref: string; resolve: (args: unknown) => void }[] = [];
+    const mutation: MutationMock = vi.fn<(ref: FakeRef, args: unknown, options?: unknown) => Promise<unknown>>(async (ref, args) => {
+        for (const waiter of mutationWaiters.filter((entry) => entry.ref === ref.__lunoraRef)) {
+            mutationWaiters.splice(mutationWaiters.indexOf(waiter), 1);
+            waiter.resolve(args);
+        }
+
+        return undefined;
+    });
+    const statusListeners = new Set<(status: string) => void>();
+    let status = "connected";
 
     const subscribe = (ref: FakeRef, args: unknown, callback: (value: unknown) => void, options?: SubscribeCall["options"]): (() => void) => {
         const call: SubscribeCall = { args, options, ref: ref.__lunoraRef, unsubscribed: false };
@@ -124,7 +143,15 @@ const createParityClient = (): ParityClient => {
         isReady: true,
         mutation,
         onAuthTokenChange: () => () => undefined,
-        onConnectionStatus: () => () => undefined,
+        // Like the real client: the listener hears the current status at once, then every change.
+        onConnectionStatus: (listener: (next: string) => void) => {
+            statusListeners.add(listener);
+            listener(status);
+
+            return () => {
+                statusListeners.delete(listener);
+            };
+        },
         onIdentityChange: () => () => undefined,
         // A held value stands for an already-open subscription's `lastValue`.
         peekActiveQuerySnapshot: (functionPath: string, args?: unknown, shardKey?: string) => {
@@ -157,6 +184,17 @@ const createParityClient = (): ParityClient => {
             held.set(keyOf(ref, args, shardKey), value);
         },
         mutation,
+        nextMutation: async (ref) =>
+            new Promise((resolve) => {
+                mutationWaiters.push({ ref, resolve });
+            }),
+        setStatus: (next) => {
+            status = next;
+
+            for (const listener of statusListeners) {
+                listener(next);
+            }
+        },
         subscribeCalls,
     };
 };
@@ -271,6 +309,77 @@ const queryForwardsShardKey = async (driver: AdapterDriver): Promise<void> => {
     mounted.dispose();
 };
 
+const mutationsOf = (fake: ParityClient, ref: FakeRef): unknown[] =>
+    fake.mutation.mock.calls.filter(([called]) => called.__lunoraRef === ref.__lunoraRef).map(([, args]) => args);
+
+// The server keeps one row per room and session, so a view torn down while another still shows the same
+// session must not remove it; only the last one's teardown sends `leave`.
+const presenceLeavesWithItsLastHolder = async (driver: AdapterDriver): Promise<void> => {
+    const fake = createParityClient();
+    const options = { intervalMs: 60_000, leave: PRESENCE.leave };
+    const first = driver.presence(fake.client, options);
+    const second = driver.presence(fake.client, options);
+
+    first.dispose();
+
+    const left = fake.nextMutation(PRESENCE.leave.__lunoraRef);
+
+    second.dispose();
+
+    await driver.act(async () => {
+        await left;
+    });
+
+    expect(mutationsOf(fake, PRESENCE.leave)).toStrictEqual([{ roomId: PRESENCE.roomId, sessionId: PRESENCE.sessionId }]);
+};
+
+const presenceSessionsLeaveIndependently = async (driver: AdapterDriver): Promise<void> => {
+    const fake = createParityClient();
+    const mine = driver.presence(fake.client, { intervalMs: 60_000, leave: PRESENCE.leave, sessionId: "sess-a" });
+    const theirs = driver.presence(fake.client, { intervalMs: 60_000, leave: PRESENCE.leave, sessionId: "sess-b" });
+    const left = fake.nextMutation(PRESENCE.leave.__lunoraRef);
+
+    mine.dispose();
+
+    await driver.act(async () => {
+        await left;
+    });
+
+    expect(mutationsOf(fake, PRESENCE.leave)).toStrictEqual([{ roomId: PRESENCE.roomId, sessionId: "sess-a" }]);
+
+    theirs.dispose();
+};
+
+// Heartbeats are online-only, so one due while the socket reconnects is dropped, and the server's disconnect
+// hook has removed the row: the session must not stay missing until the next interval tick.
+const presenceRejoinsOnReconnect = async (driver: AdapterDriver): Promise<void> => {
+    const fake = createParityClient();
+    const mounted = driver.presence(fake.client, { intervalMs: 60_000 });
+    const beats = (): number => mutationsOf(fake, PRESENCE.heartbeat).length;
+    const atMount = beats();
+    const rejoined = fake.nextMutation(PRESENCE.heartbeat.__lunoraRef);
+
+    fake.setStatus("connecting");
+
+    expect(beats()).toBe(atMount);
+
+    fake.setStatus("connected");
+
+    // Sent in the listener's own tick, so a missing rejoin fails here rather than by timing out below.
+    expect(beats()).toBe(atMount + 1);
+
+    await driver.act(async () => {
+        await rejoined;
+    });
+
+    mounted.dispose();
+
+    fake.setStatus("connecting");
+    fake.setStatus("connected");
+
+    expect(beats()).toBe(atMount + 1);
+};
+
 /** Run from each adapter's `parity.test.ts` as `it.each(scenarios)("$name", ({ run }) => run(driver))`. */
 const scenarios: Scenario[] = [
     { name: "subscription onError receives the raw wire error, code intact", run: subscriptionOnErrorGetsRawWireError },
@@ -279,6 +388,9 @@ const scenarios: Scenario[] = [
     { name: "dispose stops the presence heartbeat and unsubscribes", run: disposeStopsPresence },
     { name: "a rejected mutation surfaces the same LunoraError code", run: mutationRejectionKeepsCode },
     { name: "query forwards shardKey to client.subscribe unchanged", run: queryForwardsShardKey },
+    { name: "presence sends leave only when the last holder of a room and session is torn down", run: presenceLeavesWithItsLastHolder },
+    { name: "presence holders of different sessions leave independently", run: presenceSessionsLeaveIndependently },
+    { name: "presence heartbeats once when the connection is open again, and not after dispose", run: presenceRejoinsOnReconnect },
 ];
 
 export type { AdapterDriver, FakeRef, Mounted, ParityClient, Scenario, WireError };

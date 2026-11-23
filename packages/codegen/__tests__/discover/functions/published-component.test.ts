@@ -389,8 +389,8 @@ export const presence = definePresence();
 
             expect(found).toStrictEqual([]);
             expect(warn.mock.calls.map(([message]) => String(message))).toStrictEqual([
-                "@lunora/codegen: presence.ts:presence ships functions (disconnect, heartbeat, listPresent, sweep) that nothing re-exports, so none is in the generated api. " +
-                    "Add `export const { disconnect, heartbeat, listPresent, sweep } = presence.functions;` (or export your own wrappers of them).",
+                "@lunora/codegen: presence.ts:presence ships functions (disconnect, heartbeat, leave, listPresent, sweep) that nothing re-exports, so none is in the generated api. " +
+                    "Add `export const { disconnect, heartbeat, leave, listPresent, sweep } = presence.functions;` (or export your own wrappers of them).",
             ]);
         } finally {
             warn.mockRestore();

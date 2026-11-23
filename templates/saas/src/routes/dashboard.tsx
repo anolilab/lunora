@@ -97,6 +97,8 @@ function OrganizationDashboard({ name, organizationId, orgRole, userId }: Organi
     const { present } = usePresence(organizationId, {
         data: { name: name ?? "Anonymous" },
         heartbeat: api.presence.heartbeat,
+        // Drops this session from the room at once on unmount, rather than after the TTL.
+        leave: api.presence.leave,
         listPresent: api.presence.listPresent,
         ...shard,
     });

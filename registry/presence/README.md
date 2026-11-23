@@ -13,7 +13,7 @@ lunora registry add presence
 This:
 
 1. Adds `@lunora/server` to your `package.json` (run `pnpm install` afterwards).
-2. Copies `lunora/presence/schema.ts` (the `present` table + the plugin) and `lunora/presence/index.ts` (the `heartbeat` / `listPresent` / `sweep` functions) into your project — these are **yours** to edit.
+2. Copies `lunora/presence/schema.ts` (the `present` table + the plugin) and `lunora/presence/index.ts` (the `heartbeat` / `leave` / `listPresent` / `sweep` functions) into your project — these are **yours** to edit.
 3. Splices a managed `.extend(presence.extension)` into `lunora/schema.ts`, merging the `present` table in as **`presence_present`** (extension tables are auto-prefixed with the plugin key).
 
 Then regenerate types:
@@ -22,11 +22,12 @@ Then regenerate types:
 lunora codegen
 ```
 
-The functions surface in the generated `api` as `presence/heartbeat`, `presence/listPresent`, and `presence/sweep` — i.e. `api.presence.heartbeat` and friends.
+The functions surface in the generated `api` as `presence/heartbeat`, `presence/leave`, `presence/listPresent`, and `presence/sweep` — i.e. `api.presence.heartbeat` and friends.
 
 ## How it works
 
 - **heartbeat** (mutation) upserts the caller's row for `(tenant, roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats _patch_ the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
+- **leave** (mutation) deletes the signed-in caller's own row for a room at once, so a room switch or an unmount does not leave the session listed until the TTL. A row owned by another identity, or an anonymous row (its `sessionId` is visible to the room), is left to age out.
 - **listPresent** (query) returns the non-expired members of the caller's room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
 - **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; the table's `.ttl()` already deletes expired rows in every shard, so it is an on-demand tool, not something to schedule (see [Expired rows](#expired-rows)).
 
@@ -44,7 +45,7 @@ Tune the time-to-live by editing `PRESENCE_TTL_MS` in `lunora/presence/schema.ts
 
 ## Use it from React
 
-The client half ships in `@lunora/react` as the `usePresence` hook — it calls `heartbeat` on an interval (and on tab-visibility changes) and subscribes to `listPresent`:
+The client half ships in `@lunora/react` as the `usePresence` hook — it calls `heartbeat` on an interval (and on tab-visibility changes), subscribes to `listPresent`, and calls `leave` when the room changes or the component unmounts:
 
 ```tsx
 import { usePresence } from "@lunora/react";
@@ -54,6 +55,7 @@ import { api } from "../lunora/_generated/api";
 function Room({ roomId }: { roomId: string }) {
     const { present, setData } = usePresence(roomId, {
         heartbeat: api.presence.heartbeat,
+        leave: api.presence.leave,
         listPresent: api.presence.listPresent,
         data: { name: "Ada", color: "#7c3aed" },
     });

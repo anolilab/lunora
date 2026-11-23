@@ -4,6 +4,7 @@ import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, Subscripti
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
+import { holdPresenceRow, onReconnected, sendPresenceHeartbeat, sendPresenceLeave } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 
@@ -47,6 +48,11 @@ type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, 
  */
 type ListPresentReference = FunctionReference<"query", { roomId: string }>;
 
+/**
+ * The presence `leave` mutation: `definePresence(...).functions.leave`.
+ */
+type LeaveReference = FunctionReference<"mutation", { roomId: string; sessionId: string }>;
+
 interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresentReference> {
     /** Awareness blob for the first heartbeat (selection, cursor, name, color…). */
     data?: Record<string, unknown>;
@@ -54,6 +60,14 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     heartbeat: H;
     /** Heartbeat cadence in ms. Defaults to 10s — keep it well under the server TTL. */
     intervalMs?: number;
+
+    /**
+     * The `api.*` reference for the presence `leave` mutation. When given, leaving a room (a room
+     * change, or teardown) removes this session's row there at once, unless another view on the same
+     * client still shows that session in that room; without it the old room lists the session until
+     * its last heartbeat ages out (`ttlMs`).
+     */
+    leave?: LeaveReference;
     /** The `api.*` reference for the presence listPresent query. */
     listPresent: L;
 
@@ -93,7 +107,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
 ): UsePresenceResult<L> => {
     const client = useLunora();
 
-    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, leave, listPresent, shardKey } = options;
 
     assertPresenceInterval(intervalMs);
 
@@ -118,9 +132,12 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     // The subscribe effect keys on the query ref + room + shard, so an inline
     // `onError` must not change its identity — read the latest through a ref.
     const onErrorRef = useRef(options.onError);
+    // Read at room teardown, so an inline `leave` reference does not re-run the room effect.
+    const leaveRef = useRef(leave);
 
     useEffect(() => {
         onErrorRef.current = options.onError;
+        leaveRef.current = leave;
     });
 
     // Latest awareness data, read at heartbeat time so `setData` never resets the
@@ -147,8 +164,9 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
             ...(dataRef.current === undefined ? {} : { data: dataRef.current }),
         } as ArgsOf<H>;
 
-        // Fire-and-forget — a dropped heartbeat self-heals on the next tick.
-        c.mutation(hb, args, { shardKey: sk }).catch(() => undefined);
+        // Fire-and-forget — a dropped heartbeat self-heals on the next tick. Never queued: a
+        // heartbeat replayed after reconnect would mark a room this session has since left.
+        sendPresenceHeartbeat(c, { roomId: room, sessionId: sid, shardKey: sk }, async () => c.mutation(hb, args, { onlineOnly: true, shardKey: sk }));
     }, []);
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `setData` is part of the hook's public return and builds on the stable `sendHeartbeat`; keeping it explicitly memoized preserves a steady identity for consumers that place it in their own effect deps.
@@ -221,9 +239,24 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     // other's context. The returned release drops only this hook's holder.
     useEffect(() => {
         const release = client.acquireConnectionContext({ roomId, sessionId: generatedSessionId }, { shardKey });
+        const releaseRow = holdPresenceRow(client, { roomId, sessionId: generatedSessionId, shardKey });
+        const stopRejoin = onReconnected(client, sendHeartbeat);
 
-        return release;
-    }, [client, roomId, generatedSessionId, shardKey]);
+        return () => {
+            stopRejoin();
+            release();
+
+            // The old room stops listing this session now, instead of when its last heartbeat ages out — unless
+            // another mounted view still shows the same session there.
+            const leaving = leaveRef.current;
+
+            if (releaseRow() && leaving !== undefined) {
+                sendPresenceLeave(client, { roomId, sessionId: generatedSessionId, shardKey }, async () =>
+                    client.mutation(leaving, { roomId, sessionId: generatedSessionId }, { onlineOnly: true, shardKey }),
+                );
+            }
+        };
+    }, [client, roomId, generatedSessionId, shardKey, sendHeartbeat]);
 
     // Subscribe to the reactive present-list for the room.
     useEffect(() => {
@@ -269,4 +302,4 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     return { error: current?.error, present: current?.present, sessionId: generatedSessionId, setData };
 };
 
-export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult };
+export type { HeartbeatReference, LeaveReference, ListPresentReference, UsePresenceOptions, UsePresenceResult };

@@ -39,7 +39,7 @@ export type {
     PaginatedArgs,
 } from "./create-paginated-query";
 export { createInfiniteQuery, createPaginatedQuery } from "./create-paginated-query";
-export type { CreatePresenceOptions, CreatePresenceResult, HeartbeatReference, ListPresentReference } from "./create-presence";
+export type { CreatePresenceOptions, CreatePresenceResult, HeartbeatReference, LeaveReference, ListPresentReference } from "./create-presence";
 export { createPresence } from "./create-presence";
 export type { CreateQueryOptions } from "./create-query";
 export { createQuery } from "./create-query";

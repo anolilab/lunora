@@ -720,7 +720,7 @@ Options for `useStream`. Set `durable` to resume the same run after a dropped co
 
 **Type:** `<H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: UsePresenceOptions<H, L>) => UsePresenceResult<L>`
 
-Joins a presence room and heartbeats the session on an interval. It returns the sessions present, the current `sessionId` and a `setData` setter for this session's data.
+Joins a presence room and heartbeats the session on an interval. It returns the sessions present, the current `sessionId` and a `setData` setter for this session's data. Pass `leave` (the preset's `leave` mutation) to drop this session's row from a room as soon as it is left; without it the row ages out after `ttlMs`.
 
 #### `useConnectionStatus`
 

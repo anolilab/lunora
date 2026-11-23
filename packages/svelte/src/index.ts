@@ -64,7 +64,7 @@ export type {
     ReactivePaginatedArgs,
 } from "./paginated-query";
 export { infiniteQuery, paginatedQuery } from "./paginated-query";
-export type { HeartbeatReference, ListPresentReference, PresenceHandle, PresenceOptions } from "./presence";
+export type { HeartbeatReference, LeaveReference, ListPresentReference, PresenceHandle, PresenceOptions } from "./presence";
 export { presence } from "./presence";
 export type { QueryStore, QueryStoreOptions, ReactiveArgs } from "./query";
 export { query } from "./query";

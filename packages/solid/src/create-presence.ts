@@ -1,17 +1,22 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
-import { createSignal } from "solid-js";
+import type { Accessor } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
+import { holdPresenceRow, onReconnected, sendPresenceHeartbeat, sendPresenceLeave } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
-import { onMounted } from "./solid-compat";
+import { trackedEffect } from "./solid-compat";
 
 /**
  * `createPresence` — collaborative-awareness primitive, the client half of the
  * `@lunora/server` `definePresence` preset.
  *
  * Drives the heartbeat mutation (on mount, interval, and tab re-focus) and
- * subscribes to the live `listPresent` query for the given room.
+ * subscribes to the live `listPresent` query for the given room. `roomId` may
+ * be an accessor; a change stops the old room's heartbeats and subscription and
+ * joins the new one. Pass `leave` to drop the old room's row at once; without it
+ * the server keeps that row until it ages out (`ttlMs`).
  *
  * Call inside a reactive context (component / `createRoot`).
  */
@@ -27,6 +32,11 @@ type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, 
  */
 type ListPresentReference = FunctionReference<"query", { roomId: string }>;
 
+/**
+ * The presence `leave` mutation: `definePresence(...).functions.leave`.
+ */
+type LeaveReference = FunctionReference<"mutation", { roomId: string; sessionId: string }>;
+
 interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPresentReference> {
     /** Awareness blob for the first heartbeat (selection, cursor, name, color…). */
     data?: Record<string, unknown>;
@@ -34,6 +44,14 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
     heartbeat: H;
     /** Heartbeat cadence in ms. Defaults to 10s. */
     intervalMs?: number;
+
+    /**
+     * The `api.*` reference for the presence `leave` mutation. When given, leaving a room (a room
+     * change, or teardown) removes this session's row there at once, unless another view on the same
+     * client still shows that session in that room; without it the old room lists the session until
+     * its last heartbeat ages out (`ttlMs`).
+     */
+    leave?: LeaveReference;
     /** The `api.*` reference for the presence listPresent query. */
     listPresent: L;
 
@@ -67,11 +85,11 @@ interface CreatePresenceResult<L extends ListPresentReference> {
 const DEFAULT_INTERVAL_MS = 10_000;
 
 const createPresence = <H extends HeartbeatReference, L extends ListPresentReference>(
-    roomId: string,
+    roomId: Accessor<string> | string,
     options: CreatePresenceOptions<H, L>,
 ): CreatePresenceResult<L> => {
     const client = useLunora();
-    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, leave, listPresent, shardKey } = options;
 
     assertPresenceInterval(intervalMs);
 
@@ -85,15 +103,20 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     let latestData: Record<string, unknown> | undefined = options.data;
     // True only between mount and teardown; `setData` must not heartbeat before then.
     let mounted = false;
+    // The room the armed wiring belongs to; only read while `mounted`.
+    let currentRoom = "";
 
     const sendHeartbeat = (): void => {
         const args = {
-            roomId,
+            roomId: currentRoom,
             sessionId,
             ...(latestData === undefined ? {} : { data: latestData }),
         } as ArgsOf<H>;
 
-        client.mutation(heartbeat, args, { shardKey }).catch(() => undefined);
+        // Never queued: a heartbeat replayed after reconnect would mark a room this session has since left.
+        const write = async () => client.mutation(heartbeat, args, { onlineOnly: true, shardKey });
+
+        sendPresenceHeartbeat(client, { roomId: currentRoom, sessionId, shardKey }, write);
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -104,10 +127,44 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         }
     };
 
-    onMounted(() => {
+    // The memo below runs eagerly on the server, where an accessor such as
+    // `() => window.location.hash` throws; effects never run there anyway, so stay idle until the
+    // client takes over. `solid-js/web`'s `isServer` is not importable from both majors.
+    if ((globalThis as { window?: unknown }).window === undefined) {
+        return { error, present, sessionId, setData };
+    }
+
+    // The room teardown is handed to the effect only once `apply` returns, but a replayed refusal can
+    // dispose the owner from inside `subscribe` before that. The owner's own cleanup covers that window:
+    // it tears the room being armed down, and `apply` unsubscribes as soon as `subscribe` returns.
+    let ownerDisposed = false;
+    let disposeArming: (() => void) | undefined;
+    const isOwnerDisposed = (): boolean => ownerDisposed;
+
+    onCleanup(() => {
+        ownerDisposed = true;
+        disposeArming?.();
+    });
+
+    // Memoised: Solid 1.x's `on` re-runs on every dependency notification, so an accessor that
+    // re-computes the same room string would otherwise leave and rejoin the room.
+    const resolveRoom: Accessor<string> = typeof roomId === "function" ? createMemo(roomId) : () => roomId;
+
+    // Re-runs per room: the previous room's interval, listener, connection context and subscription
+    // are torn down before the next room is armed. Effects do not run during SSR, which keeps
+    // heartbeats and sockets off the server.
+    trackedEffect(resolveRoom, (room) => {
+        currentRoom = room;
         mounted = true;
 
-        // Heartbeat immediately on mount.
+        // A room change must not show the previous room's members or error under the new one.
+        setPresent(() => undefined);
+        setError(() => undefined);
+
+        // Guards a value or error the client delivers after this room was torn down.
+        let live = true;
+
+        // Heartbeat immediately on mount, and at once for a new room.
         sendHeartbeat();
 
         const intervalHandle = setInterval(sendHeartbeat, intervalMs);
@@ -129,26 +186,22 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         // shard each hold their own registration, so one unmounting no longer
         // clears the other's context. The returned release drops only this hook's
         // holder.
-        const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
+        const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
+        const releaseRow = holdPresenceRow(client, { roomId: room, sessionId, shardKey });
+        const stopRejoin = onReconnected(client, sendHeartbeat);
 
-        // Subscribe to the live present-list for the room.
-        const unsubscribe = client.subscribe(
-            listPresent,
-            { roomId } as ArgsOf<L>,
-            (value) => {
-                setPresent(() => value);
-                setError(undefined);
-            },
-            {
-                onError: (subscriptionError) => {
-                    setError(subscriptionError);
-                    options.onError?.(subscriptionError);
-                },
-                shardKey,
-            },
-        );
+        let unsubscribe: (() => void) | undefined;
+        let disposed = false;
 
-        return () => {
+        // The one teardown for this room: a normal room change or unmount, a setup rollback, and the
+        // owner disposed while `subscribe` replays. Idempotent, so `leave` goes out exactly once.
+        const dispose = (): void => {
+            if (disposed) {
+                return;
+            }
+
+            disposed = true;
+            live = false;
             mounted = false;
             clearInterval(intervalHandle);
 
@@ -156,13 +209,65 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
                 document.removeEventListener("visibilitychange", onVisible);
             }
 
+            stopRejoin();
+
             releaseConnectionContext();
-            unsubscribe();
+            unsubscribe?.();
+
+            // The old room stops listing this session now, instead of when its last heartbeat ages out — unless
+
+            // another mounted view still shows the same session there.
+            if (releaseRow() && leave !== undefined) {
+                const write = async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey });
+
+                sendPresenceLeave(client, { roomId: room, sessionId, shardKey }, write);
+            }
         };
+
+        disposeArming = dispose;
+
+        // Subscribe to the live present-list for the room; a throw rolls this room's setup back.
+        try {
+            unsubscribe = client.subscribe(
+                listPresent,
+                { roomId: room } as ArgsOf<L>,
+                (value) => {
+                    if (live) {
+                        setPresent(() => value);
+                        setError(undefined);
+                    }
+                },
+                {
+                    onError: (subscriptionError) => {
+                        if (live) {
+                            setError(subscriptionError);
+                            options.onError?.(subscriptionError);
+                        }
+                    },
+                    shardKey,
+                },
+            );
+        } catch (subscribeError) {
+            dispose();
+
+            throw subscribeError;
+        } finally {
+            disposeArming = undefined;
+        }
+
+        // A read through a call: `subscribe` can flip the flag, which control-flow narrowing cannot see.
+        // The owner's cleanup ran `dispose` before `subscribe` returned the handle, so close it now.
+        if (isOwnerDisposed()) {
+            unsubscribe();
+
+            return undefined;
+        }
+
+        return dispose;
     });
 
     return { error, present, sessionId, setData };
 };
 
-export type { CreatePresenceOptions, CreatePresenceResult, HeartbeatReference, ListPresentReference };
+export type { CreatePresenceOptions, CreatePresenceResult, HeartbeatReference, LeaveReference, ListPresentReference };
 export { createPresence };

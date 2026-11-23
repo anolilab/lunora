@@ -1,6 +1,7 @@
 /* eslint-disable no-underscore-dangle -- `__lunoraRef` is the Lunora function-reference field */
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
+import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HeartbeatReference, ListPresentReference } from "../src/create-presence";
@@ -45,6 +46,7 @@ const createPresenceFakeClient = () => {
 
             return Promise.resolve(undefined);
         },
+        onConnectionStatus: () => () => undefined,
         subscribe: (
             function_: FunctionReference,
             args: Record<string, unknown>,
@@ -390,5 +392,336 @@ describe("createPresence (Solid)", () => {
         expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
         // The last good value is retained — the error is additive, not a reset.
         expect(captured!.present()).toStrictEqual([{ sessionId: "sess-fixed" }]);
+    });
+
+    it("follows a reactive room id: leaves the old room, joins the new one at once, and drops the old room's data", async () => {
+        expect.assertions(9);
+
+        const fake = createPresenceFakeClient();
+        const [room, setRoom] = createSignal("a");
+        let captured: ReturnType<typeof createPresence> | undefined;
+
+        render(
+            () => {
+                // A long interval, so only a room-change heartbeat can reach the new room.
+                captured = createPresence(room, { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        fake.push("presence:listPresent", { roomId: "a" }, ["alice"]);
+
+        expect(captured!.present()).toStrictEqual(["alice"]);
+
+        setRoom("b");
+        await flushAsync();
+
+        expect(fake.mutationCalls.map((call) => (call.args as { roomId: string }).roomId)).toStrictEqual(["a", "b"]);
+        expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true, false]);
+        expect(fake.subscribeCalls.map((call) => call.args)).toStrictEqual([{ roomId: "a" }, { roomId: "b" }]);
+        expect(fake.connectionContextHolders.map((holder) => holder.context)).toStrictEqual([
+            { roomId: "a", sessionId: "sess-fixed" },
+            { roomId: "b", sessionId: "sess-fixed" },
+        ]);
+        expect(fake.connectionContextHolders.map((holder) => holder.released)).toStrictEqual([true, false]);
+        expect(captured!.present()).toBeUndefined();
+
+        // A late push for the room that was left must not appear under the new one.
+        fake.subscribeCalls[0]?.callback(["stale"]);
+
+        expect(captured!.present()).toBeUndefined();
+
+        fake.push("presence:listPresent", { roomId: "b" }, ["bob"]);
+
+        expect(captured!.present()).toStrictEqual(["bob"]);
+    });
+
+    it("keeps the room armed when the room id accessor re-runs to the same value", async () => {
+        expect.assertions(3);
+
+        const fake = createPresenceFakeClient();
+        const [org, setOrg] = createSignal({ id: "acme" });
+        let captured: ReturnType<typeof createPresence> | undefined;
+
+        render(
+            () => {
+                captured = createPresence(() => `${org().id}:lobby`, {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 60_000,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        fake.push("presence:listPresent", { roomId: "acme:lobby" }, ["alice"]);
+
+        // A new object with the same id: the accessor re-runs, the room string does not change.
+        setOrg({ id: "acme" });
+        await flushAsync();
+
+        expect(fake.subscribeCalls).toHaveLength(1);
+        expect(fake.connectionContextHolders).toHaveLength(1);
+        expect(captured!.present()).toStrictEqual(["alice"]);
+    });
+
+    it("leaves each room it stops showing, and the last one on unmount, through the leave mutation", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const leftB = Promise.withResolvers<undefined>();
+        // A leave waits for its room's heartbeat to settle, so the last one is awaited, not assumed.
+        const mutation = vi.spyOn(fake.client, "mutation").mockImplementation(async (reference, args) => {
+            if ((reference as unknown as Record<string, string>)["__lunoraRef"] === "presence:leave" && (args as { roomId: string }).roomId === "b") {
+                leftB.resolve(undefined);
+            }
+
+            return undefined;
+        });
+        const [room, setRoom] = createSignal("a");
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+
+        const view = render(
+            () => {
+                createPresence(room, { heartbeat: HEARTBEAT, intervalMs: 60_000, leave: LEAVE, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+        setRoom("b");
+        await flushAsync();
+        view.unmount();
+        await leftB.promise;
+
+        expect(
+            mutation.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === "presence:leave").map((call) => call[1]),
+        ).toStrictEqual([
+            { roomId: "a", sessionId: "sess-fixed" },
+            { roomId: "b", sessionId: "sess-fixed" },
+        ]);
+    });
+
+    it("sends a room's leave only after the heartbeat still in flight for it has settled", async () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const heartbeatLanded = Promise.withResolvers<undefined>();
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const leaveSent = Promise.withResolvers<undefined>();
+        const mutation = vi.spyOn(fake.client, "mutation").mockImplementation(async (reference) => {
+            const name = (reference as unknown as Record<string, string>)["__lunoraRef"];
+
+            if (name === "presence:leave") {
+                leaveSent.resolve(undefined);
+            }
+
+            return name === "presence:heartbeat" ? heartbeatLanded.promise : undefined;
+        });
+        const sent = (): string[] => mutation.mock.calls.map((call) => (call[0] as unknown as Record<string, string>)["__lunoraRef"] ?? "");
+
+        const view = render(
+            () => {
+                createPresence("a", { heartbeat: HEARTBEAT, intervalMs: 60_000, leave: LEAVE, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+        view.unmount();
+
+        expect(sent()).toStrictEqual(["presence:heartbeat"]);
+
+        heartbeatLanded.resolve(undefined);
+        await leaveSent.promise;
+
+        expect(sent()).toStrictEqual(["presence:heartbeat", "presence:leave"]);
+    });
+
+    it("releases a room whose root is disposed while its subscription replays a refusal", async () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        const original = fake.client.subscribe.bind(fake.client);
+        let disposeRoot = (): void => {};
+
+        // A replayed refusal reaches onError before subscribe returns.
+        vi.spyOn(fake.client, "subscribe").mockImplementation((...args: Parameters<typeof original>) => {
+            const unsubscribe = original(...args);
+
+            fake.subscribeCalls.at(-1)?.onError?.({ code: "FORBIDDEN", message: "no" });
+
+            return unsubscribe;
+        });
+
+        const Presence = (): null => {
+            createPresence("a", {
+                heartbeat: HEARTBEAT,
+                intervalMs: 60_000,
+                listPresent: LIST_PRESENT,
+                onError: () => {
+                    disposeRoot();
+                },
+                sessionId: "sess-fixed",
+            });
+
+            return null;
+        };
+
+        createRoot((dispose) => {
+            disposeRoot = dispose;
+
+            return (
+                <LunoraProvider client={fake.client}>
+                    <Presence />
+                </LunoraProvider>
+            );
+        });
+
+        await flushAsync();
+
+        expect(fake.connectionContextHolders.map((holder) => holder.released)).toStrictEqual([true]);
+        expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true]);
+    });
+
+    it("sends the room's leave once when its root is disposed while its subscription replays a refusal", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const original = fake.client.subscribe.bind(fake.client);
+        const leaveSent = Promise.withResolvers<undefined>();
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const mutation = vi.spyOn(fake.client, "mutation").mockImplementation(async (reference) => {
+            if ((reference as unknown as Record<string, string>)["__lunoraRef"] === "presence:leave") {
+                leaveSent.resolve(undefined);
+            }
+
+            return undefined;
+        });
+        let disposeRoot = (): void => {};
+
+        // A replayed refusal reaches onError before subscribe returns.
+        vi.spyOn(fake.client, "subscribe").mockImplementation((...args: Parameters<typeof original>) => {
+            const unsubscribe = original(...args);
+
+            fake.subscribeCalls.at(-1)?.onError?.({ code: "FORBIDDEN", message: "no" });
+
+            return unsubscribe;
+        });
+
+        const Presence = (): null => {
+            createPresence("a", {
+                heartbeat: HEARTBEAT,
+                intervalMs: 60_000,
+                leave: LEAVE,
+                listPresent: LIST_PRESENT,
+                onError: () => {
+                    disposeRoot();
+                },
+                sessionId: "sess-fixed",
+            });
+
+            return null;
+        };
+
+        createRoot((dispose) => {
+            disposeRoot = dispose;
+
+            return (
+                <LunoraProvider client={fake.client}>
+                    <Presence />
+                </LunoraProvider>
+            );
+        });
+
+        await leaveSent.promise;
+
+        expect(
+            mutation.mock.calls.filter((call) => (call[0] as unknown as Record<string, string>)["__lunoraRef"] === "presence:leave").map((call) => call[1]),
+        ).toStrictEqual([{ roomId: "a", sessionId: "sess-fixed" }]);
+    });
+
+    it("never queues a heartbeat for offline replay", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const mutation = vi.spyOn(fake.client, "mutation");
+
+        render(
+            () => {
+                createPresence("a", { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ onlineOnly: true });
+    });
+
+    it("does not read the room accessor without a browser global (SSR)", () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const room = vi.fn<() => string>(() => {
+            throw new Error("window.location is not available on the server");
+        });
+
+        vi.stubGlobal("window", undefined);
+
+        try {
+            render(
+                () => {
+                    createPresence(room, { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                    return <div />;
+                },
+                { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+            );
+        } finally {
+            vi.unstubAllGlobals();
+        }
+
+        expect(room).not.toHaveBeenCalled();
+    });
+
+    it("rolls a room's setup back when subscribing to it throws", async () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+
+        vi.spyOn(fake.client, "subscribe").mockImplementation(() => {
+            throw new Error("client closed");
+        });
+
+        expect(() =>
+            render(
+                () => {
+                    createPresence("a", { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+                    return <div />;
+                },
+                { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+            ),
+        ).toThrow("client closed");
+
+        await flushAsync();
+
+        expect(fake.connectionContextHolders.map((holder) => holder.released)).toStrictEqual([true]);
     });
 });

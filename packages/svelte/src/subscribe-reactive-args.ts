@@ -31,6 +31,11 @@ import { isReadableStore } from "./is-readable-store";
  * teardown the outer call then overwrites, leaking it. Such a value waits and is
  * applied once the in-flight `open` has handed over its teardown, so the last
  * emission always wins and every subscription it replaced is closed.
+ *
+ * An `open` that throws on the first emission (a closed client's `subscribe`) is rethrown from
+ * here only after the args source is detached: svelte/store registers the listener before it
+ * invokes it, so letting the throw escape `args.subscribe` would strand the listener with no
+ * stop function to remove it.
  */
 // eslint-disable-next-line import/prefer-default-export -- named export so it composes with the other named imports at its call sites; a default would not.
 export const subscribeReactiveArgs = <T>(args: T | Readable<T>, open: (value: T) => Unsubscriber): Unsubscriber => {
@@ -46,6 +51,9 @@ export const subscribeReactiveArgs = <T>(args: T | Readable<T>, open: (value: T)
     // and `stableWireKey` never returns `undefined`, so the first emission
     // always opens.
     let openKey: string | undefined;
+    let subscribing = true;
+    // A one-slot box, like `queued`: a thrown value may itself be undefined.
+    let initialError: [unknown] | undefined;
 
     const unsubscribeArgs = args.subscribe((resolved) => {
         if (opening) {
@@ -75,10 +83,25 @@ export const subscribeReactiveArgs = <T>(args: T | Readable<T>, open: (value: T)
                 next = queued;
                 queued = undefined;
             }
+        } catch (error) {
+            if (!subscribing) {
+                throw error;
+            }
+
+            initialError = [error];
         } finally {
             opening = false;
         }
     });
+
+    subscribing = false;
+
+    if (initialError !== undefined) {
+        unsubscribeArgs();
+        teardown();
+
+        throw initialError[0];
+    }
 
     return () => {
         unsubscribeArgs();

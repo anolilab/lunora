@@ -1801,6 +1801,12 @@ interface PresenceFunctions {
     }, {
         lastSeen: number;
     }>;
+    leave: RegisteredMutation<{
+        roomId: StringColumnValidator;
+        sessionId: StringColumnValidator;
+    }, {
+        left: boolean;
+    }>;
     listPresent: RegisteredQuery<{
         roomId: StringColumnValidator;
     }, PresenceMember[]>;

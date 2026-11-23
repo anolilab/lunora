@@ -43,6 +43,7 @@ const outDirectory = join(here, "..", "node_modules", ".registry-presence-test")
 
 interface PresenceItem {
     heartbeat: RegisteredMutation<ArgsValidator, unknown>;
+    leave: RegisteredMutation<ArgsValidator, { left: boolean }>;
     listPresent: RegisteredQuery<ArgsValidator, unknown>;
     presence: { extension: Parameters<ReturnType<typeof defineSchema>["extend"]>[0] };
     sweep: RegisteredMutation<ArgsValidator, { deleted: number }>;
@@ -117,6 +118,34 @@ export { v };`,
 
         await expect(t.query(item.listPresent, { roomId: "room-1" })).resolves.toStrictEqual([
             expect.objectContaining({ data, roomId: "room-1", sessionId: "sess-1" }),
+        ]);
+    });
+
+    it("lets a signed-in member leave its own row, and no one else", async () => {
+        expect.assertions(3);
+
+        const t = start();
+        const ada = t.withIdentity({ userId: "ada" });
+        const bob = t.withIdentity({ userId: "bob" });
+
+        await ada.mutation(item.heartbeat, { roomId: "room-1", sessionId: "sess-ada" });
+
+        await expect(bob.mutation(item.leave, { roomId: "room-1", sessionId: "sess-ada" })).resolves.toStrictEqual({ left: false });
+        await expect(ada.mutation(item.leave, { roomId: "room-1", sessionId: "sess-ada" })).resolves.toStrictEqual({ left: true });
+        await expect(ada.query(item.listPresent, { roomId: "room-1" })).resolves.toStrictEqual([]);
+    });
+
+    it("never lets an anonymous caller remove an anonymous row, whose sessionId listPresent shows to the room", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        await t.mutation(item.heartbeat, { roomId: "room-1", sessionId: "sess-anon" });
+
+        // Anyone in the room can read `sess-anon`, so an anonymous leave proves nothing about who asks.
+        await expect(t.mutation(item.leave, { roomId: "room-1", sessionId: "sess-anon" })).resolves.toStrictEqual({ left: false });
+        await expect(t.query(item.listPresent, { roomId: "room-1" })).resolves.toStrictEqual([
+            expect.objectContaining({ roomId: "room-1", sessionId: "sess-anon" }),
         ]);
     });
 
