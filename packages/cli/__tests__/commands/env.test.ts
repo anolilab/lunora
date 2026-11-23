@@ -652,6 +652,24 @@ describe("lunora env", () => {
             expect(message).toContain("lunora env set --env staging");
         });
 
+        it("push --env staging --from-dev-vars points the placeholder fix-ups at .dev.vars, not .dev.vars.staging", async () => {
+            expect.assertions(5);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="replace-me"\n', "utf8");
+            writeFileSync(join(workdir, ".dev.vars.staging"), 'AUTH_SECRET="s3cret"\n', "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const { spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", fromDevVars: true, logger, spawner, subcommand: "push", yes: true });
+            const message = recorded.errors.join("\n");
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(message).toContain("lunora env generate --set`");
+            expect(message).toContain("lunora env set <KEY> <VALUE>");
+            expect(message).not.toMatch(/lunora env (?:doctor|generate --set|set) --env/u);
+            expect(message).toContain("lunora env push --yes --env staging --from-dev-vars");
+        });
+
         it("set --env staging writes .dev.vars.staging, leaves .dev.vars alone and git-ignores the sibling", async () => {
             expect.assertions(4);
 
