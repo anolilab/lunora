@@ -156,6 +156,63 @@ describe("createAuthAdmin API keys", () => {
         expect((database["apikey"] ?? []).map((row) => (row as { id: string }).id)).toStrictEqual(["k1"]);
     });
 
+    it("lets only one of two concurrent revocations of a key report success", async () => {
+        expect.assertions(2);
+
+        const database = seedDatabase();
+        // Both revocations read the row before either deletes it: the first delete waits for the second to arrive.
+        let arrived: (() => void) | undefined;
+        const secondArrived = new Promise<void>((resolve) => {
+            arrived = resolve;
+        });
+        let deletes = 0;
+        const holdFirstDelete = async (model: string): Promise<void> => {
+            if (model !== "apikey") {
+                return;
+            }
+
+            deletes += 1;
+
+            if (deletes === 1) {
+                await secondArrived;
+            } else {
+                arrived?.();
+            }
+        };
+        const memory = memoryAdapter(database);
+        const adminApi = createAuthAdmin(
+            createAuth({
+                baseURL: "http://localhost",
+                database: (options: Parameters<typeof memory>[0]) => {
+                    const adapter = memory(options);
+
+                    return {
+                        ...adapter,
+                        delete: async (input: Parameters<typeof adapter.delete>[0]) => {
+                            await holdFirstDelete(input.model);
+
+                            return adapter.delete(input);
+                        },
+                        deleteMany: async (input: Parameters<typeof adapter.deleteMany>[0]) => {
+                            await holdFirstDelete(input.model);
+
+                            return adapter.deleteMany(input);
+                        },
+                    };
+                },
+                plugins: [apiKey()],
+                secret: SECRET,
+            }),
+        );
+
+        database["apikey"]?.push(keyRow("k1", "alice"));
+
+        const outcomes = await Promise.allSettled([adminApi.deleteApiKey({ apiKeyId: "k1" }), adminApi.deleteApiKey({ apiKeyId: "k1" })]);
+
+        expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+        expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({ reason: { code: "API_KEY_NOT_FOUND" } });
+    });
+
     it("revokes a database-stored key while sessions live in secondary storage, and the key stops verifying", async () => {
         expect.assertions(3);
 
