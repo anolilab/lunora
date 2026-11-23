@@ -3381,9 +3381,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      *
      * - `baseWhere` (this hop's policy filter) is ANDed into `where`.
      * - `relationBaseWhere` (a function, for NESTED `with` levels) is projected
-     *   into a table → filter map. Projecting every schema table is cheaper than
-     *   walking the `with` tree and can't miss a hop; `readBase` is memoized
-     *   upstream, and tables with no restricting policy simply don't appear.
+     *   into a table → filter map over the tables the hop can reach: its `with`,
+     *   `where` and `baseWhere`, and the relations each projected policy filters by
+     *   (see `projectRelationPolicies`). Tables with no restricting policy simply
+     *   don't appear; a reached protected table with none refuses.
      *
      * `relationMask` has the same problem and NO such projection: a mask policy
      * isn't serializable (a custom `MaskFn` is a closure over the request, and

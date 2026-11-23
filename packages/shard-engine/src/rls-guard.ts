@@ -18,6 +18,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { isRelationPredicate } from "../../../shared/relation-operators";
 import { normalizeCountArgument } from "./aggregate-sql";
 import { findRelated } from "./relation-graph";
 import type { DatabaseWriterLike, RelatedOptions, RelatedStart, RelationEdge } from "./schema-types";
@@ -78,7 +79,14 @@ class RlsRequiredError extends LunoraError {
 /** Minimal schema projection the guard reads: the RLS mode + per-table opt-out and shard mode. */
 interface GuardableSchema {
     readonly rlsMode?: "required";
-    readonly tables: Record<string, { readonly isPublic?: boolean; readonly shardMode?: { readonly kind?: string } }>;
+    readonly tables: Record<
+        string,
+        {
+            readonly isPublic?: boolean;
+            readonly relationMap?: Record<string, { readonly table: string; readonly through?: { readonly table: string } }>;
+            readonly shardMode?: { readonly kind?: string };
+        }
+    >;
 }
 
 /**
@@ -349,6 +357,34 @@ const installReboundMethods = (guarded: Record<string, unknown>, base: Guardable
     }
 };
 
+/** The tables one relation node reads: its target, its join table, and whatever its inner filters reach. */
+const relationNodeTargets = (schema: GuardableSchema, relation: { table: string; through?: { table: string } }, node: Record<string, unknown>): string[] => [
+    ...(relation.through === undefined ? [] : [relation.through.table]),
+    relation.table,
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with relationTargetsOf
+    ...Object.values(node).flatMap((inner) => relationTargetsOf(schema, relation.table, inner)),
+];
+
+/**
+ * Every table a `where` on `tableName` reads through a relation predicate, by the engine's own test
+ * for a relation node (every key an operator), through `AND`/`OR`/`NOT` and nested predicates.
+ */
+const relationTargetsOf = (schema: GuardableSchema, tableName: string, where: unknown): string[] => {
+    if (where === null || typeof where !== "object") {
+        return [];
+    }
+
+    return Object.entries(where).flatMap(([key, value]) => {
+        if (key === "AND" || key === "OR" || key === "NOT") {
+            return (Array.isArray(value) ? value : [value]).flatMap((branch) => relationTargetsOf(schema, tableName, branch));
+        }
+
+        const relation = schema.tables[tableName]?.relationMap?.[key];
+
+        return relation !== undefined && isRelationPredicate(value) ? relationNodeTargets(schema, relation, value) : [];
+    });
+};
+
 /**
  * Wrap `raw` in the secure-by-default guard. A no-op (returns `raw` untouched)
  * unless the schema is `.rls("required")` — so non-secure schemas pay nothing
@@ -384,6 +420,15 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
     const guardTable = (tableName: string): void => {
         if (isProtected(tableName)) {
             throw new RlsRequiredError(tableName);
+        }
+    };
+    // `deleteWhere`/`patchWhere` resolve their `where` through the raw writer, which carries no
+    // relation gate (only the `rls()` middleware's reads do, and it never calls these). A relation
+    // predicate there reads the child to decide which rows to write, and the count it returns
+    // tells the caller what matched, so every relation table it names is gated like a direct read.
+    const guardRelationTargets = (tableName: string, where: unknown): void => {
+        for (const target of relationTargetsOf(schema, tableName, where)) {
+            guardTable(target);
         }
     };
 
@@ -426,6 +471,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
                   // Where-based: gate the table, then delegate. Per-row policy
                   // checks happen in the RLS middleware layer above this guard.
                   guardTable(tableName);
+                  guardRelationTargets(tableName, where);
 
                   return await base.deleteWhere?.(tableName, where, options);
               }
@@ -464,6 +510,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, r
                   // Where-based: gate the table, then delegate. Per-row policy
                   // checks happen in the RLS middleware layer above this guard.
                   guardTable(tableName);
+                  guardRelationTargets(tableName, args.where);
 
                   return await base.patchWhere?.(tableName, args, options);
               }

@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { lunoraTest } from "../src/index";
 import trackHarnesses from "./harness-tracker";
 
-const { query } = initLunora.dataModel().create();
+const { mutation, query } = initLunora.dataModel().create();
 
 /** See `rls-enforcement.test.ts`: the raw builder types `ctx.db` nominally, so the middleware is cast once here. */
 const rlsForTest = <Context>(policies: ReadonlyArray<Policy<Context>>): Middleware<any, any> =>
@@ -113,6 +113,12 @@ const postsWithPoliciedSecrets = query
     .use(rlsForTest(definePolicies([readPosts, readSecrets])))
     .query(async ({ ctx }) => (ctx.db as unknown as { findMany: FindMany }).findMany("posts", { with: { secrets: true } }));
 
+/** The where-based bulk writes; the builder's nominal `ctx.db` type does not list them. */
+interface BulkWrites {
+    deleteWhere: (table: string, where: Record<string, unknown>) => Promise<unknown>;
+    patchWhere: (table: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }) => Promise<unknown>;
+}
+
 const harnesses = trackHarnesses();
 
 const seeded = async (): Promise<ReturnType<typeof lunoraTest>> => {
@@ -189,6 +195,26 @@ describe("lunoraTest — relation reads of a protected table without a read poli
         const { page } = await t.query(postsWithPoliciedSecrets, {});
 
         expect(page.map((post) => (post["secrets"] as Record<string, unknown>[]).map((row) => row["body"]))).toStrictEqual([["s"]]);
+    });
+
+    it.each([
+        ["deleteWhere", async (database: BulkWrites) => database.deleteWhere("notices", { secrets: { some: { body: "s" } } })],
+        ["patchWhere", async (database: BulkWrites) => database.patchWhere("notices", { patch: { text: "x" }, where: { secrets: { some: { body: "s" } } } })],
+    ] as const)("refuses a %s on a .public() parent filtered by the protected child without rls()", async (_name, write) => {
+        expect.assertions(1);
+
+        const t = await seeded();
+
+        // The matched count would otherwise tell the handler what the hidden child rows hold.
+        await expect(
+            t.mutation(
+                mutation.mutation(async ({ ctx }) => write(ctx.db as unknown as BulkWrites)),
+                {},
+            ),
+        ).rejects.toMatchObject({
+            code: "RLS_REQUIRED",
+            table: "secrets",
+        });
     });
 
     it("still loads a .public() child", async () => {
