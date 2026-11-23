@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -334,6 +334,33 @@ const refuseMissingPushSource = (context: EnvContext): EnvCommandResult | undefi
     return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
 };
 
+/**
+ * The refusal for a named push whose own file is the bare `.dev.vars` under another name — a
+ * symlink or hard link to it — or `undefined` to go on. Following it would upload the local dev
+ * values, generated dev credentials included, without --from-dev-vars and its mintable-key check.
+ */
+const refuseAliasedPushSource = (context: EnvContext): EnvCommandResult | undefined => {
+    const { cwd, devVariablesFile, devVariablesPath, environment, logger, options } = context;
+
+    if (environment === undefined || options.fromDevVars === true) {
+        return undefined;
+    }
+
+    const bare = statSync(join(cwd, DEV_VARS_FILE), { throwIfNoEntry: false });
+    const named = statSync(devVariablesPath);
+
+    if (bare?.dev !== named.dev || bare.ino !== named.ino) {
+        return undefined;
+    }
+
+    logger.error(
+        `env push --env ${environment}: ${devVariablesFile} is a link to ${DEV_VARS_FILE}, so it would push the local dev values. ` +
+            `Give ${devVariablesFile} its own values, or pass --from-dev-vars to push ${DEV_VARS_FILE} on purpose.`,
+    );
+
+    return { code: EXIT_CODE.USAGE, descriptors: [] };
+};
+
 const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     const { devVariablesFile, devVariablesPath, environment, logger, options } = context;
 
@@ -343,7 +370,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
         return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
-    const missingSource = refuseMissingPushSource(context);
+    const missingSource = refuseMissingPushSource(context) ?? refuseAliasedPushSource(context);
 
     if (missingSource !== undefined) {
         return missingSource;

@@ -1,5 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain secret-like strings */
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -560,6 +560,24 @@ describe("lunora env", () => {
             expect(calls.map((call) => call.descriptor.args.join(" "))).toStrictEqual(["exec wrangler secret put PROD_ONLY --env production"]);
             expect(calls[0]?.descriptor.input).toBe("prod-value");
             expect(result.data).toStrictEqual({ pushed: ["PROD_ONLY"], subcommand: "push", target: "production" });
+        });
+
+        it.each([
+            ["symlink", symlinkSync],
+            ["hard link", linkSync],
+        ])("push --prod refuses a .dev.vars.production that is a %s to the bare .dev.vars, and pushes nothing", async (_kind, link) => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'RESEND_API_KEY="re_dev"\nLUNORA_ADMIN_TOKEN="devtoken"\n', "utf8");
+            link(join(workdir, ".dev.vars"), join(workdir, ".dev.vars.production"));
+
+            const { logger, recorded } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, logger, prod: true, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(calls).toHaveLength(0);
+            expect(recorded.errors.join("\n")).toContain("is a link to .dev.vars");
         });
 
         it("push --from-dev-vars pushes the bare file to a named environment", async () => {
