@@ -3228,6 +3228,9 @@ abstract class ShardDO {
     /** Sockets whose close is in progress: their room membership is being torn down, so nothing new may join or leave. */
     private readonly closingSockets = new WeakSet<ShardSocketLike>();
 
+    /** Per socket, the subscribe ids waiting on their function's load; see {@link ShardDO.subscribeOutlivedLoad}. */
+    private readonly loadingSubscribes = new WeakMap<ShardSocketLike, Map<string, symbol>>();
+
     /**
      * Sockets holding at least one live grant, so a publish visits only grant holders. Kept as a
      * superset of the truth: `deliverLiveLocal` re-checks each socket's attachment, and drops an
@@ -8848,8 +8851,10 @@ abstract class ShardDO {
                 }
             }
 
-            if (functionPath !== undefined && !isAdmin) {
-                await this.prepareForLiveQueryGate(functionPath);
+            const preparation = functionPath === undefined || isAdmin ? undefined : this.prepareForLiveQueryGate(functionPath);
+
+            if (preparation !== undefined && !(await this.subscribeOutlivedLoad(ws, envelope.id, preparation))) {
+                return;
             }
 
             const registered = this.readAttachment(ws).subs;
@@ -9134,6 +9139,8 @@ abstract class ShardDO {
                 cancellers?.delete(envelope.id);
             }
 
+            // A subscribe still waiting on its function's load must not register after this.
+            this.loadingSubscribes.get(ws)?.delete(envelope.id);
             this.unsubscribe(ws, envelope.id);
             this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
         }
@@ -9854,21 +9861,82 @@ abstract class ShardDO {
      * makes, so it holds no scope here, and putting a snapshot back after the wait would overwrite
      * those of a dispatch that ran meanwhile.
      */
-    private async prepareForLiveQueryGate(functionPath: string): Promise<void> {
+    //
+    // `undefined` when there is nothing to wait for (a warm function, or an admin path, which has no
+    // module): the gate then stays synchronous, as a warm `prepareFunction` promises.
+    private prepareForLiveQueryGate(functionPath: string): Promise<void> | undefined {
+        if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            return undefined;
+        }
+
         try {
-            await this.prepareFunction(functionPath, "subscription");
+            return this.prepareFunction(functionPath, "subscription")?.catch(() => undefined);
         } catch {
             // Reported by the run that follows: see above.
+            return undefined;
         }
     }
 
-    /** The refresh sweep's {@link ShardDO.liveQueryRefusal}, asked once the function is loaded; admin paths have no module to load. */
-    private async liveQueryRefusalLoaded(functionPath: string): Promise<{ message: string; status: "paid" | "per_dispatch" } | undefined> {
-        if (!functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-            await this.prepareForLiveQueryGate(functionPath);
+    /**
+     * Wait out a subscribe's function load, answering whether the subscribe may still register: an
+     * unsubscribe for the same id, or the socket closing, during the wait makes it moot.
+     */
+    private async subscribeOutlivedLoad(ws: ShardSocketLike, subId: string, preparation: Promise<void>): Promise<boolean> {
+        const token = Symbol(subId);
+        const loading = this.loadingSubscribes.get(ws) ?? new Map<string, symbol>();
+
+        loading.set(subId, token);
+        this.loadingSubscribes.set(ws, loading);
+
+        await preparation;
+
+        // An unsubscribe deletes the entry; a newer subscribe for the same id replaces it.
+        const stillWanted = loading.get(subId) === token;
+
+        if (stillWanted) {
+            loading.delete(subId);
         }
 
-        return this.liveQueryRefusal(functionPath);
+        return stillWanted && !this.closingSockets.has(ws);
+    }
+
+    /**
+     * The refresh sweep's gate: drop `subId` (and tell the client) when its function may not be held
+     * live, once that function is loaded. `undefined` keeps it, decided without a yield; a promise
+     * answers whether it was dropped, and is only pending while a cold function loads.
+     */
+    private dropIfNotLive(ws: ShardSocketLike, subId: string, functionPath: string, adminAuthorized: boolean): Promise<boolean> | undefined {
+        // Same drift as the paywall below, on the credential rather than the price: an admin
+        // subscription registered under a token since rotated or cleared would otherwise keep being
+        // re-run and pushed — arbitrary read-only SQL over the shard — for the life of the socket.
+        // The token is checked at upgrade and never again.
+        if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX) && !adminAuthorized) {
+            this.unsubscribe(ws, subId);
+            this.sendSubscriptionError(ws, subId, "FORBIDDEN", "admin authorization for this socket is no longer valid");
+
+            return Promise.resolve(true);
+        }
+
+        const drop = (): boolean => {
+            const refusal = this.liveQueryRefusal(functionPath);
+
+            if (refusal === undefined) {
+                return false;
+            }
+
+            this.unsubscribe(ws, subId);
+            this.sendSubscriptionError(ws, subId, "BAD_REQUEST", refusal.message);
+
+            return true;
+        };
+        const preparation = this.prepareForLiveQueryGate(functionPath);
+
+        if (preparation !== undefined) {
+            return preparation.then(drop);
+        }
+
+        // Warm: decided now, so a kept subscription costs the sweep no yield.
+        return drop() ? Promise.resolve(true) : undefined;
     }
 
     /** Why `functionPath` may not be held as a live subscription, or `undefined` when it may; shared by `subscribe` and the refresh sweep. */
@@ -15195,30 +15263,15 @@ abstract class ShardDO {
                 // Without this it keeps being re-run on every write for the life
                 // of the socket — the paid result served free, or the
                 // subscriber charged for writes it did not make.
+                const dropped = this.dropIfNotLive(ws, subId, functionPath, adminAuthorized);
+
+                // Only a cold function is waited for; a warm one keeps the sweep synchronous.
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket are refreshed in order
-                const refusal = await this.liveQueryRefusalLoaded(functionPath);
-
-                if (refusal !== undefined) {
-                    this.unsubscribe(ws, subId);
-                    this.sendSubscriptionError(ws, subId, "BAD_REQUEST", refusal.message);
-
+                if (dropped !== undefined && (await dropped)) {
                     continue;
                 }
 
                 const isAdmin = functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
-
-                // Same drift as the paywall above, on the credential rather than
-                // the price: `isAdmin` is recomputed from the PATH, so without
-                // this an admin subscription registered under a token that has
-                // since been rotated or cleared keeps being re-run and pushed —
-                // arbitrary read-only SQL over the shard — for the life of the
-                // socket. The token is checked at upgrade and never again.
-                if (isAdmin && !adminAuthorized) {
-                    this.unsubscribe(ws, subId);
-                    this.sendSubscriptionError(ws, subId, "FORBIDDEN", "admin authorization for this socket is no longer valid");
-
-                    continue;
-                }
 
                 const memo = this.socketIndex.memo(ws, subId);
 
