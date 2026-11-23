@@ -206,8 +206,9 @@ describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, 
 
         expect(hugeRest).toStrictEqual({ expiration: future, metadata: { big: true } });
         // Bytes by `Buffer.equals`, not a deep equality: vitest walks a typed array element by element, about
-        // 1.7 s per MiB under coverage, which put this test past its timeout on a loaded CI runner.
-        expect(hugeValue).toBeInstanceOf(Uint8Array);
+        // 1.7 s per MiB under coverage, which put this test past its timeout on a loaded CI runner. The prototype
+        // check keeps the exact type a deep equality enforced: a `Buffer` would pass `toBeInstanceOf(Uint8Array)`.
+        expect(Object.getPrototypeOf(hugeValue)).toBe(Uint8Array.prototype);
         expect(Buffer.from(hugeValue).equals(huge)).toBe(true);
         expect(target.buckets.get("default")!.get("small.txt")).toStrictEqual({
             bytes: new TextEncoder().encode("small"),
@@ -218,7 +219,7 @@ describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, 
 
         const largeBytes = target.buckets.get("avatars")!.get("large.bin")!.bytes;
 
-        expect(largeBytes).toBeInstanceOf(Uint8Array);
+        expect(Object.getPrototypeOf(largeBytes)).toBe(Uint8Array.prototype);
         expect(Buffer.from(largeBytes).equals(large)).toBe(true);
         // The staged chunks are cleaned up once the object is assembled.
         expect([...target.buckets.get("avatars")!.keys()]).toStrictEqual(["large.bin"]);
