@@ -3,6 +3,38 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-23T23:28:51.823Z",
+      "key": "@lunora/runtime@1.0.0-alpha.300"
+    },
+    {
+      "at": "2026-11-23T23:28:51.823Z",
+      "key": "@lunora/client@1.0.0-alpha.302"
+    },
+    {
+      "at": "2026-11-23T23:28:51.823Z",
+      "key": "@lunora/scheduler@1.0.0-alpha.173"
+    },
+    {
+      "at": "2026-11-23T23:28:51.823Z",
+      "key": "@lunora/server@1.0.0-alpha.278"
+    },
+    {
+      "at": "2026-11-23T23:28:51.823Z",
+      "key": "@lunora/codegen@1.0.0-alpha.436"
+    },
+    {
+      "at": "2026-11-23T23:28:51.823Z",
+      "key": "@lunora/do@1.0.0-alpha.294"
+    },
+    {
+      "at": "2026-11-23T23:28:51.823Z",
+      "key": "@lunora/platform-node@1.0.0-alpha.225"
+    },
+    {
+      "at": "2026-11-23T23:28:51.823Z",
+      "key": "@lunora/testing@1.0.0-alpha.341"
+    },
+    {
       "at": "2026-11-23T23:12:37.648Z",
       "key": "@lunora/client@1.0.0-alpha.301"
     },
@@ -369,40 +401,8 @@
     {
       "at": "2026-11-20T21:16:11.479Z",
       "key": "@lunora/cli@1.0.0-alpha.505"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/do@1.0.0-alpha.289"
-    },
-    {
-      "at": "2026-11-20T15:48:15.139Z",
-      "key": "@lunora/config@1.0.0-alpha.468"
-    },
-    {
-      "at": "2026-11-20T15:48:15.139Z",
-      "key": "@lunora/platform-node@1.0.0-alpha.222"
-    },
-    {
-      "at": "2026-11-20T15:48:15.139Z",
-      "key": "@lunora/cli@1.0.0-alpha.504"
-    },
-    {
-      "at": "2026-11-20T09:18:08.271Z",
-      "key": "@lunora/platform@1.0.0-alpha.82"
-    },
-    {
-      "at": "2026-11-20T09:18:08.271Z",
-      "key": "@lunora/codegen@1.0.0-alpha.427"
-    },
-    {
-      "at": "2026-11-20T09:18:08.271Z",
-      "key": "@lunora/mail@1.0.0-alpha.140"
-    },
-    {
-      "at": "2026-11-20T09:18:08.271Z",
-      "key": "@lunora/studio@1.0.0-alpha.387"
     }
   ],
-  "updatedAt": "2026-11-23T23:12:37.648Z",
+  "updatedAt": "2026-11-23T23:28:51.824Z",
   "version": 1
 }
