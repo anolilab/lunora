@@ -572,7 +572,9 @@ const createAuthAuditReader = (executor: SqlExecutor): AuthAuditReader => {
 /**
  * The audit write plane the runtime's `authAuditWriter` option accepts. The worker's admin plane calls
  * better-auth's adapter directly, so its operations never pass through {@link appendAuthAuditEntry}'s
- * better-auth hook; the admin routes record them through this instead.
+ * better-auth hook; the admin routes record them through this instead. A row for a revoke or delete records that
+ * the operation was requested and accepted, not that a row was removed: those operations succeed when the target is
+ * already gone.
  */
 interface AuthAuditWriter {
     write: (entry: AppendAuthAuditEntry) => Promise<void>;

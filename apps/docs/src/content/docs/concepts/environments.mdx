@@ -281,5 +281,7 @@ the **Security** page beside sign-ins. The actor is `admin:root`, or
 `admin:token:<token name>` for a named admin token, so a token named `root`
 never reads as the root credential. The row holds the ids of what changed, never
 the request body, a password or a session token. The row goes through the audit
-hook's `retention` and `onRecord` like any other. Reads are not
+hook's `retention` and `onRecord` like any other. A row for a revoke or delete
+records that the operation was requested and accepted, not that a row was
+removed: those operations succeed when the target is already gone. Reads are not
 recorded, and a failed write does not fail the operation.

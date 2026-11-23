@@ -1199,6 +1199,8 @@ interface WorkerOptions {
      * directly, so the better-auth audit hook never sees these operations. Wire it with `@lunora/auth`'s
      * `createAuthAuditWriter(d1Executor(env.DB), auth)`, which also applies the audit hook's `retention` and
      * `onRecord`. Omit it and the admin plane records nothing; a failed write is logged and does not fail the operation.
+     * A row for a revoke or delete records that the operation was requested and accepted, not that a row was removed:
+     * the plane's delete methods succeed when the target is already gone.
      */
     authAuditWriter?: AuthAuditWriter;
 
