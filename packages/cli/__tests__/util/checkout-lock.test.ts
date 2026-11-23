@@ -8,6 +8,8 @@ import { acquireCheckoutLock } from "../../src/util/checkout-lock";
 
 /** Beyond any real pid range, so `process.kill(pid, 0)` reports no such process. */
 const DEAD_PID = 2_147_483_646;
+/** A second dead process: a taker that died while it held the right to retire {@link DEAD_PID}'s lock. */
+const DEAD_TAKER_PID = 2_147_483_645;
 
 describe("acquireCheckoutLock", () => {
     let workdir: string;
@@ -70,14 +72,48 @@ describe("acquireCheckoutLock", () => {
         expect(existsSync(`${lockPath}.retire-${String(DEAD_PID)}`)).toBe(false);
     });
 
-    it("leaves the lock alone while another taker holds the right to retire it", () => {
+    it("leaves the lock alone while a live taker holds the right to retire it", () => {
         expect.assertions(2);
 
         writeFileSync(lockPath, String(DEAD_PID));
-        writeFileSync(`${lockPath}.retire-${String(DEAD_PID)}`, String(DEAD_PID));
+        writeFileSync(`${lockPath}.retire-${String(DEAD_PID)}`, String(process.ppid));
 
         expect(acquireCheckoutLock(workdir).error).toMatch(/taking over the lock/u);
         expect(readFileSync(lockPath, "utf8")).toBe(String(DEAD_PID));
+    });
+
+    it("recovers the right to retire from a taker that died holding it", () => {
+        expect.assertions(3);
+
+        const claim = `${lockPath}.retire-${String(DEAD_PID)}`;
+
+        writeFileSync(lockPath, String(DEAD_PID));
+        writeFileSync(claim, String(DEAD_TAKER_PID));
+
+        expect(acquireCheckoutLock(workdir).error).toBeUndefined();
+        expect(readFileSync(lockPath, "utf8")).toBe(String(process.pid));
+        expect(existsSync(claim)).toBe(false);
+    });
+
+    it("lets exactly one of two takers recover a dead taker's claim and take the lock", () => {
+        expect.assertions(4);
+
+        writeFileSync(lockPath, String(DEAD_PID));
+        writeFileSync(`${lockPath}.retire-${String(DEAD_PID)}`, String(DEAD_TAKER_PID));
+
+        let other: ReturnType<typeof acquireCheckoutLock> | undefined;
+        const first = acquireCheckoutLock(workdir, {
+            // The other taker runs its whole takeover between this one reading the dead taker and acting on it.
+            afterReadingTaker: () => {
+                other ??= acquireCheckoutLock(workdir);
+            },
+        });
+
+        expect(other?.release).toBeTypeOf("function");
+        expect(first.error).toMatch(/taking over the lock|is running/u);
+        // The winner's lock survives the loser's late retirement attempt.
+        expect(readFileSync(lockPath, "utf8")).toBe(String(process.pid));
+        expect(existsSync(lockPath)).toBe(true);
     });
 
     it("never releases a lock that is no longer its own", () => {
