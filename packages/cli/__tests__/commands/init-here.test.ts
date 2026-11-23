@@ -271,6 +271,24 @@ describe("lunora init --here", () => {
         expect(readFileSync(schemaPath, "utf8")).toBe("// hand edited\n");
         expect(logger.lines.join("\n")).toContain("already present");
     });
+
+    it("a re-run leaves a sample function the user deleted deleted", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        const functionPath = join(workdir, "lunora", "messages.ts");
+
+        unlinkSync(functionPath);
+
+        const result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        expect(result.code).toBe(0);
+        // Its public messages:list / messages:send functions must not come back.
+        expect(existsSync(functionPath)).toBe(false);
+    });
 });
 
 describe("lunora init --here — a failed lunora/ scaffold", () => {
@@ -283,18 +301,18 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
     });
 
     /**
-     * A dangling link at `lunora/messages.ts`: `existsSync` reports it missing, so
+     * A dangling link at `lunora/<name>`: `existsSync` reports it missing, so
      * the scaffold tries to write it, and the write follows the link into a
      * directory that does not exist — a deterministic write failure that does
      * not depend on file modes (which root ignores).
      */
-    const breakFunctionFile = (): string => {
-        const functionPath = join(workdir, "lunora", "messages.ts");
+    const breakScaffoldFile = (name: string): string => {
+        const path = join(workdir, "lunora", name);
 
         mkdirSync(join(workdir, "lunora"), { recursive: true });
-        symlinkSync(join(workdir, "missing-dir", "messages.ts"), functionPath);
+        symlinkSync(join(workdir, "missing-dir", name), path);
 
-        return functionPath;
+        return path;
     };
 
     it("exits non-zero, logs the failure and runs neither --add nor --ci", async () => {
@@ -302,7 +320,7 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
 
         writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
         writeFileSync(join(workdir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
-        breakFunctionFile();
+        breakScaffoldFile("messages.ts");
 
         const registryRoot = mkdtempSync(join(tmpdir(), "lunora-empty-registry-"));
         const logger = capturingLogger();
@@ -318,27 +336,27 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
         expect(existsSync(join(workdir, ".github", "workflows", "deploy.yml"))).toBe(false);
     });
 
-    it("a re-run after the failure is fixed writes the missing file and leaves schema.ts byte-identical", async () => {
+    it("a re-run after the failure is fixed writes the missing file and leaves messages.ts byte-identical", async () => {
         expect.assertions(4);
 
         writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
 
-        const functionPath = breakFunctionFile();
+        const schemaPath = breakScaffoldFile("schema.ts");
         const first = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
 
         expect(first.code).toBe(1);
 
-        const schemaPath = join(workdir, "lunora", "schema.ts");
-        const schemaBefore = readFileSync(schemaPath);
+        const functionPath = join(workdir, "lunora", "messages.ts");
+        const functionBefore = readFileSync(functionPath);
 
         // unlinkSync, not rmSync: Node 24.11's rmSync({ force }) leaves a dangling link in place.
-        unlinkSync(functionPath);
+        unlinkSync(schemaPath);
 
         const second = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
 
         expect(second.code).toBe(0);
-        expect(existsSync(functionPath)).toBe(true);
-        expect(readFileSync(schemaPath).equals(schemaBefore)).toBe(true);
+        expect(existsSync(schemaPath)).toBe(true);
+        expect(readFileSync(functionPath).equals(functionBefore)).toBe(true);
     });
 });
 

@@ -590,6 +590,19 @@ describe("lunora env", () => {
             expect(recorded.errors.join("\n")).toContain("LUNORA_ADMIN_TOKEN");
         });
 
+        it("push --from-dev-vars fails, and pushes nothing, when .dev.vars does not exist", async () => {
+            expect.assertions(3);
+
+            const { logger, recorded } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", fromDevVars: true, logger, spawner, subcommand: "push", yes: true });
+
+            // The source was named explicitly, so its absence is not an empty push to report as done.
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
+            expect(calls).toHaveLength(0);
+            expect(recorded.errors.join("\n")).toContain(".dev.vars does not exist");
+        });
+
         it("--from-dev-vars without a named environment is a usage error", async () => {
             expect.assertions(2);
 
@@ -681,6 +694,31 @@ describe("lunora env", () => {
             });
 
             expect(recorded.infos.join("\n")).toContain("lunora env push --yes --env staging --from-dev-vars");
+        });
+
+        it("diff --from-dev-vars never suggests pushing a key deploy generates", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, ".dev.vars"), 'DEV_ONLY="x"\nLUNORA_ADMIN_TOKEN="devtoken"\n', "utf8");
+
+            const { logger, recorded } = recordingLogger();
+
+            await runEnvCommand({
+                cwd: workdir,
+                env: "staging",
+                fromDevVars: true,
+                logger,
+                secretLister: async () => {
+                    return { names: [], ok: true };
+                },
+                subcommand: "diff",
+            });
+
+            const adminLine = recorded.infos.find((line) => line.includes("LUNORA_ADMIN_TOKEN")) ?? "";
+
+            // `env push --from-dev-vars` refuses it, so the hint would only lead to a usage error.
+            expect(adminLine).not.toContain("--from-dev-vars");
+            expect(adminLine).toContain("lunora deploy --env staging");
         });
 
         it("refuses --env example, whose .dev.vars.example file is kept visible to git", async () => {

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 import type { DevProcessSpawner, DiscoveryCache } from "@lunora/config";
-import { createDiscoveryCache, D1_PLACEHOLDER_ID, probeCelldToolchain } from "@lunora/config";
+import { createDiscoveryCache, D1_PLACEHOLDER_ID, parseDevVariableEntries, probeCelldToolchain } from "@lunora/config";
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV, HYPERDRIVE_PLACEHOLDER_ID } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -3066,7 +3066,7 @@ export const backfillNames = defineMigration({
             });
 
             it("records the keys a failed bulk push carried, keeps an existing local value, and names the uncertain ones", async () => {
-                expect.assertions(7);
+                expect.assertions(8);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="local"\n', "utf8");
@@ -3107,9 +3107,13 @@ export const backfillNames = defineMigration({
                 expect(result.code).not.toBe(0);
                 expect(Object.keys(bulkBody).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["AUTH_SECRET", "LUNORA_ADMIN_TOKEN"]);
                 expect(recorded).toContain(`LUNORA_ADMIN_TOKEN="${bulkBody.LUNORA_ADMIN_TOKEN ?? "missing"}"`);
-                // The key whose put failed may or may not be live: a local value it already had is left as it was.
+                // The key whose put failed may or may not be live: a local value it already had stays the active one,
+                // and the minted value is kept beside it, commented out, in case the bulk request did apply it.
                 expect(recorded).toContain('AUTH_SECRET="local"');
-                expect(recorded).not.toContain(`AUTH_SECRET="${bulkBody.AUTH_SECRET ?? "missing"}"`);
+                expect(parseDevVariableEntries(recorded).filter((entry) => entry.key === "AUTH_SECRET")).toStrictEqual([
+                    { key: "AUTH_SECRET", value: "local" },
+                ]);
+                expect(recorded).toMatch(new RegExp(String.raw`^# .*AUTH_SECRET="${bulkBody.AUTH_SECRET ?? "missing"}"`, "mu"));
                 expect(warns.join("\n")).toMatch(/AUTH_SECRET: the failed bulk push may already have set/u);
                 expect(warns.join("\n")).not.toMatch(/LUNORA_ADMIN_TOKEN[^\n]*may already have set/u);
             });
@@ -3480,6 +3484,34 @@ export default defineNotify({ fcm: ${fcmValue}, webPush: (env) => webPushFromEnv
                 expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: STRIPE_API_KEY\./u);
             });
 
+            it("names only the missing keys in a non-interactive abort's fix, never a mint-everything generate and push", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("staging"), "utf8");
+                writeFileSync(join(workdir, ".dev.vars.staging"), 'STRIPE_API_KEY="x"\n', "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+                const deployed = [...DEPLOYED_WITHOUT_FCM_KEYS, "FCM_SERVICE_ACCOUNT", "FCM_PROJECT_ID"].filter((name) => name !== "LUNORA_ADMIN_TOKEN");
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "staging",
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: deployed, ok: true }),
+                    spawner,
+                });
+
+                // An unscoped `env generate --set` mints every generatable key and `env push` uploads them all,
+                // rotating the ones already live on the target.
+                expect(result.error).not.toMatch(/env generate --set|env push/u);
+                expect(result.error).toContain("wrangler secret put STRIPE_API_KEY --env staging");
+                expect(result.error).toContain("for LUNORA_ADMIN_TOKEN, run `lunora deploy --env staging` from a terminal");
+                // A provider-issued key cannot be generated, so it is never sent down the deploy path.
+                expect(result.error).not.toMatch(/for [^;]*STRIPE_API_KEY/u);
+            });
+
             it("refuses to mint for an environment whose values cannot be recorded locally, before asking or pushing", async () => {
                 expect.assertions(4);
 
@@ -3565,7 +3597,7 @@ export default defineNotify({ fcm: ${fcmValue}, webPush: (env) => webPushFromEnv
                 });
 
                 expect(result.code).toBe(EXIT_CODE.USAGE);
-                expect(errors.some((line) => line.includes("lunora env push --yes --env staging") && !line.includes("--prod"))).toBe(true);
+                expect(errors.some((line) => line.includes("lunora deploy --env staging") && !line.includes("--prod"))).toBe(true);
             });
         });
 

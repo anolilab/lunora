@@ -306,6 +306,34 @@ const resolveSecretSources = async (cwd: string): Promise<ReadonlyArray<string>>
 /** The keys deploy mints rather than ever taking from a local file — the same set `deploy`'s secrets gate uses. */
 const resolveMintableKeySet = async (context: EnvContext): Promise<ReadonlySet<string>> => mintableSecretKeysFor(await resolveSecretSources(context.cwd));
 
+/**
+ * The refusal for a push whose source file is absent, or `undefined` to go on. The bare file is
+ * local dev's: pushing it to a named environment would overwrite the secrets deploy minted there
+ * (recorded in `.dev.vars.<name>`) with the developer's local values. A source named explicitly
+ * with --from-dev-vars that is not there is a failure too, not an empty push to report as done.
+ */
+const refuseMissingPushSource = (context: EnvContext): EnvCommandResult | undefined => {
+    const { devVariablesFile, devVariablesPath, environment, logger, options } = context;
+
+    if (environment === undefined || existsSync(devVariablesPath)) {
+        return undefined;
+    }
+
+    if (options.fromDevVars === true) {
+        logger.error(`env push --env ${environment} --from-dev-vars: ${devVariablesFile} does not exist, so there is nothing to push.`);
+
+        return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
+    }
+
+    logger.error(
+        `env push --env ${environment}: ${devVariablesFile} does not exist. A named environment is pushed from its own file, never from ${DEV_VARS_FILE}, ` +
+            `so local dev values cannot overwrite its secrets. Create it with \`lunora env set --env ${environment} <KEY> <VALUE>\` ` +
+            `(or \`lunora env generate --set --env ${environment}\`), or pass --from-dev-vars to push ${DEV_VARS_FILE} to it.`,
+    );
+
+    return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
+};
+
 const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     const { devVariablesFile, devVariablesPath, environment, logger, options } = context;
 
@@ -315,17 +343,10 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
         return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
-    // The bare file is local dev's: pushing it to a named environment would
-    // overwrite the secrets deploy minted there (recorded in this same
-    // `.dev.vars.<name>`) with the developer's local values.
-    if (environment !== undefined && options.fromDevVars !== true && !existsSync(devVariablesPath)) {
-        logger.error(
-            `env push --env ${environment}: ${devVariablesFile} does not exist. A named environment is pushed from its own file, never from ${DEV_VARS_FILE}, ` +
-                `so local dev values cannot overwrite its secrets. Create it with \`lunora env set --env ${environment} <KEY> <VALUE>\` ` +
-                `(or \`lunora env generate --set --env ${environment}\`), or pass --from-dev-vars to push ${DEV_VARS_FILE} to it.`,
-        );
+    const missingSource = refuseMissingPushSource(context);
 
-        return { code: EXIT_CODE.NOT_FOUND, descriptors: [] };
+    if (missingSource !== undefined) {
+        return missingSource;
     }
 
     const map = loadDevVariables(devVariablesPath);
@@ -445,9 +466,17 @@ const runEnvDiff = async (context: EnvContext): Promise<EnvCommandResult> => {
     const remoteOnly = remote.names.filter((name) => !localKeys.has(name));
     const both = [...localKeys].filter((key) => remoteKeys.has(key)).toSorted((a, b) => a.localeCompare(b));
 
+    const environmentFlag = context.environment === undefined ? "" : ` --env ${context.environment}`;
+    // `push --from-dev-vars` refuses a key deploy generates, so the dev value is never the hint for one.
+    const generated = context.options.fromDevVars === true ? await resolveMintableKeySet(context) : new Set<string>();
+
+    const pushHint = `lunora env push --yes${environmentFlag}${context.options.fromDevVars === true ? " --from-dev-vars" : ""}`;
+
     for (const key of localOnly) {
         logger.info(
-            `local only (run \`lunora env push --yes${context.environment === undefined ? "" : ` --env ${context.environment}`}${context.options.fromDevVars === true ? " --from-dev-vars" : ""}\`): ${key}`,
+            generated.has(key)
+                ? `local only (generated per environment, never pushed from ${DEV_VARS_FILE}: run \`lunora deploy${environmentFlag}\` to mint it): ${key}`
+                : `local only (run \`${pushHint}\`): ${key}`,
         );
     }
 

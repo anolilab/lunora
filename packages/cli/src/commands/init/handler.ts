@@ -1119,18 +1119,21 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
 };
 
 /**
- * Scaffold `lunora/{schema,messages}.ts` into `cwd`, each only when missing:
- * a hand-edited file is never clobbered on a re-run, and a re-run after a
- * partial failure still writes the file the first run could not. A failed
- * write fails the in-place init like a failed Vite config write does.
+ * Scaffold `lunora/{messages,schema}.ts` into `cwd`. `schema.ts` is written
+ * last and marks a finished scaffold: once it exists a re-run touches nothing,
+ * so a hand-edited file is never clobbered and a sample the user deleted does
+ * not come back. Before that, a re-run after a partial failure writes only the
+ * files still missing. A failed write fails the in-place init like a failed
+ * Vite config write does.
  */
 const scaffoldLunoraDirectory = (cwd: string, logger: Logger): InitCommandResult => {
     const lunoraDirectory = join(cwd, "lunora");
+    const schemaPath = join(lunoraDirectory, "schema.ts");
     const files: [path: string, content: string][] = [
-        [join(lunoraDirectory, "schema.ts"), SAMPLE_SCHEMA],
         [join(lunoraDirectory, "messages.ts"), SAMPLE_FUNCTION],
+        [schemaPath, SAMPLE_SCHEMA],
     ];
-    const pending = files.filter(([path]) => !existsSync(path));
+    const pending = existsSync(schemaPath) ? [] : files.filter(([path]) => !existsSync(path));
 
     if (pending.length === 0) {
         logger.info(`lunora/ already present — left ${lunoraDirectory} untouched`);

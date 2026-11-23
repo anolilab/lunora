@@ -293,24 +293,36 @@ const persistMintedSecrets = (
     const devVariablesPath = join(cwd, targetFile);
     let raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
     const present = new Set(parseDevVariableEntries(raw).map((entry) => entry.key));
-    // A value whose push may not have landed must not displace one the file already holds:
-    // nothing proves the minted value is the live one, and the local one would be lost.
-    const kept = minted.filter((entry) => keepExisting.has(entry.key) && present.has(entry.key)).map((entry) => entry.key);
-    const written = minted.filter((entry) => !kept.includes(entry.key));
+    // A value whose push may not have landed must not displace one the file already holds: nothing
+    // proves the minted value is the live one. Nor may it be dropped: if the request did apply it, the
+    // target now lists the key, no later deploy mints it again, and this is its only copy. So it is
+    // kept beside the local value as a comment.
+    const kept = minted.filter((entry) => keepExisting.has(entry.key) && present.has(entry.key));
+    const written = minted.filter((entry) => !kept.includes(entry));
 
     for (const entry of written) {
         raw = upsertDevVariableLine(raw, entry.key, entry.value);
     }
 
-    if (kept.length > 0) {
-        options.logger.warn(`${kept.join(", ")}: left the existing value in ${targetFile} as it was — the failed push may not have set the minted one.`);
+    for (const entry of kept) {
+        raw = `${raw}${raw.endsWith("\n") || raw === "" ? "" : "\n"}# Minted by a deploy whose push failed; the live value if that push applied: ${upsertDevVariableLine("", entry.key, entry.value).trim()}\n`;
     }
 
-    if (written.length === 0) {
+    if (kept.length > 0) {
+        options.logger.warn(
+            `${kept.map((entry) => entry.key).join(", ")}: left the existing value in ${targetFile} active and recorded the minted one beside it as a comment — the failed push may or may not have set it.`,
+        );
+    }
+
+    if (written.length === 0 && kept.length === 0) {
         return undefined;
     }
 
     writeDevVariablesFileAtomically(devVariablesPath, raw);
+
+    if (written.length === 0) {
+        return targetFile;
+    }
 
     const writtenKeys = written.map((entry) => entry.key).join(", ");
 
@@ -403,8 +415,8 @@ const failedPushOutcome = (logger: Logger, uncertain: ReadonlyArray<string>, min
 
     logger.warn(
         `${uncertain.join(", ")}: the failed bulk push may already have set these on the target — their values are recorded ` +
-            `${mintedSecretsFile === undefined ? "nowhere (see above)" : `in ${mintedSecretsFile}`} in case it did, except where a local value already existed. The next deploy re-checks the target ` +
-            `and replaces the record of any that are still missing with a fresh value.`,
+            `${mintedSecretsFile === undefined ? "nowhere (see above)" : `in ${mintedSecretsFile}`} in case it did (as a comment where a local value already existed). The next deploy re-checks the target ` +
+            `and replaces the record of any that are still missing with a fresh value; for one it finds set, the recorded value is the live one.`,
     );
 
     return {
@@ -467,11 +479,20 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     // No TTY to prompt on → fail fast rather than deploy a worker that will crash
     // on a missing required secret.
     if (!interactive) {
+        // Not `env generate --set` + `env push`: with no key named they mint every generatable secret and
+        // upload the whole file, rotating the ones already live on the target. An interactive deploy mints
+        // exactly the missing ones and records them.
+        const generatable = missing.filter((key) => mintableKeys.has(key));
+        const providerIssued = missing.filter((key) => !mintableKeys.has(key));
+        const fixes = [
+            ...providerIssued.map((key) => `\`wrangler secret put ${key}${environmentFlag}\``),
+            ...(generatable.length === 0
+                ? []
+                : [`for ${generatable.join(", ")}, run \`lunora deploy${environmentFlag}\` from a terminal to generate, push and record them`]),
+        ];
+
         return {
-            error:
-                `missing required secret(s) on the deploy target: ${missing.join(", ")}. ` +
-                `Set them with \`wrangler secret put <KEY>${environmentFlag}\` ` +
-                `(or \`lunora env generate --set${environmentFlag}\` then \`lunora env push --yes${environmentFlag}\`), then re-deploy.`,
+            error: `missing required secret(s) on the deploy target: ${missing.join(", ")}. Set them: ${fixes.join("; ")}. Then re-deploy.`,
         };
     }
 
