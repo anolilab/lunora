@@ -200,7 +200,7 @@ class AppBuilder<Env extends object> {
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null | undefined }) => {
+                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string) => void; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const database = this.globalDeclaration?.d1(env);
 
@@ -241,6 +241,9 @@ class AppBuilder<Env extends object> {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // Announces a trigger's write to another global table, which the shard's
+                              // own broadcast cannot see. See `SqlCtxDbOptions.onWrite`.
+                              ...(request?.onWrite === undefined ? {} : { onWrite: request.onWrite }),
                               // The binding outlives this per-request writer, so the
                               // provisioning sweep runs once per isolate rather than
                               // once per request. See `SqlCtxDbOptions.provisionScope`.

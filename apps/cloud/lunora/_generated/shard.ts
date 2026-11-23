@@ -134,7 +134,7 @@ export interface ShardDOConfig {
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;
     ai?: (env: Record<string, unknown>) => AiBindingLike;
     payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;
-    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;
+    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;
 }
 
 const schedulerStub = {
@@ -650,7 +650,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);
         }
 
-        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity, readBookmark?: string): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -663,7 +663,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
             // subscription caller — never read from the shared per-request field
             // here — so a concurrent RPC can't leak its identity into this re-run.
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange, readBookmark });
             const result = await registered.handler(ctx, args);
 
             // Ranges come from THIS run's reads, never a shared field on the DO:
@@ -698,6 +698,42 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     return this.windowStreamReads(headroom, (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath, headroom, identity }), args, signal));
                 },
             };
+        }
+
+        // Without a changelog a tick cannot say which tables moved, so there is nothing to poll for.
+        private readonly polledGlobalTableSet: ReadonlySet<string> = new Set<string>(config.cdc === true ? ["cells","organizations","members","projects","invitations","auditLog","githubInstallations","deployments","halts","aliasOwnership","deployKeys","githubDeliveries","builds","buildLogs","domains","certificateReleases","secrets","tenantBackups","boxes","boxEnrolments","hostdReleases","cloudflareAccounts","metricPoints","tenantLogs","observations","issues","incidents","alertRules","alertRuleState","alerts","anomalyBaselines","edgeRules","anomalySilences","uptimeChecks","uptimeState","dashboards","notificationChannels","notificationDeliveries","overageDebits","platformUsage","usageCheckpoints","usageSourceStatus","payment_customers","payment_events","payment_sessions","payment_subscriptions","payment_usageEvents","catalogInstalls","catalogIndexState"] : []);
+
+        protected override polledGlobalTables(): ReadonlySet<string> {
+            return this.polledGlobalTableSet;
+        }
+
+        protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ bookmark?: string; cursor: number; floor?: number; tables: string[] } | undefined> {
+            const env = this.env as Record<string, unknown>;
+            // Metadata-only: this asks the global changelog which TABLES moved,
+            // never what changed in them, so it costs one small read per poll tick
+            // for the whole shard — and a tick whose answer omits a table skips
+            // the shapes and live queries that read only it.
+            // Named local, not an inline object literal — same reason as the
+            // dispatch path and `readGlobalShapeRows`: `bookmark` and `onBookmark` are not
+            // declared on the narrower Hyperdrive thunk's `request` type, and an inline
+            // literal trips an excess-property error (TS2353). The Hyperdrive factory
+            // simply never reads them.
+            //
+            // The session's bookmark after the read is returned with the answer: a read
+            // at it sees every write the answer reports, so the refresh it drives reads there.
+            const bookmark = this.getInboundBookmark();
+            let changelogBookmark: string | undefined;
+            const globalRequest = {
+                ...this.globalCdcOptions(config.cdc ?? false),
+                ...(bookmark === undefined ? {} : { bookmark }),
+                onBookmark: (value: string | undefined) => {
+                    changelogBookmark = value;
+                },
+            };
+            const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;
+            const changed = await globalDb.cdcChangedTables?.(sinceSeq, cursorOnly === undefined ? {} : { cursorOnly });
+
+            return changed === undefined || changelogBookmark === undefined ? changed : { ...changed, bookmark: changelogBookmark };
         }
 
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
@@ -1123,7 +1159,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
         }
 
-        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; replayKey?: boolean | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; readBookmark?: string | undefined; replayKey?: boolean | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -1292,14 +1328,16 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // so both write to the same trace.
             const span = this.makeDispatchSpan(traceAnchor, observability, options.sensitive);
 
-            const bookmark = this.getInboundBookmark();
+            const bookmark = options.readBookmark ?? this.getInboundBookmark();
+            let writeBookmark: string | undefined;
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),
                 get identity(): Record<string, unknown> | undefined {
                     return readIdentity();
                 },
-                onBookmark: (bookmarkValue: string | undefined) => { if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
+                onBookmark: (bookmarkValue: string | undefined) => { writeBookmark = bookmarkValue; if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
+                onWrite: (table: string) => { this.recordGlobalWrite(table, writeBookmark); },
                 get userId(): string | undefined {
                     return readUserId();
                 },
@@ -1324,7 +1362,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     },
                 },
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
+                    if (writeBookmark !== undefined && (schema as unknown as SchemaLike).tables[delta.table]?.shardMode?.kind === "global") {
+                        this.recordGlobalWrite(delta.table, writeBookmark);
+                    } else {
+                        this.recordChangedTable(delta.table, delta.indexKeys);
+                    }
                 },
                 // Read at call time, not captured: the baseline belongs to the
                 // dispatch in flight, and a queued mutation admitted after a
@@ -1621,7 +1663,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                         reference.__lunoraRef,
                         fnArgs,
                         runOptions?.untracked === true
-                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", scope: options.scope, sensitive: options.sensitive })
+                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", readBookmark: options.readBookmark, scope: options.scope, sensitive: options.sensitive })
                             : queryContext(),
                         kind,
                     );
