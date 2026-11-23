@@ -1,11 +1,15 @@
 /**
- * Orders one session's presence writes for the same room.
+ * Orders the presence writes for one row: a session in a room, on one client.
  *
  * A heartbeat and a `leave` are separate requests, so sent independently a `leave` can be
- * processed before a heartbeat still in flight for that room (which then re-creates the row it
- * removed), and a rejoin's heartbeat can be overtaken by the `leave` of the same room. So a
- * `leave` waits for that room's heartbeats in flight, and a heartbeat waits for that room's
+ * processed before a heartbeat still in flight for that row (which then re-creates the row it
+ * removed), and a rejoin's heartbeat can be overtaken by the `leave` of the same row. So a
+ * `leave` waits for that row's heartbeats in flight, and a heartbeat waits for that row's
  * pending `leave`. Anything else is sent at once, in the caller's tick.
+ *
+ * Keyed per client and row, not per presence handle: a view remounted with the same explicit
+ * `sessionId` gets a new handle, and its first heartbeat must still wait for the `leave` the
+ * unmounting handle sent, or that `leave` deletes the remounted view's row until its next interval.
  *
  * Every write is fire-and-forget: a dropped heartbeat or leave is healed by the next heartbeat or
  * the row's TTL, so a failure only settles the write.
@@ -17,9 +21,15 @@
  * deliberately **not** a package: consumers import it by relative path and the bundler inlines it.
  * Keep it zero-dependency.
  */
-interface PresenceWrites {
-    heartbeat: (roomId: string, write: () => Promise<unknown>) => void;
-    leave: (roomId: string, write: () => Promise<unknown>) => void;
+interface PresenceRow {
+    roomId: string;
+    sessionId: string;
+    shardKey?: string;
+}
+
+interface PendingWrites {
+    heartbeats: Map<string, Set<Promise<void>>>;
+    leaves: Map<string, Promise<void>>;
 }
 
 const send = async (write: () => Promise<unknown>): Promise<void> => {
@@ -30,38 +40,53 @@ const send = async (write: () => Promise<unknown>): Promise<void> => {
     }
 };
 
-const createPresenceWrites = (): PresenceWrites => {
-    const heartbeats = new Map<string, Set<Promise<void>>>();
-    const leaves = new Map<string, Promise<void>>();
+// `shardKey ?? ""`: the client routes an absent shard key and `""` to the same (root) shard.
+const rowKey = (row: PresenceRow): string => JSON.stringify([row.shardKey ?? "", row.roomId, row.sessionId]);
 
-    return {
-        heartbeat: (roomId, write) => {
-            const leaving = leaves.get(roomId);
-            const sent = leaving === undefined ? send(write) : leaving.then(async () => send(write));
-            const inFlight = heartbeats.get(roomId) ?? new Set();
+/** Per client instance, never by strings alone: two clients are two connections. */
+const pendingWrites = new WeakMap<object, PendingWrites>();
 
-            inFlight.add(sent);
-            heartbeats.set(roomId, inFlight);
-            sent.then(() => {
-                inFlight.delete(sent);
+const pendingWritesOf = (client: object): PendingWrites => {
+    let pending = pendingWrites.get(client);
 
-                if (inFlight.size === 0 && heartbeats.get(roomId) === inFlight) {
-                    heartbeats.delete(roomId);
-                }
-            });
-        },
-        leave: (roomId, write) => {
-            const prior = [...(heartbeats.get(roomId) ?? [])];
-            const left = prior.length === 0 ? send(write) : Promise.all(prior).then(async () => send(write));
+    if (pending === undefined) {
+        pending = { heartbeats: new Map(), leaves: new Map() };
+        pendingWrites.set(client, pending);
+    }
 
-            leaves.set(roomId, left);
-            left.then(() => {
-                if (leaves.get(roomId) === left) {
-                    leaves.delete(roomId);
-                }
-            });
-        },
-    };
+    return pending;
+};
+
+const sendPresenceHeartbeat = (client: object, row: PresenceRow, write: () => Promise<unknown>): void => {
+    const { heartbeats, leaves } = pendingWritesOf(client);
+    const key = rowKey(row);
+    const leaving = leaves.get(key);
+    const sent = leaving === undefined ? send(write) : leaving.then(async () => send(write));
+    const inFlight = heartbeats.get(key) ?? new Set();
+
+    inFlight.add(sent);
+    heartbeats.set(key, inFlight);
+    sent.then(() => {
+        inFlight.delete(sent);
+
+        if (inFlight.size === 0 && heartbeats.get(key) === inFlight) {
+            heartbeats.delete(key);
+        }
+    });
+};
+
+const sendPresenceLeave = (client: object, row: PresenceRow, write: () => Promise<unknown>): void => {
+    const { heartbeats, leaves } = pendingWritesOf(client);
+    const key = rowKey(row);
+    const prior = [...(heartbeats.get(key) ?? [])];
+    const left = prior.length === 0 ? send(write) : Promise.all(prior).then(async () => send(write));
+
+    leaves.set(key, left);
+    left.then(() => {
+        if (leaves.get(key) === left) {
+            leaves.delete(key);
+        }
+    });
 };
 
 /** The holders of each presence row, per client: `[shardKey, roomId, sessionId]` → how many mounted views hold it. */
@@ -73,10 +98,9 @@ const holders = new WeakMap<object, Map<string, number>>();
  * may send `leave`. Returns the release: true when it dropped the last holder. Releasing twice (a teardown that
  * runs again) counts once. Per client instance, never by strings alone: two clients are two connections.
  */
-const holdPresenceRow = (client: object, row: { roomId: string; sessionId: string; shardKey?: string }): (() => boolean) => {
+const holdPresenceRow = (client: object, row: PresenceRow): (() => boolean) => {
     const counts = holders.get(client) ?? new Map<string, number>();
-    // `shardKey ?? ""`: the client routes an absent shard key and `""` to the same (root) shard.
-    const key = JSON.stringify([row.shardKey ?? "", row.roomId, row.sessionId]);
+    const key = rowKey(row);
 
     holders.set(client, counts);
     counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -131,4 +155,4 @@ const onReconnected = (client: ConnectionStatusSource, rejoin: () => void): (() 
     });
 };
 
-export { createPresenceWrites, holdPresenceRow, onReconnected };
+export { holdPresenceRow, onReconnected, sendPresenceHeartbeat, sendPresenceLeave };

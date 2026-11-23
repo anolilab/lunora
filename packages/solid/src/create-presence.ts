@@ -3,7 +3,7 @@ import type { Accessor } from "solid-js";
 import { createMemo, createSignal, onCleanup } from "solid-js";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
-import { createPresenceWrites, holdPresenceRow, onReconnected } from "../../../shared/presence-writes";
+import { holdPresenceRow, onReconnected, sendPresenceHeartbeat, sendPresenceLeave } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
 import { trackedEffect } from "./solid-compat";
@@ -106,9 +106,6 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     // The room the armed wiring belongs to; only read while `mounted`.
     let currentRoom = "";
 
-    // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
-    const presenceWrites = createPresenceWrites();
-
     const sendHeartbeat = (): void => {
         const args = {
             roomId: currentRoom,
@@ -117,7 +114,9 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         } as ArgsOf<H>;
 
         // Never queued: a heartbeat replayed after reconnect would mark a room this session has since left.
-        presenceWrites.heartbeat(currentRoom, async () => client.mutation(heartbeat, args, { onlineOnly: true, shardKey }));
+        const write = async () => client.mutation(heartbeat, args, { onlineOnly: true, shardKey });
+
+        sendPresenceHeartbeat(client, { roomId: currentRoom, sessionId, shardKey }, write);
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -219,7 +218,9 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
 
             // another mounted view still shows the same session there.
             if (releaseRow() && leave !== undefined) {
-                presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
+                const write = async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey });
+
+                sendPresenceLeave(client, { roomId: room, sessionId, shardKey }, write);
             }
         };
 

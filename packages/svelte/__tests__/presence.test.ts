@@ -603,6 +603,76 @@ describe("presence (Svelte)", () => {
         expect(fake.mutationCalls.map((call) => call.functionPath)).toStrictEqual(["presence:heartbeat", "presence:leave"]);
     });
 
+    it("keeps a remounted view's row when the unmounted view's leave was still waiting on its heartbeat", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const firstHeartbeatLanded = Promise.withResolvers<undefined>();
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const record = fake.client.mutation.bind(fake.client);
+        const secondHeartbeatSent = Promise.withResolvers<undefined>();
+        let heartbeats = 0;
+
+        (fake.client as unknown as { mutation: unknown }).mutation = async (...args: Parameters<typeof record>) => {
+            await record(...args);
+
+            if (args[0]["__lunoraRef"] !== "presence:heartbeat") {
+                return undefined;
+            }
+
+            heartbeats += 1;
+
+            if (heartbeats === 2) {
+                secondHeartbeatSent.resolve(undefined);
+            }
+
+            return heartbeats === 1 ? firstHeartbeatLanded.promise : undefined;
+        };
+
+        const options = { heartbeat: HEARTBEAT, intervalMs: 60_000, leave: LEAVE, listPresent: LIST_PRESENT, sessionId: "sess-fixed" };
+        const first = presence(fake.client, "room-1", options);
+
+        // Unmount while the first heartbeat is in flight, so its leave waits; then remount the same session.
+        first.teardown();
+
+        const second = presence(fake.client, "room-1", options);
+
+        firstHeartbeatLanded.resolve(undefined);
+        await secondHeartbeatSent.promise;
+
+        // The remounted view's heartbeat follows the leave, so the row it re-creates stays.
+        expect(fake.mutationCalls.map((call) => call.functionPath)).toStrictEqual(["presence:heartbeat", "presence:leave", "presence:heartbeat"]);
+
+        second.teardown();
+    });
+
+    it("rethrows a closed client's subscribe without stranding a listener on the room store", () => {
+        expect.assertions(2);
+
+        const fake = createPresenceFakeClient();
+        let roomListened = false;
+        // A writable's start/stop runs when its first subscriber arrives and its last one leaves.
+        const room = writable("room-1", () => {
+            roomListened = true;
+
+            return () => {
+                roomListened = false;
+            };
+        });
+
+        (fake.client as unknown as { subscribe: unknown }).subscribe = () => {
+            throw Object.assign(new Error("client closed"), { code: "CLIENT_CLOSED" });
+        };
+
+        const handle = presence(fake.client, room, { heartbeat: HEARTBEAT, intervalMs: 60_000, listPresent: LIST_PRESENT, sessionId: "sess-fixed" });
+
+        expect(() => handle.present.subscribe(() => {})).toThrow("client closed");
+
+        handle.teardown();
+
+        expect(roomListened).toBe(false);
+    });
+
     it("never queues a heartbeat for offline replay", () => {
         expect.assertions(1);
 

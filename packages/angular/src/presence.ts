@@ -3,7 +3,7 @@ import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
-import { createPresenceWrites, holdPresenceRow, onReconnected } from "../../../shared/presence-writes";
+import { holdPresenceRow, onReconnected, sendPresenceHeartbeat, sendPresenceLeave } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { resolveLunoraClient } from "./client";
 import { attachReactiveArgs, outsideAngularRunner, shouldOpenSubscription } from "./platform";
@@ -148,9 +148,6 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     // Resolved here, in the injection context: the arm below can run later from an effect.
     const runInZone = outsideAngularRunner(fromInjectionContext);
 
-    // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
-    const presenceWrites = createPresenceWrites();
-
     const sendHeartbeat = (): void => {
         const args: ArgsOf<H> = { roomId: currentRoom, sessionId } as ArgsOf<H>;
 
@@ -160,7 +157,9 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
 
         // Fire-and-forget — a dropped heartbeat self-heals on the next tick. Never queued: a
         // heartbeat replayed after reconnect would mark a room this session has since left.
-        presenceWrites.heartbeat(currentRoom, async () => client.mutation(heartbeat, args, { onlineOnly: true, shardKey }));
+        const write = async () => client.mutation(heartbeat, args, { onlineOnly: true, shardKey });
+
+        sendPresenceHeartbeat(client, { roomId: currentRoom, sessionId, shardKey }, write);
     };
 
     const setData = (next: Record<string, unknown> | undefined): void => {
@@ -243,7 +242,9 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
 
                 // another mounted view still shows the same session there.
                 if (releaseRow() && leave !== undefined) {
-                    presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
+                    const write = async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey });
+
+                    sendPresenceLeave(client, { roomId: room, sessionId, shardKey }, write);
                 }
             };
 
