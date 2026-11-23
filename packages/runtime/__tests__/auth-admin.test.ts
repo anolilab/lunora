@@ -1,6 +1,11 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
+import { lunoraAuthAdapter } from "../../auth/src/adapter";
+import { createAuthAdmin } from "../../auth/src/admin";
+import { createAuth } from "../../auth/src/create-auth";
+import { apiKey } from "../../auth/src/plugins";
+import { createMemoryAuthStore } from "../../auth/src/store";
 import type { AuthAdmin, AuthAuditWrite, AuthAuditWriter, ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -454,6 +459,22 @@ describe("createWorker — auth admin audit trail", () => {
         expect(writer.rows).toStrictEqual([
             { actorId: "admin:root", detail: { path: `/_lunora/admin/auth/${route}`, ...ids }, event, outcome: "success", ts: expect.any(Number), ...columns },
         ]);
+    });
+
+    it("writes no row for a revoke of an api key that does not exist, so the id it named is never stored", async () => {
+        expect.assertions(2);
+
+        // The real plane, so the revoke answers as @lunora/auth does for an id that matches no key.
+        const plane = createAuthAdmin(
+            createAuth({ baseURL: "http://localhost", database: lunoraAuthAdapter(createMemoryAuthStore()), plugins: [apiKey()], secret: "x".repeat(32) }),
+        );
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        const response = await worker.fetch(post(`${AUTH}/api-keys/delete`, { apiKeyId: "f".repeat(64) }), {}, fakeContext);
+
+        expect(response.status).toBe(404);
+        expect(writer.rows).toStrictEqual([]);
     });
 
     it("records the persisted roles of a multi-role grant", async () => {
