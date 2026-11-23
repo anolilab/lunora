@@ -53,9 +53,7 @@ const connect = async (boxId: string) => {
 
     socket.accept();
 
-    // Frames nobody has asked for yet, and the callers waiting for a type that has not arrived. Each
-    // frame goes to the first waiter for its type, else to the inbox: the socket's own events are the
-    // milestone, so no wait depends on a timer.
+    // Frames reach a waiter from the message listener itself, so no wait depends on a timer.
     const received: CloudMessage[] = [];
     const waiters: { reject: (error: Error) => void; resolve: (frame: CloudMessage) => void; type: CloudMessage["type"] }[] = [];
     const closed: { code?: number }[] = [];
