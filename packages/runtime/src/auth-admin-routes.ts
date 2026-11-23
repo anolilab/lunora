@@ -275,22 +275,22 @@ const roleField = (value: unknown): string | undefined => {
 const dataOf = (input: unknown): unknown => (typeof input === "object" && input !== null ? (input as Record<string, unknown>)["data"] : undefined);
 
 /**
- * The role a row records: the one the plane saved, which `createUser`'s `data.role` can override, and for a
- * role-granting op the plane's default when the request named none.
+ * The role a row records: the one the plane saved, and for a role-granting op the plane's default when the request
+ * named none. When the result omits it, `data.role` comes first, since the plane spreads `data` over the top level.
  */
 const auditedRole = (audit: NonNullable<AuthRouteDescriptor["audit"]>, input: unknown, result: unknown): string | undefined => {
-    const requestedRole = roleField(input) ?? roleField(dataOf(input));
+    const requestedRole = roleField(dataOf(input)) ?? roleField(input);
 
     return requestedRole !== undefined || audit.role === true ? (roleField(result) ?? requestedRole) : undefined;
 };
 
 /**
  * An invitation names its target only by address, and a created user's address identifies it to a reader. It goes in
- * `targetEmail`: inside `detail` the PII rules erase it. The saved address wins over the requested one, since
- * `createUser` lets `data.email` override the top-level field.
+ * `targetEmail`: inside `detail` the PII rules erase it. The saved address wins over the requested one, and of the
+ * requested ones `data.email` wins, since `createUser` spreads `data` over the top-level field.
  */
 const auditedTargetEmail = (input: unknown, result: unknown): string | undefined => {
-    const requestedEmail = stringField(input, "email") ?? stringField(dataOf(input), "email");
+    const requestedEmail = stringField(dataOf(input), "email") ?? stringField(input, "email");
 
     return requestedEmail === undefined ? undefined : (stringField(result, "email") ?? requestedEmail);
 };

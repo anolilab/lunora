@@ -617,6 +617,29 @@ describe("createWorker — auth admin audit trail", () => {
         expect(writer.rows[0]?.detail).toMatchObject({ role: "admin", targetUserId: "u1" });
     });
 
+    it("records `data`'s role and address, which the save keeps, when the created user omits them", async () => {
+        expect.assertions(2);
+
+        const plane = auditedAuthAdmin();
+
+        // `AuthAdminUser.role` and `.email` are optional, so a conforming plane may return neither.
+        vi.mocked(plane.createUser as NonNullable<AuthAdmin["createUser"]>).mockImplementationOnce(async () => {
+            return { id: "u1" };
+        });
+
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        await worker.fetch(
+            post(`${AUTH}/users/create`, { data: { email: "saved@example.com", role: "admin" }, email: "asked@example.com", name: "New", role: "user" }),
+            {},
+            fakeContext,
+        );
+
+        expect(writer.rows[0]?.detail).toMatchObject({ role: "admin", targetUserId: "u1" });
+        expect(writer.rows[0]).toMatchObject({ targetEmail: "saved@example.com" });
+    });
+
     it("names the sign-up invitation it created", async () => {
         expect.assertions(1);
 
