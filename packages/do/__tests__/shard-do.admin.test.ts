@@ -4542,13 +4542,15 @@ describe("shardDO admin bulk delete", () => {
         });
 
         it("skips a row a concurrent write deleted before its turn", async () => {
-            expect.assertions(2);
+            expect.assertions(4);
 
             await seedProject(createShardContextDatabase({ schema: todosSchema, sql: database.sql }), "p1", 3);
 
             const shard = new RacingDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
-            [, shard.victim] = p1Ids();
+            // The victim must come after another row in the unordered scan (storage order, not id
+            // order), or its own write lands before the racing delete and it is rightly counted.
+            shard.victim = String(database.raw(`SELECT "id" FROM "todos" WHERE json_extract("__doc__", '$.projectId') = 'p1'`).at(-1)?.["id"]);
 
             const response = await shard.fetch(
                 bulkRequest(ADMIN_FUNCTIONS.patchRows, {
@@ -4560,6 +4562,12 @@ describe("shardDO admin bulk delete", () => {
 
             expect(response.status).toBe(200);
             expect(doneCount("p1")).toBe(2);
+            // The skipped row is not reported as patched, to the caller or in the audit.
+            await expect(response.json()).resolves.toStrictEqual({ result: { count: 2, hasMore: false } });
+            await expect(auditOps(shard)).resolves.toContainEqual({
+                detail: expect.objectContaining({ patched: 2 }),
+                op: "patchRows",
+            });
         });
 
         it("fails the batch on a NOT_FOUND raised for a row that is still there", async () => {

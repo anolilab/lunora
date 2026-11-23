@@ -529,7 +529,7 @@ abstract class ShardDO {
     protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]>;
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult>;
     protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult>;
-    protected runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>, after?: string): Promise<RunShardBulkRowResult>;
+    protected runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<boolean>, after?: string): Promise<RunShardBulkRowResult>;
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{
         before: number;
         total: number;

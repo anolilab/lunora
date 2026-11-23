@@ -5510,8 +5510,12 @@ abstract class ShardDO {
      * Rows applied before it are ALREADY COMMITTED — the writer commits per row —
      * so the caller must flush on the failure path too; {@link handleBulkRowOp}
      * owns that, alongside every other admin arm's flush.
+     *
+     * `apply` resolves `false` for a row it skipped (one that vanished between the
+     * scan and its turn); `count` reports written rows only, while the cursor and
+     * `hasMore` still follow the scanned ids.
      */
-    protected async runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>, after?: string): Promise<RunShardBulkRowResult> {
+    protected async runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<boolean>, after?: string): Promise<RunShardBulkRowResult> {
         const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_ROW_CAP), 1), SHARD_BULK_ROW_CAP);
 
         // Collect this batch's ids first (a read; raw SQL is fine), then write
@@ -5529,8 +5533,9 @@ abstract class ShardDO {
 
         for (const id of ids) {
             // eslint-disable-next-line no-await-in-loop -- see the note above: per-row writer calls must serialise to avoid OCC contention on the shard DO
-            await apply(id);
-            count += 1;
+            if (await apply(id)) {
+                count += 1;
+            }
         }
 
         // Only an ordered scan yields a resumable boundary — see the note above.
@@ -11556,6 +11561,8 @@ abstract class ShardDO {
                 const result = await this.runShardBulkRowOp(parsed, async (id) => {
                     await this.runShardWrite({ hard: true, id, op: "delete", table: parsed.table }, headroom);
                     applied += 1;
+
+                    return true;
                 });
 
                 this.recordAudit(args, isClear ? "clearTable" : "deleteRows", {
@@ -11587,12 +11594,14 @@ abstract class ShardDO {
                     // `NOT_FOUND` included, even one that removed this row first — is reported. A
                     // probe that cannot run is not an absence, so the write goes ahead.
                     if (this.shardRowExists(parsed.table, id) === false) {
-                        return;
+                        return false;
                     }
 
                     try {
                         await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table }, headroom);
                         applied += 1;
+
+                        return true;
                     } catch (error) {
                         failedRow = id;
 
@@ -17350,7 +17359,10 @@ abstract class ShardDO {
         return Promise.resolve(undefined);
     }
 
-    /** Whether `table` holds a row with `id`; a missing table holds none. */
+    /**
+     * Whether `table` holds a row with `id`: `true`/`false` when the probe runs,
+     * `undefined` when it cannot (a missing table included) — unknown, not absent.
+     */
     private shardRowExists(table: string, id: string): boolean | undefined {
         try {
             return (this.sql as SqlExec).exec(`SELECT 1 FROM ${quoteIdentifier(table)} WHERE "id" = ? LIMIT 1`, id).toArray().length > 0;

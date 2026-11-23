@@ -127,6 +127,35 @@ const runSoftDeleteCompanionScenarios = (factory: () => SqlHarness): void => {
             expect(companionRowCount()).toBe(3);
         });
 
+        it("a patch that clears the marker after such a write re-adds the row at its new position", async () => {
+            expect.assertions(2);
+
+            const writer = await setup();
+
+            await writer.delete("scores", "s2");
+            await writer.patch("scores", "s2", { score: 99 });
+            await writer.patch("scores", "s2", { deletedAt: null });
+
+            const page = await writer.rankPage("scores", "by_score", {});
+
+            expect(page.page.map((row) => row["_id"])).toStrictEqual(["s2", "s3", "s1"]);
+            expect(companionRowCount()).toBe(3);
+        });
+
+        it("a marker-only patch restoring a soft-deleted row re-adds it", async () => {
+            expect.assertions(2);
+
+            const writer = await setup();
+
+            await writer.delete("scores", "s2");
+            await writer.patch("scores", "s2", { deletedAt: null });
+
+            const page = await writer.rankPage("scores", "by_score", {});
+
+            expect(page.page.map((row) => row["_id"])).toStrictEqual(["s3", "s2", "s1"]);
+            expect(companionRowCount()).toBe(3);
+        });
+
         it("rebuilds, on its next touch, a companion that kept a soft-deleted row's entry from before that write was refused", async () => {
             expect.assertions(2);
 

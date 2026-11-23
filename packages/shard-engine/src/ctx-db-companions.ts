@@ -262,9 +262,16 @@ const syncRankIndexEntry = (
     previous: Record<string, unknown> | undefined,
     next: Record<string, unknown> | undefined,
 ): void => {
-    // Fast path: both sides exist and no field this index reads changed — the
-    // companion entry is already correct, so skip the DELETE+INSERT pair.
-    if (previous && next && rankIndexFieldsUnchanged(index, previous, next)) {
+    // Fast path: both sides exist, neither the soft-delete marker's liveness nor
+    // any field this index reads changed — the companion entry is already
+    // correct, so skip the DELETE+INSERT pair. Liveness is part of the key: a
+    // deleted row holds no entry, so restoring it must insert one.
+    if (
+        previous &&
+        next &&
+        isLiveForCompanion(previous, softField) === isLiveForCompanion(next, softField) &&
+        rankIndexFieldsUnchanged(index, previous, next)
+    ) {
         return;
     }
 
