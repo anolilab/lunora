@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import Database from "better-sqlite3";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createNodeShardHost } from "../src/node-shard-host";
 
@@ -19,6 +19,12 @@ import { createNodeShardHost } from "../src/node-shard-host";
  * transaction, leaving an alarm that fires once in this process and never again.
  */
 describe("createNodeShardHost alarms", () => {
+    // Every test fakes the clock before creating its host; restoring here, not in each `finally`,
+    // keeps a throw during setup from leaving the rest of the file on the fake clock.
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     const alarmRowCount = (database: Database.Database): number =>
         database.prepare<[], { n: number }>("SELECT count(*) AS n FROM _lunora_alarm").get()?.n ?? -1;
 
@@ -50,7 +56,6 @@ describe("createNodeShardHost alarms", () => {
             expect(host.alarms.get()).toBeNull();
             expect(alarmRowCount(database)).toBe(0);
         } finally {
-            vi.useRealTimers();
             dispose();
         }
     });
@@ -80,7 +85,6 @@ describe("createNodeShardHost alarms", () => {
             // back. Without it a restart between attempts loses the alarm.
             expect(alarmRowCount(database)).toBe(1);
         } finally {
-            vi.useRealTimers();
             dispose();
         }
     });
@@ -116,7 +120,6 @@ describe("createNodeShardHost alarms", () => {
 
             expect(fired).toBe(0);
         } finally {
-            vi.useRealTimers();
             dispose();
         }
     });
@@ -144,7 +147,6 @@ describe("createNodeShardHost alarms", () => {
 
             expect(fired).toBe(1);
         } finally {
-            vi.useRealTimers();
             dispose();
         }
     });
@@ -187,7 +189,6 @@ describe("createNodeShardHost alarms", () => {
                 second.dispose();
             }
         } finally {
-            vi.useRealTimers();
             rmSync(workdir, { force: true, recursive: true });
         }
     });
@@ -226,7 +227,6 @@ describe("createNodeShardHost alarms", () => {
             expect(fired).toBe(1);
         } finally {
             dispose();
-            vi.useRealTimers();
         }
     });
 
@@ -261,7 +261,6 @@ describe("createNodeShardHost alarms", () => {
             expect(alarmRowCount(database)).toBe(0);
         } finally {
             dispose();
-            vi.useRealTimers();
         }
     });
 
@@ -302,7 +301,6 @@ describe("createNodeShardHost alarms", () => {
         } finally {
             first.dispose();
             first.database.close();
-            vi.useRealTimers();
             rmSync(directory, { force: true, recursive: true });
         }
     });
@@ -346,7 +344,6 @@ describe("createNodeShardHost alarms", () => {
             other.close();
             dispose();
             database.close();
-            vi.useRealTimers();
             rmSync(directory, { force: true, recursive: true });
         }
     });
@@ -385,7 +382,6 @@ describe("createNodeShardHost alarms", () => {
         } finally {
             first.dispose();
             first.database.close();
-            vi.useRealTimers();
             rmSync(directory, { force: true, recursive: true });
         }
     });
