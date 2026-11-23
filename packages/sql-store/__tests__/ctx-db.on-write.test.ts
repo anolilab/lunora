@@ -164,3 +164,47 @@ describe("createSqlCtxDb onWrite for a statement abandoned at its deadline", () 
         await expect(announcedLate).resolves.toBe("posts");
     });
 });
+
+describe("createSqlCtxDb onWrite inside a transaction", () => {
+    let stored: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        stored = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        stored.close();
+    });
+
+    it("announces a write that commits with its companions only once the transaction has committed", async () => {
+        expect.assertions(1);
+
+        const order: string[] = [];
+        const exec: SqlCtxExec = {
+            all: async (query, parameters) => stored.exec.all(query, parameters),
+            run: async (query, parameters) => stored.exec.run(query, parameters),
+            transaction: async <R>(closure: (on: SqlCtxExec) => Promise<R>): Promise<R> => {
+                const result = await closure(exec);
+
+                order.push("commit");
+
+                return result;
+            },
+        };
+        // CDC on gives the row a companion statement, so it is written inside a transaction.
+        const writer = createSqlCtxDb({
+            cdc: true,
+            clock: () => 1_700_000_000_000,
+            dialect: makeSqliteDialect(),
+            exec,
+            onWrite: (table) => {
+                order.push(`write:${table}`);
+            },
+            schema,
+        });
+
+        await writer.insert("audit", { postId: "p1" });
+
+        expect(order.slice(-2)).toStrictEqual(["commit", "write:audit"]);
+    });
+});

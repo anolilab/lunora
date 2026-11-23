@@ -302,6 +302,43 @@ describe("the global poll tick and live queries", () => {
         expect(shard.refreshes).toStrictEqual([{ functionPath: "boards:list", readBookmark: "first-primary" }]);
     });
 
+    it("counts a resubscribed id again, though the query it replaced recorded nothing", async () => {
+        expect.assertions(1);
+
+        const { shard, sockets } = await setup([]);
+        const woken = new FakeSocket();
+
+        woken.serializeAttachment({ subs: { reused: { args: {}, functionPath: "none:list" } } });
+        sockets.push(woken);
+        shard.changelog = [
+            { cursor: 1, tables: [] },
+            { cursor: 2, tables: [] },
+        ];
+
+        // The first tick runs it and it records nothing; then the client reuses the id for another query.
+        await shard.alarm();
+        await shard.webSocketMessage(
+            woken as unknown as WebSocket,
+            JSON.stringify({ id: "reused", query: { args: {}, functionPath: "none:list" }, type: "subscribe" }),
+        );
+        await shard.alarm();
+
+        expect(shard.changelogReads).toBe(2);
+    });
+
+    it("refreshes blind, after a failed changelog read, at most once per resync interval", async () => {
+        expect.assertions(1);
+
+        const { shard } = await setup(["boards:list"]);
+
+        // Every read fails, as when the changelog table is missing.
+        await shard.alarm();
+        await shard.alarm();
+        await shard.alarm();
+
+        expect(shard.refreshes).toHaveLength(1);
+    });
+
     it("warns once that a live query reads a global table nothing polls for", async () => {
         expect.assertions(1);
 

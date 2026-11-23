@@ -2869,6 +2869,21 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         ).catch(() => undefined);
     };
 
+    /** Run `apply` in one transaction and announce its row through `onWrite` once the transaction has committed. */
+    const commitAnnounced = async (
+        tableName: string,
+        apply: (on: SqlCtxExec) => Promise<boolean>,
+        transaction: NonNullable<SqlCtxExec["transaction"]>,
+    ): Promise<boolean> => {
+        const written = await transaction(apply).catch(mapTransactionConflict);
+
+        if (written) {
+            options.onWrite?.(tableName);
+        }
+
+        return written;
+    };
+
     /**
      * Follow a row write abandoned at its deadline to wherever it settles: it may still land.
      *
@@ -2946,9 +2961,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 return false;
             }
 
-            // Announced before a surrounding transaction commits: a rollback only costs subscribers a
-            // re-read of what did commit, while a write announced late, or never, leaves them stale.
-            options.onWrite?.(tableName);
+            // A row that commits on its own is stored now; one inside a transaction is announced once that commits,
+            // below: announced earlier, a read made before the commit could be cached past the invalidation it drives.
+            if (rowCommitsAlone) {
+                options.onWrite?.(tableName);
+            }
 
             const progress = { batched: false, dispatched: false };
 
@@ -2992,7 +3009,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const skippedBefore = skippedDeltas;
 
         try {
-            written = exec.transaction !== undefined && hasCompanions ? await exec.transaction(apply).catch(mapTransactionConflict) : await apply(exec);
+            written = exec.transaction === undefined || !hasCompanions ? await apply(exec) : await commitAnnounced(tableName, apply, exec.transaction);
 
             // A delta skipped inside the transaction assumed the next rebuild would count this row, but it was not yet
             // committed: a rebuild that settled before the commit tallied the table without it and would be trusted.

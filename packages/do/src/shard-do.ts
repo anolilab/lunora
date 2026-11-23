@@ -3074,6 +3074,9 @@ abstract class ShardDO {
     /** Whether this instance has warned that a live query reads a `.global()` table nothing polls for. */
     private warnedUnpolledGlobalRead = false;
 
+    /** When the poll last re-ran global live queries without a changelog answer; see {@link ShardDO.refreshFromGlobalPoll}. */
+    private lastBlindRefreshAt: number | undefined;
+
     /** Coalesced twin of {@link ShardDO.pendingChangedBookmarks}; see {@link refreshReadBookmark}. */
     private pendingRefreshBookmarks: Set<string> | undefined = undefined;
 
@@ -6632,6 +6635,8 @@ abstract class ShardDO {
         // discarded) and the client never gets the snapshot it asked for. The new
         // subscription has no memo yet, so the socket is visited on every flush until one indexes it.
         this.socketIndex.resubscribed(ws, subId);
+        // What the replaced query recorded says nothing about the new one, which the poll must count until it is run.
+        this.unrecordedQueries.get(ws)?.delete(subId);
         this.restartFailureStreakUnlessRetry(ws, subId, previous, query);
 
         return "ok";
@@ -6670,6 +6675,7 @@ abstract class ShardDO {
         }
 
         this.socketIndex.forgetMemo(ws, subId);
+        this.unrecordedQueries.get(ws)?.delete(subId);
         this.subscriptionFailures.clear(ws, subId);
         this.deliveryRegistrations.get(ws)?.delete(subId);
     }
@@ -17867,6 +17873,26 @@ abstract class ShardDO {
      * result is not pushed again.
      */
     private async refreshFromGlobalPoll(poll: GlobalPollRead): Promise<void> {
+        // A changelog that cannot be read often stays that way (a table never migrated), and a rerun of every global
+        // live query at the primary on each tick would bill it every time, so a blind pass runs at most once per
+        // resync interval, as a shape's unconditional re-read does, and says why.
+        if (!poll.visible) {
+            const now = Date.now();
+
+            if (this.lastBlindRefreshAt !== undefined && now - this.lastBlindRefreshAt < ShardDO.GLOBAL_SHAPE_RESYNC_MS) {
+                return;
+            }
+
+            this.lastBlindRefreshAt = now;
+            this.logs.push({
+                functionPath: "global:poll",
+                level: "warn",
+                message:
+                    "the global changelog could not be read, so live queries on .global() tables re-run at the primary once per resync interval until it can",
+                timestamp: now,
+            });
+        }
+
         const polled = this.polledGlobalTables();
         // A changelog read that failed says nothing about what moved, so everything polled may have. A
         // store that is down fails those reruns too, and each failing query then backs off on its own.
