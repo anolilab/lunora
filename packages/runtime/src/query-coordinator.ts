@@ -918,7 +918,9 @@ const noteRankPageFailure = (
         return;
     }
 
-    const failedInARow = (cursorState.failures?.[shardKey] ?? 0) + 1;
+    // The counts come back from the caller as JSON: only an own numeric entry is a count.
+    const prior = cursorState.failures !== undefined && Object.hasOwn(cursorState.failures, shardKey) ? cursorState.failures[shardKey] : undefined;
+    const failedInARow = (typeof prior === "number" && Number.isFinite(prior) ? prior : 0) + 1;
 
     if (failedInARow >= RANK_PAGE_DROP_AFTER_FAILURES) {
         next.dropped.add(shardKey);
@@ -2225,14 +2227,11 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 },
             );
             // A dropped shard is still named on every later page, so the result stays partial.
-            const outcomes: ShardRankPageOutcome[] = [
-                ...asked,
-                ...keys
-                    .filter((key) => previouslyDropped.has(key))
-                    .map((shardKey) => {
-                        return { error: { message: droppedShardMessage, timedOut: false }, shardKey };
-                    }),
-            ];
+            const askedByKey = new Map(asked.map((outcome) => [outcome.shardKey, outcome]));
+            // Registry order, as `shards` promises, with a dropped shard named in its place.
+            const outcomes: ShardRankPageOutcome[] = keys.map(
+                (shardKey) => askedByKey.get(shardKey) ?? { error: { message: droppedShardMessage, timedOut: false }, shardKey },
+            );
             const dropped = new Set(previouslyDropped);
             const failures = new Map<string, number>();
 

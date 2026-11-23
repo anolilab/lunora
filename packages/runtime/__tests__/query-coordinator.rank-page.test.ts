@@ -435,6 +435,50 @@ describe("orchestrateRankPage — failures and request forwarding", () => {
         expect(bCalls.count).toBe(2);
     });
 
+    /** A cursor as a caller sends it back: base64 of its JSON state. */
+    const cursorOf = (state: Record<string, unknown>): string => btoa(JSON.stringify(state));
+
+    const namespaceFor = (stubFor: (shardKey: string) => { fetch: (request: Request) => Promise<Response> }): ShardNamespaceLike => {
+        return {
+            get: (id) => stubFor((id as { __name: string }).__name),
+            getByName: (name) => stubFor(name),
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+    };
+
+    it("counts a failure for a shard whose key names an Object.prototype member", async () => {
+        expect.assertions(2);
+
+        // Every shard but "a" fails; "constructor" is not an own key of the cursor's failure counts.
+        const namespace = namespaceFor((shardKey) => failingShardBStub(shardKey === "a" ? "a" : "b"));
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a", "constructor"] }) });
+        const cursor = cursorOf({ failures: {}, perShard: {} });
+
+        const page1 = await coordinator.orchestrateRankPage(namespace, { cursor, index: "lb", table: "scores", take: 100 });
+        const page2 = await coordinator.orchestrateRankPage(namespace, { cursor: page1.continueCursor, index: "lb", table: "scores", take: 100 });
+
+        expect(page1.isDone).toBe(false);
+        // Its second failure in a row: dropped, so paging ends.
+        expect(page2.isDone).toBe(true);
+    });
+
+    it("lists a dropped shard's outcome in registry order", async () => {
+        expect.assertions(1);
+
+        const namespace = namespaceFor((shardKey) => failingShardBStub(shardKey === "b" ? "b" : "a"));
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a", "b", "c"] }) });
+        const result = await coordinator.orchestrateRankPage(namespace, {
+            cursor: cursorOf({ dropped: ["b"], perShard: {} }),
+            index: "lb",
+            table: "scores",
+            take: 100,
+        });
+
+        expect(result.shards.map((shard) => shard.shardKey)).toStrictEqual(["a", "b", "c"]);
+    });
+
     it("delivers a recovered never-paged shard's rows on a later page", async () => {
         expect.assertions(8);
 

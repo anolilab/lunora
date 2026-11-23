@@ -11507,6 +11507,7 @@ abstract class ShardDO {
      */
     private async handleBulkRowOp(functionPath: string, args: Record<string, unknown>): Promise<Response> {
         let applied = 0;
+        let failedRow: string | undefined;
 
         // ONE meter for the whole batch, threaded by value into every per-row
         // `runShardWrite` — the same shape {@link ShardDO.pollTtlSweeps} uses for
@@ -11587,7 +11588,9 @@ abstract class ShardDO {
                         // Only the target's own absence is the race above. A `NOT_FOUND` while the row is
                         // still there came from a write the patch set off (an after-update trigger
                         // patching a missing document), after this row was written: a failure to report.
-                        if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND" || this.shardRowExists(parsed.table, id)) {
+                        if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND" || this.shardRowExists(parsed.table, id) !== false) {
+                            failedRow = id;
+
                             throw error;
                         }
                     }
@@ -11607,8 +11610,14 @@ abstract class ShardDO {
             // commits per row), so a privileged partial write still gets an audit
             // record — otherwise a batch that wrote 200 rows and then failed leaves
             // no trace at all.
-            if (applied > 0) {
-                this.recordAudit(args, "bulkRowOpFailed", { table: typeof args["table"] === "string" ? args["table"] : undefined, detail: { applied } });
+            //
+            // `failedRow` is the row whose own write raised. No transaction wraps a row's write and its
+            // triggers, so it may already be written though it is not counted: named, so it can be checked.
+            if (applied > 0 || failedRow !== undefined) {
+                this.recordAudit(args, "bulkRowOpFailed", {
+                    table: typeof args["table"] === "string" ? args["table"] : undefined,
+                    detail: { applied, ...(failedRow === undefined ? {} : { failedRow }) },
+                });
             }
 
             throw error;
@@ -17338,11 +17347,12 @@ abstract class ShardDO {
     }
 
     /** Whether `table` holds a row with `id`; a missing table holds none. */
-    private shardRowExists(table: string, id: string): boolean {
+    private shardRowExists(table: string, id: string): boolean | undefined {
         try {
             return (this.sql as SqlExec).exec(`SELECT 1 FROM ${quoteIdentifier(table)} WHERE "id" = ? LIMIT 1`, id).toArray().length > 0;
         } catch {
-            return false;
+            // Unknown, not absent: a caller must not read a failed probe as the row being gone.
+            return undefined;
         }
     }
 
