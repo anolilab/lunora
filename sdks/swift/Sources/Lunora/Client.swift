@@ -241,6 +241,9 @@ public final class LunoraClient {
     /// Query subscription ids a reconnect has yet to re-send, in order, and the ones it has sent and
     /// not yet heard back about, each with the `ProcessInfo.systemUptime` deadline after which it
     /// stops holding a slot. See ``resendSubscriptions()``. Guarded by the lock.
+    ///
+    /// The queue is held in REVERSE, next id last: `popLast` is O(1) where `removeFirst` shifts
+    /// the rest, which made draining a large reconnect quadratic under the lock.
     private var resubscribeQueue: [String] = []
     private var resubscribeSlots: [String: TimeInterval] = [:]
     /// Bumped by every attach and detach. A sender closure has no identity to compare, so a retry
@@ -1208,8 +1211,9 @@ public final class LunoraClient {
             guard let sender = send else { return (nil, [], []) }
 
             clearResubscribesLocked()
-            // In subscribe order: `sub_N` ids compare by length first, then digits.
-            resubscribeQueue = subscriptions.keys.sorted { ($0.count, $0) < ($1.count, $1) }
+            // Subscribe order, reversed (see `resubscribeQueue`): `sub_N` ids compare by length
+            // first, then digits.
+            resubscribeQueue = subscriptions.keys.sorted { ($0.count, $0) > ($1.count, $1) }
 
             let batch = takeResubscribesLocked(now: ProcessInfo.processInfo.systemUptime)
             let shapeFrames = shapes.compactMap { id, entry in
@@ -1249,8 +1253,7 @@ public final class LunoraClient {
     private func takeResubscribesLocked(now: TimeInterval) -> [[String: Any]] {
         var batch: [[String: Any]] = []
 
-        while resubscribeSlots.count < LunoraClient.resubscribeConcurrency, !resubscribeQueue.isEmpty {
-            let id = resubscribeQueue.removeFirst()
+        while resubscribeSlots.count < LunoraClient.resubscribeConcurrency, let id = resubscribeQueue.popLast() {
 
             // Unsubscribed while it waited its turn: nothing to re-send.
             guard let entry = subscriptions[id] else { continue }
