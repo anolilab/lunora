@@ -1,6 +1,6 @@
 import type { DatabaseWriterLike, QueryPage, SchemaLike } from "@lunora/shard-engine";
 import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
-import { decodeWire } from "@lunora/wire";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
 import { serveRelationFanout } from "../src/relation-fanout";
@@ -137,13 +137,16 @@ describe("serveRelationFanout", () => {
  */
 describe("relation fan-out dispatch response", () => {
     class FanoutShard extends ShardDO {
+        public receivedArgs: Record<string, unknown> | undefined = undefined;
+
         // eslint-disable-next-line class-methods-use-this -- override stub; a reserved relation path must never reach user dispatch
         public async handleRpc(): Promise<unknown> {
             throw new Error("user dispatch must not be reached for a reserved relation path");
         }
 
-        // eslint-disable-next-line class-methods-use-this -- override stub returning a fixed wire-encodable row, no instance state
-        protected override runRelationFanoutRead(): Promise<unknown> {
+        protected override runRelationFanoutRead(_functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+            this.receivedArgs = args;
+
             return Promise.resolve([{ _id: "l1", blob: new Uint8Array([1, 2, 3]).buffer, seq: 9_007_199_254_740_993n }]);
         }
     }
@@ -179,5 +182,24 @@ describe("relation fan-out dispatch response", () => {
         expect(decoded[0]?.seq).toBe(9_007_199_254_740_993n);
         // Bytes survive as bytes rather than flattening to `{}`.
         expect([...new Uint8Array(decoded[0]?.blob ?? new ArrayBuffer(0))]).toEqual([1, 2, 3]);
+    });
+
+    it("hands the reader wire-DECODED args, so a bigint policy value is a bigint again", async () => {
+        expect.assertions(1);
+
+        const shard = new FanoutShard(fanoutState(), {});
+
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({
+                    args: encodeWire({ relationPolicies: { users: { tenantKey: 42n } }, table: "local", where: { globalId: 7n } }),
+                    functionPath: COUNT,
+                }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        expect(shard.receivedArgs).toStrictEqual({ relationPolicies: { users: { tenantKey: 42n } }, table: "local", where: { globalId: 7n } });
     });
 });

@@ -17,7 +17,7 @@ const globalSchema: SchemaLike = {
     tables: { counters: { indexes: [], shape: { n: col("number") }, shardMode: { kind: "global" } } },
 };
 
-type GlobalStub = Partial<Record<"delete" | "deleteMany" | "findMany" | "get" | "patch" | "patchIf" | "replace" | "restore", unknown>>;
+type GlobalStub = Partial<Record<"count" | "delete" | "deleteMany" | "findMany" | "get" | "patch" | "patchIf" | "replace" | "restore", unknown>>;
 
 /**
  * Live subscriptions on this shard read `.global()` rows, and the write lands in D1.
@@ -423,5 +423,48 @@ describe("nested counts under a .global() relation", () => {
         await writer.findMany("local", { with: { remote: { with: { _count: { deep: true } } } } });
 
         expect(onRead).toHaveBeenCalledWith("deeper", "*scan", undefined);
+    });
+
+    it("records the scan of every table a global _count child's policy reaches through a relation", async () => {
+        expect.hasAssertions();
+
+        const schema: SchemaLike = {
+            tables: {
+                memberships: {
+                    indexes: [],
+                    relationMap: { team: { field: "teamId", kind: "one", references: "_id", table: "teams" } },
+                    shape: { teamId: col("string"), userId: col("string") },
+                    shardMode: { kind: "global" },
+                },
+                posts: {
+                    indexes: [],
+                    relationMap: { members: { field: "postId", kind: "many", references: "_id", table: "memberships" } },
+                    shape: { postId: col("string") },
+                    shardMode: { kind: "global" },
+                },
+                teams: { indexes: [], shape: { name: col("string") }, shardMode: { kind: "global" } },
+                threads: {
+                    indexes: [],
+                    relationMap: { posts: { field: "threadId", kind: "many", references: "_id", table: "posts" } },
+                    shape: { title: col("string") },
+                    shardMode: { kind: "root" },
+                },
+            },
+        };
+        const onRead = vi.fn<NonNullable<CtxDbOptions["onRead"]>>();
+        const { writer } = setup({ count: vi.fn<() => Promise<number>>(async () => 1) }, { onRead, schema });
+        // The posts policy reaches memberships, and the memberships policy reaches teams: D1
+        // reads both while counting, so a change to either has to re-run the count.
+        const policies: Record<string, Record<string, unknown>> = {
+            memberships: { team: { is: { name: "core" } } },
+            posts: { members: { some: { userId: "u1" } } },
+        };
+
+        await writer.insert("threads", { _id: "t1", title: "hi" }, { allowExplicitId: true });
+        await writer.findMany("threads", { relationBaseWhere: (table) => policies[table], with: { _count: { posts: true } } });
+
+        expect(onRead).toHaveBeenCalledWith("posts", "*scan", undefined);
+        expect(onRead).toHaveBeenCalledWith("memberships", "*scan", undefined);
+        expect(onRead).toHaveBeenCalledWith("teams", "*scan", undefined);
     });
 });

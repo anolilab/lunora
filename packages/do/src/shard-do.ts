@@ -9350,7 +9350,7 @@ abstract class ShardDO {
             // codecs are the identity on pure-JSON payloads, so a relation with
             // no exotic columns is byte-identical to before.
             if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
-                const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
+                const value = await this.runRelationFanoutRead(payload.functionPath, handlerArgs);
 
                 // THIS dispatch's own by-value sink, never the shared field: a
                 // fan-out read performs no `.global()` write, so the sink is

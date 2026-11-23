@@ -41,7 +41,7 @@
 // Type-only: keeps `@lunora/runtime` free of a hard (value) dependency on
 // `@lunora/do` while reusing its canonical writer types (see the alias note).
 import type { CrossShardCountArgs, CrossShardReadArgs, QueryPage } from "@lunora/shard-engine";
-import { decodeWire } from "@lunora/wire";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { LunoraError } from "./errors";
@@ -121,7 +121,11 @@ const fanOutRelation = async (options: CrossShardRelationOptions, body: Record<s
     const doFetch = options.fetch ?? globalThis.fetch;
     const response = await doFetch(
         new Request(`${options.origin}${RPC_ENDPOINT}`, {
-            body: JSON.stringify(body),
+            // Wire-encoded because `where` and `relationPolicies` carry the
+            // caller's policy values, and an `int64` column's value is a
+            // `bigint`, which `JSON.stringify` refuses. The shard decodes the
+            // args before serving the reserved read.
+            body: JSON.stringify(encodeWire(body)),
             headers: buildIdentityHeaders(options),
             method: "POST",
         }),
