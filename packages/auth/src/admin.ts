@@ -1263,11 +1263,14 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
                 // A `null` result means the adapter didn't echo the row, NOT that no row
                 // matched `roleId`. Read it back, since the inputs do not name the
-                // organization the audit entry records; synthesize from the inputs only
-                // when that read finds nothing either.
+                // organization the audit entry records; synthesize from the inputs when
+                // that read finds nothing or fails. The update has already committed, so a
+                // failed read must not turn it into a reported failure.
                 const row =
                     updated ??
-                    (await context_.adapter.findOne<Record<string, unknown>>({ model: "organizationRole", where: [{ field: "id", value: roleId }] }));
+                    (await context_.adapter
+                        .findOne<Record<string, unknown>>({ model: "organizationRole", where: [{ field: "id", value: roleId }] })
+                        .catch(() => undefined));
 
                 return normalizeRow(row ?? { id: roleId, permission: JSON.stringify(permission) }) as AuthOrgRole;
             }),
@@ -1281,8 +1284,13 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 });
 
                 // A `null` result means the adapter didn't echo the row, NOT that no row
-                // matched `teamId`. Read it back for the organization, as `updateOrgRole` does.
-                const row = team ?? (await context_.adapter.findOne<Record<string, unknown>>({ model: "team", where: [{ field: "id", value: teamId }] }));
+                // matched `teamId`. Read it back for the organization, tolerating a failed
+                // read as `updateOrgRole` does.
+                const row =
+                    team ??
+                    (await context_.adapter
+                        .findOne<Record<string, unknown>>({ model: "team", where: [{ field: "id", value: teamId }] })
+                        .catch(() => undefined));
 
                 return normalizeRow(row ?? { id: teamId, name }) as AuthTeam;
             }),

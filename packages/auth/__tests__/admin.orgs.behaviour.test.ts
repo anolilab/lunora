@@ -507,6 +507,44 @@ describe("createAuthAdmin — teams & org roles", () => {
         expect(updatedRole.organizationId).toBe(org.id);
     });
 
+    it("team and custom-role updates still succeed when the read-back after an unechoed update fails", async () => {
+        expect.assertions(4);
+
+        const ownerId = await createUserRow(adminApi, "readback-owner@example.com", "ReadbackOwner");
+        const org = await adminApi.createOrganization({ name: "Readback", ownerId });
+        const team = await adminApi.createTeam({ name: "Before", organizationId: org.id });
+        const role = await adminApi.createOrgRole({ organizationId: org.id, permission: { billing: ["read"] }, role: "readback-role" });
+
+        const { adapter } = await auth.$context;
+        const { findOne, update } = adapter;
+
+        adapter.update = async (...args: Parameters<typeof update>) => {
+            await update.apply(adapter, args);
+
+            return null;
+        };
+        adapter.findOne = async () => {
+            throw new Error("read-back failed");
+        };
+
+        try {
+            const updatedTeam = await adminApi.updateTeam({ name: "After", teamId: team.id });
+            const updatedRole = await adminApi.updateOrgRole({ permission: { billing: ["read", "update"] }, roleId: role.id });
+
+            expect(updatedTeam).toMatchObject({ id: team.id, name: "After" });
+            expect(updatedRole.id).toBe(role.id);
+        } finally {
+            adapter.update = update;
+            adapter.findOne = findOne;
+        }
+
+        const teams = await adminApi.listTeams({ organizationId: org.id });
+        const roles = await adminApi.listOrgRoles({ organizationId: org.id });
+
+        expect(teams.rows.find((row) => row.id === team.id)?.name).toBe("After");
+        expect(roles.rows.find((row) => row.id === role.id)?.permission).toBe(JSON.stringify({ billing: ["read", "update"] }));
+    });
+
     it("listTeams / listTeamMembers / listOrgRoles return what was seeded", async () => {
         expect.assertions(3);
 
