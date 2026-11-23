@@ -781,15 +781,31 @@ const deleteOrganizationTeamMemberships = async (context_: Awaited<LunoraAuth["$
  * Refuse `email` when an account other than `exceptUserId` holds it in any casing or Unicode form.
  * better-auth's `findUserByEmail` matches the stored address exactly, so an account written before addresses
  * were lowercased, or imported as it was, would slip past it; the canonical column is an exact, indexed match.
+ *
+ * A row with no canonical value yet is matched on its address with ASCII case folded, as before the column
+ * existed: one written before it and not yet backfilled (a non-D1 database, a D1 table larger than one
+ * backfill pass), or a pre-existing duplicate the backfill leaves empty. The `IS NULL` range of the canonical
+ * index is empty once a table is backfilled, so this costs an index probe rather than a scan.
  */
 const assertEmailFree = async (context_: AuthContext, email: string, exceptUserId: string | undefined): Promise<void> => {
-    const holders = await context_.adapter.findMany<{ id: string }>({
-        limit: 2,
-        model: "user",
-        where: [{ field: CANONICAL_EMAIL_FIELD, value: canonicalEmail(email) }],
-    });
+    const [held, unfilled] = await Promise.all([
+        context_.adapter.findMany<{ id: string }>({
+            limit: 2,
+            model: "user",
+            where: [{ field: CANONICAL_EMAIL_FIELD, value: canonicalEmail(email) }],
+        }),
+        context_.adapter.findMany<{ id: string }>({
+            limit: 2,
+            model: "user",
+            where: [
+                // eslint-disable-next-line unicorn/no-null -- better-auth compiles a `null` value to `IS NULL`
+                { field: CANONICAL_EMAIL_FIELD, value: null },
+                { field: "email", mode: "insensitive", value: email },
+            ],
+        }),
+    ]);
 
-    if (holders.some((holder) => holder.id !== exceptUserId)) {
+    if ([...held, ...unfilled].some((holder) => holder.id !== exceptUserId)) {
         throw new LunoraAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");
     }
 };

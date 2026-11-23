@@ -40,12 +40,24 @@ const replacedData = (result: unknown): Record<string, unknown> | undefined =>
  * replaced `replaced`: theirs, plus the canonical value of the address it leaves in place.
  * After, not before: a caller's hook that rewrites `email` would otherwise persist an
  * address its canonical value no longer describes.
+ *
+ * A write that sets no address gets the field as `undefined`, which better-auth's adapter
+ * layer leaves out of the `UPDATE`. better-auth merges a hook's data over the caller's, so
+ * dropping the key from ours would not drop it from theirs, and any `updateUser` caller
+ * could otherwise point a user at another account's canonical address or clear its own.
  */
 const withCanonicalData = (replaced: Record<string, unknown> | undefined, data: Record<string, unknown>): Record<string, unknown> => {
     const email = replaced?.["email"] ?? data["email"];
 
-    return typeof email === "string" ? { ...replaced, [CANONICAL_EMAIL_FIELD]: canonicalEmail(email) } : { ...replaced };
+    return { ...replaced, [CANONICAL_EMAIL_FIELD]: typeof email === "string" ? canonicalEmail(email) : undefined };
 };
+
+/**
+ * The `create.before` hooks this module installed. `resolveAuthOptions` runs more than once
+ * on some paths (the auth DO resolves for its schema, then `createAuth` resolves again), and
+ * the field's presence cannot say whether the hooks are in: an app may declare it itself.
+ */
+const installedHooks = new WeakSet<UserCreateBefore>();
 
 /**
  * `options` with the canonical column declared on `user` and filled on every create and
@@ -54,16 +66,16 @@ const withCanonicalData = (replaced: Record<string, unknown> | undefined, data: 
  * Hooks rather than the adapter: they run for every adapter an app may pass, and every
  * user write better-auth makes goes through `internalAdapter`, which runs them. `input:
  * false` keeps it out of every request body and the admin create-user form; `returned:
- * false` keeps it out of the session user.
+ * false` keeps it out of the session user. An app's own declaration of the field keeps
+ * its `fieldName`; the attributes the column depends on are forced over it.
  */
 const withCanonicalEmail = <O extends BetterAuthOptions>(options: O): O => {
-    // `resolveAuthOptions` runs more than once on some paths (the auth DO resolves for its
-    // schema, then `createAuth` resolves again); wrapping twice would run the hooks twice.
-    if (options.user?.additionalFields?.[CANONICAL_EMAIL_FIELD] !== undefined) {
+    const create = options.databaseHooks?.user?.create;
+
+    if (create?.before !== undefined && installedHooks.has(create.before)) {
         return options;
     }
 
-    const create = options.databaseHooks?.user?.create;
     const update = options.databaseHooks?.user?.update;
     // `false` is the caller's veto, and stays one.
     const createBefore: UserCreateBefore = async (user, context) => {
@@ -76,6 +88,8 @@ const withCanonicalEmail = <O extends BetterAuthOptions>(options: O): O => {
 
         return result === false ? false : { data: withCanonicalData(replacedData(result), patch) };
     };
+
+    installedHooks.add(createBefore);
 
     return {
         ...options,
@@ -91,7 +105,14 @@ const withCanonicalEmail = <O extends BetterAuthOptions>(options: O): O => {
             ...options.user,
             additionalFields: {
                 ...options.user?.additionalFields,
-                [CANONICAL_EMAIL_FIELD]: { input: false, required: false, returned: false, type: "string", unique: true },
+                [CANONICAL_EMAIL_FIELD]: {
+                    ...options.user?.additionalFields?.[CANONICAL_EMAIL_FIELD],
+                    input: false,
+                    required: false,
+                    returned: false,
+                    type: "string",
+                    unique: true,
+                },
             },
         },
     };
@@ -138,78 +159,92 @@ const withCanonicalEmailValue = (row: Record<string, unknown>, table: string, co
 
 const BACKFILL_PAGE_ROWS = 200;
 
+/**
+ * Pages one async run fills at most: two D1 queries a page, well inside the per-invocation
+ * query budget the first request's `ensureMigrated` shares with the request itself. A
+ * larger table fills over later runs; until then `assertEmailFree` covers its unfilled rows.
+ */
+const BACKFILL_MAX_PAGES = 20;
+
 const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
- * The two methods of `SqlExecutor` the backfill uses, declared here rather than imported:
+ * The method of `SqlExecutor` the backfill uses, declared here rather than imported:
  * `create-auth.ts` imports this module, and `sql-store.ts` would drag the store into every
  * consumer of its types.
  */
 interface BackfillExecutor {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
-    run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
 }
 
-/** One statement the backfill needs run; the driver answers with the rows read, or the error a write raised. */
-type BackfillStep = { params: unknown[]; read: boolean; sql: string };
-/** `collided`: the write hit the unique index, which the backfill counts rather than fails on. */
-type BackfillAnswer = { collided?: boolean; rows?: Record<string, unknown>[] };
-
-const UNIQUE_VIOLATION = /UNIQUE constraint failed/u;
-
-/** A write's error as an answer when it is a collision; anything else fails the backfill. */
-const collision = (error: unknown): BackfillAnswer => {
-    if (!UNIQUE_VIOLATION.test(error instanceof Error ? error.message : String(error))) {
-        throw error;
-    }
-
-    return { collided: true };
-};
+/** One statement the backfill needs run, answered with the rows it returns. */
+type BackfillStep = { params: unknown[]; sql: string };
 
 /**
  * The backfill as a sequence of statements, so the synchronous Durable Object storage and
  * the asynchronous D1 binding run the same logic.
  *
  * In JS, a page at a time, because SQLite has no Unicode lowercasing to do it in one
- * `UPDATE`. A row whose canonical value another row already holds is left `NULL` and
- * counted: those are duplicates the old byte-exact index let in, and which account keeps
- * the address is the operator's call, not a migration's. They stay visible to this pass,
- * so it reports them on every run until resolved. `IS NULL` is a range of the canonical
- * column's own index, so a fully backfilled table costs one empty read.
+ * `UPDATE`. Each page is one `UPDATE ... FROM json_each(?)`, so its cost does not grow with
+ * the page. A row is written only while it still holds the address that was read and has no
+ * canonical value yet, so a concurrent email change is never overwritten with the old
+ * address's value; and only while no other row holds that value, so a collision skips the
+ * row instead of failing the statement. Those rows are duplicates the old byte-exact index
+ * let in, and which account keeps the address is the operator's call, not a migration's:
+ * they stay `NULL`, are counted, and are reported on every run until resolved. `IS NULL`
+ * is a range of the canonical column's own index, so a fully backfilled table costs one
+ * empty read.
  */
-const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn): Generator<BackfillStep, number, BackfillAnswer> {
+const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxPages: number): Generator<BackfillStep, number, Record<string, unknown>[]> {
     const table = quote(column.table);
     const canonical = quote(column.canonical);
+    const email = quote(column.email);
     let after = 0;
     let duplicates = 0;
 
-    for (;;) {
-        const { rows = [] } = yield {
+    for (let page = 0; page < maxPages; page += 1) {
+        const rows = yield {
             params: [after, BACKFILL_PAGE_ROWS],
-            read: true,
-            sql: `SELECT rowid AS "rid", ${quote(column.email)} AS "email" FROM ${table} WHERE ${canonical} IS NULL AND rowid > ? ORDER BY rowid LIMIT ?`,
+            sql: `SELECT rowid AS "rid", ${email} AS "email" FROM ${table} WHERE ${canonical} IS NULL AND rowid > ? ORDER BY rowid LIMIT ?`,
         };
+        // The first row of the page per canonical value: two in one statement would both pass `NOT EXISTS`.
+        const fills = new Map<string, [unknown, string, string]>();
 
         for (const row of rows) {
             if (typeof row["email"] === "string") {
-                const { collided = false } = yield {
-                    params: [canonicalEmail(row["email"]), row["rid"]],
-                    read: false,
-                    sql: `UPDATE ${table} SET ${canonical} = ? WHERE rowid = ?`,
-                };
+                const value = canonicalEmail(row["email"]);
 
-                duplicates += collided ? 1 : 0;
+                if (fills.has(value)) {
+                    duplicates += 1;
+                } else {
+                    fills.set(value, [row["rid"], row["email"], value]);
+                }
             }
+        }
+
+        if (fills.size > 0) {
+            const filled = yield {
+                params: [JSON.stringify([...fills.values()])],
+                sql:
+                    `UPDATE ${table} SET ${canonical} = "v"."canonical" ` +
+                    `FROM (SELECT json_extract("value", '$[0]') AS "rid", json_extract("value", '$[1]') AS "email", json_extract("value", '$[2]') AS "canonical" FROM json_each(?)) AS "v" ` +
+                    `WHERE ${table}.rowid = "v"."rid" AND ${table}.${email} = "v"."email" AND ${table}.${canonical} IS NULL ` +
+                    `AND NOT EXISTS (SELECT 1 FROM ${table} AS "held" WHERE "held".${canonical} = "v"."canonical") RETURNING rowid`,
+            };
+
+            duplicates += fills.size - filled.length;
         }
 
         const last = rows.at(-1)?.["rid"];
 
         if (rows.length < BACKFILL_PAGE_ROWS || typeof last !== "number") {
-            return duplicates;
+            break;
         }
 
         after = last;
     }
+
+    return duplicates;
 };
 
 const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn): void => {
@@ -223,12 +258,13 @@ const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn): void 
 };
 
 /**
- * Fill the canonical column for rows written before it existed, through an async executor (D1).
- * @returns How many rows could not be filled because another row holds their canonical value.
+ * Fill the canonical column for rows written before it existed, through an async executor
+ * (D1), at most {@link BACKFILL_MAX_PAGES} pages per call.
+ * @returns How many rows read could not be filled, because another row holds their canonical value.
  */
 const backfillCanonicalEmails = async (executor: BackfillExecutor, column: CanonicalEmailColumn): Promise<number> => {
-    const steps = backfillSteps(column);
-    let answer: BackfillAnswer = {};
+    const steps = backfillSteps(column, BACKFILL_MAX_PAGES);
+    let answer: Record<string, unknown>[] = [];
 
     for (;;) {
         const step = steps.next(answer);
@@ -239,31 +275,19 @@ const backfillCanonicalEmails = async (executor: BackfillExecutor, column: Canon
             return step.value;
         }
 
-        const { params, read, sql } = step.value;
-
-        if (read) {
-            // eslint-disable-next-line no-await-in-loop -- each statement depends on the last one's answer
-            answer = { rows: await executor.all(sql, params) };
-            continue;
-        }
-
-        try {
-            // eslint-disable-next-line no-await-in-loop -- each statement depends on the last one's answer
-            await executor.run(sql, params);
-            answer = {};
-        } catch (error) {
-            answer = collision(error);
-        }
+        // eslint-disable-next-line no-await-in-loop -- each statement depends on the last one's answer
+        answer = await executor.all(step.value.sql, step.value.params);
     }
 };
 
 /**
- * The same backfill over a synchronous executor (a Durable Object's `storage.sql.exec`).
+ * The same backfill over a synchronous executor (a Durable Object's `storage.sql.exec`),
+ * to the end of the table: local SQLite has no per-invocation query budget.
  * @returns How many rows could not be filled because another row holds their canonical value.
  */
 const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], column: CanonicalEmailColumn): number => {
-    const steps = backfillSteps(column);
-    let answer: BackfillAnswer = {};
+    const steps = backfillSteps(column, Number.POSITIVE_INFINITY);
+    let answer: Record<string, unknown>[] = [];
 
     for (;;) {
         const step = steps.next(answer);
@@ -274,19 +298,7 @@ const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => R
             return step.value;
         }
 
-        const { params, read, sql } = step.value;
-
-        if (read) {
-            answer = { rows: exec(sql, params) };
-            continue;
-        }
-
-        try {
-            exec(sql, params);
-            answer = {};
-        } catch (error) {
-            answer = collision(error);
-        }
+        answer = exec(step.value.sql, step.value.params);
     }
 };
 

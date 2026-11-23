@@ -394,6 +394,39 @@ const countUnkept = async (sql: AuthSqlReader, table: string, kept: ReadonlyArra
 };
 
 /**
+ * Why a planned replace row cannot be written, if it cannot; one tracker per plan.
+ *
+ * A row with no known column is refused here rather than at the commit: `INSERT INTO t () VALUES ()` is a
+ * syntax error, and the dry run that vets a staged restore before its shards are swapped has to see it, or the
+ * restore fails half-written. A `user` row whose canonical address another row of the snapshot holds is
+ * refused for the same reason: the replace empties the table first, so the snapshot's own rows are the only
+ * ones its unique index can see collide.
+ */
+const replaceRowRefusal = (column: CanonicalEmailColumn | undefined): ((row: Row, table: string) => string | undefined) => {
+    const seen = new Set<string>();
+
+    return (row, table) => {
+        if (Object.keys(row).length === 0) {
+            return `no column of the row exists on "${table}"`;
+        }
+
+        const address = column?.table === table ? row[column.canonical] : undefined;
+
+        if (typeof address !== "string") {
+            return undefined;
+        }
+
+        if (seen.has(address)) {
+            return `another "${table}" row of the snapshot holds the same address once case and Unicode form are ignored`;
+        }
+
+        seen.add(address);
+
+        return undefined;
+    };
+};
+
+/**
  * The statements that make `tables` hold exactly `rows` — every table (and
  * `clearTables`) emptied children-first, then the rows inserted parents-first —
  * plus what they will delete. Nothing runs here; the caller runs the list as
@@ -410,6 +443,7 @@ const planAuthReplace = async (
     const errors: AuthReplaceResult["errors"] = [];
     const columns = new Map<string, string[]>();
     const decoded: { row: Row; table: string }[] = [];
+    const refusalOf = replaceRowRefusal(canonicalEmail);
 
     for (const table of [...clearTables, ...tables]) {
         // eslint-disable-next-line no-await-in-loop -- once per table
@@ -433,10 +467,10 @@ const planAuthReplace = async (
 
         const row = Object.fromEntries(Object.entries(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail)).filter(([name]) => known.includes(name)));
 
-        // Refused here rather than at the commit: `INSERT INTO t () VALUES ()` is a syntax error, and the dry run that
-        // vets a staged restore before its shards are swapped has to see it, or the restore fails half-written.
-        if (Object.keys(row).length === 0) {
-            errors.push({ index, message: `no column of the row exists on "${table}"`, table });
+        const refusal = refusalOf(row, table);
+
+        if (refusal !== undefined) {
+            errors.push({ index, message: refusal, table });
             continue;
         }
 

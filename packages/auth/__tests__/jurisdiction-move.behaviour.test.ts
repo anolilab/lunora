@@ -99,7 +99,9 @@ const seed = (database: DatabaseSync): void => {
     database.exec(`CREATE TABLE IF NOT EXISTS "device" ("id" text NOT NULL PRIMARY KEY, "token" text NOT NULL, "userId" text NOT NULL)`);
 
     for (let index = 0; index < 120; index += 1) {
-        database.prepare(`INSERT INTO "user" VALUES (?, ?, ?, 1, 0, 0)`).run(`u${String(index)}`, `User ${String(index)}`, `u${String(index)}@example.test`);
+        database
+            .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (?, ?, ?, 1, 0, 0)`)
+            .run(`u${String(index)}`, `User ${String(index)}`, `u${String(index)}@example.test`);
         database.prepare(`INSERT INTO "device" VALUES (?, ?, ?)`).run(`s${String(index)}`, `t${String(index)}`, `u${String(index)}`);
     }
 };
@@ -183,6 +185,20 @@ describe("auth jurisdiction move (node:sqlite)", () => {
         expect(forced.tables.find((entry) => entry.table === "user")).toMatchObject({ conflicts: 1, copied: 119 });
         expect(context.target.prepare(`SELECT "id" FROM "user" WHERE "email" = 'u7@example.test'`).get()).toMatchObject({ id: "fresh" });
         await expect(context.move.purge()).resolves.toMatchObject({ dropped: expect.arrayContaining(["user"]) });
+    });
+
+    it("migrates a source that has served no request since an upgrade before copying it, so the users arrive with their canonical address", async () => {
+        expect.assertions(1);
+
+        const context = harness();
+
+        // The source's `user` table as an earlier `@lunora/auth` left it: no `emailCanonical`.
+        seed(context.source);
+        await copyAll(context.move);
+
+        expect({ ...context.target.prepare(`SELECT "emailCanonical" FROM "user" WHERE "id" = 'u3'`).get() }).toStrictEqual({
+            emailCanonical: "u3@example.test",
+        });
     });
 
     it("refuses to purge before a copy has finished", async () => {

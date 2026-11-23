@@ -793,6 +793,10 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
             );
         }
         case "manifest": {
+            // A source that has served no auth request since an upgrade still has the older schema; migrated
+            // first, the rows it hands over carry the columns (and backfilled values) the target expects.
+            context.prepare();
+
             return { tables: listMovableTables(storage) };
         }
         case "page": {

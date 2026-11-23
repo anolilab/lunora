@@ -168,10 +168,12 @@ const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void>
  * Fill `user.emailCanonical` on rows that predate the column. The migrator adds it
  * (nullable, uniquely indexed) like any other field; the value needs Unicode
  * lowercasing SQLite does not have, so it is computed here rather than in DDL. Runs on
- * every `ensureMigrated`, and finds nothing to do once a database is backfilled.
+ * every `ensureMigrated`, a bounded number of pages each time, and finds nothing to do once
+ * a database is backfilled.
  *
  * D1 only, like {@link dropLegacyIssuerColumn}: any other dialect's rows keep a `NULL`
- * canonical value until rewritten.
+ * canonical value until rewritten. The admin plane's duplicate-address check matches such
+ * rows on the address with ASCII case folded, as it did before the column.
  */
 const backfillCanonicalEmailColumn = async (options: LunoraAuthOptions): Promise<void> => {
     const { database } = options as { database?: unknown };
@@ -295,8 +297,9 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  *
  * The same goes for `user.emailCanonical`: the compiled DDL adds the column, but filling it
  * on existing rows needs Unicode lowercasing SQLite lacks, so `ensureMigrated` (which the
- * generated worker runs on its first auth request) does it. Until then a pre-existing
- * account is not found by the admin plane's duplicate-address check.
+ * generated worker runs on its first auth request) does it. Until then the admin plane's
+ * duplicate-address check finds a pre-existing account by its address with ASCII case
+ * folded only, so a variant differing in non-ASCII case or Unicode form gets past it.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
     const resolved = resolveAuthOptions(options);
