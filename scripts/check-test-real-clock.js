@@ -20,13 +20,13 @@ import { fileURLToPath } from "node:url";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const baselinePath = join(rootDir, "scripts", "test-real-clock.baseline.json");
 
-// A delay of two or more digits, `_` separators allowed (lint requires them from five digits up),
-// or a named one — a bare `ms` or a member such as `options.gapMs`; a third argument passes a value
-// to resolve with. The third spelling is a timer whose callback does some work and then resolves
-// the awaited promise.
-const DELAY = String.raw`(?:[0-9]{2}[0-9_]*|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)`;
+// A delay of two or more digits with `_` allowed between any two (`10`, `1_000`, `10_000`; lint
+// requires them from five digits up), or a named one — a bare `ms` or a member such as
+// `options.gapMs`; a third argument passes a value to resolve with. The third spelling is a timer
+// whose callback does some work and then resolves the awaited promise.
+const DELAY = String.raw`(?:[0-9](?:_?[0-9])+|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)`;
 const PATTERNS = [
-    new RegExp(String.raw`sleep\([0-9]{2}[0-9_]*\)`, "u"),
+    new RegExp(String.raw`\bsleep\(${DELAY}\)`, "u"),
     new RegExp(String.raw`setTimeout\((?:resolve|r), ${DELAY}[,)]`, "u"),
     new RegExp(String.raw`setTimeout\(\(\) => \{[^}]*?\b(?:resolve|r)\([^)]*\);?\s*\},\s*${DELAY}\)`, "su"),
 ];
