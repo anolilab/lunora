@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { aggregateTableName } from "../src/aggregate-tally";
 import type { SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { rankTableName } from "../src/rank";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -79,6 +80,51 @@ describe("insertManyUnsafe — a later chunk fails", () => {
         expect(sortedIds(ranked.page.map((row) => row["_id"]))).toStrictEqual(sortedIds(onDisk));
         expect(sortedIds(found.map((row) => row["_id"]))).toStrictEqual(sortedIds(onDisk));
         expect(sortedIds(reported)).toStrictEqual(sortedIds(onDisk));
+    });
+
+    // A write report is awaited, and another write can land in that await. The companions of every
+    // row the batch wrote must be in place before then, or one deleted in between is put back in
+    // the indexes (and its insert logged after its delete) from the image the batch kept.
+    it.each([
+        ["catches up a failed batch", true],
+        ["finishes a batch", false],
+    ])("keeps a row deleted during a report out of the indexes when it %s", async (_label, failing) => {
+        expect.assertions(5);
+
+        runShardMigrations(harness.sql, schema);
+
+        const writer = createShardContextDatabase({
+            clock: () => 1_700_000_000_000,
+            onWrite: async (event) => {
+                if (event.op === "insert" && event.id === "r0") {
+                    await writer.delete("items", "r1", { skipOnDelete: true });
+                }
+            },
+            schema,
+            sql: harness.sql,
+        });
+
+        const documents = Array.from({ length: ROWS }, (_, index) => {
+            return { _id: failing && index === DUPLICATE_AT ? "r0" : `r${String(index)}`, body: "hello", bucket: "b", score: index };
+        });
+        const [inserted] = await Promise.allSettled([writer.insertManyUnsafe?.("items", documents, { allowExplicitId: true })]);
+
+        expect(inserted?.status).toBe(failing ? "rejected" : "fulfilled");
+
+        const onDisk = harness.sql
+            .exec("SELECT id FROM items")
+            .toArray()
+            .map((row) => row["id"] as string);
+        const counted = harness.sql.exec(`SELECT SUM(__value__) AS total FROM ${aggregateTableName("items", "count_by_bucket")}`).toArray()[0]?.["total"];
+        const ranked = await writer.rankPage("items", "by_score", { take: ROWS });
+        const rankEntries = harness.sql.exec(`SELECT COUNT(*) AS n FROM ${rankTableName("items", "by_score")}`).toArray()[0]?.["n"];
+
+        // The delete landed, so the batch's own image of the row must not bring it back.
+        expect(onDisk).not.toContain("r1");
+        expect(Number(counted)).toBe(onDisk.length);
+        expect(sortedIds(ranked.page.map((row) => row["_id"]))).toStrictEqual(sortedIds(onDisk));
+        // The page above hydrates from the table, so a stale entry only shows in the companion itself.
+        expect(Number(rankEntries)).toBe(onDisk.length);
     });
 
     it("indexes the committed rows when a mutation catches the failure and its transaction commits", async () => {

@@ -3261,12 +3261,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * Companions + write report for rows an `insertManyUnsafe` chunk committed before a later chunk
      * threw. Each row on its own, failures dropped: one row's companion error must not leave the
      * rows after it unsynced, nor replace the insert error that stopped the batch, which is the one
-     * the caller has to act on.
+     * the caller has to act on. A row whose companions failed is not reported.
+     *
+     * Every row's companions go in before the first report is awaited: another write can land in
+     * that await, and a row it deletes must not be put back in the indexes (or its insert logged
+     * after its delete) from the image the batch kept.
      */
     const catchUpCommittedRows = async (tableName: string, rows: ReadonlyArray<{ document: Record<string, unknown>; id: string }>): Promise<void> => {
-        for (const { document, id } of rows) {
+        const synced = rows.filter(({ document, id }) => {
             try {
                 syncCompanionsForInsert(tableName, id, document);
+
+                return true;
+            } catch {
+                return false;
+            }
+        });
+
+        for (const { document, id } of synced) {
+            try {
                 // Raw hook, not `onWrite`: the batch was metered before the insert.
                 // eslint-disable-next-line no-await-in-loop -- sequential write-hook fan-out, mirrors the single insert
                 await reportWrite({ doc: document, id, op: "insert", table: tableName });
@@ -4705,8 +4718,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // aggregates, ranks, CDC, the reactive cache and live subscriptions stay
             // correct — only the validator + trigger pipeline is skipped.
             const syncWritten = async (written: typeof rows): Promise<void> => {
+                // All companions before the first awaited report, as in `catchUpCommittedRows`.
                 for (const { document, id } of written) {
                     syncCompanionsForInsert(tableName, id, document);
+                }
+
+                for (const { document, id } of written) {
                     // The batch was already charged to the meter BEFORE the insert, so
                     // notify through the raw hook — `onWrite` is the metering wrapper
                     // and would charge every row a second time, halving the effective
