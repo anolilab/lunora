@@ -54,7 +54,7 @@ import {
     emitWorkflowFragments,
     emitWorkflowsMetadataFragments,
 } from "./shard-runtime";
-import { emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
+import { emitGlobalChangelogOverride, emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
 import emitExternalSourceFragments from "./shard-sources";
 import emitVectorFragments from "./shard-vectors";
 import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderObjectKey, sensitiveArgNamesOf as sensitiveArgumentNamesOf } from "./shared";
@@ -701,7 +701,12 @@ ${broadcastBody}
             };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
-    const globalShapeReaderOverride = emitGlobalShapeReaderOverride(hasShapes && hasGlobalTables, globalDatabaseThunk);
+    const globalShapeReaderOverride =
+        emitGlobalShapeReaderOverride(hasShapes && hasGlobalTables, globalDatabaseThunk) +
+        emitGlobalChangelogOverride(
+            schema.tables.filter((table) => table.shardMode === "global").map((table) => table.name),
+            globalDatabaseThunk,
+        );
 
     // `defineRoom` → the base's `roomHandlerPath` seam. Gated on a declared room
     // so a room-free project's ShardDO subclass is byte-identical (it inherits

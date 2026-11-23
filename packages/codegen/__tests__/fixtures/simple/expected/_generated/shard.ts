@@ -642,6 +642,42 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
         }
 
+        // Without a changelog a tick cannot say which tables moved, so there is nothing to poll for.
+        private readonly polledGlobalTableSet: ReadonlySet<string> = new Set<string>(config.cdc === true ? ["users","attachments"] : []);
+
+        protected override polledGlobalTables(): ReadonlySet<string> {
+            return this.polledGlobalTableSet;
+        }
+
+        protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ bookmark?: string; cursor: number; floor?: number; tables: string[] } | undefined> {
+            const env = this.env as Record<string, unknown>;
+            // Metadata-only: this asks the global changelog which TABLES moved,
+            // never what changed in them, so it costs one small read per poll tick
+            // for the whole shard — and a tick whose answer omits a table skips
+            // the shapes and live queries that read only it.
+            // Named local, not an inline object literal — same reason as the
+            // dispatch path and `readGlobalShapeRows`: `bookmark` and `onBookmark` are not
+            // declared on the narrower Hyperdrive thunk's `request` type, and an inline
+            // literal trips an excess-property error (TS2353). The Hyperdrive factory
+            // simply never reads them.
+            //
+            // The session's bookmark after the read is returned with the answer: a read
+            // at it sees every write the answer reports, so the refresh it drives reads there.
+            const bookmark = this.getInboundBookmark();
+            let changelogBookmark: string | undefined;
+            const globalRequest = {
+                ...this.globalCdcOptions(config.cdc ?? false),
+                ...(bookmark === undefined ? {} : { bookmark }),
+                onBookmark: (value: string | undefined) => {
+                    changelogBookmark = value;
+                },
+            };
+            const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;
+            const changed = await globalDb.cdcChangedTables?.(sinceSeq, cursorOnly === undefined ? {} : { cursorOnly });
+
+            return changed === undefined || changelogBookmark === undefined ? changed : { ...changed, bookmark: changelogBookmark };
+        }
+
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
