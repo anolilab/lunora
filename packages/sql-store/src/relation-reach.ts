@@ -90,4 +90,41 @@ const relationReachableTables = (table: string, withInput: WithInput | undefined
     return reached;
 };
 
-export default relationReachableTables;
+/**
+ * The read policy of every table a cross-shard hop can read, keyed by table, for the serving shard
+ * to apply there. Only reachable tables are asked: `relationBaseWhere` refuses a protected table no
+ * policy reads, and asking it about every table in the schema made an unrelated one fail a read
+ * that never touches it. A policy can itself filter by a relation, and the serving shard resolves
+ * that predicate too, so each policy's targets join the set until it stops growing; one left out
+ * would be read there with no policy at all.
+ */
+const projectRelationPolicies = (
+    table: string,
+    withInput: WithInput | undefined,
+    where: WhereInput | undefined,
+    schema: SchemaLike,
+    relationBaseWhere: (table: string) => WhereInput | undefined,
+): Record<string, WhereInput> => {
+    const policies: Record<string, WhereInput> = {};
+    const pending = [...relationReachableTables(table, withInput, where, schema)];
+    const reached = new Set(pending);
+
+    for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+        const policy = relationBaseWhere(next);
+
+        if (policy !== undefined) {
+            policies[next] = policy;
+
+            for (const target of relationReachableTables(next, undefined, policy, schema)) {
+                if (!reached.has(target)) {
+                    reached.add(target);
+                    pending.push(target);
+                }
+            }
+        }
+    }
+
+    return policies;
+};
+
+export default projectRelationPolicies;
