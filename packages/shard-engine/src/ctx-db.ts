@@ -3265,8 +3265,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * reported.
      *
      * Every row's companions go in before the first report is awaited: another write can land in
-     * that await, and a row it deletes must not be put back in the indexes (or its insert logged
-     * after its delete) from the image the batch kept.
+     * that await, and a row it deletes must not be put back in the indexes from the image the batch
+     * kept. For the same reason a row is reported only while it still holds that image: a write in
+     * an earlier await has already reported its own change, and a stale insert after it would
+     * re-upsert what that write removed (a search vector, a CDC consumer's copy).
      */
     const catchUpCommittedRows = async (tableName: string, rows: ReadonlyArray<{ document: Record<string, unknown>; id: string }>): Promise<void> => {
         const synced = rows.filter(({ document, id }) => {
@@ -3283,6 +3285,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         });
 
         for (const { document, id } of synced) {
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs only once the writer is built, after `locateRowById` is initialised
+            if (locateRowById(id, tableName)?.docJson !== encodeDocJson(document)) {
+                continue;
+            }
+
             try {
                 // Raw hook, not `onWrite`: the batch was metered before the insert.
                 // eslint-disable-next-line no-await-in-loop -- sequential write-hook fan-out, mirrors the single insert

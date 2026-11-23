@@ -128,6 +128,69 @@ describe("insertManyUnsafe — a later chunk fails", () => {
         expect(Number(rankEntries)).toBe(onDisk.length);
     });
 
+    it.each([
+        ["deleted", "delete"],
+        ["updated", "update"],
+    ])("does not report a failed batch's insert of a row an earlier report %s", async (_label, change) => {
+        expect.assertions(2);
+
+        runShardMigrations(harness.sql, schema);
+
+        const reported: string[] = [];
+        const writer = createShardContextDatabase({
+            clock: () => 1_700_000_000_000,
+            onWrite: async (event) => {
+                reported.push(`${event.op}:${event.id}`);
+
+                if (event.op === "insert" && event.id === "r0") {
+                    await (change === "delete" ? writer.delete("items", "r1", { skipOnDelete: true }) : writer.patch("items", "r1", { body: "changed" }));
+                }
+            },
+            schema,
+            sql: harness.sql,
+        });
+
+        const documents = Array.from({ length: ROWS }, (_, index) => {
+            return { _id: index === DUPLICATE_AT ? "r0" : `r${String(index)}`, body: "hello", bucket: "b", score: index };
+        });
+
+        await expect(writer.insertManyUnsafe?.("items", documents, { allowExplicitId: true })).rejects.toThrow('unique constraint violation on "items"');
+
+        // The newer write reported itself; an insert from the batch's image after it would undo it downstream.
+        expect(reported.filter((entry) => entry.endsWith(":r1"))).toStrictEqual([`${change}:r1`]);
+    });
+
+    it("leaves no committed row or companion behind when the mutation's transaction rolls back", async () => {
+        expect.assertions(4);
+
+        runShardMigrations(harness.sql, schema);
+
+        const writer = createShardContextDatabase({
+            clock: () => 1_700_000_000_000,
+            inTransaction: () => true,
+            schema,
+            sql: harness.sql,
+        });
+
+        const documents = Array.from({ length: ROWS }, (_, index) => {
+            return { _id: index === DUPLICATE_AT ? "r0" : `r${String(index)}`, body: "hello", bucket: "b", score: index };
+        });
+
+        harness.sql.exec("BEGIN");
+
+        await expect(writer.insertManyUnsafe?.("items", documents, { allowExplicitId: true })).rejects.toThrow('unique constraint violation on "items"');
+
+        harness.sql.exec("ROLLBACK");
+
+        const onDisk = harness.sql.exec("SELECT COUNT(*) AS n FROM items").toArray()[0]?.["n"];
+        const counted = harness.sql.exec(`SELECT COUNT(*) AS n FROM ${aggregateTableName("items", "count_by_bucket")}`).toArray()[0]?.["n"];
+        const rankEntries = harness.sql.exec(`SELECT COUNT(*) AS n FROM ${rankTableName("items", "by_score")}`).toArray()[0]?.["n"];
+
+        expect(Number(onDisk)).toBe(0);
+        expect(Number(counted)).toBe(0);
+        expect(Number(rankEntries)).toBe(0);
+    });
+
     it("indexes the committed rows when a mutation catches the failure and its transaction commits", async () => {
         expect.assertions(5);
 
