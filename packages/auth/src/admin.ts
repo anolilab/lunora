@@ -756,12 +756,6 @@ const deleteOrganizationTeamMemberships = async (context_: Awaited<LunoraAuth["$
 };
 
 /**
- * Re-throw an unknown error as a {@link LunoraAuthAdminError}, lifting a
- * better-auth `APIError`'s `body.code` when present so the caller sees a stable
- * machine code rather than an opaque message.
- */
-
-/**
  * Refuse `email` (already lowercased) when an account other than `exceptUserId` holds it in any casing.
  * better-auth's `findUserByEmail` matches the stored address exactly, so an account written before addresses
  * were lowercased, or imported as it was, would slip past it.
@@ -799,6 +793,11 @@ const writeClaimingEmail = async <R>(
     }
 };
 
+/**
+ * Re-throw an unknown error as a {@link LunoraAuthAdminError}, lifting a
+ * better-auth `APIError`'s `body.code` when present so the caller sees a stable
+ * machine code rather than an opaque message.
+ */
 const asAdminError = (error: unknown): LunoraAuthAdminError => {
     if (error instanceof LunoraAuthAdminError) {
         return error;
