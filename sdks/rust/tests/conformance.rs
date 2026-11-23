@@ -1864,6 +1864,11 @@ fn an_unanswered_one_stops_holding_its_slot_after_the_timeout() {
 }
 
 #[test]
+fn a_late_timer_dates_the_next_slots_from_when_it_ran() {
+    resubscribe_cases::a_late_timer_dates_the_next_slots_from_when_it_ran();
+}
+
+#[test]
 fn a_reconnect_mid_drain_starts_a_fresh_window() {
     resubscribe_cases::a_reconnect_mid_drain_starts_a_fresh_window();
 }

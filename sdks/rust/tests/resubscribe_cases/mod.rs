@@ -142,6 +142,21 @@ pub fn an_unanswered_one_stops_holding_its_slot_after_the_timeout() {
     assert_eq!(subscribes(&sent).len(), 6);
 }
 
+/// A timer that fires late still passes the deadline it was armed for. The slots it claims are
+/// dated from when it ran, or they would already be (nearly) expired and the window would pace
+/// nothing.
+pub fn a_late_timer_dates_the_next_slots_from_when_it_ran() {
+    let (mut client, sent, _ids) = reconnected(SUBSCRIPTIONS);
+    let deadline = client.next_subscription_retry_at().expect("a slot deadline is pending");
+    let late = deadline + Duration::from_secs(5);
+
+    client.clock = Box::new(move || late);
+
+    assert_eq!(client.retry_due_subscriptions(deadline).expect("due"), RESUBSCRIBE_CONCURRENCY);
+    assert_eq!(subscribes(&sent).len(), 2 * RESUBSCRIBE_CONCURRENCY);
+    assert!(client.next_subscription_retry_at().expect("the new window's deadline") >= late + RESUBSCRIBE_ACK_TIMEOUT);
+}
+
 pub fn a_reconnect_mid_drain_starts_a_fresh_window() {
     let (mut client, sent, _ids) = reconnected(SUBSCRIPTIONS);
     let stale = subscribes(&sent);

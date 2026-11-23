@@ -156,6 +156,9 @@ pub type HttpPoster = Box<dyn Fn(&str, &HashMap<String, String>, &[u8]) -> Resul
 /// crate stays free of a socket dependency.
 pub type FrameSender = Box<dyn Fn(&Value) + Send>;
 
+/// Reads the monotonic clock. See [`Client::clock`].
+pub type Clock = Box<dyn Fn() -> Instant + Send>;
+
 /// Receives each whisper delivered on a topic the listener joined.
 pub type WhisperHandler = Box<dyn Fn(&WireValue) + Send>;
 
@@ -553,6 +556,9 @@ pub struct Client {
     /// record carries it), and a per-device id keeps that namespace stable across
     /// sessions instead of minting a new one on every boot.
     pub client_id: String,
+    /// The monotonic clock the re-subscribe pacing and the retry hints read, [`Instant::now`]
+    /// unless replaced. Replaceable so a test can stand where a late timer would.
+    pub clock: Clock,
     /// An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
     /// not a bearer token. It is persisted alongside every queued write and
     /// re-checked before that write replays, so a restart cannot push one user's
@@ -621,6 +627,7 @@ impl Client {
             auth_token: None,
             base_url: base_url.into(),
             client_id: format!("client-{}", random_id()),
+            clock: Box::new(Instant::now),
             closed: false,
             flush_not_before: None,
             pending_retries: HashMap::new(),
@@ -1247,7 +1254,7 @@ impl Client {
 
         self.resubscribe_slots.clear();
         self.resubscribe_queue = self.subscriptions.keys().cloned().collect();
-        self.drain_resubscribes(Instant::now());
+        self.drain_resubscribes((self.clock)());
 
         if let Some(send) = &self.send {
             for frame in &shapes {
@@ -1346,7 +1353,11 @@ impl Client {
 
         self.resubscribe_slots.retain(|_, deadline| *deadline > now);
 
-        Ok(frames.len() + self.drain_resubscribes(now))
+        // Dated from now, not the deadline a late timer was armed for, or the new slots would
+        // already be (nearly) expired and the window would not pace anything.
+        let claimed_at = now.max((self.clock)());
+
+        Ok(frames.len() + self.drain_resubscribes(claimed_at))
     }
 
     /// The earliest pending retry or paced re-subscribe deadline, or `None` when none is
@@ -1365,7 +1376,7 @@ impl Client {
 
         // Its frame will never be answered now, so the slot it holds goes to the next one.
         if self.resubscribe_slots.remove(id).is_some() {
-            self.drain_resubscribes(Instant::now());
+            self.drain_resubscribes((self.clock)());
         }
     }
 
@@ -1426,7 +1437,7 @@ impl Client {
         // its ack. Releasing here rather than per type keeps an unanticipated frame from
         // stalling the drain.
         if self.resubscribe_slots.remove(&id).is_some() {
-            self.drain_resubscribes(Instant::now());
+            self.drain_resubscribes((self.clock)());
         }
 
         match kind.as_str() {
@@ -1596,7 +1607,7 @@ impl Client {
             }
             "error" => {
                 // The hint counts from arrival, not from whenever the error handlers return.
-                let received = Instant::now();
+                let received = (self.clock)();
                 let envelope = frame.get("error");
                 let code = envelope.and_then(|inner| inner.get("code")).and_then(Value::as_str);
 
