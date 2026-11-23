@@ -55,18 +55,11 @@ const withTelemetry = (integration: Telemetry): { integrations: Telemetry[]; isE
     return { integrations: [integration], isEnabled: true };
 };
 
-/** A non-streaming mock model whose `doGenerate` resolves after `delayMs`. */
-const generatingModel = (extra: Partial<GenerateResult> = {}, delayMs = 0): MockLanguageModelV4 =>
+/** A non-streaming mock model; `extra` overrides fields of the result `doGenerate` resolves with. */
+const generatingModel = (extra: Partial<GenerateResult> = {}): MockLanguageModelV4 =>
     new MockLanguageModelV4({
-        doGenerate: async (): Promise<GenerateResult> => {
-            if (delayMs > 0) {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, delayMs);
-                });
-            }
-
-            return { content: [{ text: "answer", type: "text" }], finishReason: STOP, usage: usageOf(12, 3), warnings: [], ...extra };
-        },
+        doGenerate: (): Promise<GenerateResult> =>
+            Promise.resolve({ content: [{ text: "answer", type: "text" }], finishReason: STOP, usage: usageOf(12, 3), warnings: [], ...extra }),
     });
 
 /**
@@ -76,6 +69,10 @@ const generatingModel = (extra: Partial<GenerateResult> = {}, delayMs = 0): Mock
  *
  * `failAfter` emits the protocol's in-band `{ type: "error" }` part, which is how
  * a v4 provider reports a stream that dies mid-way.
+ *
+ * The gaps are real time on purpose and no test waits on them: they are the
+ * elapsed time the streamed-duration cases floor the span at, and they keep two
+ * concurrent runs interleaved so an abort lands while the sibling's call is open.
  */
 const streamingModel = (options: { chunks: number; failAfter?: number; gapMs: number }): MockLanguageModelV4 =>
     new MockLanguageModelV4({
@@ -147,12 +144,5 @@ const failedStreamModel = (): MockLanguageModelV4 =>
             }),
     });
 
-/** Let a fire-and-forget export / detached span settle before reading what was captured. */
-const settle = async (): Promise<void> => {
-    await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-    });
-};
-
 export type { GenerateResult };
-export { drain, failedGenerateModel, failedStreamModel, generatingModel, reportedUsage, settle, STOP, streamingModel, usageOf, withTelemetry };
+export { drain, failedGenerateModel, failedStreamModel, generatingModel, reportedUsage, STOP, streamingModel, usageOf, withTelemetry };

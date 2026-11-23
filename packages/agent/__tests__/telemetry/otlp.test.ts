@@ -8,23 +8,12 @@ import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
 import type { OtlpTelemetryOptions } from "../../src/telemetry/otlp";
 import { otlpTelemetry as createOtlpTelemetry } from "../../src/telemetry/otlp";
 import type { GenerateResult } from "./model-fixtures";
-import {
-    drain,
-    failedGenerateModel,
-    failedStreamModel,
-    generatingModel,
-    reportedUsage,
-    settle as settleFixture,
-    STOP,
-    streamingModel,
-    usageOf,
-    withTelemetry,
-} from "./model-fixtures";
+import { drain, failedGenerateModel, failedStreamModel, generatingModel, reportedUsage, STOP, streamingModel, usageOf, withTelemetry } from "./model-fixtures";
 
 /** A model the price table covers, so a cost assertion can fail rather than pass vacuously. */
 const PRICED_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
-/** Every integration the test built, so `settle` can export what each still buffers. */
+/** Every integration the test built, so `flushAll` can export what each still buffers. */
 const created: ReturnType<typeof createOtlpTelemetry>[] = [];
 
 const otlpTelemetry = (options: OtlpTelemetryOptions): ReturnType<typeof createOtlpTelemetry> => {
@@ -51,13 +40,17 @@ const runTools = async (telemetry: ReturnType<typeof createOtlpTelemetry>, count
     await Promise.all(Array.from({ length: count }, runOne));
 };
 
-/** Flush every integration (the agent loop does this at run end), then let the POSTs land. */
-const settle = async (): Promise<void> => {
+/**
+ * Flush every integration, as the agent loop does at run end. The stubbed `fetch`
+ * records each POST synchronously, so the export is captured once this returns.
+ * Callers first await the SDK promise that settles after the span's closing
+ * callback — `generateText`, `stream.usage` / `finishReason`, the drained stream —
+ * because a span still open at flush time is simply not in the export.
+ */
+const flushAll = (): void => {
     for (const telemetry of created.splice(0)) {
         telemetry.flush();
     }
-
-    await settleFixture();
 };
 
 interface CapturedPost {
@@ -134,7 +127,7 @@ describe(otlpTelemetry, () => {
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test/", token: "ingest-key" })),
         });
 
-        await settle();
+        flushAll();
 
         expect(result.text).toBe("answer");
         expect(calls).toHaveLength(1);
@@ -171,7 +164,7 @@ describe(otlpTelemetry, () => {
         }
 
         await stream.usage;
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -214,7 +207,7 @@ describe(otlpTelemetry, () => {
 
         await expect(stream.finishReason).resolves.toBe("error");
 
-        await settle();
+        flushAll();
 
         // The old shape reported status 1 for this: `execute()` had already
         // resolved successfully at first byte, so the failure never reached a span.
@@ -233,7 +226,7 @@ describe(otlpTelemetry, () => {
             }),
         ).rejects.toThrow("model down");
 
-        await settle();
+        flushAll();
 
         expect(spanOf(calls[0] as CapturedPost).status.code).toBe(2);
     });
@@ -244,7 +237,7 @@ describe(otlpTelemetry, () => {
 
         await expect(createAgentGenerate(agent, {})({ messages: [{ content: "hi", role: "user" }] })).rejects.toThrow("model finished with an error reason");
 
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -262,7 +255,7 @@ describe(otlpTelemetry, () => {
             "model finished with an error reason",
         );
 
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -279,7 +272,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ conversationId: "thread-42", endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.conversation.id")).toBe("thread-42");
     });
@@ -288,7 +281,7 @@ describe(otlpTelemetry, () => {
         const calls = captureFetch();
 
         await generateText({ model: generatingModel(), prompt: "hi", telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })) });
-        await settle();
+        flushAll();
 
         expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.conversation.id")).toBeUndefined();
     });
@@ -299,7 +292,7 @@ describe(otlpTelemetry, () => {
 
         await generateText({ model: generatingModel(), prompt: "hi", telemetry: withTelemetry(telemetry) });
         await telemetry.executeTool?.({ callId: "c-1", execute: () => Promise.resolve("ok"), toolCallId: "tc-1" });
-        await settle();
+        flushAll();
 
         expect(calls.flatMap((post) => spansOf(post)).map((span) => span.traceId)).toStrictEqual([FIXED_TRACE_ID, FIXED_TRACE_ID]);
     });
@@ -312,7 +305,7 @@ describe(otlpTelemetry, () => {
             prompt: "SENSITIVE",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         expect(JSON.stringify(calls)).not.toContain("SENSITIVE");
         expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.prompt")).toBeUndefined();
@@ -326,7 +319,7 @@ describe(otlpTelemetry, () => {
             prompt: "hello",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test", recordInputs: true })),
         });
-        await settle();
+        flushAll();
 
         expect(attribute(spanOf(calls[0] as CapturedPost), "gen_ai.prompt")).toContain("hello");
     });
@@ -339,7 +332,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -357,7 +350,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -384,7 +377,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -413,7 +406,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -438,7 +431,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -468,7 +461,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -498,7 +491,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -520,7 +513,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -545,7 +538,7 @@ describe(otlpTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -557,7 +550,7 @@ describe(otlpTelemetry, () => {
         const calls = captureFetch();
 
         await generateText({ model: generatingModel(), prompt: "hi", telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })) });
-        await settle();
+        flushAll();
 
         const span = spanOf(calls[0] as CapturedPost);
 
@@ -575,7 +568,7 @@ describe(otlpTelemetry, () => {
             toolCallId: "tc-1",
         });
 
-        await settle();
+        flushAll();
 
         expect(result).toBe("tool-value");
 
@@ -595,8 +588,6 @@ describe(otlpTelemetry, () => {
 
         await runTools(telemetry, 20);
 
-        await settleFixture();
-
         expect(calls).toHaveLength(0);
 
         telemetry.flush();
@@ -611,7 +602,6 @@ describe(otlpTelemetry, () => {
 
         await runTools(telemetry, 120);
 
-        await settleFixture();
         telemetry.flush();
 
         expect(calls.map((post) => spansOf(post).length)).toStrictEqual([50, 50, 20]);
@@ -633,7 +623,6 @@ describe(otlpTelemetry, () => {
 
         await runTools(telemetry, 51);
 
-        await settleFixture();
         telemetry.flush();
 
         // 50-span threshold flush + the final flush of the remaining span.
@@ -665,7 +654,11 @@ describe(otlpTelemetry, () => {
             }),
             drain(healthy.textStream),
         ]);
-        await settle();
+        // The SDK awaits `onAbort` before it closes the aborted stream, so the drain
+        // covers that run; the healthy call closes on its step end, which settles
+        // before `finishReason` does.
+        await healthy.finishReason;
+        flushAll();
 
         const spans = calls.flatMap((post) => spansOf(post));
         const ok = spans.filter((span) => span.status.code === 1);

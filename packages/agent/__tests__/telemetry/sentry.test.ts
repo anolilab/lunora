@@ -7,7 +7,7 @@ import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
 import type { SentryLike, SentrySpan } from "../../src/telemetry/sentry";
 import { sentryTelemetry } from "../../src/telemetry/sentry";
 import type { GenerateResult } from "./model-fixtures";
-import { drain, failedGenerateModel, failedStreamModel, generatingModel, reportedUsage, settle, STOP, streamingModel, withTelemetry } from "./model-fixtures";
+import { drain, failedGenerateModel, failedStreamModel, generatingModel, reportedUsage, STOP, streamingModel, withTelemetry } from "./model-fixtures";
 
 /**
  * The ai@7 `Telemetry` event shapes are broad and churn across patch releases;
@@ -47,6 +47,11 @@ interface RecordedSpan {
  * A fake Sentry namespace recording span lifetimes. `startSpanManual` models the
  * real `@sentry/core` contract — the span is NOT finished when the callback
  * settles, only when `span.end()` is called.
+ *
+ * The bridge ends a model-call span synchronously inside the SDK callback that
+ * closes the call, so a case reads it as soon as the SDK promise that follows
+ * that callback settles — the awaited `generateText`, `stream.usage`, a drained
+ * aborted stream — with no wait of its own.
  */
 const fakeSentry = () => {
     const spans: RecordedSpan[] = [];
@@ -115,7 +120,6 @@ describe(sentryTelemetry, () => {
         await expect(drain(stream.textStream)).resolves.toBe("xxx");
 
         await stream.usage;
-        await settle();
 
         const span = spans[0] as RecordedSpan;
 
@@ -146,8 +150,6 @@ describe(sentryTelemetry, () => {
             prompt: "hi",
             telemetry: withTelemetry(sentryTelemetry({ functionId: "support", Sentry })),
         });
-
-        await settle();
 
         expect(result.text).toBe("answer");
 
@@ -186,8 +188,6 @@ describe(sentryTelemetry, () => {
             telemetry: withTelemetry(sentryTelemetry({ functionId: "support", Sentry })),
         });
 
-        await settle();
-
         const span = spans[0] as RecordedSpan;
 
         expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(4);
@@ -209,8 +209,6 @@ describe(sentryTelemetry, () => {
 
         await expect(stream.finishReason).resolves.toBe("error");
 
-        await settle();
-
         // `execute()` had already resolved successfully at first byte, so under the
         // old shape this failure never reached a span.
         expect((spans[0] as RecordedSpan).status?.code).toBe(2);
@@ -229,8 +227,6 @@ describe(sentryTelemetry, () => {
             }),
         ).rejects.toThrow("model down");
 
-        await settle();
-
         expect((spans[0] as RecordedSpan).status?.code).toBe(2);
         expect((spans[0] as RecordedSpan).endedAt).toBeDefined();
         // ai@7 dispatches `onError` as `{ callId, error }`; the ERROR is what Sentry
@@ -245,8 +241,6 @@ describe(sentryTelemetry, () => {
 
         await expect(createAgentGenerate(agent, {})({ messages: [{ content: "hi", role: "user" }] })).rejects.toThrow("model finished with an error reason");
 
-        await settle();
-
         expect((spans[0] as RecordedSpan).status?.code).toBe(2);
         expect((spans[0] as RecordedSpan).attributes["gen_ai.usage.input_tokens"]).toBe(2);
         expect((spans[0] as RecordedSpan).attributes["gen_ai.usage.output_tokens"]).toBe(1);
@@ -260,8 +254,6 @@ describe(sentryTelemetry, () => {
         await expect(createStreamGenerate(agent, {})({ messages: [{ content: "hi", role: "user" }] }, () => undefined)).rejects.toThrow(
             "model finished with an error reason",
         );
-
-        await settle();
 
         expect((spans[0] as RecordedSpan).status?.code).toBe(2);
         expect((spans[0] as RecordedSpan).attributes["gen_ai.usage.input_tokens"]).toBe(2);
@@ -291,7 +283,10 @@ describe(sentryTelemetry, () => {
             }),
             drain(healthy.textStream),
         ]);
-        await settle();
+        // The SDK awaits `onAbort` before it closes the aborted stream, so the drain
+        // covers that run; the healthy call closes on its step end, which settles
+        // before `finishReason` does.
+        await healthy.finishReason;
 
         const modelSpans = spans.filter((span) => span.manual);
 
@@ -357,7 +352,6 @@ describe(sentryTelemetry, () => {
         const { Sentry, spans } = fakeSentry();
 
         await generateText({ model: generatingModel(), prompt: "SENSITIVE", telemetry: withTelemetry(sentryTelemetry({ Sentry })) });
-        await settle();
 
         expect(JSON.stringify(spans)).not.toContain("SENSITIVE");
         expect((spans[0] as RecordedSpan).attributes).not.toHaveProperty("gen_ai.prompt");
@@ -372,7 +366,6 @@ describe(sentryTelemetry, () => {
             prompt: "hello",
             telemetry: withTelemetry(sentryTelemetry({ recordInputs: true, recordOutputs: true, Sentry })),
         });
-        await settle();
 
         expect(JSON.stringify((spans[0] as RecordedSpan).attributes["gen_ai.prompt"])).toContain("hello");
         // The normalized content, not the raw resolved value.

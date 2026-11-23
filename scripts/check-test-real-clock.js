@@ -21,17 +21,18 @@ const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const baselinePath = join(rootDir, "scripts", "test-real-clock.baseline.json");
 
 // A delay of two or more digits, `_` separators allowed (lint requires them from five digits up),
-// or a named one (a `settle(ms = 25)` helper); a third argument passes a value to resolve with.
-// The third spelling is a timer whose callback does some work and then resolves the awaited promise.
-const DELAY = String.raw`(?:[0-9]{2}[0-9_]*|[A-Za-z_$][\w$]*)`;
+// or a named one — a bare `ms` or a member such as `options.gapMs`; a third argument passes a value
+// to resolve with. The third spelling is a timer whose callback does some work and then resolves
+// the awaited promise.
+const DELAY = String.raw`(?:[0-9]{2}[0-9_]*|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)`;
 const PATTERNS = [
     new RegExp(String.raw`sleep\([0-9]{2}[0-9_]*\)`, "u"),
     new RegExp(String.raw`setTimeout\((?:resolve|r), ${DELAY}[,)]`, "u"),
     new RegExp(String.raw`setTimeout\(\(\) => \{[^}]*?\b(?:resolve|r)\([^)]*\);?\s*\},\s*${DELAY}\)`, "su"),
 ];
 const TEST_FILE = /\.test\.tsx?$/u;
-// A shared fixture under `__tests__/` (`settle()` in `model-fixtures.ts`) sleeps on behalf of every
-// test that imports it, which a test-file-only sweep would wave through.
+// A shared fixture under `__tests__/` sleeps on behalf of every test that imports it, which a
+// test-file-only sweep would wave through.
 const TEST_HELPER = /\.tsx?$/u;
 // `workerd` and `celld` suites drive a real runtime or a live child process, where a clock is the point.
 const SKIPPED_DIRS = new Set(["celld", "dist", "node_modules", "workerd"]);
