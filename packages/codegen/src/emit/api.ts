@@ -316,7 +316,7 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
         },
         {
             args: {
-                approvalSlot: { inner: { kind: "string" }, kind: "optional" },
+                approvalSlot: { kind: "string" },
                 decision: {
                     kind: "union",
                     members: [

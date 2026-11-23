@@ -12,6 +12,7 @@ const approvalMarkerFields = (marker: {
 }): Record<string, unknown> & { expiresAt: number; messageKey: string } => {
     return {
         approvalAgent: "support",
+        approvalSlot: marker.toolCallId,
         content: `Awaiting approval to run tool "refund".`,
         expiresAt: marker.expiresAt ?? Date.now() + 60_000,
         messageKey: marker.messageKey ?? `${marker.instanceId}:approval:${marker.toolCallId}`,

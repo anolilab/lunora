@@ -68,6 +68,12 @@ const buildClient = (): {
 const MESSAGES_REF = "agents:agentMessages";
 const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
+
+/** Two approvals pending under one provider id: the later turn's call waits under a turn-scoped slot. */
+const PENDING_TWICE = [
+    { approvalSlot: "call-1", content: "Awaiting approval", role: "tool", seq: 1, status: "awaiting_approval", toolCallId: "call-1" },
+    { approvalSlot: "1:call-1", content: "Awaiting approval", role: "tool", seq: 2, status: "awaiting_approval", toolCallId: "call-1" },
+];
 const GRANTS_REF = "agents:agentApprovalGrants";
 const REVOKE_REF = "agents:agentRevokeApprovalGrant";
 const SUPPLY_REF = "agents:agentSupplySecret";
@@ -458,24 +464,44 @@ describe("useAgentChat", () => {
         });
 
         await act(async () => {
-            await latest?.approve("call-1");
+            await latest?.approve({ approvalSlot: "call-1", toolCallId: "call-1" });
         });
 
         expect(mutation).toHaveBeenCalledWith(
             expect.objectContaining({ __lunoraRef: APPROVAL_REF }),
-            { decision: "approve", instanceId: "wf-1", threadKey: "t1", toolCallId: "call-1" },
+            { approvalSlot: "call-1", decision: "approve", instanceId: "wf-1", threadKey: "t1", toolCallId: "call-1" },
             undefined,
         );
 
         await act(async () => {
-            await latest?.reject("call-2", "not allowed");
+            await latest?.reject({ approvalSlot: "call-2", toolCallId: "call-2" }, "not allowed");
         });
 
         expect(mutation).toHaveBeenCalledWith(
             expect.objectContaining({ __lunoraRef: APPROVAL_REF }),
-            { decision: "reject", instanceId: "wf-1", note: "not allowed", threadKey: "t1", toolCallId: "call-2" },
+            { approvalSlot: "call-2", decision: "reject", instanceId: "wf-1", note: "not allowed", threadKey: "t1", toolCallId: "call-2" },
             undefined,
         );
+
+        // Two approvals pending under one provider id: approving the later one sends its slot alone,
+        // and an approval that names no slot is refused before it reaches the server.
+        await act(async () => {
+            emit(MESSAGES_REF, PENDING_TWICE);
+        });
+
+        const later = latest?.messages.find((message) => message.approvalSlot === "1:call-1");
+
+        await act(async () => {
+            await latest?.approve(later ?? {});
+        });
+
+        await expect(latest?.approve({ toolCallId: "call-1" })).rejects.toThrow("approvalSlot");
+
+        expect(mutation.mock.calls.map(([, args]) => args as Record<string, unknown>).filter((args) => "decision" in args)).toStrictEqual([
+            { approvalSlot: "call-1", decision: "approve", instanceId: "wf-1", threadKey: "t1", toolCallId: "call-1" },
+            { approvalSlot: "call-2", decision: "reject", instanceId: "wf-1", note: "not allowed", threadKey: "t1", toolCallId: "call-2" },
+            { approvalSlot: "1:call-1", decision: "approve", instanceId: "wf-1", threadKey: "t1", toolCallId: "call-1" },
+        ]);
     });
 
     it("approveForThread sends approve_for_thread through agentResolveApproval", async () => {
@@ -501,12 +527,12 @@ describe("useAgentChat", () => {
         });
 
         await act(async () => {
-            await latest?.approveForThread("call-1", "ok for this thread");
+            await latest?.approveForThread({ approvalSlot: "call-1", toolCallId: "call-1" }, "ok for this thread");
         });
 
         expect(mutation).toHaveBeenCalledWith(
             expect.objectContaining({ __lunoraRef: APPROVAL_REF }),
-            { decision: "approve_for_thread", instanceId: "wf-1", note: "ok for this thread", threadKey: "t1", toolCallId: "call-1" },
+            { approvalSlot: "call-1", decision: "approve_for_thread", instanceId: "wf-1", note: "ok for this thread", threadKey: "t1", toolCallId: "call-1" },
             undefined,
         );
     });
@@ -717,6 +743,6 @@ describe("useAgentChat", () => {
             </LunoraProvider>,
         );
 
-        await expect(latest?.approve("call-1")).rejects.toThrow("no in-flight run");
+        await expect(latest?.approve({ approvalSlot: "call-1", toolCallId: "call-1" })).rejects.toThrow("no in-flight run");
     });
 });

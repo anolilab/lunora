@@ -1376,6 +1376,8 @@ describe(runAgentLoop, () => {
         const marker = [...runtime.messages.values()].find((message) => message.status === "awaiting_approval");
 
         expect(marker?.toolName).toBe("charge");
+        // Every marker names its slot, so a decision is bound to it; a first occurrence's slot is its call id.
+        expect(marker).toMatchObject({ approvalSlot: "call_1" });
 
         // Phase B — a client approves; the SAME workflow instance replays (same
         // journal + store), the memoized turn/marker are skipped, and the tool runs.

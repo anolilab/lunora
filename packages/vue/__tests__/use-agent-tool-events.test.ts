@@ -58,13 +58,13 @@ describe(useAgentToolEvents, () => {
             { content: "hi", role: "user", seq: 0 },
             { content: "checking…", role: "assistant", seq: 1, toolCalls: [{ id: "c1", input: { city: "Berlin" }, name: "getWeather" }] },
             { content: "sunny", role: "tool", seq: 2, toolCallId: "c1", toolName: "getWeather" },
-            { content: "awaiting approval", role: "tool", seq: 3, status: "awaiting_approval", toolCallId: "c2", toolName: "charge" },
+            { approvalSlot: "1:c2", content: "awaiting approval", role: "tool", seq: 3, status: "awaiting_approval", toolCallId: "c2", toolName: "charge" },
         ]);
 
         expect(tool.events.value).toStrictEqual([
             { input: { city: "Berlin" }, seq: 1, toolCallId: "c1", toolName: "getWeather", type: "call" },
             { output: "sunny", seq: 2, toolCallId: "c1", toolName: "getWeather", type: "result" },
-            { seq: 3, toolCallId: "c2", toolName: "charge", type: "awaiting-approval" },
+            { approvalSlot: "1:c2", seq: 3, toolCallId: "c2", toolName: "charge", type: "awaiting-approval" },
         ]);
 
         scope.stop();

@@ -405,27 +405,24 @@ type QueueDatabase = DatabaseWriter;
  * through here before anything is written or sent, so only the first decision on a call counts and none is reported
  * as resolved once the run has stopped waiting. Mutations run one at a time, so the read is decisive.
  *
- * A client answers with the provider's tool-call id, which a later turn can reuse under a turn-scoped marker key, so
- * the marker is found by its `toolCallId` among the instance's markers rather than by key, and the decision must name
- * the marker's `approvalSlot` (none for a marker without one). Without it, a late decision on the call the id first
- * named would approve the repeated call's new arguments. A paused run waits on one call at a time, so more than one
- * match is refused rather than guessed at.
+ * A decision names the marker's `approvalSlot`, the call key the loop stored it under, not only the provider's
+ * tool-call id: a later turn can reuse that id, and a late decision on the earlier call would otherwise approve the
+ * later call's arguments. A marker stored without a slot is never matched. A paused run waits on one call at a time,
+ * so more than one match is refused rather than guessed at.
  */
 const pendingApprovalMarker = async (
     database: QueueDatabase,
     threadKey: string,
     instanceId: string,
     toolCallId: string,
-    approvalSlot: string | undefined,
+    approvalSlot: string,
 ): Promise<Record<string, unknown>> => {
     // Markers are keyed `<instanceId>:approval:<slot>`. `;` is the byte after `:`, so the range holds exactly this instance's markers.
     const rows = await database
         .query(MESSAGES_TABLE)
         .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).gte("messageKey", `${instanceId}:approval:`).lt("messageKey", `${instanceId}:approval;`))
         .collect();
-    const pending = rows.filter(
-        (row) => row["status"] === "awaiting_approval" && row["toolCallId"] === toolCallId && (row["approvalSlot"] ?? undefined) === approvalSlot,
-    );
+    const pending = rows.filter((row) => row["status"] === "awaiting_approval" && row["toolCallId"] === toolCallId && row["approvalSlot"] === approvalSlot);
     const [marker] = pending;
 
     if (pending.length !== 1 || marker === undefined) {
@@ -1381,7 +1378,7 @@ export const agentComponent = (): AgentComponent => {
      * to the verified identity — an anonymous caller gets `[]`, and ownerless
      * threads are never listed (their only protection is key secrecy, which a
      * cross-thread listing would turn into enumeration). Each item carries the
-     * ids `agentResolveApproval` takes, `approvalSlot` included when the marker has one.
+     * ids `agentResolveApproval` takes, `approvalSlot` included.
      *
      * Only a marker minted by the thread's CURRENT instance is returned: an older
      * instance's marker is unresolvable (`agentResolveApproval` rejects any
@@ -1483,8 +1480,8 @@ export const agentComponent = (): AgentComponent => {
      * this, a caller who passes the owner gate for one thread (including any
      * ownerless one) could deliver an approve/reject to an arbitrary
      * `instanceId` — a different, unrelated run entirely.
-     * - The delivered event's `type` is scoped to `toolCallId`
-     * (`agent-approval:<id>`) — the SAME format `agent-loop.ts`'s
+     * - The delivered event's `type` is scoped to the marker's slot
+     * (`agent-approval:<slot>`) — the SAME format `agent-loop.ts`'s
      * `awaitApproval` matches on — so a decision meant for one pending tool
      * call cannot resolve a different one on the same instance.
      *
@@ -1497,8 +1494,8 @@ export const agentComponent = (): AgentComponent => {
      */
     const agentResolveApproval = mutation
         .input({
-            /** The marker's `approvalSlot`, when it has one: a decision is bound to the marker it was issued for. */
-            approvalSlot: v.optional(v.string()),
+            /** The pending marker's `approvalSlot`: a decision is bound to the marker it was issued for. */
+            approvalSlot: v.string(),
             decision: v.union(v.literal("approve"), v.literal("approve_for_thread"), v.literal("reject")),
             instanceId: v.string(),
             note: v.optional(v.string()),
@@ -1564,8 +1561,8 @@ export const agentComponent = (): AgentComponent => {
                     ...(args.decision === "approve_for_thread" ? { scope: "thread" } : {}),
                     ...(args.note === undefined ? {} : { note: args.note }),
                 },
-                // Scoped per tool call — see the doc comment above. A repeated call id waits under its slot.
-                type: `agent-approval:${typeof marker["approvalSlot"] === "string" ? marker["approvalSlot"] : args.toolCallId}`,
+                // Scoped per tool call — see the doc comment above.
+                type: `agent-approval:${args.approvalSlot}`,
             });
 
             return { resolved: true };

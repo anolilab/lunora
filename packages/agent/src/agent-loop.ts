@@ -333,8 +333,8 @@ const isWaitTimeoutError = (error: unknown): boolean => error instanceof Error &
  * durable step name, so without this an approval meant for a different
  * pending tool call on the same instance could resolve this one instead.
  *
- * `slot` is the call's key (see {@link callKeyOf}). A slot that differs from the provider's id is stored on the
- * marker, because a client answers with the provider's id and the resolve path must send the slot's event type.
+ * `slot` is the call's key (see {@link callKeyOf}), stored on the marker: a decision must name it, so it resolves the
+ * call it was issued for and not a later call that reused the provider's id.
  */
 const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall, slot: string): Promise<ApprovalDecision> => {
     const { agent, deleteMessage, instanceId, patchThread, persist, step } = turnContext;
@@ -349,7 +349,7 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall, slot
             messageKey: `${instanceId}:approval:${slot}`,
             role: "tool",
             approvalAgent: turnContext.agentName,
-            ...(slot === call.id ? {} : { approvalSlot: slot }),
+            approvalSlot: slot,
             status: "awaiting_approval",
             toolCallId: call.id,
             toolName: call.name,
