@@ -3,6 +3,42 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-23T14:18:33.061Z",
+      "key": "@lunora/ratelimit@1.0.0-alpha.197"
+    },
+    {
+      "at": "2026-11-23T14:18:33.061Z",
+      "key": "@lunora/angular@1.0.0-alpha.271"
+    },
+    {
+      "at": "2026-11-23T14:18:33.061Z",
+      "key": "@lunora/mail@1.0.0-alpha.141"
+    },
+    {
+      "at": "2026-11-23T14:18:33.061Z",
+      "key": "@lunora/react@1.0.0-alpha.303"
+    },
+    {
+      "at": "2026-11-23T14:18:33.061Z",
+      "key": "@lunora/solid@1.0.0-alpha.292"
+    },
+    {
+      "at": "2026-11-23T14:18:33.061Z",
+      "key": "@lunora/storage@1.0.0-alpha.175"
+    },
+    {
+      "at": "2026-11-23T14:18:33.061Z",
+      "key": "@lunora/svelte@1.0.0-alpha.321"
+    },
+    {
+      "at": "2026-11-23T14:18:33.061Z",
+      "key": "@lunora/vue@1.0.0-alpha.322"
+    },
+    {
+      "at": "2026-11-23T14:18:33.061Z",
+      "key": "lunorash@1.0.0-alpha.481"
+    },
+    {
       "at": "2026-11-23T11:13:42.967Z",
       "key": "@lunora/auth@1.0.0-alpha.269"
     },
@@ -365,44 +401,8 @@
     {
       "at": "2026-11-17T20:36:20.440Z",
       "key": "@lunora/codegen@1.0.0-alpha.421"
-    },
-    {
-      "at": "2026-11-17T07:19:47.843Z",
-      "key": "@lunora/payment@1.0.0-alpha.275"
-    },
-    {
-      "at": "2026-11-17T01:01:33.682Z",
-      "key": "@lunora/config@1.0.0-alpha.464"
-    },
-    {
-      "at": "2026-11-17T01:01:33.682Z",
-      "key": "@lunora/runtime@1.0.0-alpha.291"
-    },
-    {
-      "at": "2026-11-17T01:01:33.682Z",
-      "key": "@lunora/cli@1.0.0-alpha.500"
-    },
-    {
-      "at": "2026-11-16T23:54:46.069Z",
-      "key": "@lunora/codegen@1.0.0-alpha.420"
-    },
-    {
-      "at": "2026-11-16T23:54:46.069Z",
-      "key": "@lunora/config@1.0.0-alpha.463"
-    },
-    {
-      "at": "2026-11-16T23:54:46.069Z",
-      "key": "@lunora/runtime@1.0.0-alpha.290"
-    },
-    {
-      "at": "2026-11-16T23:54:46.069Z",
-      "key": "@lunora/cli@1.0.0-alpha.499"
-    },
-    {
-      "at": "2026-11-16T23:36:46.236Z",
-      "key": "@lunora/client@1.0.0-alpha.300"
     }
   ],
-  "updatedAt": "2026-11-23T11:13:42.967Z",
+  "updatedAt": "2026-11-23T14:18:33.062Z",
   "version": 1
 }
