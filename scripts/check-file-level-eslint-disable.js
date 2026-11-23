@@ -145,8 +145,11 @@ const isFileLevel = (fileName, text) => {
     return leavesRuleDisabled(directives, (disabledAt, enabledAt) => firstStart !== undefined && disabledAt <= firstStart && enabledAt >= lastEnd);
 };
 
-const SCRIPT_BLOCK = /<script\b[^>]*>([\s\S]*?)<\/script>/g;
-const HTML_DIRECTIVE = /<!--\s*eslint-(disable|enable)(?!-line|-next-line)(?:\s+([\s\S]*?))?\s*(?:--\s[\s\S]*?)?-->/g;
+// Tag names match in any case, a closing tag may carry whitespace (`</script >`), and a block with no
+// closing tag runs to the end of the file: a lenient parser still reads each of those as script.
+const SCRIPT_BLOCK = /<script\b[^>]*>([\s\S]*?)(?:<\/script\b[^>]*>|$)/gi;
+// `--!>` closes a comment too.
+const HTML_DIRECTIVE = /<!--\s*eslint-(disable|enable)(?!-line|-next-line)(?:\s+([\s\S]*?))?\s*(?:--\s[\s\S]*?)?--!?>/g;
 
 /** A Vue or Svelte component: each `<script>` block is read like a module, and an `<!-- eslint-disable -->` left open covers the rest of the template. */
 const isComponentFileLevel = (fileName, text) =>
