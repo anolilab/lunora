@@ -406,16 +406,26 @@ type QueueDatabase = DatabaseWriter;
  * as resolved once the run has stopped waiting. Mutations run one at a time, so the read is decisive.
  *
  * A client answers with the provider's tool-call id, which a later turn can reuse under a turn-scoped marker key, so
- * the marker is found by its `toolCallId` among the instance's markers rather than by key. A paused run waits on one
- * call at a time, so more than one match is refused rather than guessed at.
+ * the marker is found by its `toolCallId` among the instance's markers rather than by key, and the decision must name
+ * the marker's `approvalSlot` (none for a marker without one). Without it, a late decision on the call the id first
+ * named would approve the repeated call's new arguments. A paused run waits on one call at a time, so more than one
+ * match is refused rather than guessed at.
  */
-const pendingApprovalMarker = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<Record<string, unknown>> => {
+const pendingApprovalMarker = async (
+    database: QueueDatabase,
+    threadKey: string,
+    instanceId: string,
+    toolCallId: string,
+    approvalSlot: string | undefined,
+): Promise<Record<string, unknown>> => {
     // Markers are keyed `<instanceId>:approval:<slot>`. `;` is the byte after `:`, so the range holds exactly this instance's markers.
     const rows = await database
         .query(MESSAGES_TABLE)
         .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).gte("messageKey", `${instanceId}:approval:`).lt("messageKey", `${instanceId}:approval;`))
         .collect();
-    const pending = rows.filter((row) => row["status"] === "awaiting_approval" && row["toolCallId"] === toolCallId);
+    const pending = rows.filter(
+        (row) => row["status"] === "awaiting_approval" && row["toolCallId"] === toolCallId && (row["approvalSlot"] ?? undefined) === approvalSlot,
+    );
     const [marker] = pending;
 
     if (pending.length !== 1 || marker === undefined) {
@@ -1371,7 +1381,7 @@ export const agentComponent = (): AgentComponent => {
      * to the verified identity — an anonymous caller gets `[]`, and ownerless
      * threads are never listed (their only protection is key secrecy, which a
      * cross-thread listing would turn into enumeration). Each item carries the
-     * triple `agentResolveApproval` takes.
+     * ids `agentResolveApproval` takes, `approvalSlot` included when the marker has one.
      *
      * Only a marker minted by the thread's CURRENT instance is returned: an older
      * instance's marker is unresolvable (`agentResolveApproval` rejects any
@@ -1426,6 +1436,7 @@ export const agentComponent = (): AgentComponent => {
                     .map((row) =>
                         definedColumns({
                             agent: thread["agent"],
+                            approvalSlot: row["approvalSlot"],
                             content: row["content"],
                             instanceId,
                             requestedAt: row["createdAt"],
@@ -1486,6 +1497,8 @@ export const agentComponent = (): AgentComponent => {
      */
     const agentResolveApproval = mutation
         .input({
+            /** The marker's `approvalSlot`, when it has one: a decision is bound to the marker it was issued for. */
+            approvalSlot: v.optional(v.string()),
             decision: v.union(v.literal("approve"), v.literal("approve_for_thread"), v.literal("reject")),
             instanceId: v.string(),
             note: v.optional(v.string()),
@@ -1511,7 +1524,7 @@ export const agentComponent = (): AgentComponent => {
                 throw new LunoraError("FORBIDDEN", `@lunora/agent: instance "${args.instanceId}" does not own thread "${args.threadKey}"`);
             }
 
-            const marker = await pendingApprovalMarker(context.db, args.threadKey, args.instanceId, args.toolCallId);
+            const marker = await pendingApprovalMarker(context.db, args.threadKey, args.instanceId, args.toolCallId, args.approvalSlot);
             // The agent that owns the pending call, not the thread's creator: a reused thread keeps the agent it was created for.
             const agentName = marker["approvalAgent"];
 

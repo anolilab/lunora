@@ -289,7 +289,11 @@ Monday.
 
 **The approvals inbox.** `agents:agentPendingApprovals` lists the caller's own
 paused approvals (newest thread first, default 50), each carrying the
-`threadKey`, `instanceId` and `toolCallId` that `agentResolveApproval` takes.
+`threadKey`, `instanceId` and `toolCallId` that `agentResolveApproval` takes, plus
+`approvalSlot` when the call reused a tool-call id from an earlier turn. A decision
+for such a call must pass that `approvalSlot` back; one without it, or with another
+call's slot, is refused with `CONFLICT`, so a late decision on the earlier call
+cannot approve the later call's arguments.
 It is owner-scoped: an anonymous caller gets `[]`, and ownerless threads are
 never listed. The React `useAgentApprovals` hook subscribes to it. The inbox is not
 exposed over the Model Context Protocol (MCP): MCP clients authenticate with a static deployment token, so a run

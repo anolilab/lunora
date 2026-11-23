@@ -1197,13 +1197,51 @@ describe("approval resolution", () => {
         });
 
         await expect(
-            callMutation(functions.agentResolveApproval, ctx, { decision: "approve", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
+            callMutation(functions.agentResolveApproval, ctx, {
+                decision: "approve",
+                instanceId: "wf-1",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                ...(marker.approvalSlot === undefined ? {} : { approvalSlot: marker.approvalSlot }),
+            }),
         ).resolves.toStrictEqual({ resolved: true });
         expect(sent).toStrictEqual([{ event: { payload: { decision: "approve", toolCallId: "call_1" }, type }, id: "wf-1" }]);
     });
 
-    it("refuses a decision that matches two pending markers, rather than guessing which call it answers", async () => {
-        expect.assertions(2);
+    it.each([
+        { label: "names no slot, as a late decision on the earlier call does", slot: {} },
+        { label: "names another slot", slot: { approvalSlot: "1:call_1" } },
+    ])("refuses a decision for a repeated call id's marker that $label", async ({ slot }) => {
+        expect.assertions(3);
+
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+        const { agents, sent } = fakeAgents();
+        const ctx = { ...owner.ctx, agents };
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", owner: "user-a" });
+        await callMutation(functions.agentAppendMessage, ctx, {
+            approvalAgent: "support",
+            approvalSlot: "2:call_1",
+            content: 'Awaiting approval to run tool "charge".',
+            expiresAt: Date.now() + 60_000,
+            messageKey: "wf-1:approval:2:call_1",
+            role: "tool",
+            status: "awaiting_approval",
+            threadKey: "t-1",
+            toolCallId: "call_1",
+            toolName: "charge",
+        });
+
+        await expect(
+            callMutation(functions.agentResolveApproval, ctx, { decision: "approve", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1", ...slot }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(sent).toStrictEqual([]);
+        expect((owner.rows.get("agent_messages") ?? []).filter((row) => row["status"] === "awaiting_approval")).toHaveLength(1);
+    });
+
+    it("binds a decision to the marker its slot names, leaving another marker for the same call id pending", async () => {
+        expect.assertions(3);
 
         const { functions } = agentComponent();
         const owner = fakeDatabase({ userId: "user-a" });
@@ -1232,9 +1270,18 @@ describe("approval resolution", () => {
         }
 
         await expect(
-            callMutation(functions.agentResolveApproval, ctx, { decision: "approve", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
-        ).rejects.toThrow(NO_PENDING_APPROVAL_PATTERN);
-        expect(sent).toStrictEqual([]);
+            callMutation(functions.agentResolveApproval, ctx, {
+                approvalSlot: "2:call_1",
+                decision: "approve",
+                instanceId: "wf-1",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+            }),
+        ).resolves.toStrictEqual({ resolved: true });
+        expect(sent.map((entry) => entry.event.type)).toStrictEqual(["agent-approval:2:call_1"]);
+        expect((owner.rows.get("agent_messages") ?? []).filter((row) => row["status"] === "awaiting_approval").map((row) => row["messageKey"])).toStrictEqual([
+            "wf-1:approval:call_1",
+        ]);
     });
 
     it("lets a plain approve resolve a legacy marker with no deadline", async () => {
