@@ -29,6 +29,8 @@ interface AuthAuditEntry {
     outcome: AuthAuditOutcome;
     /** Monotonic per-database cursor — strictly increasing, never reused. */
     seq: number;
+    /** Address the event targeted, when it names its target by address (an invitation, a created user). */
+    targetEmail?: string;
     /** Wall-clock millis when the event was recorded. */
     ts: number;
     /** Client User-Agent, when present on the request. */
