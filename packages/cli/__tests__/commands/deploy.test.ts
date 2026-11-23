@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
 import { runDeployCommand, runPreDeployPipeline } from "../../src/commands/deploy/handler";
 import type { DeployCommandResult } from "../../src/commands/deploy/types";
+import { UNCONFIRMED_MINT_MARKER } from "../../src/util/dev-variables-file";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
@@ -3151,6 +3152,38 @@ export const backfillNames = defineMigration({
                 expect(recorded).toContain(`AUTH_SECRET="${secretCalls[0]?.descriptor.input ?? "missing"}"`);
             });
 
+            it("clears the unconfirmed-mint marker once a later deploy pushes that key successfully", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(
+                    join(workdir, ".dev.vars"),
+                    `LUNORA_ADMIN_TOKEN="${"a".repeat(64)}"\nAUTH_SECRET="old"\n${UNCONFIRMED_MINT_MARKER}AUTH_SECRET="${"c".repeat(64)}"\n`,
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    // The earlier uncertain push never reached the target, so AUTH_SECRET is re-minted and lands.
+                    secretLister: () => Promise.resolve({ names: [...REGISTRY_SECRET_DEPLOYED, "LUNORA_ADMIN_TOKEN"], ok: true }),
+                    spawner,
+                });
+
+                const put = calls.find((call) => call.descriptor.args.join(" ").includes("secret put AUTH_SECRET"));
+                const recorded = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+                // A marker left behind would make every later `env push` refuse AUTH_SECRET.
+                expect(result.code).toBe(0);
+                expect(recorded).toContain(`AUTH_SECRET="${put?.descriptor.input ?? "missing"}"`);
+                expect(recorded).not.toContain(UNCONFIRMED_MINT_MARKER);
+            });
+
             it("scans the project once per deploy: each discovery result is computed a single time", async () => {
                 expect.assertions(3);
 
@@ -3391,6 +3424,30 @@ export const backfillNames = defineMigration({
                 // The mintable secret was generated + pushed (via stdin) before the deploy spawn.
                 expect(argv.some((line) => line.includes("wrangler secret put LUNORA_ADMIN_TOKEN"))).toBe(true);
                 expect(argv.some((line) => line.includes("wrangler deploy"))).toBe(true);
+            });
+
+            it("records a single key whose `secret put` failed, since the write may still have landed", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                // One missing key, so no bulk request: the lone `secret put` exits non-zero.
+                const { calls, spawner } = createRecordingSpawner(1);
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                const put = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${put?.descriptor.input ?? "missing"}"`);
             });
 
             it("aborts an interactive deploy when the confirmed secret push fails instead of deploying anyway", async () => {

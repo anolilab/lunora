@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { applyLintIgnores, BADGES, detectLintTools, isInteractive, readProjectDependencies, readProjectManifest } from "@lunora/config";
@@ -1119,6 +1119,33 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
 };
 
 /**
+ * Move the complete `temporaryPath` to `path` unless something already sits there, including a dangling
+ * link, and fail with EEXIST if it does. A hard link creates `path` atomically, so a file created after
+ * the caller's absence check is never replaced; a filesystem without hard links falls back to a check
+ * and `rename`.
+ */
+const publishExclusively = (temporaryPath: string, path: string): void => {
+    try {
+        linkSync(temporaryPath, path);
+        rmSync(temporaryPath, { force: true });
+
+        return;
+    } catch (error) {
+        const { code } = error as NodeJS.ErrnoException;
+
+        if (code !== "EPERM" && code !== "ENOTSUP" && code !== "ENOSYS") {
+            throw error;
+        }
+    }
+
+    if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) {
+        throw Object.assign(new Error(`EEXIST: file already exists, ${path}`), { code: "EEXIST" });
+    }
+
+    renameSync(temporaryPath, path);
+};
+
+/**
  * Scaffold `lunora/{messages,schema}.ts` into `cwd`. `schema.ts` is written
  * last and marks a finished scaffold: once it exists a re-run touches nothing,
  * so a hand-edited file is never clobbered and a sample the user deleted does
@@ -1155,14 +1182,9 @@ const scaffoldLunoraDirectory = (cwd: string, logger: Logger): InitCommandResult
         const temporaryPath = `${path}.lunora-${String(process.pid)}.tmp`;
 
         try {
-            // `existsSync` calls a dangling link missing, and `rename` would replace the link where a write would follow it.
-            if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) {
-                throw Object.assign(new Error(`EEXIST: file already exists, ${path}`), { code: "EEXIST" });
-            }
-
             // `wx` creates the temp file exclusively: a link planted at its predictable name fails the write instead of being followed.
             writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx" });
-            renameSync(temporaryPath, path);
+            publishExclusively(temporaryPath, path);
         } catch (error) {
             rmSync(temporaryPath, { force: true });
 

@@ -671,6 +671,22 @@ describe("lunora env", () => {
             expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe("FOO=1\nLOCAL=2\n");
         });
 
+        it("push --prod refuses a .dev.vars.production linked to a bare file stored as .DEV.VARS", async () => {
+            expect.assertions(3);
+
+            // How a case-preserving, case-insensitive filesystem may list the bare file.
+            writeFileSync(join(workdir, ".DEV.VARS"), 'LUNORA_ADMIN_TOKEN="devtoken"\n', "utf8");
+            symlinkSync(join(workdir, ".DEV.VARS"), join(workdir, ".dev.vars.production"));
+
+            const { logger, recorded } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, logger, prod: true, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(calls).toHaveLength(0);
+            expect(recorded.errors.join("\n")).toContain("is a link to .DEV.VARS");
+        });
+
         it("push --from-dev-vars pushes the bare file to a named environment", async () => {
             expect.assertions(3);
 
@@ -841,6 +857,20 @@ describe("lunora env", () => {
             expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(existsSync(join(workdir, ".dev.vars.staging"))).toBe(false);
             expect(recorded.errors.join("\n")).toContain(".gitignore could not be updated");
+        });
+
+        it("set --env staging refuses when .gitignore is a symlink, which git does not read", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "shared-ignore"), ".dev.vars\n.dev.vars.*\n!.dev.vars.example\n", "utf8");
+            symlinkSync(join(workdir, "shared-ignore"), join(workdir, ".gitignore"));
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", key: "FOO", logger, subcommand: "set", value: "bar" });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(existsSync(join(workdir, ".dev.vars.staging"))).toBe(false);
+            expect(recorded.errors.join("\n")).toContain(".gitignore is a symlink");
         });
 
         it("generate --set --env staging mints a mintable key declared only in the bare .dev.vars", async () => {

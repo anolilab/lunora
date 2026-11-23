@@ -10,7 +10,7 @@ import type { Logger } from "../../src/util/logger";
 
 /** When set, a `writeFileSync` whose path contains it writes half its content and then fails, as ENOSPC does. */
 const writeFailure = vi.hoisted(() => {
-    return { pathPart: undefined as string | undefined };
+    return { beforeWrite: undefined as ((path: string) => void) | undefined, pathPart: undefined as string | undefined };
 });
 
 vi.mock(import("node:fs"), async (importOriginal) => {
@@ -19,6 +19,8 @@ vi.mock(import("node:fs"), async (importOriginal) => {
     return {
         ...actual,
         writeFileSync: ((path: Parameters<typeof actual.writeFileSync>[0], data: string, options?: Parameters<typeof actual.writeFileSync>[2]) => {
+            writeFailure.beforeWrite?.(String(path));
+
             if (writeFailure.pathPart !== undefined && String(path).includes(writeFailure.pathPart)) {
                 actual.writeFileSync(path, data.slice(0, Math.floor(data.length / 2)), options);
 
@@ -379,6 +381,33 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
         expect(second.code).toBe(0);
         expect(existsSync(schemaPath)).toBe(true);
         expect(readFileSync(functionPath).equals(functionBefore)).toBe(true);
+    });
+
+    it("does not replace a schema.ts another process creates while the sample is being written", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const schemaPath = join(workdir, "lunora", "schema.ts");
+
+        // Runs once, as the scaffold writes schema.ts's temp file: after its absence check, before publication.
+        writeFailure.beforeWrite = (path) => {
+            if (path.includes("schema.ts.lunora-")) {
+                writeFailure.beforeWrite = undefined;
+                writeFileSync(schemaPath, "user\n", "utf8");
+            }
+        };
+
+        let result: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        } finally {
+            writeFailure.beforeWrite = undefined;
+        }
+
+        expect(result.code).toBe(1);
+        expect(readFileSync(schemaPath, "utf8")).toBe("user\n");
     });
 
     it("does not follow a link planted at the scaffold's temp file", async () => {

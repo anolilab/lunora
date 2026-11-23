@@ -47,6 +47,11 @@ const devVariablesFileFor = (environment: string | undefined): string | undefine
 
 /** Add the ignore patterns, returning why that failed, or `undefined` once `.gitignore` covers every `.dev.vars` file. */
 const addDevVariablesIgnorePatterns = (cwd: string, logger: Logger): string | undefined => {
+    // Git does not read a `.gitignore` that is a symlink, so patterns written through one ignore nothing.
+    if (lstatSync(join(cwd, ".gitignore"), { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+        return ".gitignore is a symlink, which git does not read";
+    }
+
     try {
         const missing = ensureGitignoreEntries(cwd, DEV_VARS_IGNORE_PATTERNS);
 
@@ -103,7 +108,10 @@ const linkedDevVariablesFile = (cwd: string, file: string): string | undefined =
     const self = names.includes(file) ? file : names.find((name) => name.toLowerCase() === file.toLowerCase());
 
     return names.find((name) => {
-        if (name === self || (name !== DEV_VARS_FILE && !name.startsWith(`${DEV_VARS_FILE}.`))) {
+        // Case-insensitively: a case-insensitive filesystem may store the bare file as `.DEV.VARS`.
+        const lower = name.toLowerCase();
+
+        if (name === self || (lower !== DEV_VARS_FILE && !lower.startsWith(`${DEV_VARS_FILE}.`))) {
             return false;
         }
 
@@ -172,12 +180,20 @@ const unconfirmedMintKeys = (raw: string): string[] => [
     ),
 ];
 
+/** `raw` without the {@link UNCONFIRMED_MINT_MARKER} lines for `key`. */
+const removeUnconfirmedMint = (raw: string, key: string): string =>
+    raw
+        .split("\n")
+        .filter((line) => !(line.startsWith(UNCONFIRMED_MINT_MARKER) && line.slice(UNCONFIRMED_MINT_MARKER.length).split("=")[0]?.trim() === key))
+        .join("\n");
+
 export {
     devVariablesFileFor,
     ensureDevVariablesIgnored,
     isDevVariablesFileTracked,
     linkedDevVariablesFile,
     refuseUnsafeSecretFile,
+    removeUnconfirmedMint,
     UNCONFIRMED_MINT_MARKER,
     unconfirmedMintKeys,
 };

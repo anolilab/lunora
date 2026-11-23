@@ -28,6 +28,7 @@ import {
     ensureDevVariablesIgnored,
     isDevVariablesFileTracked,
     refuseUnsafeSecretFile,
+    removeUnconfirmedMint,
     UNCONFIRMED_MINT_MARKER,
 } from "../../util/dev-variables-file";
 import type { Logger } from "../../util/logger";
@@ -239,7 +240,8 @@ const pushMintableSecrets = async (
                 return { minted: pending, ok: false, uncertain: pending.slice(index).map((entry) => entry.key) };
             }
 
-            return { minted, ok: false, uncertain: [] };
+            // A non-zero exit can follow a write that landed, as after a failed bulk push: keep the value as uncertain.
+            return { minted: [...minted, { key, value }], ok: false, uncertain: [key] };
         }
 
         minted.push({ key, value });
@@ -315,8 +317,9 @@ const persistMintedSecrets = (
     const kept = minted.filter((entry) => keepExisting.has(entry.key) && present.has(entry.key));
     const written = minted.filter((entry) => !kept.includes(entry));
 
+    // A confirmed push settles the key: a marker an earlier failed push left would otherwise make `env push` refuse it forever.
     for (const entry of written) {
-        raw = upsertDevVariableLine(raw, entry.key, entry.value);
+        raw = upsertDevVariableLine(keepExisting.has(entry.key) ? raw : removeUnconfirmedMint(raw, entry.key), entry.key, entry.value);
     }
 
     for (const entry of kept) {
