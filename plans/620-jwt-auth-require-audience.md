@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `093c5e41f` (2026-11-20)
-**Status:** BLOCKED (owner decision, see "Blocked on" below)
+**Status:** DONE (option 1: presets pass `audience: false`), pushed: `fix/jwt-auth-require-audience`. Breaking for callers without `audience`; PR #1635
 
 ## Status
 
@@ -25,7 +25,7 @@
 - **Planned at**: commit `093c5e41f`, 2026-11-20
 - **Platform parity**: not applicable — no `ctx.*` surface, binding or capability is added or changed.
 
-## Blocked on (2026-11-20, first execution attempt; no code was changed)
+## Blocked on (2026-11-20, first execution attempt; no code was changed) — resolved: the owner chose option 1
 
 The Design assumes the `clerk` and `workos` presets enforce a binding claim unconditionally. They do not, by documented choice:
 
@@ -94,7 +94,7 @@ Run everything from the repo (worktree) root. `dist/` is not committed, so build
 - `audience` becomes `audience: string | string[] | false` and is **required** in `JwtVerifierOptionsOf`. `false` is the explicit opt-out ("this provider issues no `aud`; another claim binds the token to this app").
 - `assertKeySource` (rename to `assertVerifierOptions` if you prefer; keep one function) throws `fail(`${name}: set \`audience\` to the value your provider puts in \`aud\`, or pass \`audience: false\` if it issues none and another claim binds the token to this app`)` when `audience === undefined`, and also when it is an empty string / empty array / contains an empty string. The runtime check stays even though the type requires the field (JS callers, env-derived `undefined`).
 - `verifyJwt` passes `audience: options.audience === false ? undefined : options.audience` to `jose`.
-- Presets: `auth0` and `supabase` unchanged. `clerk` and `workos` pass `audience: false` **internally** (their party/client checks are the binding), with a one-line why-comment. If either preset does _not_ in fact enforce a binding claim unconditionally, STOP.
+- Presets: `auth0` and `supabase` unchanged. `clerk` and `workos` pass `audience: false` **internally** (their party/client checks are the binding), with a one-line why-comment. Those checks are conditional by documented choice (see "Blocked on"); option 1 accepts that, so it is no longer a STOP.
 - `@lunora/cloudflare-access` already always passes `aud`; only its types may need a touch.
 
 ## Scope
@@ -125,7 +125,6 @@ Run everything from the repo (worktree) root. `dist/` is not committed, so build
 
 ## STOP conditions
 
-- `clerk` or `workos` preset has a code path that verifies with neither an audience nor a binding-claim check.
 - An example/template relies on audience-less verification with no binding claim available (report it; do not paper over with `audience: false`).
 - `api:check` shows unrelated diffs.
 

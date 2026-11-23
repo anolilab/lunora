@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE, pushed: `fix/subscribe-refuses-per-dispatch-queries`, PR #1661 (workerd: all). Not covered: a per-dispatch query reached through `ctx.runQuery` inside a subscribed query
 
 ## Status
 

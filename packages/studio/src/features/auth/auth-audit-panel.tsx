@@ -33,9 +33,14 @@ const TARGET_DETAIL_KEYS = [
     "scimGroupId",
 ] as const;
 
+/** Events whose subject is not the first of {@link TARGET_DETAIL_KEYS} they carry: a new organization also names its owner. */
+const EVENT_TARGET_KEY: Readonly<Record<string, (typeof TARGET_DETAIL_KEYS)[number]>> = { "org-create": "organizationId" };
+
 /** The id an event acted on, read from its `detail` (the admin plane and the hooks copy ids there, never free text). */
 const targetIdOf = (entry: AuthAuditEntry): string | undefined => {
-    for (const key of TARGET_DETAIL_KEYS) {
+    const eventKey = EVENT_TARGET_KEY[entry.event];
+
+    for (const key of eventKey === undefined ? TARGET_DETAIL_KEYS : [eventKey, ...TARGET_DETAIL_KEYS]) {
         const value = entry.detail?.[key];
 
         if (typeof value === "string" && value !== "") {

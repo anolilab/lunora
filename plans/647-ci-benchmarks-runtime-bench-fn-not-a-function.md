@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE after one revision (root cause: a `@noble/hashes` 2.2.0 pin split vitest into two copies; moved to 2.4.0), pushed: `ci/fix-runtime-benchmarks`, PR #1656
 
 ## Status
 

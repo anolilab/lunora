@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE (leak confirmed and fixed), pushed: `security/rls-shape-guards-intersect`; follow-up in 635; PR #1637
 
 ## Status
 

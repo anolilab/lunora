@@ -533,6 +533,33 @@ describe("createWorker — auth admin audit trail", () => {
         expect(writer.rows[1]?.detail).toMatchObject({ memberId: "m1", role: "admin,billing" });
     });
 
+    it("records the organization an item update returns when the request names only the item", async () => {
+        expect.assertions(3);
+
+        const plane: AuthAdmin = {
+            ...auditedAuthAdmin(),
+            updateMemberRole: vi.fn<NonNullable<AuthAdmin["updateMemberRole"]>>(async () => {
+                return { id: "m1", organizationId: "o1", role: "admin", userId: "u1" };
+            }),
+            updateOrgRole: vi.fn<NonNullable<AuthAdmin["updateOrgRole"]>>(async () => {
+                return { id: "r1", organizationId: "o3", permission: {}, role: "editor" };
+            }),
+            updateTeam: vi.fn<NonNullable<AuthAdmin["updateTeam"]>>(async () => {
+                return { id: "t1", name: "Ops", organizationId: "o2" };
+            }),
+        };
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        await worker.fetch(post(`${AUTH}/organizations/members/role`, { memberId: "m1", role: "admin" }), {}, fakeContext);
+        await worker.fetch(post(`${AUTH}/organizations/teams/update`, { name: "Ops", teamId: "t1" }), {}, fakeContext);
+        await worker.fetch(post(`${AUTH}/organizations/roles/update`, { permission: { project: ["read"] }, roleId: "r1" }), {}, fakeContext);
+
+        expect(writer.rows[0]?.detail).toMatchObject({ memberId: "m1", organizationId: "o1" });
+        expect(writer.rows[1]?.detail).toMatchObject({ organizationId: "o2", teamId: "t1" });
+        expect(writer.rows[2]?.detail).toMatchObject({ organizationId: "o3", roleId: "r1" });
+    });
+
     it("records the address a created user was saved under, the caller's address and agent, and an org role's name", async () => {
         expect.assertions(3);
 

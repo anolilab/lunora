@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `093c5e41f` (2026-11-20)
-**Status:** TODO
+**Status:** DONE, pushed: `fix/auth-banned-identity-and-key-revoke` (workerd: auth, runtime); PR #1634
 
 ## Status
 

@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `093c5e41f` (2026-11-20)
-**Status:** TODO
+**Status:** DONE, pushed: `fix/migrate-exclusive-write-and-presence-room`; PR #1643
 
 ## Status
 

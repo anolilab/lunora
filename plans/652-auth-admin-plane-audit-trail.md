@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE after one revision (Security feed, via a new `createAuthAuditWriter` wired through codegen), pushed: `security/auth-admin-audit-trail`, PR #1660 (workerd: auth, runtime)
 
 ## Status
 

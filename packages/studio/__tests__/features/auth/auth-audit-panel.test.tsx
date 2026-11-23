@@ -131,6 +131,28 @@ describe("authAuditPanel", () => {
         await expect(screen.findAllByTestId("aa-row")).resolves.toHaveLength(1);
     });
 
+    it("shows a new organization, not its owner, as the target of an org create", async () => {
+        expect.assertions(2);
+
+        const orgCreate: AuthAuditEntry = {
+            actorId: "admin:root",
+            detail: { organizationId: "org_7", path: "/_lunora/admin/auth/organizations/create", targetUserId: "u9" },
+            event: "org-create",
+            outcome: "success",
+            seq: 6,
+            ts: 1_700_000_006_000,
+        };
+
+        render(renderPanel(createClient([orgCreate])));
+
+        await screen.findByTestId("aa-table");
+
+        const target = within(bodyRows()[0] as HTMLElement).getAllByRole("cell")[3];
+
+        expect(target?.textContent).toContain("org_7");
+        expect(target?.textContent).not.toContain("u9");
+    });
+
     it("shows the empty state when there are no events", async () => {
         expect.assertions(1);
 

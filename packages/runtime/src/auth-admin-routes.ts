@@ -323,6 +323,13 @@ const buildAuditEntry = (
         }
     }
 
+    // A team, member or custom-role update names only its item; the row it returns carries the organization.
+    const resultOrganizationId = audit.event.startsWith("org-") && detail["organizationId"] === undefined ? stringField(result, "organizationId") : undefined;
+
+    if (resultOrganizationId !== undefined) {
+        detail["organizationId"] = resultOrganizationId;
+    }
+
     const savedRole = auditedRole(audit, input, result);
 
     if (savedRole !== undefined) {

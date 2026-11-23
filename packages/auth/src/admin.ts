@@ -6,7 +6,7 @@ import { apiKeyStorage } from "./api-key-storage";
 import type { LunoraAuth } from "./create-auth";
 // Aliased: this module exposes methods of the same names, and a method body
 // calling an identically-named import is a needless double-take.
-import { createSignUpInvitation as issueSignUpInvitation } from "./invite-only";
+import { createSignUpInvitation as issueSignUpInvitation, INVITATION_MODEL, normalizeEmail } from "./invite-only";
 
 /**
  * A timestamp as it leaves the admin API: epoch-ms (better-auth stores `Date`s,
@@ -807,7 +807,14 @@ const writeClaimingEmail = async <R>(
         return await write();
     } catch (error) {
         if (email !== undefined) {
-            await assertEmailFree(context_, email, exceptUserId);
+            try {
+                await assertEmailFree(context_, email, exceptUserId);
+            } catch (lookupError) {
+                // Only a confirmed holder replaces the write's error; a failed lookup says nothing about the write.
+                if (lookupError instanceof LunoraAuthAdminError && lookupError.code === "USER_ALREADY_EXISTS") {
+                    throw lookupError;
+                }
+            }
         }
 
         throw error;
@@ -1200,8 +1207,10 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
                 // A `null` result means the adapter didn't echo the row (some adapters
                 // don't on `update`), NOT that no row matched `memberId` — synthesize the
-                // updated row from the inputs rather than treat it as not-found.
-                return normalizeRow(member ?? { id: memberId, role: nextRole }) as AuthMember;
+                // updated row from the inputs rather than treat it as not-found. The
+                // organization comes from the row read above: the audit entry has no
+                // other source for it.
+                return normalizeRow(member ?? { id: memberId, organizationId: current?.organizationId, role: nextRole }) as AuthMember;
             }),
 
         updateOrganization: ({ logo, metadata, name, organizationId, slug }) =>
@@ -1253,9 +1262,17 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 });
 
                 // A `null` result means the adapter didn't echo the row, NOT that no row
-                // matched `roleId` — synthesize the updated row from the inputs rather
-                // than treat it as not-found.
-                return normalizeRow(updated ?? { id: roleId, permission: JSON.stringify(permission) }) as AuthOrgRole;
+                // matched `roleId`. Read it back, since the inputs do not name the
+                // organization the audit entry records; synthesize from the inputs when
+                // that read finds nothing or fails. The update has already committed, so a
+                // failed read must not turn it into a reported failure.
+                const row =
+                    updated ??
+                    (await context_.adapter
+                        .findOne<Record<string, unknown>>({ model: "organizationRole", where: [{ field: "id", value: roleId }] })
+                        .catch(() => undefined));
+
+                return normalizeRow(row ?? { id: roleId, permission: JSON.stringify(permission) }) as AuthOrgRole;
             }),
 
         updateTeam: ({ name, teamId }) =>
@@ -1267,9 +1284,15 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 });
 
                 // A `null` result means the adapter didn't echo the row, NOT that no row
-                // matched `teamId` — synthesize the updated row from the inputs rather
-                // than treat it as not-found.
-                return normalizeRow(team ?? { id: teamId, name }) as AuthTeam;
+                // matched `teamId`. Read it back for the organization, tolerating a failed
+                // read as `updateOrgRole` does.
+                const row =
+                    team ??
+                    (await context_.adapter
+                        .findOne<Record<string, unknown>>({ model: "team", where: [{ field: "id", value: teamId }] })
+                        .catch(() => undefined));
+
+                return normalizeRow(row ?? { id: teamId, name }) as AuthTeam;
             }),
 
         // The one op that genuinely builds a row rather than mutating one. Replicates
@@ -1277,7 +1300,8 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
         // email, create the row, then link a credential account when a password is given).
         createUser: ({ data, email, name, password, role }) =>
             withContext(async (context_) => {
-                const normalizedEmail = email.toLowerCase();
+                // `data` is spread over the top-level fields below, so its `email` is the address the row gets.
+                const normalizedEmail = (typeof data?.["email"] === "string" ? data["email"] : email).toLowerCase();
 
                 await assertEmailFree(context_, normalizedEmail, undefined);
 
@@ -1294,6 +1318,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 const safeData = { ...data };
 
                 delete safeData["isAnonymous"];
+                delete safeData["email"];
 
                 const user = await writeClaimingEmail(context_, normalizedEmail, undefined, async () =>
                     context_.internalAdapter.createUser(
@@ -1453,20 +1478,20 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
         listSignUpInvitations: ({ limit, offset }) =>
             withContext((context_) =>
-                page<AuthSignUpInvitation>(context_, "signUpInvitation", {
+                page<AuthSignUpInvitation>(context_, INVITATION_MODEL, {
                     limit,
                     offset,
                     sortBy: { direction: "desc", field: "createdAt" },
                 }),
             ),
 
-        // Addresses are stored trimmed and lowercased, so the delete matches on the same form.
+        // Matches on the stored form of the address, through the same normaliser the invite-only plugin writes with.
         revokeSignUpInvitation: ({ email }) =>
             withContext(async (context_) => {
                 await deleteExisting(
                     context_,
-                    "signUpInvitation",
-                    [{ field: "email", value: email.trim().toLowerCase() }],
+                    INVITATION_MODEL,
+                    [{ field: "email", value: normalizeEmail(email) }],
                     ["sign-up invitation not found", "SIGN_UP_INVITATION_NOT_FOUND"],
                 );
             }),

@@ -13,7 +13,8 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE (Workers and Node targets), pushed: `fix/scheduler-reused-id-dedup`, PR #1652 (workerd: all 23)
+**As implemented:** a record's generation is not `enqueuedAt`. `/schedule` stores `dedupKey = <id>-<random UUID>` on the record (or the caller's `RunOptions.dedupKey`), so two schedulings in the same millisecond still differ. Only a record persisted before the change falls back to `<id>-<enqueuedAt>`, then to the bare id.
 
 ## Status
 

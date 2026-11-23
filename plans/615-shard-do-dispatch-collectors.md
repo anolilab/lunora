@@ -13,7 +13,8 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `093c5e41f` (2026-11-20)
-**Status:** TODO
+**Status:** DONE, pushed: `fix/data-rank-notfound-collectors`; PR #1636
+**As implemented, narrower than the Design promises:** the tail readers use the dispatch's own collectors, and `endDispatch` clears a field only while it is still this dispatch's. The hooks still write through the shared fields, so the test covers one order only (the earlier dispatch finishes while the later one runs). In the other order — B parks, A begins and finishes, B resumes — A's `endDispatch` clears fields A owned and B's later reads are not collected; until B resumes they also count against A. `currentStmtSamplesTruncated` is still one shared flag that `beginDispatch` resets, so a dispatch that starts can erase a running one's truncation. Closing either needs the hooks bound per dispatch, which this plan kept out of scope.
 
 ## Status
 

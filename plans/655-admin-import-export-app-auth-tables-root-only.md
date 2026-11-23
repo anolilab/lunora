@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** NOT REPRODUCED: tables from `authTables(...)` are not in the worker's table list and already move only through the root-gated auth section. Unverified lead left open: a named token's `/apply` of `globalChanges` for a non-`.global()` table (the D1 writer's `insert` has no `.global()` check)
 
 ## Status
 

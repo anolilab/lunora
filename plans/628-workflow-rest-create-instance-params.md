@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** NOT CHANGED: Cloudflare's API reference documents `params` as a JSON-encoded string (current code), wrangler 4.156.2 sends a JSON value. Needs one live `createInstance` call to settle
 
 ## Status
 

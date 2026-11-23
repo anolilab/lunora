@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** BY DESIGN for ownership (the app's `authorize` gate owns it; docs and tests added). The `Upload-Concat` hole found on the way is fixed by plan 636. PR #1645
 
 ## Status
 

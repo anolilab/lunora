@@ -3064,6 +3064,7 @@ interface AuthAuditEntry {
     ip?: string;
     outcome: AuthAuditOutcome;
     seq: number;
+    targetEmail?: string;
     ts: number;
     userAgent?: string;
 }

@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE, pushed: `security/auth-admin-plane-gaps`, PR #1658 (workerd: auth, runtime). Gap left: app-declared `authTables(...)` travel as plain `.global()` rows
 
 ## Status
 

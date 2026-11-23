@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `093c5e41f` (2026-11-20)
-**Status:** TODO
+**Status:** DONE (spike + one extraction), pushed: `refactor/runtime-shard-authorization` (workerd: runtime); remaining clusters listed in the plan file; PR #1646
 
 ## Status
 
