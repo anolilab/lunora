@@ -1,3 +1,7 @@
+## @lunora/react [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.302...@lunora/react@1.0.0-alpha.303) (2026-11-23)
+
+- Updated dependency @lunora/ratelimit@1.0.0-alpha.197
+
 ## @lunora/react [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.301...@lunora/react@1.0.0-alpha.302) (2026-11-22)
 
 - fix: publish correct dependency ranges and stop typing absent global columns as null (#1669)

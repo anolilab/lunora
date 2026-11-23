@@ -1,3 +1,7 @@
+## @lunora/angular [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.270...@lunora/angular@1.0.0-alpha.271) (2026-11-23)
+
+- Updated dependency @lunora/ratelimit@1.0.0-alpha.197
+
 ## @lunora/angular [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.269...@lunora/angular@1.0.0-alpha.270) (2026-11-10)
 
 - fix(react): pass the provider's query client to TanStack; extend the cross-copy fix to other frameworks (#1524)

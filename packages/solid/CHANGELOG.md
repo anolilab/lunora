@@ -1,3 +1,7 @@
+## @lunora/solid [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.291...@lunora/solid@1.0.0-alpha.292) (2026-11-23)
+
+- Updated dependency @lunora/ratelimit@1.0.0-alpha.197
+
 ## @lunora/solid [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.290...@lunora/solid@1.0.0-alpha.291) (2026-11-10)
 
 - fix(react): pass the provider's query client to TanStack; extend the cross-copy fix to other frameworks (#1524)
