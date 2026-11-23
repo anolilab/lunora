@@ -505,8 +505,17 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             }
 
             // The unique `by_provider_event` index is the real race guard in the DO; a concurrent
-            // insert of the same event id fails its OCC commit, so at most one caller wins.
-            await database.insert(PAYMENT_TABLES.events, { processedAt: Date.now(), provider, providerEventId: eventId, type });
+            // insert of the same event id fails its OCC commit, so at most one caller wins. The loser is told
+            // the id is claimed, as the read above would have, rather than handed the index error.
+            try {
+                await database.insert(PAYMENT_TABLES.events, { processedAt: Date.now(), provider, providerEventId: eventId, type });
+            } catch (error) {
+                if ((await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId })) !== null) {
+                    return false;
+                }
+
+                throw error;
+            }
 
             return true;
         },

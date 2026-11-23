@@ -4,7 +4,7 @@ import type { PaymentAdapter } from "../src/adapter";
 import type { CreatePaymentOptions, WebhookOutcome } from "../src/create-payment";
 import { createPayment, webhookResponse } from "../src/create-payment";
 import { LunoraPaymentError } from "../src/errors";
-import { derivedIdempotencyKey } from "../src/idempotency";
+import { derivedIdempotencyKey, heldClaimFor, PENDING_REFUND_CLAIM_TYPE, pendingRefundHeldKey, pendingRefundKey } from "../src/idempotency";
 import { money } from "../src/money";
 import type { PaymentEvent, PaymentObserver } from "../src/observability";
 import type { StripeClientLike } from "../src/providers/stripe";
@@ -1772,7 +1772,7 @@ describe("createPayment", () => {
         });
 
         it("never leaves the hold released over a ledger short of the provider's settled total", async () => {
-            expect.assertions(1);
+            expect.assertions(3);
 
             const { payment, providerRefunds, store } = await settleSetup("polar");
 
@@ -1782,31 +1782,91 @@ describe("createPayment", () => {
                 { amount: money(200, "USD"), refundId: "ref_0", status: "succeeded" },
             );
 
-            // The store fails a write partway through the settlement.
-            const upsert = store.upsertPaymentSession.bind(store);
-            let writes = 0;
+            // The settlement's ledger write fails: the refund markers are claimed, the ledger is not.
+            vi.spyOn(store, "upsertPaymentSession").mockRejectedValueOnce(new Error("store unavailable"));
 
-            vi.spyOn(store, "upsertPaymentSession").mockImplementation(async (session, guard) => {
-                writes += 1;
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).rejects.toThrow("store unavailable");
+            // Short of the provider's 500, so the hold stays and no new refund can be issued against it.
+            await expect(payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
 
-                if (writes === 2) {
-                    throw new Error("store unavailable");
+            // The next settlement books the whole total, the claimed markers notwithstanding.
+            await payment.settlePendingRefund({ sessionId: "ord_1" });
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(500, "USD") });
+        });
+
+        it("leaves a newer call's hold standing when an event for the older refund releases its own", async () => {
+            expect.assertions(2);
+
+            const { payment, store } = await settleSetup("polar");
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            const newerPending = `${PENDING_REFUND_CLAIM_TYPE}:newer`;
+            const release = store.releaseEvent.bind(store);
+
+            // A newer call claims and holds the session right after the event released the older call's pending marker.
+            vi.spyOn(store, "releaseEvent").mockImplementation(async (provider, eventId, ifType) => {
+                await release(provider, eventId, ifType);
+
+                if (eventId === pendingRefundKey("ord_1") && (await store.getEventClaim(provider, eventId)) === undefined) {
+                    await store.markEventProcessed(provider, eventId, newerPending);
+                    // The newer call's hold replaces the stale one, as `holdPendingRefund` does.
+                    await release(provider, pendingRefundHeldKey("ord_1"));
+                    await store.markEventProcessed(provider, pendingRefundHeldKey("ord_1"), heldClaimFor(newerPending));
                 }
-
-                return upsert(session, guard);
             });
 
-            await payment.settlePendingRefund({ sessionId: "ord_1" }).catch(() => undefined);
+            await applyWebhookAction(store, { eventId: "evt_failed", provider: "polar", refundId: "ref_1", sessionId: "ord_1", type: "payment.refund_failed" });
 
-            const settled = await store.getPaymentSession("polar", "ord_1");
-            const ledger = settled?.refundedAmount;
-            const released = await payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" }).then(
-                () => true,
-                () => false,
-            );
+            await expect(store.getEventClaim("polar", pendingRefundKey("ord_1"))).resolves.toBe(newerPending);
+            await expect(store.getEventClaim("polar", pendingRefundHeldKey("ord_1"))).resolves.toBe(heldClaimFor(newerPending));
+        });
 
-            // Released only once the ledger holds all 500.
-            expect(released ? ledger : money(500, "USD")).toStrictEqual(money(500, "USD"));
+        it("does not overwrite a newer call's hold when its own pending marker was taken while it held", async () => {
+            expect.assertions(1);
+
+            const { payment, store } = await settleSetup("polar");
+            const newerPending = `${PENDING_REFUND_CLAIM_TYPE}:newer`;
+            const mark = store.markEventProcessed.bind(store);
+            let raced = false;
+
+            // Between this call's ownership check and its hold, an event releases its marker and a newer call claims and holds.
+            vi.spyOn(store, "markEventProcessed").mockImplementation(async (provider, eventId, type) => {
+                if (eventId === pendingRefundHeldKey("ord_1") && !raced) {
+                    raced = true;
+                    await store.releaseEvent(provider, pendingRefundKey("ord_1"));
+                    await mark(provider, pendingRefundKey("ord_1"), newerPending);
+                    await mark(provider, eventId, heldClaimFor(newerPending));
+                }
+
+                return mark(provider, eventId, type);
+            });
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            await expect(store.getEventClaim("polar", pendingRefundHeldKey("ord_1"))).resolves.toBe(heldClaimFor(newerPending));
+        });
+
+        it("re-checks the refunded total once it holds the session, so a refund booked meanwhile is not issued again", async () => {
+            expect.assertions(2);
+
+            const { payment, refundPayment, store } = await settleSetup("polar");
+            const mark = store.markEventProcessed.bind(store);
+
+            // An earlier call's refund of the whole amount is booked, and its marker released, right before this call claims.
+            vi.spyOn(store, "markEventProcessed").mockImplementation(async (provider, eventId, type) => {
+                if (eventId === pendingRefundKey("ord_1")) {
+                    const row = await store.getPaymentSession("polar", "ord_1");
+
+                    await store.upsertPaymentSession({ ...row!, refundedAmount: money(1000, "USD"), state: "refunded" });
+                }
+
+                return mark(provider, eventId, type);
+            });
+
+            await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            expect(refundPayment).not.toHaveBeenCalled();
         });
 
         it("changes nothing on a session that holds no pending refund", async () => {

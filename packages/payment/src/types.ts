@@ -102,10 +102,10 @@ export interface Subscription {
     readonly lastEventAt?: number;
 
     /**
-     * Provider time of the stale event that filled in a price the row was created without (see
-     * `lastEventAt`). A later stale event that is newer than this one may still replace it, so the row ends
-     * on the newest plan whatever order the late events arrive in. Absent once a current event or a
-     * `reconcile` sets the price, which a stale event then never overrides.
+     * When the stored price was established: the provider time of the stale event that filled in a price the
+     * row was created without (see `lastEventAt`), or the time a current event or a `reconcile` set it. A stale
+     * event newer than this may still replace it, so the row ends on the newest plan whatever order the late
+     * events arrive in; a current event's or a reconcile's stamp is newer than every stale event, so none does.
      */
     readonly priceEventAt?: number;
 

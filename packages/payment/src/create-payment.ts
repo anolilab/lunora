@@ -785,6 +785,26 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return { booked: 0, unrecorded: true };
     };
 
+    // Claims refundPayment's pending-refund marker, or refuses while another call holds it. The over-refund check read the
+    // row before the claim: a refund booked, and its marker released, in between is on the ledger now, and an unkeyed
+    // refund must not be issued on top of it, so the row is checked again once claimed and the claim given back on refusal.
+    const claimPendingRefund = async (existing: PaymentSession, issued: Money, pendingClaim: string, requested: Money | undefined): Promise<void> => {
+        if (!(await store.markEventProcessed(adapter.identifier, pendingRefundKey(existing.id), pendingClaim))) {
+            throw new LunoraPaymentError("INVALID_TRANSITION", "a refund on this session is still pending; retry once it settles");
+        }
+
+        const current = (await store.getPaymentSession(adapter.identifier, existing.id)) ?? existing;
+
+        if (compareMoney(addMoney(current.refundedAmount, issued), current.capturedAmount) > 0) {
+            await store.releaseEvent(adapter.identifier, pendingRefundKey(existing.id), pendingClaim);
+
+            throw new LunoraPaymentError(
+                "VALIDATION_ERROR",
+                `refundPayment(): refunding ${String(requested?.minorUnits)} would exceed the captured amount on session "${existing.id}"`,
+            );
+        }
+    };
+
     // Marks a refundPayment call's pending-refund marker as held, which is what lets settlePendingRefund release it.
     const holdPendingRefund = async (sessionId: string, pendingClaim: string, refundId?: string): Promise<void> => {
         const heldMarker = pendingRefundHeldKey(sessionId);
@@ -796,9 +816,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         }
 
         // Only the marker's owner writes the held marker, so one already there is stale: written by an earlier
-        // call after the webhook that settled its refund had cleared both.
+        // call after the webhook that settled its refund had cleared both. Unless the marker changed hands since the
+        // check above, in which case the hold there is its new owner's and this call has nothing left to hold.
         if (!(await store.markEventProcessed(adapter.identifier, heldMarker, heldClaim))) {
-            await store.releaseEvent(adapter.identifier, heldMarker);
+            if ((await store.getEventClaim(adapter.identifier, pendingRefundKey(sessionId))) !== pendingClaim) {
+                return;
+            }
+
+            const stale = await store.getEventClaim(adapter.identifier, heldMarker);
+
+            if (stale !== undefined) {
+                await store.releaseEvent(adapter.identifier, heldMarker, stale);
+            }
+
             await store.markEventProcessed(adapter.identifier, heldMarker, heldClaim);
         }
     };
@@ -1120,8 +1150,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // newer call re-claim it, and only the newer call may then release it.
             const pendingClaim = `${PENDING_REFUND_CLAIM_TYPE}:${crypto.randomUUID()}`;
 
-            if (pendingGuarded && !(await store.markEventProcessed(adapter.identifier, pendingMarker, pendingClaim))) {
-                throw new LunoraPaymentError("INVALID_TRANSITION", "a refund on this session is still pending; retry once it settles");
+            if (pendingGuarded) {
+                await claimPendingRefund(existing, issued, pendingClaim, input.amount);
             }
 
             try {

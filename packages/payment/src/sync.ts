@@ -141,8 +141,17 @@ const releasePendingRefund = async (store: PaymentStore, action: WebhookAction):
             return;
         }
 
-        await store.releaseEvent(action.provider, pendingRefundKey(action.sessionId));
-        await store.releaseEvent(action.provider, pendingRefundHeldKey(action.sessionId));
+        // Only the claims read here: once the marker is released a newer call can claim and hold it, and the second
+        // release must not take that call's hold with it.
+        const pending = await store.getEventClaim(action.provider, pendingRefundKey(action.sessionId));
+
+        if (pending !== undefined) {
+            await store.releaseEvent(action.provider, pendingRefundKey(action.sessionId), pending);
+        }
+
+        if (held !== undefined) {
+            await store.releaseEvent(action.provider, pendingRefundHeldKey(action.sessionId), held);
+        }
     }
 };
 
@@ -429,8 +438,9 @@ const mergeSubscriptionEvent = (existing: Subscription, action: WebhookAction, n
         // A reported set REPLACES the stored one (a plan change can remove an item); `undefined`
         // means "unknown", not "empty", so the stored set stands.
         priceIds: action.priceIds ?? existing.priceIds,
-        // A current event's price is authoritative, so no stale event may replace it any more.
-        priceEventAt: action.priceId === undefined ? existing.priceEventAt : undefined,
+        // A current event's price is authoritative: stamped with its time, which every stale event is older than,
+        // so none may replace it. Stamped rather than cleared, because a store that patches leaves an absent field as it was.
+        priceEventAt: action.priceId === undefined ? existing.priceEventAt : (action.occurredAt ?? now),
         quantity: action.quantity ?? existing.quantity,
         referenceId: ownerOf(existing.referenceId, action.referenceId),
         updatedAt: now,
