@@ -189,6 +189,12 @@ const outboxSettlements = new Map<string, Promise<void>>();
 /** Settles once the raw write the sink stored under `idempotencyKey` is sent or dropped; `undefined` when it stored none. */
 const outboxWriteSettled = (idempotencyKey: string): Promise<void> | undefined => outboxSettlements.get(idempotencyKey);
 
+/** Failures of stored writes whose rejection has already reached `onWriteRejected`. */
+const reportedOutboxFailures = new WeakSet<Error>();
+
+/** Whether `error` is a stored write's failure that was already reported, so a waiter must not report it again. */
+const isReportedOutboxFailure = (error: unknown): boolean => error instanceof Error && reportedOutboxFailures.has(error);
+
 /** Record that a raw write reached its replay handler (called by `defineCollections`). */
 const noteOutboxReplayStarted = (metadata: OutboxMutationMetadata): void => {
     outboxReplaysStarted.add(metadata);
@@ -368,20 +374,28 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
             const forget = (): void => {
                 outboxSettlements.delete(mutation.idempotencyKey);
             };
+            // Rejects for a write that failed, so an action waiting on it (see `outboxWriteSettled`)
+            // fails too, with an error marked as already reported: either path below reports it.
             const settled = committed.then(forget, (error: unknown) => {
                 forget();
 
-                if (outboxReplaysStarted.has(metadata)) {
-                    return;
+                if (!outboxReplaysStarted.has(metadata)) {
+                    takeOutboxRejection(mutation.idempotencyKey)?.();
+                    outboxUnstoredReporters.get(executor)?.({
+                        collection: mutation.functionPath,
+                        error: new Error(`offline write could not be stored: ${error instanceof Error ? error.message : String(error)}`, { cause: error }),
+                    });
                 }
 
-                takeOutboxRejection(mutation.idempotencyKey)?.();
-                outboxUnstoredReporters.get(executor)?.({
-                    collection: mutation.functionPath,
-                    error: new Error(`offline write could not be stored: ${error instanceof Error ? error.message : String(error)}`, { cause: error }),
-                });
+                const failure = error instanceof Error ? error : new Error(String(error));
+
+                reportedOutboxFailures.add(failure);
+
+                throw failure;
             });
 
+            // Nobody may be waiting; the failure is already reported, so an unheard rejection is noise.
+            settled.catch(() => undefined);
             outboxSettlements.set(mutation.idempotencyKey, settled);
         },
     };
@@ -604,6 +618,7 @@ export {
     createExecutorOutboxSink,
     createOptimisticOnlineDetector,
     createOutboxCarrier,
+    isReportedOutboxFailure,
     makeDiffEmit,
     noteOutboxReplayStarted,
     OUTBOX_MUTATION_FN_NAME,

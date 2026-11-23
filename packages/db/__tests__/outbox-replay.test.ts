@@ -1492,7 +1492,12 @@ describe("durable replay while the connection is down", () => {
 
     /** A real client with a held socket; `messages:send` RPCs are recorded in `sent`. */
     const offlineClient = (
-        options: { failSends?: boolean; outbox?: () => ReturnType<typeof createExecutorOutboxSink>; queueBeforeFirstConnect?: boolean } = {},
+        options: {
+            failSends?: boolean;
+            outbox?: () => ReturnType<typeof createExecutorOutboxSink>;
+            queueBeforeFirstConnect?: boolean;
+            refuseSends?: boolean;
+        } = {},
     ) => {
         const sent: unknown[] = [];
         const client = new LunoraClient({
@@ -1506,6 +1511,10 @@ describe("durable replay while the connection is down", () => {
                 if (functionPath === "messages:send") {
                     if (options.failSends) {
                         throw new TypeError("Failed to fetch");
+                    }
+
+                    if (options.refuseSends) {
+                        return Response.json({ error: { code: "FORBIDDEN", message: "not allowed" } }, { status: 403 });
                     }
 
                     sent.push(args.text);
@@ -1722,6 +1731,42 @@ describe("durable replay while the connection is down", () => {
         expect(rejected).not.toHaveBeenCalled();
     });
 
+    // The action's send awaits inside the client before it reads a bearer. A user switch in that
+    // window must not put user A's row on user B's token.
+    it("sends a one-shot action's write with the bearer of the user who composed it", async () => {
+        await startLeader();
+
+        const bearers: (null | string)[] = [];
+        const client = new LunoraClient({
+            fetch: async (input, init) => {
+                if (input === RPC_URL) {
+                    bearers.push(new Headers(init?.headers).get("authorization"));
+                }
+
+                return Response.json({ result: "ok" });
+            },
+            url: "https://app.example",
+            WebSocket: heldWebSocket(),
+        });
+
+        clients.push(client);
+        client.setAuthToken("token-a", "user-a");
+
+        const database = notesDatabase(client);
+
+        await awaitInit(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+        sockets.at(-1)?.open();
+
+        expect(database.executor.isOfflineEnabled).toBe(false);
+
+        database.actions.notes({ text: "user a's note" });
+        client.setAuthToken("token-b", "user-b");
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(bearers).toStrictEqual(["Bearer token-a"]);
+    });
+
     // Composed before election, the action runs once, unstored; its write then
     // reaches the sink after this tab has won, and is stored there. The action's
     // transaction must stay pending until that write is sent, or its row
@@ -1751,6 +1796,35 @@ describe("durable replay while the connection is down", () => {
 
         expect(sent).toStrictEqual(["early, stored"]);
         expect(transaction.state).toBe("completed");
+    });
+
+    // The stored write the early action waits on can then be refused for good. The action must
+    // report that failure as its own verdict, once, rather than complete as if it were sent.
+    it("fails an early action's transaction when the write the outbox stored for it is refused", async () => {
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const { client, sent } = offlineClient({ outbox: () => sink as ReturnType<typeof createExecutorOutboxSink>, refuseSends: true });
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const database = notesDatabase(client, { onWriteRejected: rejected }) as unknown as {
+            actions: { notes: (input: { text: string }) => { id: string; transaction: { isPersisted: { promise: Promise<unknown> }; state: string } } };
+            executor: OfflineExecutor;
+        };
+
+        sink = createExecutorOutboxSink(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        const { transaction } = database.actions.notes({ text: "early, refused" });
+        const verdict = transaction.isPersisted.promise.then(
+            () => "persisted",
+            () => "failed",
+        );
+
+        await awaitInit(database.executor);
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        await expect(verdict).resolves.toBe("failed");
+        expect(rejected).toHaveBeenCalledTimes(1);
     });
 
     // The sink cannot store a write on a follower, so it declines it, and the

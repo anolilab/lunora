@@ -11,6 +11,7 @@ import {
     assertSecureRandom,
     createOptimisticOnlineDetector,
     createOutboxCarrier,
+    isReportedOutboxFailure,
     noteOutboxReplayStarted,
     OUTBOX_MUTATION_FN_NAME,
     outboxWriteSettled,
@@ -438,6 +439,27 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
         return terminal;
     };
 
+    /**
+     * The error a collection write's failure rethrows, reporting it when it is final. A stored write's
+     * failure an early one-shot action waited on was already reported where it failed, so it is only
+     * made final here; otherwise a one-shot write, which nothing retries, reports any failure.
+     */
+    const oneShotOrTerminalFailure = (mutationId: string, error: unknown, oneShot: boolean, report: (terminal: Error) => void): unknown => {
+        if (oneShot && isReportedOutboxFailure(error)) {
+            return toNonRetriable(error);
+        }
+
+        const terminal = settleFailure(mutationId, error) ?? (oneShot ? toNonRetriable(error) : undefined);
+
+        if (terminal === undefined) {
+            return error;
+        }
+
+        report(terminal);
+
+        return terminal;
+    };
+
     const scope: Record<string, (args?: Record<string, unknown>) => void> = {};
     const mutationFns: OfflineConfig["mutationFns"] = {};
 
@@ -539,15 +561,9 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
                         // only a terminal verdict is reported — except in a one-shot
                         // transaction, which nothing retries: its row is rolled back
                         // either way, so any failure is reported.
-                        const terminal = settleFailure(mutationId, error) ?? (meta?.oneShot ? toNonRetriable(error) : undefined);
-
-                        if (terminal !== undefined) {
+                        throw oneShotOrTerminalFailure(mutationId, error, meta?.oneShot === true, (terminal) => {
                             reportWriteRejected(options, { code: (terminal as Error & { code?: string }).code, collection: name, error: terminal, row });
-
-                            throw terminal;
-                        }
-
-                        throw error;
+                        });
                     }
                 }
             };
