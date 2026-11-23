@@ -1256,6 +1256,10 @@ class LunoraClient:
             sender = self._send
             if sender is None:
                 return
+            # Every query frame is built up front, as the Rust port does, so args that no longer
+            # encode raise to the caller here; later in the drain they can only be logged.
+            for sub in self._subs.values():
+                build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
             self._clear_resubscribes()
             self._resubscribe_queue = list(self._subs)
             batch = self._take_resubscribes(time.monotonic())

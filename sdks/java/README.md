@@ -99,6 +99,10 @@ while (!Thread.currentThread().isInterrupted()) {
                 }
             } catch (InterruptedException e) {
                 // the socket run ended
+            } catch (RuntimeException e) {
+                // A failed send. Without the close, receive() below stays blocked on a socket
+                // nobody paces, so nothing reconnects; closing it ends the run instead.
+                socket.close();
             }
         });
         pacer.setDaemon(true);
