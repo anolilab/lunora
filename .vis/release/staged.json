@@ -3,6 +3,70 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/shard-engine@1.0.0-alpha.206"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/runtime@1.0.0-alpha.301"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/client@1.0.0-alpha.303"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/angular@1.0.0-alpha.273"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/server@1.0.0-alpha.279"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/auth@1.0.0-alpha.272"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/codegen@1.0.0-alpha.437"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/cli@1.0.0-alpha.509"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/do@1.0.0-alpha.295"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/react@1.0.0-alpha.305"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/solid@1.0.0-alpha.294"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/sql-store@1.0.0-alpha.245"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/studio@1.0.0-alpha.391"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/svelte@1.0.0-alpha.323"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/testing@1.0.0-alpha.342"
+    },
+    {
+      "at": "2026-11-23T23:50:57.326Z",
+      "key": "@lunora/vue@1.0.0-alpha.324"
+    },
+    {
       "at": "2026-11-23T23:28:51.823Z",
       "key": "@lunora/runtime@1.0.0-alpha.300"
     },
@@ -337,72 +401,8 @@
     {
       "at": "2026-11-22T00:35:09.618Z",
       "key": "@lunora/codegen@1.0.0-alpha.429"
-    },
-    {
-      "at": "2026-11-22T00:35:09.618Z",
-      "key": "@lunora/react@1.0.0-alpha.302"
-    },
-    {
-      "at": "2026-11-20T22:51:11.036Z",
-      "key": "@lunora/mcp@1.0.0-alpha.293"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/errors@1.0.0-alpha.92"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/auth@1.0.0-alpha.268"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/platform@1.0.0-alpha.83"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/bindings@1.0.0-alpha.153"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/queue@1.0.0-alpha.145"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/shard-engine@1.0.0-alpha.202"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/sql-store@1.0.0-alpha.239"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/d1@1.0.0-alpha.238"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/codegen@1.0.0-alpha.428"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/runtime@1.0.0-alpha.293"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/studio@1.0.0-alpha.388"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/config@1.0.0-alpha.469"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/platform-node@1.0.0-alpha.223"
-    },
-    {
-      "at": "2026-11-20T21:16:11.479Z",
-      "key": "@lunora/cli@1.0.0-alpha.505"
     }
   ],
-  "updatedAt": "2026-11-23T23:28:51.824Z",
+  "updatedAt": "2026-11-23T23:50:57.327Z",
   "version": 1
 }
