@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.269...@lunora/auth@1.0.0-alpha.270) (2026-11-23)
+
+- security(runtime)!: require the root token to export or import auth tables (#1658)
+
 ## @lunora/auth [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.268...@lunora/auth@1.0.0-alpha.269) (2026-11-23)
 
 - fix(auth)!: stop banned users and failed key revokes passing silently (#1634)

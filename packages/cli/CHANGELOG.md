@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.508](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.507...@lunora/cli@1.0.0-alpha.508) (2026-11-23)
+
+- security(runtime)!: require the root token to export or import auth tables (#1658)
+
 ## @lunora/cli [1.0.0-alpha.507](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.506...@lunora/cli@1.0.0-alpha.507) (2026-11-23)
 
 - fix(cli): fail deploy --migrate when migrations cannot be discovered (#1642)
