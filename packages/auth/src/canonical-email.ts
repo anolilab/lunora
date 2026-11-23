@@ -163,14 +163,6 @@ const withCanonicalEmailValue = (row: Record<string, unknown>, table: string, co
 
 const BACKFILL_PAGE_ROWS = 200;
 
-/**
- * Pages one async run fills at most: two D1 queries a page, well inside the per-invocation
- * query budget the request that runs it shares with it. A larger table fills over later
- * runs, each resuming where the last stopped; until then `assertEmailFree` covers its
- * unfilled rows.
- */
-const BACKFILL_MAX_PAGES = 20;
-
 const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
@@ -189,11 +181,11 @@ type BackfillStep = { params: unknown[]; sql: string };
 type BackfillSteps<R> = Generator<BackfillStep, R, Record<string, unknown>[]>;
 
 /**
- * Where each backfill resumes, one row per backfill. A run capped by D1's query budget would
- * otherwise start over at the first row every time, and rows it must leave as they are (a
- * duplicate it cannot fill, an invitation already in canonical form) could take every later
- * run's whole budget and keep it from the rows behind them. In the database itself, because
- * the next run may be another isolate's.
+ * Where each backfill resumes, one row per physical table and column, written after every
+ * page. A run cut short (D1's per-invocation query limit, an evicted isolate, a failed
+ * statement) would otherwise start over at the first row, re-reading every row it must leave
+ * as it is (a duplicate it cannot fill, an invitation already in canonical form) before it
+ * reaches new ones. In the database itself, because the next run may be another isolate's.
  */
 const BACKFILL_STATE_TABLE = "__lunora_auth_backfill__";
 
@@ -219,14 +211,6 @@ const writeBackfillState = function* writeBackfillState(name: string, cursor: un
               sql: `INSERT INTO ${table} ("name", "cursor") VALUES (?, ?) ON CONFLICT ("name") DO UPDATE SET "cursor" = excluded."cursor"`,
           };
 };
-
-const USER_BACKFILL = "user.emailCanonical";
-
-/** What one run did: whether it reached the end of the table, and how many rows it had to leave empty. */
-interface CanonicalBackfillReport {
-    complete: boolean;
-    duplicates: number;
-}
 
 /** A page's rows to fill as `[rowid, email, canonical]`: the first per canonical value, as two in one statement would both pass `NOT EXISTS`. */
 const pageFills = (rows: Record<string, unknown>[]): Map<string, [unknown, string, string]> => {
@@ -258,19 +242,22 @@ const pageFills = (rows: Record<string, unknown>[]): Map<string, [unknown, strin
  * is a range of the canonical column's own index, so a fully backfilled table costs one
  * empty read.
  *
- * A run that stops on its page budget records the last row it read, and the next resumes
- * after it. One that reaches the end clears that, so the next pass starts over and fills a
- * duplicate the operator has since resolved.
+ * Runs to the end of the table. Each page records the last row it read, so a run cut short
+ * resumes after it; reaching the end clears that, so the next pass (a later cold start)
+ * starts over and fills a duplicate the operator has since resolved.
+ * @returns How many rows could not be filled because another row holds their canonical value.
  */
-const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxPages: number): BackfillSteps<CanonicalBackfillReport> {
+const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn): BackfillSteps<number> {
     const table = quote(column.table);
     const canonical = quote(column.canonical);
     const email = quote(column.email);
-    const resumed = yield* readBackfillState(USER_BACKFILL);
+    // Keyed on the physical names: another auth configuration's table in the same database has its own rowids.
+    const state = `${column.table}.${column.canonical}`;
+    const resumed = yield* readBackfillState(state);
     let after = typeof resumed === "number" ? resumed : 0;
     let duplicates = 0;
 
-    for (let page = 0; page < maxPages; page += 1) {
+    for (;;) {
         const rows = yield {
             params: [after, BACKFILL_PAGE_ROWS],
             sql: `SELECT rowid AS "rid", ${email} AS "email" FROM ${table} WHERE ${canonical} IS NULL AND rowid > ? ORDER BY rowid LIMIT ?`,
@@ -295,19 +282,16 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
         const last = rows.at(-1)?.["rid"];
 
         if (rows.length < BACKFILL_PAGE_ROWS || typeof last !== "number") {
-            if (resumed !== undefined) {
-                yield* writeBackfillState(USER_BACKFILL, undefined);
+            if (resumed !== undefined || after > 0) {
+                yield* writeBackfillState(state, undefined);
             }
 
-            return { complete: true, duplicates };
+            return duplicates;
         }
 
         after = last;
+        yield* writeBackfillState(state, after);
     }
-
-    yield* writeBackfillState(USER_BACKFILL, after);
-
-    return { complete: false, duplicates };
 };
 
 const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn): void => {
@@ -353,23 +337,23 @@ const runBackfillSync = <R>(steps: BackfillSteps<R>, exec: (sql: string, params:
 
 /**
  * Fill the canonical column for rows written before it existed, through an async executor
- * (D1), at most {@link BACKFILL_MAX_PAGES} pages per call, each call resuming where the last stopped.
+ * (D1), to the end of the table, resuming where a run cut short stopped.
+ * @returns How many rows could not be filled because another row holds their canonical value.
  */
-const backfillCanonicalEmails = async (executor: BackfillExecutor, column: CanonicalEmailColumn): Promise<CanonicalBackfillReport> => {
-    const report = await runBackfill(backfillSteps(column, BACKFILL_MAX_PAGES), executor);
+const backfillCanonicalEmails = async (executor: BackfillExecutor, column: CanonicalEmailColumn): Promise<number> => {
+    const duplicates = await runBackfill(backfillSteps(column), executor);
 
-    warnDuplicates(report.duplicates, column);
+    warnDuplicates(duplicates, column);
 
-    return report;
+    return duplicates;
 };
 
 /**
- * The same backfill over a synchronous executor (a Durable Object's `storage.sql.exec`),
- * to the end of the table: local SQLite has no per-invocation query budget.
+ * The same backfill over a synchronous executor (a Durable Object's `storage.sql.exec`).
  * @returns How many rows could not be filled because another row holds their canonical value.
  */
 const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], column: CanonicalEmailColumn): number => {
-    const { duplicates } = runBackfillSync(backfillSteps(column, Number.POSITIVE_INFINITY), exec);
+    const duplicates = runBackfillSync(backfillSteps(column), exec);
 
     warnDuplicates(duplicates, column);
 
@@ -454,10 +438,9 @@ const backfillCanonicalEmailsThroughAdapter = async (adapter: BackfillAdapter): 
     }
 };
 
-export type { BackfillAdapter, BackfillExecutor, BackfillStep, BackfillSteps, CanonicalBackfillReport, CanonicalEmailColumn };
+export type { BackfillAdapter, BackfillExecutor, BackfillStep, BackfillSteps, CanonicalEmailColumn };
 export {
     authCanonicalEmailColumn,
-    BACKFILL_MAX_PAGES,
     BACKFILL_PAGE_ROWS,
     BACKFILL_STATE_TABLE,
     backfillCanonicalEmails,

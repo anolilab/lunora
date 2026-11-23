@@ -8,16 +8,7 @@ import type { BetterAuthOptions } from "better-auth";
 import { getAuthTables } from "better-auth/db";
 
 import type { BackfillExecutor, BackfillSteps } from "./canonical-email";
-import {
-    BACKFILL_MAX_PAGES,
-    BACKFILL_PAGE_ROWS,
-    canonicalEmail,
-    quote,
-    readBackfillState,
-    runBackfill,
-    runBackfillSync,
-    writeBackfillState,
-} from "./canonical-email";
+import { BACKFILL_PAGE_ROWS, canonicalEmail, quote, readBackfillState, runBackfill, runBackfillSync, writeBackfillState } from "./canonical-email";
 import { INVITATION_MODEL } from "./invite-only";
 
 /** The physical names the rewrite reads; `undefined` from {@link invitationEmailColumns} without `inviteOnly()`. */
@@ -119,16 +110,8 @@ const rewritePage = function* rewritePage(
     }
 };
 
-const INVITATION_BACKFILL = "signUpInvitation.email";
-
 /** Recorded once a pass has read every invitation: new ones are written in canonical form, so none can need it again. */
 const DONE = "done";
-
-/** What one run did: whether it read the last invitation, and which it left unchanged. */
-interface InvitationBackfillReport {
-    complete: boolean;
-    unchanged: string[];
-}
 
 /**
  * The rewrite as a sequence of statements, run like the user backfill.
@@ -142,24 +125,27 @@ interface InvitationBackfillReport {
  * rewriting that row instead; the newer one is reported.
  *
  * That read keeps matching a non-ASCII address once it is canonical, and an invitation left
- * unchanged, so a run that stops on its page budget records where it stopped and the next
- * resumes there, and a pass that reaches the end records that it is done. Without either,
- * every run would re-read the same newest rows and never reach an older one. A later run
- * finds a holder on the table, not in this run's memory, so resuming loses nothing.
+ * unchanged, so each page records where it stopped and a run cut short resumes there, and a
+ * pass that reaches the end records that it is done. Without either, every run would re-read
+ * the same newest rows. A resumed run finds a holder on the table, not in the cut-short
+ * run's memory, so resuming loses nothing.
+ * @returns The ids of the invitations left unchanged because another holds their folded address.
  */
-const invitationBackfillSteps = function* invitationBackfillSteps(columns: InvitationEmailColumns, maxPages: number): BackfillSteps<InvitationBackfillReport> {
+const invitationBackfillSteps = function* invitationBackfillSteps(columns: InvitationEmailColumns): BackfillSteps<string[]> {
     const sql = invitationStatements(columns);
     const settled = new Set<string>();
     const unchanged: string[] = [];
-    const resumed = yield* readBackfillState(INVITATION_BACKFILL);
+    // Keyed on the physical names, like the user backfill's.
+    const state = `${columns.table}.${columns.email}`;
+    const resumed = yield* readBackfillState(state);
 
     if (resumed === DONE) {
-        return { complete: true, unchanged };
+        return unchanged;
     }
 
     let cursor: unknown[] = Array.isArray(resumed) ? resumed : [];
 
-    for (let page = 0; page < maxPages; page += 1) {
+    for (;;) {
         const rows = yield { params: [...cursor, BACKFILL_PAGE_ROWS], sql: sql.read(cursor.length > 0) };
 
         const candidates = pageCandidates(rows, settled, unchanged);
@@ -173,17 +159,14 @@ const invitationBackfillSteps = function* invitationBackfillSteps(columns: Invit
         const last = rows.at(-1);
 
         if (rows.length < BACKFILL_PAGE_ROWS || last === undefined) {
-            yield* writeBackfillState(INVITATION_BACKFILL, DONE);
+            yield* writeBackfillState(state, DONE);
 
-            return { complete: true, unchanged };
+            return unchanged;
         }
 
         cursor = [last["createdAt"], last["rid"]];
+        yield* writeBackfillState(state, cursor);
     }
-
-    yield* writeBackfillState(INVITATION_BACKFILL, cursor);
-
-    return { complete: false, unchanged };
 };
 
 const warnUnchanged = (unchanged: string[]): void => {
@@ -197,28 +180,29 @@ const warnUnchanged = (unchanged: string[]): void => {
 };
 
 /**
- * Rewrite invitation addresses to canonical form through an async executor (D1), at most
- * `BACKFILL_MAX_PAGES` pages per call, each call resuming where the last stopped.
- */
-const backfillInvitationEmails = async (executor: BackfillExecutor, columns: InvitationEmailColumns): Promise<InvitationBackfillReport> => {
-    const report = await runBackfill(invitationBackfillSteps(columns, BACKFILL_MAX_PAGES), executor);
-
-    warnUnchanged(report.unchanged);
-
-    return report;
-};
-
-/**
- * The same rewrite over a synchronous executor (a Durable Object's `storage.sql.exec`), to the end of the table.
+ * Rewrite invitation addresses to canonical form through an async executor (D1), to the end
+ * of the table, resuming where a run cut short stopped.
  * @returns The ids of the invitations left unchanged because another holds their folded address.
  */
-const backfillInvitationEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], columns: InvitationEmailColumns): string[] => {
-    const { unchanged } = runBackfillSync(invitationBackfillSteps(columns, Number.POSITIVE_INFINITY), exec);
+const backfillInvitationEmails = async (executor: BackfillExecutor, columns: InvitationEmailColumns): Promise<string[]> => {
+    const unchanged = await runBackfill(invitationBackfillSteps(columns), executor);
 
     warnUnchanged(unchanged);
 
     return unchanged;
 };
 
-export type { InvitationBackfillReport, InvitationEmailColumns };
+/**
+ * The same rewrite over a synchronous executor (a Durable Object's `storage.sql.exec`).
+ * @returns The ids of the invitations left unchanged because another holds their folded address.
+ */
+const backfillInvitationEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], columns: InvitationEmailColumns): string[] => {
+    const unchanged = runBackfillSync(invitationBackfillSteps(columns), exec);
+
+    warnUnchanged(unchanged);
+
+    return unchanged;
+};
+
+export type { InvitationEmailColumns };
 export { backfillInvitationEmails, backfillInvitationEmailsSync, invitationEmailColumns };

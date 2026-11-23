@@ -126,13 +126,13 @@ better-auth write. The admin plane's duplicate-address check is an exact, indexe
 it, and sign-up invitations are stored in the same form.
 
 - **Existing rows are backfilled.** This happens on the auth Durable Object's cold start
-  and in `ensureMigrated`. On D1 each call fills a bounded number of pages and the next
-  resumes where it stopped, and the generated worker calls it again after each request
-  until the table is done. Other databases are filled through better-auth's adapter in one
-  call. Invitation addresses stored before the change are rewritten the same way (on the
-  Durable Object and D1). When two rows fold to one address, the backfill leaves the second
-  one alone and logs a warning, because deciding which account or invitation keeps the
-  address is up to you. Until a row is filled, the admin plane's duplicate check folds its
+  and in `ensureMigrated`, to the end of the table. On D1 the position is saved after every
+  page, so a call cut short (D1's per-invocation query limit on a very large table) rejects
+  and the next call resumes there. Other databases are filled through better-auth's
+  adapter. Invitation addresses stored before the change are rewritten the same way (on
+  the Durable Object and D1). When two rows fold to one address, the backfill leaves the
+  second one alone and logs a warning, because deciding which account or invitation keeps
+  the address is up to you. A duplicate you resolve is filled on the next cold start. Until a row is filled, the admin plane's duplicate check folds its
   address in JS, so it still refuses a variant in any case or Unicode form.
 - **Rows imported through your own `authTables(...)` are trusted operator input.** The
   admin-token import writes tables declared in `lunora/schema.ts` as given, so a user row

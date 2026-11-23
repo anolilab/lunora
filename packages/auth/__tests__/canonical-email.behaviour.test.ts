@@ -6,7 +6,7 @@ import { lunoraAuthAdapter } from "../src/adapter";
 import type { AuthAdmin } from "../src/admin";
 import { createAuthAdmin } from "../src/admin";
 import { INTERNAL_SECRET_HEADER, LunoraAuthDO, RESOLVE_SESSION_PATH } from "../src/auth-do";
-import { authCanonicalEmailColumn, backfillCanonicalEmails, canonicalEmail, withCanonicalEmail } from "../src/canonical-email";
+import { authCanonicalEmailColumn, BACKFILL_PAGE_ROWS, backfillCanonicalEmails, canonicalEmail, withCanonicalEmail } from "../src/canonical-email";
 import type { LunoraAuthOptions } from "../src/create-auth";
 import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import type { AuthDataPortLike } from "../src/data-port";
@@ -354,8 +354,23 @@ describe("canonical email on the schema paths", () => {
         });
     });
 
-    it("fills a page per statement and stops a run after a bounded number of pages", async () => {
-        expect.assertions(3);
+    /** An executor over `database` that fails once `limit` page reads of `table` have run, as D1 does past its per-invocation query limit. */
+    const cutShortAfter = (database: DatabaseSync, table: string, limit: number): SqlExecutor["all"] => {
+        let reads = 0;
+
+        return async (sql, parameters) => {
+            reads += sql.startsWith(`SELECT rowid AS "rid"`) && sql.includes(`FROM "${table}"`) ? 1 : 0;
+
+            if (reads > limit) {
+                throw new Error("Too many API requests by single worker invocation.");
+            }
+
+            return executorFor(database).all(sql, parameters);
+        };
+    };
+
+    it("fills to the end of the table in one run, however many pages it takes", async () => {
+        expect.assertions(1);
 
         const database = new DatabaseSync(":memory:");
 
@@ -367,23 +382,12 @@ describe("canonical email on the schema paths", () => {
             insert.run(`u${String(index)}`, `User${String(index)}@Example.com`);
         }
 
-        const sqlite = executorFor(database);
-        const all = vi.fn<SqlExecutor["all"]>(sqlite.all);
-        const column = { canonical: "emailCanonical", email: "email", table: "user" };
-        const unfilled = (): number => (database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get() as { n: number }).n;
+        await backfillCanonicalEmails(executorFor(database), { canonical: "emailCanonical", email: "email", table: "user" });
 
-        await backfillCanonicalEmails({ all }, column);
-
-        // 20 pages of 200, a read and one UPDATE each, plus creating, reading and writing the resume point.
-        expect(all).toHaveBeenCalledTimes(43);
-        expect(unfilled()).toBe(1);
-
-        await backfillCanonicalEmails({ all }, column);
-
-        expect(unfilled()).toBe(0);
+        expect((database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get() as { n: number }).n).toBe(0);
     });
 
-    it("resumes a capped run where the last stopped, so rows it cannot fill never starve the rows behind them", async () => {
+    it("resumes a run cut short where it stopped, so rows it cannot fill are not read again", async () => {
         expect.assertions(4);
 
         const database = new DatabaseSync(":memory:");
@@ -396,8 +400,8 @@ describe("canonical email on the schema paths", () => {
         const insert = database.prepare(`INSERT INTO "user" ("id", "email") VALUES (?, ?)`);
         const local = "duplicateaddress";
 
-        // More case variants of the held address than one run reads; none can be filled.
-        for (let index = 0; index < 4200; index += 1) {
+        // Case variants of the held address, more than one page of them: none can be filled.
+        for (let index = 0; index < 1000; index += 1) {
             const variant = local.replaceAll(/[a-z]/gu, (letter, position: number) =>
                 Math.floor(index / 2 ** position) % 2 === 1 ? letter.toUpperCase() : letter,
             );
@@ -408,17 +412,48 @@ describe("canonical email on the schema paths", () => {
         insert.run("behind", "Behind@Example.com");
 
         const column = { canonical: "emailCanonical", email: "email", table: "user" };
-        const canonicalOfBehind = (): unknown =>
-            (database.prepare(`SELECT "emailCanonical" FROM "user" WHERE "id" = 'behind'`).get() as { emailCanonical: unknown }).emailCanonical;
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        await expect(backfillCanonicalEmails(executorFor(database), column)).resolves.toStrictEqual({ complete: false, duplicates: 4000 });
-        expect(canonicalOfBehind()).toBeNull();
+        await expect(backfillCanonicalEmails({ all: cutShortAfter(database, "user", 3) }, column)).rejects.toThrow("Too many API requests");
 
-        await expect(backfillCanonicalEmails(executorFor(database), column)).resolves.toStrictEqual({ complete: true, duplicates: 200 });
-        expect(canonicalOfBehind()).toBe("behind@example.com");
+        const all = vi.fn<SqlExecutor["all"]>(executorFor(database).all);
+
+        // The cut-short run read three pages and recorded two; the resumed one reads what is left.
+        await expect(backfillCanonicalEmails({ all }, column)).resolves.toBe(400);
+        expect(all.mock.calls.find(([sql]) => sql.startsWith(`SELECT rowid AS "rid"`))?.[1]).toStrictEqual([601, BACKFILL_PAGE_ROWS]);
+        expect((database.prepare(`SELECT "emailCanonical" FROM "user" WHERE "id" = 'behind'`).get() as { emailCanonical: unknown }).emailCanonical).toBe(
+            "behind@example.com",
+        );
 
         warn.mockRestore();
+    });
+
+    it("keeps each user table's position apart when two auth configurations share a database", async () => {
+        expect.assertions(1);
+
+        const database = new DatabaseSync(":memory:");
+
+        for (const [table, rows] of [
+            ["user", 4400],
+            ["account_holder", 1000],
+        ] as const) {
+            database.exec(`CREATE TABLE "${table}" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
+
+            const insert = database.prepare(`INSERT INTO "${table}" ("id", "email") VALUES (?, ?)`);
+
+            for (let index = 0; index < rows; index += 1) {
+                insert.run(`u${String(index)}`, `User${String(index)}@Example.com`);
+            }
+        }
+
+        // The first configuration's run is cut short deep into its table, past every rowid of the second's.
+        await backfillCanonicalEmails({ all: cutShortAfter(database, "user", 21) }, { canonical: "emailCanonical", email: "email", table: "user" }).catch(
+            () => {},
+        );
+
+        await backfillCanonicalEmails(executorFor(database), { canonical: "emailCanonical", email: "email", table: "account_holder" });
+
+        expect((database.prepare(`SELECT COUNT(*) AS "n" FROM "account_holder" WHERE "emailCanonical" IS NULL`).get() as { n: number }).n).toBe(0);
     });
 
     it("adds and backfills the column on a Durable Object that predates it, leaving a pre-existing duplicate empty", async () => {
@@ -518,8 +553,8 @@ describe("invitation addresses stored before canonical form", () => {
         warn.mockRestore();
     });
 
-    it("resumes a capped run past newer rows already in canonical form, and stops reading once a pass is done", async () => {
-        expect.assertions(4);
+    it("resumes a run cut short past newer rows already in canonical form, and stops reading once a pass is done", async () => {
+        expect.assertions(5);
 
         const database = new DatabaseSync(":memory:");
 
@@ -529,22 +564,38 @@ describe("invitation addresses stored before canonical form", () => {
         invitation(database, "older", DECOMPOSED, 1);
 
         // Newer and non-ASCII, so the read matches them, but already canonical: nothing to rewrite.
-        for (let index = 0; index < 4000; index += 1) {
+        for (let index = 0; index < 1000; index += 1) {
             invitation(database, `settled${String(index)}`, `é${String(index)}@example.com`, 2 + index);
         }
 
         const columns = invitationEmailColumns(resolveAuthOptions(inviteOptions))!;
+        let reads = 0;
+        const cutShort = async (sql: string, parameters: ReadonlyArray<unknown>): Promise<Record<string, unknown>[]> => {
+            reads += sql.includes(`FROM "signUpInvitation" WHERE ("email" GLOB`) ? 1 : 0;
+
+            if (reads > 3) {
+                throw new Error("Too many API requests by single worker invocation.");
+            }
+
+            return executorFor(database).all(sql, parameters);
+        };
+
+        await expect(backfillInvitationEmails({ all: cutShort }, columns)).rejects.toThrow("Too many API requests");
+
         const all = vi.fn<SqlExecutor["all"]>(executorFor(database).all);
 
-        await expect(backfillInvitationEmails({ all }, columns)).resolves.toStrictEqual({ complete: false, unchanged: [] });
-        await expect(backfillInvitationEmails({ all }, columns)).resolves.toStrictEqual({ complete: true, unchanged: [] });
+        await backfillInvitationEmails({ all }, columns);
+
         expect(emails(database)["older"]).toBe(canonicalEmail(DECOMPOSED));
+        // The resumed run starts after the 600 rows the cut-short one read.
+        expect(all.mock.calls.filter(([sql]) => sql.includes(`WHERE ("email" GLOB`))).toHaveLength(3);
 
         all.mockClear();
         await backfillInvitationEmails({ all }, columns);
 
         // Creating and reading the resume point; no invitation is read again.
         expect(all).toHaveBeenCalledTimes(2);
+        expect(all.mock.calls.some(([sql]) => sql.includes(`WHERE ("email" GLOB`))).toBe(false);
     });
 
     it("rewrites them on a Durable Object's cold start", async () => {

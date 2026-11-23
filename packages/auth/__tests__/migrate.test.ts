@@ -339,9 +339,9 @@ describe("ensureMigrated", () => {
         warn.mockRestore();
     });
 
-    it("runs another bounded backfill pass on each call until the table is filled, then none", async () => {
-        // The generated worker migrates once per isolate and calls again after later requests;
-        // a table larger than one pass must keep filling on those calls.
+    it("fills a table larger than any page budget in one call, and resumes a call cut short", async () => {
+        // A hand-written or event-only worker may run `ensureMigrated` once per isolate, so one
+        // call must finish the backfill; a call D1 cuts short rejects, and the retry resumes.
         expect.assertions(3);
 
         mockGetMigrations.mockReset();
@@ -352,7 +352,7 @@ describe("ensureMigrated", () => {
 
             const insert = sqlite.prepare(`INSERT INTO "user" ("id", "email") VALUES (?, ?)`);
 
-            for (let index = 0; index < 4001; index += 1) {
+            for (let index = 0; index < 5001; index += 1) {
                 insert.run(`u${String(index)}`, `User${String(index)}@Example.com`);
             }
         });
@@ -362,20 +362,27 @@ describe("ensureMigrated", () => {
 
             return { ...(results[0] as object) };
         };
-        const prepare = vi.spyOn(database, "prepare");
+        const { prepare } = database;
+        let reads = 0;
 
-        await ensureMigrated({ options });
+        database.prepare = (query: string) => {
+            const page = query.startsWith(`SELECT rowid AS "rid"`);
 
-        await expect(unfilled()).resolves.toStrictEqual({ n: 1 });
+            reads += page ? 1 : 0;
+
+            if (page && reads === 3) {
+                throw new Error("Too many API requests by single worker invocation.");
+            }
+
+            return prepare(query);
+        };
+
+        await expect(ensureMigrated({ options })).rejects.toThrow("Too many API requests");
+        await expect(unfilled()).resolves.toStrictEqual({ n: 4601 });
 
         await ensureMigrated({ options });
 
         await expect(unfilled()).resolves.toStrictEqual({ n: 0 });
-
-        prepare.mockClear();
-        await ensureMigrated({ options });
-
-        expect(prepare).not.toHaveBeenCalled();
     });
 
     it("fills `user.emailCanonical` through better-auth's adapter on a database that is not D1", async () => {

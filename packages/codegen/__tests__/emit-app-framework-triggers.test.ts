@@ -54,10 +54,7 @@ describe("emitApp — framework-host trigger passthrough", () => {
 
         const [fetchSegment, scheduledSegment, serverQuerySegment, queueSegment, emailSegment] = builds as [string, string, string, string, string];
 
-        // `fetch` then hands the next auth backfill pass to `waitUntil`, which builds nothing.
-        expect(fetchSegment.trimEnd()).toMatch(
-            /await ensureAuth\(env\);\s*if \(continueMigration\) \{\s*context\.waitUntil\?\.\(continueMigration\(\)\);\s*\}$/u,
-        );
+        expect(fetchSegment.trimEnd()).toMatch(/await ensureAuth\(env\);$/u);
         expect(serverQuerySegment.trimEnd()).toMatch(/await ensureAuth\(rawEnv as Env\);$/u);
 
         for (const segment of [scheduledSegment, queueSegment, emailSegment]) {
