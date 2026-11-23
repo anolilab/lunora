@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -207,16 +206,13 @@ describe("provision box", { timeout: 20_000 }, () => {
     it("runs one job at a time and answers 409 while busy", async () => {
         expect.assertions(3);
 
-        const first = post(deployJob("lunora-slow"));
-
-        // Let the first request claim the instance.
-        await sleep(300);
-
+        // The 200 is written only once the job has claimed the instance, so its headers are the milestone.
+        const first = await post(deployJob("lunora-slow"));
         const second = await post(deployJob());
 
         expect(second.status).toBe(409);
 
-        const firstEvents = await events(await first);
+        const firstEvents = await events(first);
 
         expect(firstEvents.at(-1)).toStrictEqual({ type: "result" });
 

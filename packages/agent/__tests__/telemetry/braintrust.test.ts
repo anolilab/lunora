@@ -6,7 +6,7 @@ import { defineAgent } from "../../src/define-agent";
 import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
 import type { BraintrustLike, BraintrustSpan } from "../../src/telemetry/braintrust";
 import { braintrustTelemetry } from "../../src/telemetry/braintrust";
-import { drain, generatingModel, reportedUsage, settle, streamingModel, withTelemetry } from "./model-fixtures";
+import { drain, generatingModel, reportedUsage, streamingModel, withTelemetry } from "./model-fixtures";
 
 /**
  * The ai@7 `Telemetry` event shapes are broad and churn across patch releases;
@@ -33,6 +33,8 @@ const finishWhenSettled = (result: unknown, end: () => void): void => {
 
 interface TracedCall {
     args?: { name?: string; type?: string };
+    /** Settles when the span finishes — after the bridge releases its parked callback, a few microtasks past the closing event. */
+    ended: Promise<void>;
     endedAt: number | undefined;
     logs: Record<string, unknown>[];
     startedAt: number;
@@ -48,7 +50,11 @@ const fakeBraintrust = () => {
 
     const logger: BraintrustLike = {
         traced: (callback, args) => {
-            const call: TracedCall = { args, endedAt: undefined, logs: [], startedAt: Date.now() };
+            let markEnded!: () => void;
+            const ended = new Promise<void>((resolve) => {
+                markEnded = resolve;
+            });
+            const call: TracedCall = { args, ended, endedAt: undefined, logs: [], startedAt: Date.now() };
             const span: BraintrustSpan = {
                 log: (event) => {
                     call.logs.push(event);
@@ -62,6 +68,7 @@ const fakeBraintrust = () => {
             // The real SDK finishes the span when the callback's promise settles.
             finishWhenSettled(result, () => {
                 call.endedAt = Date.now();
+                markEnded();
             });
 
             return result;
@@ -69,6 +76,11 @@ const fakeBraintrust = () => {
     };
 
     return { calls, logger };
+};
+
+/** Every span traced so far has finished. A span that never finishes fails the case on its timeout. */
+const allEnded = async (calls: TracedCall[]): Promise<void> => {
+    await Promise.all(calls.map(async (call) => call.ended));
 };
 
 /** All logged fields across every traced span, flattened for assertions. */
@@ -90,7 +102,7 @@ describe(braintrustTelemetry, () => {
         await expect(drain(stream.textStream)).resolves.toBe("xxx");
 
         await stream.usage;
-        await settle();
+        await allEnded(calls);
 
         const call = calls[0] as TracedCall;
 
@@ -119,7 +131,7 @@ describe(braintrustTelemetry, () => {
             telemetry: withTelemetry(braintrustTelemetry({ functionId: "support", logger })),
         });
 
-        await settle();
+        await allEnded(calls);
 
         expect(result.text).toBe("answer");
         expect(calls[0]?.args).toStrictEqual({ name: "support", type: "llm" });
@@ -141,7 +153,7 @@ describe(braintrustTelemetry, () => {
             telemetry: withTelemetry(braintrustTelemetry({ logger })),
         });
 
-        await settle();
+        await allEnded(calls);
 
         // Reasoning (1) is inside the output count (3), so `tokens` stays prompt + completion.
         expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({
@@ -166,7 +178,7 @@ describe(braintrustTelemetry, () => {
             telemetry: withTelemetry(braintrustTelemetry({ logger })),
         });
 
-        await settle();
+        await allEnded(calls);
 
         expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({ completion_tokens: 3, prompt_tokens: 12, tokens: 15 });
     });
@@ -182,7 +194,7 @@ describe(braintrustTelemetry, () => {
             telemetry: withTelemetry(braintrustTelemetry({ logger })),
         });
 
-        await settle();
+        await allEnded(calls);
 
         expect(merged(calls[0] as TracedCall)).not.toHaveProperty("metrics");
         expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "unavailable" });
@@ -204,7 +216,7 @@ describe(braintrustTelemetry, () => {
         });
         telemetry.onLanguageModelCallEnd?.({ callId: "call-1", usage: { totalTokens: 15 } } as never);
 
-        await settle();
+        await allEnded(calls);
 
         expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({ tokens: 15 });
         expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "unavailable" });
@@ -232,7 +244,7 @@ describe(braintrustTelemetry, () => {
 
         await expect(stream.finishReason).resolves.toBe("error");
 
-        await settle();
+        await allEnded(calls);
 
         expect(merged(calls[0] as TracedCall).error).toBe("the model call ended with an error");
         expect(calls[0]?.endedAt).toBeDefined();
@@ -250,7 +262,7 @@ describe(braintrustTelemetry, () => {
             }),
         ).rejects.toThrow("model down");
 
-        await settle();
+        await allEnded(calls);
 
         // The llm span records the failure; a separate `type: "error"` span carries
         // the exception itself.
@@ -279,7 +291,7 @@ describe(braintrustTelemetry, () => {
             }),
             drain(healthy.textStream),
         ]);
-        await settle();
+        await allEnded(calls);
 
         const llmSpans = calls.filter((call) => call.args?.type === "llm");
 
@@ -298,7 +310,7 @@ describe(braintrustTelemetry, () => {
         const { calls, logger } = fakeBraintrust();
 
         await generateText({ model: generatingModel(), prompt: "SENSITIVE", telemetry: withTelemetry(braintrustTelemetry({ logger })) });
-        await settle();
+        await allEnded(calls);
 
         expect(dumpLogs(calls)).not.toContain("SENSITIVE");
         expect(merged(calls[0] as TracedCall)).not.toHaveProperty("input");
@@ -313,7 +325,7 @@ describe(braintrustTelemetry, () => {
             prompt: "hello",
             telemetry: withTelemetry(braintrustTelemetry({ logger, recordInputs: true, recordOutputs: true })),
         });
-        await settle();
+        await allEnded(calls);
 
         expect(dumpLogs(calls)).toContain("hello");
         // The normalized content, not the raw resolved value.
@@ -338,9 +350,8 @@ describe(braintrustTelemetry, () => {
             | Promise<unknown>
             | undefined;
 
-        opened?.catch(() => undefined);
-
-        await settle();
+        // Once the caller has `execute()`'s value, the traced callback is parked on the gate.
+        await opened;
 
         expect(calls).toHaveLength(1);
 
@@ -358,7 +369,7 @@ describe(braintrustTelemetry, () => {
             vi.mocked(Date.now).mockRestore();
         }
 
-        await settle();
+        await (calls[0] as TracedCall).ended;
 
         expect((calls[0] as TracedCall).endedAt).toBeDefined();
     });
@@ -442,7 +453,7 @@ describe(braintrustTelemetry, () => {
             )({ messages: [{ content: "hi", role: "user" }] }),
         ).rejects.toThrow("model finished with an error reason");
 
-        await settle();
+        await allEnded(calls);
 
         const llmSpans = calls.filter((call) => call.args?.type === "llm");
 
@@ -470,7 +481,7 @@ describe(braintrustTelemetry, () => {
             ),
         ).rejects.toThrow("model finished with an error reason");
 
-        await settle();
+        await allEnded(calls);
 
         const llmSpans = calls.filter((call) => call.args?.type === "llm");
 

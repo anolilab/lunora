@@ -191,17 +191,25 @@ describe("lifecycle disposers", () => {
             await first.host.alarms.set(Date.now() - 1000);
             first.dispose();
 
-            let delivered = 0;
-            const second = createNodeShardHost({
-                onAlarm: () => {
-                    delivered += 1;
-                },
-                path,
-            });
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
+            let delivered = 0;
+            let second: ReturnType<typeof createNodeShardHost>;
+
+            // Restored on failure too, or the fake clock leaks into every later test.
+            try {
+                second = createNodeShardHost({
+                    onAlarm: () => {
+                        delivered += 1;
+                    },
+                    path,
+                });
+
+                // Far past the delivery timer, so a second (duplicate) delivery would show up in the count.
+                await vi.advanceTimersByTimeAsync(10_000);
+            } finally {
+                vi.useRealTimers();
+            }
 
             expect(delivered).toBe(1);
 

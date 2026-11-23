@@ -423,10 +423,10 @@ describe("boxSessionDO", () => {
                     },
                 };
             };
-            /** Let every pending microtask and timer run, so an unserialised push would finish here. */
-            const settle = async (ms = 0): Promise<void> => {
+            /** Let every pending microtask and the I/O turn after them run, so an unserialised push would finish here. */
+            const settle = async (): Promise<void> => {
                 await new Promise<void>((resolve) => {
-                    setTimeout(resolve, ms);
+                    setImmediate(resolve);
                 });
             };
             const setOrg1 = (store: ReturnType<typeof memoryStore>, over: Record<string, unknown>): void => {
@@ -494,9 +494,22 @@ describe("boxSessionDO", () => {
 
                 setOrg1(store, { suspendedAt: 1 });
 
+                const pushRoutes = session.pushRoutes.bind(session);
+                // The handshake's signature checks finish on the thread pool, so no fixed turn count reaches its push.
+                const reconnectPushRequested = new Promise<void>((resolve) => {
+                    session.pushRoutes = async (): Promise<boolean> => {
+                        const push = pushRoutes();
+
+                        resolve();
+
+                        return push;
+                    };
+                });
                 const reconnecting = handshake(session, state, key, "box_1");
 
-                await settle(50);
+                await reconnectPushRequested;
+                // An unserialised reconnect push would now read the current table and send it before the held one lands.
+                await settle();
                 held.release();
 
                 const reconnected = await reconnecting;

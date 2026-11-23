@@ -1985,10 +1985,10 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             // exists to filter the HOOK's own writes; it must not eat the
             // developer's, and the two are only distinguishable by content.
             writeFixture(workdir);
+            const hookGate = Promise.withResolvers<undefined>();
+
             vi.mocked(runPostCodegenHook).mockImplementation(async () => {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 900);
-                });
+                await hookGate.promise;
 
                 return { ran: true };
             });
@@ -2023,6 +2023,8 @@ export const archive = mutation({
             );
             onChange(messagesPath);
 
+            hookGate.resolve(undefined);
+
             await vi.runAllTimersAsync();
 
             expect(runPostCodegenHook).toHaveBeenCalledTimes(2);
@@ -2039,10 +2041,10 @@ export const archive = mutation({
             // recheck must stay silent rather than trade the old spin loop for a
             // new one.
             writeFixture(workdir);
+            const hookGate = Promise.withResolvers<undefined>();
+
             vi.mocked(runPostCodegenHook).mockImplementation(async () => {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 900);
-                });
+                await hookGate.promise;
 
                 return { ran: true };
             });
@@ -2061,6 +2063,7 @@ export const archive = mutation({
 
             // Standing in for the hook's own write — same bytes on disk.
             onChange(join(workdir, "lunora", "messages.ts"));
+            hookGate.resolve(undefined);
             await vi.runAllTimersAsync();
 
             expect(runPostCodegenHook).toHaveBeenCalledTimes(1);

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readDevServerState, writeDevServerState } from "@lunora/config";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Logger } from "../../src/util/logger";
 import markWorkerReadyWhenServing from "../../src/util/worker-ready";
@@ -223,15 +223,16 @@ describe("markWorkerReadyWhenServing", () => {
         const workdir = projectWithStartedServer();
         const { logger } = silentLogger();
 
+        vi.useFakeTimers({ toFake: ["Date"] });
+
         try {
             const recorded = await markWorkerReadyWhenServing({
                 cwd: workdir,
                 logger,
                 origin: "http://localhost:8787",
                 probe: async () => {
-                    await new Promise((resolve) => {
-                        setTimeout(resolve, 20);
-                    });
+                    // The answer arrives after the deadline: the clock moves, nothing waits.
+                    vi.advanceTimersByTime(20);
 
                     return true;
                 },
@@ -242,6 +243,7 @@ describe("markWorkerReadyWhenServing", () => {
             expect(recorded).toBe(false);
             expect(readDevServerState(workdir)?.readyAt).toBeUndefined();
         } finally {
+            vi.useRealTimers();
             rmSync(workdir, { force: true, recursive: true });
         }
     });
