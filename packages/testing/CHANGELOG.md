@@ -1,3 +1,7 @@
+## @lunora/testing [1.0.0-alpha.341](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.340...@lunora/testing@1.0.0-alpha.341) (2026-11-23)
+
+- fix(scheduler): run a job scheduled under an id that already fired (#1652)
+
 ## @lunora/testing [1.0.0-alpha.340](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.339...@lunora/testing@1.0.0-alpha.340) (2026-11-23)
 
 - security(server)!: close two row-level-security gaps on shapes and relations (#1637)

@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.301...@lunora/client@1.0.0-alpha.302) (2026-11-23)
+
+- fix(scheduler): run a job scheduled under an id that already fired (#1652)
+
 ## @lunora/client [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.300...@lunora/client@1.0.0-alpha.301) (2026-11-23)
 
 - fix(db): stop the offline outbox losing or repeating writes (#1654)

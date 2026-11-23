@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.436](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.435...@lunora/codegen@1.0.0-alpha.436) (2026-11-23)
+
+- fix(scheduler): run a job scheduled under an id that already fired (#1652)
+
 ## @lunora/codegen [1.0.0-alpha.435](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.434...@lunora/codegen@1.0.0-alpha.435) (2026-11-23)
 
 - fix(payment)!: stop double refunds and a paid subscriber losing access (#1653)

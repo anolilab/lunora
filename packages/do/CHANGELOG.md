@@ -1,3 +1,7 @@
+## @lunora/do [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.293...@lunora/do@1.0.0-alpha.294) (2026-11-23)
+
+- fix(scheduler): run a job scheduled under an id that already fired (#1652)
+
 ## @lunora/do [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.292...@lunora/do@1.0.0-alpha.293) (2026-11-23)
 
 - security(shard-engine)!: apply relation policies to counts (#1679)
