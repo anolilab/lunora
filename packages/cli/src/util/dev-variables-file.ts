@@ -71,9 +71,13 @@ const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
  * Whether git already tracks `file`: an ignore pattern does not apply to a tracked file, so a
  * secret written there shows up as a change the next `git commit -a` records. Outside a repository,
  * or without git, nothing is tracked.
+ *
+ * Matched case-insensitively: on a case-insensitive filesystem `--env Production` writes the tracked
+ * `.dev.vars.production`. On a case-sensitive one that refuses a file the write would not reach,
+ * which costs a rename and leaks nothing.
  */
 const isDevVariablesFileTracked = (cwd: string, file: string): boolean =>
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH (install location varies); args are fixed and no shell is involved
-    spawnSync("git", ["ls-files", "--error-unmatch", "--", file], { cwd, stdio: "ignore" }).status === 0;
+    spawnSync("git", ["ls-files", "--error-unmatch", "--", `:(icase)${file}`], { cwd, stdio: "ignore" }).status === 0;
 
 export { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked };

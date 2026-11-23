@@ -2,11 +2,33 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runInitCommand } from "../../src/commands/init/handler";
 import { detectFramework } from "../../src/util/detect-framework";
 import type { Logger } from "../../src/util/logger";
+
+/** When set, a `writeFileSync` whose path contains it writes half its content and then fails, as ENOSPC does. */
+const writeFailure = vi.hoisted(() => {
+    return { pathPart: undefined as string | undefined };
+});
+
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        writeFileSync: ((path: Parameters<typeof actual.writeFileSync>[0], data: string, options?: Parameters<typeof actual.writeFileSync>[2]) => {
+            if (writeFailure.pathPart !== undefined && String(path).includes(writeFailure.pathPart)) {
+                actual.writeFileSync(path, data.slice(0, Math.floor(data.length / 2)), options);
+
+                throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+            }
+
+            actual.writeFileSync(path, data, options);
+        }) as typeof actual.writeFileSync,
+    };
+});
 
 interface CapturingLogger extends Logger {
     lines: string[];
@@ -357,6 +379,43 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
         expect(second.code).toBe(0);
         expect(existsSync(schemaPath)).toBe(true);
         expect(readFileSync(functionPath).equals(functionBefore)).toBe(true);
+    });
+
+    it("a write that fails part-way leaves no schema.ts, so a re-run writes the whole sample", async () => {
+        expect.assertions(4);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const schemaPath = join(workdir, "lunora", "schema.ts");
+
+        writeFailure.pathPart = "schema.ts";
+
+        let first: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            first = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        } finally {
+            writeFailure.pathPart = undefined;
+        }
+
+        expect(first.code).toBe(1);
+        // A truncated schema.ts would mark the scaffold finished, and the re-run would keep it.
+        expect(existsSync(schemaPath)).toBe(false);
+
+        const second = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        // Byte-identical to a scaffold that never failed.
+        const clean = mkdtempSync(join(tmpdir(), "lunora-here-clean-"));
+
+        writePackageJson(clean, { "@sveltejs/kit": "^2.0.0" });
+        await runInitCommand({ cwd: clean, inPlace: true, logger: capturingLogger() });
+
+        const expected = readFileSync(join(clean, "lunora", "schema.ts"), "utf8");
+
+        rmSync(clean, { force: true, recursive: true });
+
+        expect(second.code).toBe(0);
+        expect(readFileSync(schemaPath, "utf8")).toBe(expected);
     });
 });
 

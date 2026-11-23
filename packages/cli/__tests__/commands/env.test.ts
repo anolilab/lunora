@@ -722,6 +722,23 @@ describe("lunora env", () => {
             expect(recorded.errors.join("\n")).toContain("git rm --cached .dev.vars.staging");
         });
 
+        it("set --env Production refuses when git tracks .dev.vars.production", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, ".dev.vars.production"), "OK=1\n", "utf8");
+            // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+            execFileSync("git", ["init", "-q"], { cwd: workdir });
+            // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+            execFileSync("git", ["add", ".dev.vars.production"], { cwd: workdir });
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "Production", key: "FOO", logger, subcommand: "set", value: "bar" });
+
+            // On a case-insensitive filesystem the write would land in the tracked file.
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(recorded.errors.join("\n")).toContain("git rm --cached .dev.vars.Production");
+        });
+
         it("generate --set --prod writes .dev.vars.production, the file push --prod reads", async () => {
             expect.assertions(3);
 

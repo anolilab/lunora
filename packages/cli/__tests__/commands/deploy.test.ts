@@ -3255,8 +3255,8 @@ export const backfillNames = defineMigration({
                 expect(readFileSync(join(workdir, ".gitignore"), "utf8")).toContain(".dev.vars.*");
             });
 
-            it("does not record a minted secret in a file git already tracks", async () => {
-                expect.assertions(3);
+            it("refuses to mint a secret before pushing it when its record file is tracked by git", async () => {
+                expect.assertions(4);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
                 writeFileSync(join(workdir, ".dev.vars.production"), "OK=1\n", "utf8");
@@ -3265,8 +3265,8 @@ export const backfillNames = defineMigration({
                 // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
                 execFileSync("git", ["add", ".dev.vars.production"], { cwd: workdir });
 
-                const { spawner } = createRecordingSpawner();
-                const { logger, warns } = silentLogger();
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
 
                 const result = await runDeployCommand({
                     cwd: workdir,
@@ -3278,10 +3278,11 @@ export const backfillNames = defineMigration({
                     spawner,
                 });
 
-                // `.gitignore` does not cover a tracked file, so the secret stays out of it.
-                expect(result.code).toBe(0);
+                // The value could not be recorded, and a pushed write-only secret with no copy is lost: nothing is pushed.
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(calls.filter((call) => /secret (?:bulk|put)/u.test(call.descriptor.args.join(" ")))).toHaveLength(0);
                 expect(readFileSync(join(workdir, ".dev.vars.production"), "utf8")).toBe("OK=1\n");
-                expect(warns.join("\n")).toContain("git rm --cached .dev.vars.production");
+                expect(errors.join("\n")).toContain("git rm --cached .dev.vars.production");
             });
 
             it("keeps the .dev.vars.example negation LAST when it appends a wider ignore above it", async () => {

@@ -435,6 +435,32 @@ const failedPushOutcome = (logger: Logger, uncertain: ReadonlyArray<string>, min
 };
 
 /**
+ * Why minted values for `mintable` could not be recorded locally, or `undefined` when they can. Cloudflare secrets are
+ * write-only, so a value pushed without a local copy is lost: the refusal must come before anything is asked or pushed.
+ */
+const unrecordableMintError = (cwd: string, environment: string | undefined, mintable: ReadonlyArray<string>): string | undefined => {
+    const environmentFlag = environment === undefined ? "" : ` --env ${environment}`;
+    const targetFile = devVariablesFileFor(environment);
+
+    if (targetFile === undefined) {
+        return (
+            `missing required secret(s) on the deploy target: ${mintable.join(", ")}. --env ${String(environment)} names no file their values can be recorded in, ` +
+            `so they cannot be recorded locally and none were generated. Set them with \`wrangler secret put <KEY>${environmentFlag}\`, then re-deploy.`
+        );
+    }
+
+    // `persistMintedSecrets` will not record into a tracked file, so the same refusal applies here.
+    if (isDevVariablesFileTracked(cwd, targetFile)) {
+        return (
+            `missing required secret(s) on the deploy target: ${mintable.join(", ")}. ${targetFile} is tracked by git, so their values could be committed ` +
+            `and none were generated. Run \`git rm --cached ${targetFile}\`, then re-deploy.`
+        );
+    }
+
+    return undefined;
+};
+
+/**
  * Before a live deploy, detect required secrets that are NOT yet set on the
  * target worker and resolve them. INTERACTIVE: offer to generate + push the
  * mintable secrets (`AUTH_SECRET`, `LUNORA_ADMIN_TOKEN`, …) in place and flag
@@ -515,14 +541,10 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         return {};
     }
 
-    // Cloudflare secrets are write-only: a value minted for an environment with no recordable file
-    // would be pushed and then lost, so refuse before asking or pushing anything.
-    if (devVariablesFileFor(options.env) === undefined) {
-        return {
-            error:
-                `missing required secret(s) on the deploy target: ${mintable.join(", ")}. --env ${String(options.env)} names no file their values can be recorded in, ` +
-                `so they cannot be recorded locally and none were generated. Set them with \`wrangler secret put <KEY>${environmentFlag}\`, then re-deploy.`,
-        };
+    const unrecordable = unrecordableMintError(cwd, options.env, mintable);
+
+    if (unrecordable !== undefined) {
+        return { error: unrecordable };
     }
 
     const confirm = options.secretConfirm ?? createTuiConfirm();

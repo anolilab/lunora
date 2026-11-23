@@ -1150,9 +1150,21 @@ const scaffoldLunoraDirectory = (cwd: string, logger: Logger): InitCommandResult
     const written: string[] = [];
 
     for (const [path, content] of pending) {
+        // A failed write (ENOSPC) can leave a truncated file behind, which the next run would take for
+        // a finished sample; only a complete file is renamed into place.
+        const temporaryPath = `${path}.lunora-${String(process.pid)}.tmp`;
+
         try {
-            writeFileSync(path, content, "utf8");
+            // `existsSync` calls a dangling link missing, and `rename` would replace the link where a write would follow it.
+            if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) {
+                throw Object.assign(new Error(`EEXIST: file already exists, ${path}`), { code: "EEXIST" });
+            }
+
+            writeFileSync(temporaryPath, content, "utf8");
+            renameSync(temporaryPath, path);
         } catch (error) {
+            rmSync(temporaryPath, { force: true });
+
             return inPlaceIoFailure("write", path, error, cwd, logger);
         }
 
