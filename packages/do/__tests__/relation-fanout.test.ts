@@ -87,7 +87,25 @@ describe("serveRelationFanout", () => {
         const result = await serveRelationFanout(schema, db, COUNT, { table: "local", where: { globalId: "g1" } });
 
         expect(result).toBe(7);
-        expect(count).toHaveBeenCalledWith("local", { globalId: "g1" });
+        expect(count).toHaveBeenCalledWith("local", expect.objectContaining({ where: { globalId: "g1" } }));
+    });
+
+    it("rebuilds `relationBaseWhere` for `:count` so a relation predicate in the counted policy stays RLS-filtered", async () => {
+        expect.assertions(2);
+
+        const count = vi.fn<DatabaseWriterLike["count"]>(async () => 0);
+        const db = stubWriter({ count, findMany: async () => pageOf([]) });
+
+        await serveRelationFanout(schema, db, COUNT, {
+            relationPolicies: { users: { name: "visible" } },
+            table: "local",
+            where: { AND: [{ globalId: "g1" }, { author: { is: { name: "Ada" } } }] },
+        });
+
+        const options = count.mock.calls[0]?.[1] as { relationBaseWhere?: (table: string) => unknown } | undefined;
+
+        expect(options?.relationBaseWhere?.("users")).toEqual({ name: "visible" });
+        expect(options?.relationBaseWhere?.("unpoliced")).toBeUndefined();
     });
 
     it("rejects an unknown table with a 404", async () => {

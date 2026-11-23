@@ -366,6 +366,36 @@ describe("d1 reverse cross-backend relation loading", () => {
         expect(page[0]?.["_count"]).toEqual({ items: 3 });
     });
 
+    it("carries the policy of a relation the counted child's policy filters by across a `_count` hop", async () => {
+        expect.assertions(2);
+
+        const schema: SchemaLike = {
+            tables: {
+                ...reverseSchema.tables,
+                local: { ...reverseSchema.tables["local"]!, relationMap: { notes: { field: "localId", kind: "many", references: "_id", table: "secrets" } } },
+                secrets: { indexes: [], shape: { body: col("string"), localId: col("string") }, shardMode: { kind: "root" } },
+            },
+        };
+        const seen: Record<string, unknown>[] = [];
+        const writer = createD1ContextDatabase({
+            crossShardCounter: async (_table, args) => {
+                seen.push(args as unknown as Record<string, unknown>);
+
+                return 0;
+            },
+            exec: harness.exec,
+            schema,
+        });
+        const policies: Record<string, WhereInput> = { local: { notes: { some: { body: "shared" } } }, secrets: { body: "visible" } };
+
+        await seedParent(writer);
+        await writer.findMany("globals", { relationBaseWhere: (table) => policies[table], with: { _count: { items: true } } });
+
+        // Without it the serving shard resolves `notes` over every secrets row and counts through them.
+        expect(seen).toHaveLength(1);
+        expect((seen[0]?.["relationPolicies"] as Record<string, unknown> | undefined)?.["secrets"]).toStrictEqual({ body: "visible" });
+    });
+
     it("throws a clear cross-backend error when the cross-shard reader is absent", async () => {
         expect.assertions(1);
 

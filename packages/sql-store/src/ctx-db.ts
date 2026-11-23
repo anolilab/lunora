@@ -29,6 +29,7 @@ import type {
     AggregateResult,
     AggregateTally,
     CdcChange,
+    CrossShardCountArgs,
     CrossShardReadArgs,
     DatabaseWriterLike,
     GroupByEntry,
@@ -302,9 +303,9 @@ interface SqlCtxDbOptions {
 
     /**
      * Cross-shard counter for **reverse cross-backend relations** — the `_count`
-     * mirror of the `crossShardReader` option below.
+     * mirror of the `crossShardReader` option below, and like it takes the RLS filters as data.
      */
-    crossShardCounter?: DatabaseWriterLike["count"];
+    crossShardCounter?: (table: string, args: CrossShardCountArgs) => Promise<number>;
 
     /**
      * Optional cross-shard reader for **reverse cross-backend relations**: a
@@ -3959,14 +3960,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
              * BEFORE `compileWhereSql` so they are rewritten into flat IN clauses
              * rather than compiled raw as scalar equality (which never matches).
              * The cross-shard fan-out path routes through `crossShardCounter`,
-             * which uses the full `count()` method and resolves predicates
-             * internally — so only the local D1 path needs this step.
+             * whose serving shard resolves predicates in its full `count()`, under
+             * the policies projected here for the tables they reach.
              */
             const relationGroupedCounter = async (
                 childTable: string,
                 whereField: string,
                 values: unknown[],
                 policyWhere?: WhereInput,
+                relationBaseWhere?: (table: string) => undefined | WhereInput,
             ): Promise<Map<unknown, number>> => {
                 if (isShardLocalTarget(childTable)) {
                     // Cross-shard reverse direction: parallel scalar counts per FK value.
@@ -3974,7 +3976,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         return crossBackendUnsupported(childTable);
                     }
 
-                    return fanOutScalarCounts(crossShardCounter, childTable, whereField, values, policyWhere);
+                    const relationPolicies = relationBaseWhere ? projectRelationPolicies(childTable, undefined, policyWhere, schema, relationBaseWhere) : {};
+
+                    return fanOutScalarCounts(
+                        (table, where) => crossShardCounter(table, { relationPolicies, where }),
+                        childTable,
+                        whereField,
+                        values,
+                        policyWhere,
+                    );
                 }
 
                 // Local D1 child: one grouped SQL query.
@@ -3993,9 +4003,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 const combined = mergeWhere(mergeWhere(inFilter, policyWhere), softScope);
                 // resolveAggregateRelations rewrites relation-crossing predicates (e.g.
                 // {author:{is:W}}) into flat IN clauses — consistent with count() /
-                // findMany(). Pass `undefined` for relationBaseWhere (no nested policy
-                // threading, matching what the old scalar counter did).
-                const resolvedCombined = await resolveAggregateRelations(combined, childTable, undefined);
+                // findMany(). The table such a predicate reads is filtered by its own
+                // policy: without it the count answers for rows the caller cannot read.
+                const resolvedCombined = await resolveAggregateRelations(combined, childTable, relationBaseWhere);
                 const whereCondition = compileWhereSql(resolvedCombined, whereSqlStrategyFor(childDefinition));
 
                 // `physicalColumn` maps `_id`/`id` → `id`; all other fields are themselves.

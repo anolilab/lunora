@@ -519,6 +519,43 @@ describe("ctx-db relations", () => {
             expect((page[1]!["_count"] as Record<string, number>)["reactions"]).toBe(1);
         });
 
+        it("_count resolves a relation predicate in the child policy under that relation's own policy", async () => {
+            expect.assertions(2);
+
+            const policedSchema: SchemaLike = {
+                tables: {
+                    messages: {
+                        indexes: [],
+                        relationMap: { reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" } },
+                        shape: { body: { kind: "string" } },
+                    },
+                    reactions: {
+                        indexes: [{ fields: ["messageId"], name: "by_message" }],
+                        relationMap: { author: { field: "userId", kind: "one", references: "_id", table: "users" } },
+                        shape: { messageId: { kind: "string" }, userId: { kind: "string" } },
+                    },
+                    users: { indexes: [], shape: { name: { kind: "string" } } },
+                },
+            };
+
+            const writer = makeWriter(policedSchema);
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true });
+            await writer.insert("reactions", { _id: "r1", messageId: "m1", userId: "u1" }, { allowExplicitId: true });
+
+            // The reactions policy filters by its author; the users policy hides Ada. Counting r1
+            // would confirm that a user named "Ada" exists, which the caller cannot read.
+            const policies: Record<string, Record<string, unknown>> = { reactions: { author: { is: { name: "Ada" } } }, users: { name: "nobody" } };
+            const { page } = await writer.findMany("messages", {
+                relationBaseWhere: (table) => policies[table],
+                with: { _count: { reactions: true } },
+            });
+
+            expect(page).toHaveLength(1);
+            expect((page[0]!["_count"] as Record<string, number>)["reactions"]).toBe(0);
+        });
+
         it("_count works with numeric FK values (SQL→JS key-equality invariant)", async () => {
             // The grouped path reads the FK back from SQL and uses Map.get (JS SameValueZero).
             // Numeric FKs stored in the JSON blob are returned as JS numbers by json_extract;

@@ -533,7 +533,7 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         }
 
         if (sameStore(tableName, target)) {
-            const counts = await groupedCounter(target, "_id", ids, relationBaseWhere?.(target));
+            const counts = await groupedCounter(target, "_id", ids, relationBaseWhere?.(target), relationBaseWhere);
 
             return new Set(ids.filter((id) => (counts.get(id) ?? 0) > 0));
         }
@@ -587,8 +587,11 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             // All per-parent tallies come back in one round-trip. The outer loop
             // is per-relation (sequential over relations, not per value); each
             // iteration issues exactly one async call.
-            // eslint-disable-next-line no-await-in-loop -- one grouped query per relation; collapses D per-value queries into 1
-            const countByValue = values.length === 0 ? new Map<unknown, number>() : await groupedCounter(relation.table, whereField, values, policyWhere);
+            const countByValue =
+                values.length === 0
+                    ? new Map<unknown, number>()
+                    : // eslint-disable-next-line no-await-in-loop -- one grouped query per relation; collapses D per-value queries into 1
+                      await groupedCounter(relation.table, whereField, values, policyWhere, relationBaseWhere);
 
             for (const parent of parents) {
                 const counts = (parent["_count"] as Record<string, number> | undefined) ?? {};

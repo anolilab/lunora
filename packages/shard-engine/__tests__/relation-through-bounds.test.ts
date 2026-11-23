@@ -60,7 +60,7 @@ describe("many-to-many read bounds", () => {
 
         // Only the join rows were read; the targets were counted, not hydrated.
         expect(fetcher.mock.calls.map(([tableName]) => tableName)).toStrictEqual(["post_tags"]);
-        expect(groupedCounter).toHaveBeenCalledWith("tags", "_id", ["t0", "t1"], undefined);
+        expect(groupedCounter).toHaveBeenCalledWith("tags", "_id", ["t0", "t1"], undefined, undefined);
         expect(parents[0]?.["_count"]).toStrictEqual({ tags: 1 });
     });
 

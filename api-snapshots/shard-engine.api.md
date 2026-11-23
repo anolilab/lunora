@@ -567,6 +567,15 @@ interface CreateWorkflowInstanceResult {
 }
 ```
 
+### `CrossShardCountArgs` (interface)
+
+```ts
+interface CrossShardCountArgs {
+    relationPolicies?: Record<string, WhereInput>;
+    where?: WhereInput;
+}
+```
+
 ### `CrossShardReadArgs` (interface)
 
 ```ts
@@ -2640,7 +2649,7 @@ interface ResolveRelationPredicatesOptions {
 interface ResolveWithOptions {
     fanOutBudget?: FanOutBudget;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
-    groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
+    groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput, relationBaseWhere?: (table: string) => undefined | WhereInput) => Promise<Map<unknown, number>>;
     parents: Record<string, unknown>[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
     relationMask?: RelationMask;

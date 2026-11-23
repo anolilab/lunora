@@ -3131,16 +3131,17 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         whereField: string,
         values: unknown[],
         policyWhere?: WhereInput,
+        relationBaseWhere?: (table: string) => undefined | WhereInput,
     ): Promise<Map<unknown, number>> => {
         const globalWriter = globalWriterFor(relationTable, "relation grouped count");
 
         if (globalWriter) {
             // Global (D1) child: parallel scalar counts through the D1 writer.
-            // The D1 writer's count() already resolves relation predicates internally.
+            // The D1 writer's count() resolves relation predicates itself, under the policies it is handed.
             // Stamp a scan dependency: any row in the child table can shift a count.
             onRead(relationTable, SCAN_DEP);
 
-            return fanOutScalarCounts((t, w) => globalWriter.count(t, w), relationTable, whereField, values, policyWhere);
+            return fanOutScalarCounts((t, w) => globalWriter.count(t, { relationBaseWhere, where: w }), relationTable, whereField, values, policyWhere);
         }
 
         // Shard-local child: one grouped SQL query.
@@ -3164,9 +3165,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const combined = mergeWhere(mergeWhere(inFilter, policyWhere), softScope);
         // resolveAggregateRelations rewrites relation-crossing predicates (e.g.
         // {author:{is:W}}) into flat IN clauses before SQL compilation — same path
-        // count() / findMany() use. Pass `undefined` for relationBaseWhere (consistent
-        // with how the scalar counter was called: no nested policy threading).
-        const resolvedCombined = await resolveAggregateRelations(combined, relationTable, undefined);
+        // count() / findMany() use. The table such a predicate reads is filtered by
+        // its own policy: without it the count would answer for rows the caller cannot read.
+        const resolvedCombined = await resolveAggregateRelations(combined, relationTable, relationBaseWhere);
         const whereCondition = compileWhereSql(resolvedCombined, doWhereSqlStrategy);
 
         // `jsonPathSql` maps `_id` → `id` (physical column) and user fields to

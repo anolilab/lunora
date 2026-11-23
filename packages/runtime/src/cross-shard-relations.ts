@@ -40,7 +40,7 @@
 
 // Type-only: keeps `@lunora/runtime` free of a hard (value) dependency on
 // `@lunora/do` while reusing its canonical writer types (see the alias note).
-import type { CrossShardReadArgs, DatabaseWriterLike, QueryPage } from "@lunora/shard-engine";
+import type { CrossShardCountArgs, CrossShardReadArgs, QueryPage } from "@lunora/shard-engine";
 import { decodeWire } from "@lunora/wire";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
@@ -55,7 +55,7 @@ import { LunoraError } from "./errors";
  * and the RLS filters must travel as data. The import is type-only:
  * `@lunora/runtime` keeps no hard (value) dependency on `@lunora/do`.
  */
-type CrossShardCounter = DatabaseWriterLike["count"];
+type CrossShardCounter = (table: string, args: CrossShardCountArgs) => Promise<number>;
 type CrossShardReader = (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
 
 interface CrossShardRelationOptions {
@@ -180,11 +180,12 @@ const createCrossShardRelationCapabilities = (options: CrossShardRelationOptions
         return { continueCursor: null, isDone: true, page: Array.isArray(data) ? (data as Record<string, unknown>[]) : [] };
     };
 
-    const crossShardCounter: CrossShardCounter = async (table, where) => {
+    const crossShardCounter: CrossShardCounter = async (table, args) => {
         const data = await fanOutRelation(
             options,
             {
-                args: { table, where },
+                // Spread for the reason the reader gives: `relationPolicies` dropped here is an RLS bypass.
+                args: { ...args, table },
                 fanOut: { merge: { kind: "sum" }, table },
                 functionPath: "__lunora_relation__:count",
             },

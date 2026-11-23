@@ -608,7 +608,7 @@ type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "uns
 ### `CrossShardCounter` (type)
 
 ```ts
-type CrossShardCounter = DatabaseWriterLike["count"];
+type CrossShardCounter = (table: string, args: CrossShardCountArgs) => Promise<number>;
 ```
 
 ### `CrossShardReader` (type)
