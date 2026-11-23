@@ -220,6 +220,10 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
     const { mutate: create } = useMutation(api.tasks.create);
     const { mutate: update } = useMutation(api.tasks.update);
     const [error, setError] = useState<string | undefined>(undefined);
+    // Separate from write errors and keyed by organisation: a later load clears it, and it never
+    // follows the user to another organisation.
+    const [loadError, setLoadError] = useState<{ message: string; organizationId: string } | undefined>(undefined);
+    const listError = loadError?.organizationId === organizationId ? loadError.message : undefined;
 
     // A one-off query, not `useQuery`: `tasks.list` is an `orgQuery`, whose
     // `rateLimit` step makes the shard refuse a live subscription to it.
@@ -230,12 +234,13 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
             .query(api.tasks.list, {}, { shardKey: organizationId, signal: controller.signal })
             .then((next) => {
                 setLoaded({ organizationId, tasks: next });
+                setLoadError(undefined);
 
                 return next;
             })
             .catch((error_: unknown) => {
                 if (!controller.signal.aborted) {
-                    setError(error_ instanceof Error ? error_.message : "The tasks could not be loaded. Try again.");
+                    setLoadError({ message: error_ instanceof Error ? error_.message : "The tasks could not be loaded.", organizationId });
                 }
             });
 
@@ -277,6 +282,19 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
                 </form>
             ) : undefined}
             {error === undefined ? undefined : <p role="alert">{error}</p>}
+            {listError === undefined ? undefined : (
+                <p role="alert">
+                    {listError}{" "}
+                    <button
+                        onClick={() => {
+                            setListVersion((version) => version + 1);
+                        }}
+                        type="button"
+                    >
+                        Try again
+                    </button>
+                </p>
+            )}
             <ul>
                 {(tasks?.page ?? []).map((task) => (
                     <li key={task._id}>
