@@ -1125,6 +1125,19 @@ describe("shardDO subscription re-execution", () => {
         state = createFakeState();
     });
 
+    /** Holds `cursors:listCursors`'s load open until the test calls `finishLoad`; every other function is warm. */
+    class SlowLoadShard extends ReexecShard {
+        public finishLoad: (() => void) | undefined;
+
+        protected override prepareFunction(functionPath: string): Promise<void> | undefined {
+            return functionPath === "cursors:listCursors"
+                ? new Promise<void>((resolve) => {
+                      this.finishLoad = resolve;
+                  })
+                : undefined;
+        }
+    }
+
     const subscribe = async (shard: ReexecShard, ws: FakeWebSocket): Promise<void> => {
         await shard.driveMessage(ws, {
             id: "sub-1",
@@ -1373,19 +1386,6 @@ describe("shardDO subscription re-execution", () => {
     it("does not register a cold subscription whose unsubscribe arrived while its function loaded", async () => {
         expect.assertions(2);
 
-        // The load is held open until the test releases it, the window an unsubscribe can land in.
-        class SlowLoadShard extends ReexecShard {
-            public finishLoad: (() => void) | undefined;
-
-            protected override prepareFunction(functionPath: string): Promise<void> | undefined {
-                return functionPath === "cursors:listCursors"
-                    ? new Promise<void>((resolve) => {
-                          this.finishLoad = resolve;
-                      })
-                    : undefined;
-            }
-        }
-
         const shard = new SlowLoadShard(state, {});
         const ws = createFakeWebSocket();
 
@@ -1400,6 +1400,25 @@ describe("shardDO subscription re-execution", () => {
 
         expect(ws.attachment?.subs ?? {}).toEqual({});
         expect(shard.execCount).toBe(0);
+    });
+
+    it("keeps a warm subscribe that replaced a cold one for the same id while its function loaded", async () => {
+        expect.assertions(1);
+
+        const shard = new SlowLoadShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        shard.outcomes.set("cursors:count", { result: 1, tables: new Set(["cursors"]) });
+
+        const subscribing = subscribe(shard, ws);
+
+        await shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "cursors:count", table: "cursors" }, type: "subscribe" });
+        shard.finishLoad?.();
+        await subscribing;
+
+        expect(ws.attachment?.subs["sub-1"]?.functionPath).toBe("cursors:count");
     });
 
     it("drops a hibernated per-dispatch subscription on a cold isolate without running it once", async () => {

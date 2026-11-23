@@ -8859,7 +8859,10 @@ abstract class ShardDO {
 
             const preparation = functionPath === undefined || isAdmin ? undefined : this.prepareForLiveQueryGate(functionPath);
 
-            if (preparation !== undefined && !(await this.subscribeOutlivedLoad(ws, envelope.id, preparation))) {
+            if (preparation === undefined) {
+                // This subscribe is the newest for its id, so one still waiting on a load must not register over it.
+                this.loadingSubscribes.get(ws)?.delete(envelope.id);
+            } else if (!(await this.subscribeOutlivedLoad(ws, envelope.id, preparation))) {
                 return;
             }
 
