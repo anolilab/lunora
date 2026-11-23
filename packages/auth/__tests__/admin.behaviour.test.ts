@@ -74,6 +74,93 @@ describe("createAuthAdmin", () => {
         await expect(adminApi.createUser({ email: "dup@example.com", name: "Second" })).rejects.toThrow(/already exists/iu);
     });
 
+    it("lower-cases an email change, so the account is found by the address better-auth looks up", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "alice@old.example", name: "Alice" });
+        const updated = await adminApi.updateUser({ data: { email: "Alice@Example.com" }, userId: user.id });
+        const context = await auth.$context;
+
+        expect(updated.email).toBe("alice@example.com");
+        expect(userRow(user.id)?.["email"]).toBe("alice@example.com");
+        await expect(context.internalAdapter.findUserByEmail("alice@example.com")).resolves.toMatchObject({ user: { id: user.id } });
+    });
+
+    it("refuses an email change to another user's address in any casing, writing nothing", async () => {
+        expect.assertions(3);
+
+        const taken = await adminApi.createUser({ email: "taken@example.com", name: "Taken" });
+        const user = await adminApi.createUser({ email: "mover@example.com", name: "Mover" });
+
+        await expect(adminApi.updateUser({ data: { email: "Taken@Example.com", name: "Renamed" }, userId: user.id })).rejects.toMatchObject({
+            code: "USER_ALREADY_EXISTS",
+        });
+        expect(userRow(user.id)).toMatchObject({ email: "mover@example.com", name: "Mover" });
+        expect(userRow(taken.id)?.["email"]).toBe("taken@example.com");
+    });
+
+    it("refuses an address another account holds in mixed case, on create and on change", async () => {
+        expect.assertions(2);
+
+        // An account written before addresses were lowercased, or imported as it was.
+        database["user"]?.push({
+            createdAt: new Date(),
+            email: "Legacy@Example.com",
+            emailVerified: false,
+            id: "legacy",
+            name: "Legacy",
+            updatedAt: new Date(),
+        });
+
+        const user = await adminApi.createUser({ email: "mover@example.com", name: "Mover" });
+
+        await expect(adminApi.createUser({ email: "legacy@example.com", name: "Twin" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+        await expect(adminApi.updateUser({ data: { email: "legacy@example.com" }, userId: user.id })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+    });
+
+    it("reports a write that lost a race for the address as USER_ALREADY_EXISTS, not a backend failure", async () => {
+        expect.assertions(2);
+
+        const context = await auth.$context;
+        const user = await adminApi.createUser({ email: "mover@example.com", name: "Mover" });
+        // The other request's write lands between this one's check and its write, and the unique index refuses it.
+        const losesRace = (): never => {
+            database["user"]?.push({
+                createdAt: new Date(),
+                email: "race@example.com",
+                emailVerified: false,
+                id: "winner",
+                name: "Winner",
+                updatedAt: new Date(),
+            });
+
+            throw new Error("UNIQUE constraint failed: user.email");
+        };
+
+        vi.spyOn(context.internalAdapter, "updateUser").mockImplementationOnce(losesRace);
+        vi.spyOn(context.internalAdapter, "createUser").mockImplementationOnce(() => {
+            database["user"] = (database["user"] ?? []).filter((row) => (row as { id: string }).id !== "winner");
+
+            return losesRace();
+        });
+
+        await expect(adminApi.updateUser({ data: { email: "race@example.com" }, userId: user.id })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+        await expect(adminApi.createUser({ email: "race@example.com", name: "Loser" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+    });
+
+    it("lets a user keep its own address in another casing, and leaves an update without an email alone", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "same@example.com", name: "Same" });
+
+        await expect(adminApi.updateUser({ data: { email: "SAME@example.com" }, userId: user.id })).resolves.toMatchObject({ email: "same@example.com" });
+        await expect(adminApi.updateUser({ data: { name: "Renamed" }, userId: user.id })).resolves.toMatchObject({
+            email: "same@example.com",
+            name: "Renamed",
+        });
+        expect(userRow(user.id)).toMatchObject({ email: "same@example.com", name: "Renamed" });
+    });
+
     it("lists users with a total and an email search", async () => {
         expect.assertions(3);
 
