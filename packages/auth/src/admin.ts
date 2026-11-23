@@ -1332,13 +1332,9 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     throw unsupported();
                 }
 
-                // A count, not `delete`: a concurrent revoke can remove the row between the read above and here, and
-                // only the one that removed it may report success.
-                const removed = await context_.adapter.deleteMany({ model: "apikey", where: [{ field: "id", value: apiKeyId }] });
-
-                if (removed === 0) {
-                    throw new LunoraAuthAdminError("api key not found", "API_KEY_NOT_FOUND");
-                }
+                // A concurrent revoke can remove the row between the read above and here; only the one that removed it
+                // may report success.
+                await deleteExisting(context_, "apikey", [{ field: "id", value: apiKeyId }], ["api key not found", "API_KEY_NOT_FOUND"]);
             }),
 
         deletePasskey: ({ passkeyId }) =>
