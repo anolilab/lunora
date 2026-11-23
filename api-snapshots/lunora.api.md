@@ -1971,6 +1971,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `OutboxDeclinedError` (class)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `OutboxMutation` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.

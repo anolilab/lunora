@@ -1,3 +1,4 @@
+import type { OutboxMutation } from "@lunora/client";
 import { LunoraClient } from "@lunora/client";
 import type { OfflineExecutor } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,7 @@ import {
     defineCollections as collectionsDefineCollections,
     lunoraCollectionOptions as collectionsLunoraCollectionOptions,
 } from "../src/collections";
+import { takeOutboxRejection } from "../src/internals";
 import { bindMutators as mutatorsBindMutators, defineMutator as mutatorsDefineMutator } from "../src/mutators";
 
 /** A fake `FunctionReference` — the binding only forwards it to the client. */
@@ -27,6 +29,7 @@ const temporaryList = ref("temp:list");
 const temporarySend = ref("temp:send");
 
 const DROPPED_RE = /dropped/u;
+const UNSTORED_RE = /^offline write could not be stored/u;
 
 /**
  * An in-memory `localStorage` shim. Without it Node has no storage and the
@@ -213,12 +216,108 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: null, replayCredential: { judged: "user-a" }, shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: null, replayClientId: "c1", replayCredential: { judged: "user-a" }, shardKey: "room-7" },
         );
 
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
         });
+    });
+
+    // A write the executor failed to store never reaches the replay handler, so
+    // nothing would retry or report it, while the client already showed it saved.
+    it("rolls back and reports a raw write the outbox could not store", async () => {
+        const { client, mutation } = makeClient();
+        let reported!: (event: WriteRejectedEvent) => void;
+        const rejection = new Promise<WriteRejectedEvent>((resolve) => {
+            reported = resolve;
+        });
+        const onWriteRejected = vi.fn<(event: WriteRejectedEvent) => void>((event) => {
+            reported(event);
+        });
+        const rolledBack = vi.fn<() => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        // How the executor's commit fails when storing the write throws (storage
+        // quota at write time): before the replay handler ever runs. Stood in for
+        // because the real store failure also leaves an internal promise of the
+        // executor's rejected with nothing awaiting it.
+        vi.spyOn(database.executor, "createOfflineTransaction").mockImplementationOnce(
+            () =>
+                ({
+                    commit: async () => {
+                        throw new Error("Storage quota exceeded");
+                    },
+                    mutate: () => undefined,
+                }) as never,
+        );
+
+        await createExecutorOutboxSink(database.executor).enqueue(outboxWrite({ onRejected: rolledBack }));
+
+        const event = await rejection;
+
+        expect(event.collection).toBe("messages:send");
+        expect(event.code).toBeUndefined();
+        expect(event.error.message).toMatch(UNSTORED_RE);
+        expect(onWriteRejected).toHaveBeenCalledTimes(1);
+        expect(rolledBack).toHaveBeenCalledTimes(1);
+        expect(takeOutboxRejection("c1:1")).toBeUndefined();
+        expect(mutation).not.toHaveBeenCalled();
+    });
+
+    it("reports a stored write the server rejects once, not again as unstored", async () => {
+        let attempts = 0;
+        const { client, mutation } = makeClient({
+            mutation: async () => {
+                attempts += 1;
+
+                if (attempts === 1) {
+                    throw Object.assign(new Error("nope"), { code: "FORBIDDEN" });
+                }
+
+                return "ok";
+            },
+        });
+        const onWriteRejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const rolledBack = vi.fn<() => void>();
+        const database = buildDatabase(client, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        const sink = createExecutorOutboxSink(database.executor);
+
+        await sink.enqueue(outboxWrite({ onRejected: rolledBack }));
+        // Runs only after the first write's verdict has fully settled: the executor is FIFO.
+        await sink.enqueue(outboxWrite({ idempotencyKey: "c1:2" }));
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(2);
+            expect(database.pendingCount()).toBe(0);
+        });
+
+        expect(onWriteRejected).toHaveBeenCalledTimes(1);
+        expect(onWriteRejected.mock.calls[0]?.[0].code).toBe("FORBIDDEN");
+        expect(rolledBack).toHaveBeenCalledTimes(1);
+    });
+
+    // An anonymous caller's dedup rows are keyed by client id. A write queued under
+    // one session's id and replayed after a reload must be sent under that id, or a
+    // write that committed but was never acknowledged runs a second time.
+    it("replays a raw offline write under the client id it was queued with, not the replaying client's", async () => {
+        const { client, mutation } = makeClient();
+        const database = buildDatabase(client);
+
+        await database.executor.waitForInit();
+
+        await createExecutorOutboxSink(database.executor).enqueue(outboxWrite({ clientId: "old", idempotencyKey: "old:k" }));
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ mutationId: "old:k", replayClientId: "old" });
     });
 
     // The write's CDC baseline has to survive the executor round-trip. By the time
@@ -243,7 +342,7 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation).toHaveBeenCalledWith(
             { __lunoraRef: "messages:send" },
             { text: "hello" },
-            { mutationId: "c1:1", replayBaseline: 10, replayCredential: { judged: "user-a" }, shardKey: "room-7" },
+            { mutationId: "c1:1", replayBaseline: 10, replayClientId: "c1", replayCredential: { judged: "user-a" }, shardKey: "room-7" },
         );
     });
 
@@ -428,12 +527,14 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         expect(mutation.mock.calls[0]?.[2]).toStrictEqual({
             mutationId: "c1:1",
             replayBaseline: null,
+            replayClientId: "c1",
             replayCredential: { judged: "user-a" },
             shardKey: undefined,
         });
         expect(mutation.mock.calls[1]?.[2]).toStrictEqual({
             mutationId: "c1:1",
             replayBaseline: null,
+            replayClientId: "c1",
             replayCredential: { judged: "user-a" },
             shardKey: undefined,
         });
@@ -1323,5 +1424,502 @@ describe("durable outbox replay credential", () => {
             expect(rolledBack).toHaveBeenCalledTimes(1);
             expect(database.pendingCount()).toBe(0);
         });
+    });
+});
+
+describe("durable replay while the connection is down", () => {
+    const RPC_URL = "https://app.example/_lunora/rpc";
+    const sockets: { open: () => void }[] = [];
+    const clients: LunoraClient[] = [];
+
+    /** A socket that stays `connecting` until the test opens it. */
+    const heldWebSocket = (): typeof WebSocket => {
+        class WS {
+            public readyState = 0;
+
+            private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
+
+            public constructor() {
+                sockets.push({
+                    open: () => {
+                        this.readyState = 1;
+
+                        for (const listener of this.listeners.get("open") ?? []) {
+                            listener();
+                        }
+                    },
+                });
+            }
+
+            public addEventListener(type: string, listener: (event?: unknown) => void): void {
+                this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+            }
+
+            public close(): void {
+                this.readyState = 3;
+            }
+
+            public removeEventListener(type: string): void {
+                this.listeners.delete(type);
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- writes under test ride HTTP, not the socket
+            public send(): void {}
+        }
+
+        return WS as unknown as typeof WebSocket;
+    };
+
+    beforeEach(() => {
+        vi.stubGlobal("localStorage", memoryLocalStorage());
+        vi.stubGlobal("window", globalThis);
+        vi.stubGlobal("navigator", { locks: memoryWebLocks() });
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        for (const executor of executors.splice(0)) {
+            executor.dispose();
+        }
+
+        for (const client of clients.splice(0)) {
+            client.close();
+        }
+
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+    });
+
+    /** A real client with a held socket; `messages:send` RPCs are recorded in `sent`. */
+    const offlineClient = (
+        options: {
+            failSends?: boolean;
+            outbox?: () => ReturnType<typeof createExecutorOutboxSink>;
+            queueBeforeFirstConnect?: boolean;
+            refuseSends?: boolean;
+        } = {},
+    ) => {
+        const sent: unknown[] = [];
+        const client = new LunoraClient({
+            fetch: async (input, init) => {
+                if (input !== RPC_URL) {
+                    return new Response("{}", { status: 404 });
+                }
+
+                const { args, functionPath } = JSON.parse(init?.body as string) as { args: { text?: string }; functionPath: string };
+
+                if (functionPath === "messages:send") {
+                    if (options.failSends) {
+                        throw new TypeError("Failed to fetch");
+                    }
+
+                    if (options.refuseSends) {
+                        return Response.json({ error: { code: "FORBIDDEN", message: "not allowed" } }, { status: 403 });
+                    }
+
+                    sent.push(args.text);
+                }
+
+                return Response.json({ result: "ok" });
+            },
+            offlineQueue: { queueBeforeFirstConnect: options.queueBeforeFirstConnect ?? true },
+            ...(options.outbox === undefined
+                ? {}
+                : {
+                      outbox: {
+                          enqueue: async (mutation: OutboxMutation) =>
+                              (options.outbox as () => ReturnType<typeof createExecutorOutboxSink>)().enqueue(mutation),
+                          pending: () => options.outbox?.().pending?.() ?? false,
+                      },
+                  }),
+            url: "https://app.example",
+            WebSocket: heldWebSocket(),
+        });
+
+        clients.push(client);
+        client.setAuthToken("token-a", "user-a");
+
+        return { client, sent };
+    };
+
+    /** A data layer with one insert-bound collection whose writes call `messages:send`. */
+    const notesDatabase = (client: LunoraClient, options?: Parameters<typeof defineCollections>[2]) => {
+        const database = defineCollections(
+            client,
+            {
+                notes: {
+                    insert: {
+                        mutation: ref("messages:send"),
+                        optimistic: (input: { text: string }, id) => {
+                            return { _id: id, text: input.text };
+                        },
+                        toArgs: (row) => {
+                            return { text: row.text };
+                        },
+                    },
+                    list: ref("messages:list"),
+                },
+            },
+            options,
+        ) as unknown as { actions: { notes: (input: { text: string }) => { id: string } }; executor: OfflineExecutor; pendingCount: () => number };
+
+        executors.push(database.executor);
+
+        return database;
+    };
+
+    const awaitInit = async (executor: OfflineExecutor): Promise<void> => {
+        const init = executor.waitForInit();
+
+        await vi.advanceTimersByTimeAsync(0);
+        await init;
+    };
+
+    /** A leader that already holds the outbox, so the next data layer in this profile is a follower. */
+    const startLeader = async (): Promise<void> => {
+        await awaitInit(notesDatabase(offlineClient().client).executor);
+    };
+
+    // The executor retries on a one-second tick and believes it is always online,
+    // so it replays while the device is offline. Such a replay must fail and be
+    // retried in place, never be handed back to the outbox as a new write behind
+    // newer ones.
+    it("keeps the original entries, in order, until the socket is back, then commits each once", async () => {
+        const sent: unknown[] = [];
+        const requeued = vi.fn<(mutation: OutboxMutation) => void>();
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const client = new LunoraClient({
+            fetch: async (input, init) => {
+                if (input !== RPC_URL) {
+                    return new Response("{}", { status: 404 });
+                }
+
+                const { args, functionPath } = JSON.parse(init?.body as string) as { args: { text?: string }; functionPath: string };
+
+                if (functionPath === "messages:send") {
+                    sent.push(args.text);
+                }
+
+                return Response.json({ result: "ok" });
+            },
+            offlineQueue: { queueBeforeFirstConnect: true },
+            outbox: {
+                enqueue: async (mutation) => {
+                    requeued(mutation);
+
+                    return (sink as NonNullable<typeof sink>).enqueue(mutation);
+                },
+                pending: () => sink?.pending?.() ?? false,
+            },
+            url: "https://app.example",
+            WebSocket: heldWebSocket(),
+        });
+
+        clients.push(client);
+        client.setAuthToken("token-a", "user-a");
+
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const database = defineCollections(
+            client,
+            {
+                notes: {
+                    insert: {
+                        mutation: ref("messages:send"),
+                        optimistic: (input: { text: string }, id) => {
+                            return { _id: id, text: input.text };
+                        },
+                        toArgs: (row) => {
+                            return { text: row.text };
+                        },
+                    },
+                    list: ref("messages:list"),
+                },
+            },
+            { onWriteRejected: rejected },
+        ) as unknown as { actions: { notes: (input: { text: string }) => unknown }; executor: OfflineExecutor; pendingCount: () => number };
+
+        executors.push(database.executor);
+
+        const ready = database.executor.waitForInit();
+
+        await vi.advanceTimersByTimeAsync(0);
+        await ready;
+
+        sink = createExecutorOutboxSink(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        const mutation = vi.spyOn(client, "mutation");
+
+        database.actions.notes({ text: "first" });
+        database.actions.notes({ text: "second" });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const outboxIds = async (): Promise<string[]> => {
+            const transactions = await database.executor.peekOutbox();
+
+            return transactions.map((transaction) => transaction.id);
+        };
+        const queued = await outboxIds();
+
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(queued).toHaveLength(2);
+        expect(requeued).not.toHaveBeenCalled();
+        await expect(outboxIds()).resolves.toStrictEqual(queued);
+        expect(sent).toStrictEqual([]);
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual(["first", "second"]);
+        expect(requeued).not.toHaveBeenCalled();
+        // A stored write is replayed: pinned baseline and the judged credential.
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ replayBaseline: null });
+        expect(mutation.mock.calls[0]?.[2]).toHaveProperty("replayCredential");
+        expect(database.pendingCount()).toBe(0);
+        expect(rejected).not.toHaveBeenCalled();
+    });
+
+    // Only the leader tab's executor stores writes; a follower's hands out a
+    // transaction that runs once, unstored. A write made there while offline
+    // must still be kept and sent, never shown as saved and dropped.
+    it("keeps a follower tab's offline insert in the client's queue and sends it once on reconnect", async () => {
+        await startLeader();
+
+        const { client, sent } = offlineClient();
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const follower = notesDatabase(client, { onWriteRejected: rejected });
+
+        await awaitInit(follower.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        expect(follower.executor.isOfflineEnabled).toBe(false);
+
+        follower.actions.notes({ text: "from a follower" });
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        expect(client.pendingCount()).toBe(1);
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual(["from a follower"]);
+        expect(client.pendingCount()).toBe(0);
+        expect(rejected).not.toHaveBeenCalled();
+    });
+
+    it("keeps an insert made before leader election finishes, and sends it once", async () => {
+        const { client, sent } = offlineClient();
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const database = notesDatabase(client, { onWriteRejected: rejected });
+
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+        database.actions.notes({ text: "before election" });
+        await awaitInit(database.executor);
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(database.executor.isOfflineEnabled).toBe(true);
+        expect(sent).toStrictEqual([]);
+        expect(client.pendingCount()).toBe(1);
+        await expect(database.executor.peekOutbox()).resolves.toStrictEqual([]);
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual(["before election"]);
+        expect(rejected).not.toHaveBeenCalled();
+    });
+
+    // The action's send awaits inside the client before it reads a bearer. A user switch in that
+    // window must not put user A's row on user B's token.
+    it("sends a one-shot action's write with the bearer of the user who composed it", async () => {
+        await startLeader();
+
+        const bearers: (null | string)[] = [];
+        const client = new LunoraClient({
+            fetch: async (input, init) => {
+                if (input === RPC_URL) {
+                    bearers.push(new Headers(init?.headers).get("authorization"));
+                }
+
+                return Response.json({ result: "ok" });
+            },
+            url: "https://app.example",
+            WebSocket: heldWebSocket(),
+        });
+
+        clients.push(client);
+        client.setAuthToken("token-a", "user-a");
+
+        const database = notesDatabase(client);
+
+        await awaitInit(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+        sockets.at(-1)?.open();
+
+        expect(database.executor.isOfflineEnabled).toBe(false);
+
+        database.actions.notes({ text: "user a's note" });
+        client.setAuthToken("token-b", "user-b");
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(bearers).toStrictEqual(["Bearer token-a"]);
+    });
+
+    // Composed before election, the action runs once, unstored; its write then
+    // reaches the sink after this tab has won, and is stored there. The action's
+    // transaction must stay pending until that write is sent, or its row
+    // vanishes from the collection while the device is still offline.
+    it("keeps an early action's transaction pending until the write the outbox stored for it is sent", async () => {
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const { client, sent } = offlineClient({ outbox: () => sink as ReturnType<typeof createExecutorOutboxSink> });
+        const database = notesDatabase(client) as unknown as {
+            actions: { notes: (input: { text: string }) => { id: string; transaction: { state: string } } };
+            executor: OfflineExecutor;
+        };
+
+        sink = createExecutorOutboxSink(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        const { transaction } = database.actions.notes({ text: "early, stored" });
+
+        await awaitInit(database.executor);
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(database.executor.isOfflineEnabled).toBe(true);
+        expect(sent).toStrictEqual([]);
+        expect(transaction.state).not.toBe("completed");
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual(["early, stored"]);
+        expect(transaction.state).toBe("completed");
+    });
+
+    // The early action's write can also fail to be stored at all (storage quota). Nothing retries it,
+    // and the report must name the collection and carry the row being rolled back, as the type says.
+    it.each([
+        [
+            "within a microtask",
+            async () => {
+                throw new Error("Storage quota exceeded");
+            },
+        ],
+        [
+            "after a macrotask",
+            async () =>
+                new Promise((_resolve, reject) => {
+                    setTimeout(() => {
+                        reject(new Error("Storage quota exceeded"));
+                    }, 0);
+                }),
+        ],
+    ] as const)("fails an early action, reporting its collection and row, when its write cannot be stored %s", async (_when, commit) => {
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const { client, sent } = offlineClient({ outbox: () => sink as ReturnType<typeof createExecutorOutboxSink> });
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const database = notesDatabase(client, { onWriteRejected: rejected }) as unknown as {
+            actions: { notes: (input: { text: string }) => { id: string; transaction: { isPersisted: { promise: Promise<unknown> }; state: string } } };
+            executor: OfflineExecutor;
+        };
+
+        sink = createExecutorOutboxSink(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        const { id, transaction } = database.actions.notes({ text: "early, unstored" });
+        const verdict = transaction.isPersisted.promise.then(
+            () => "persisted",
+            () => "failed",
+        );
+
+        vi.spyOn(database.executor, "createOfflineTransaction").mockImplementationOnce(() => ({ commit, mutate: () => undefined }) as never);
+
+        await awaitInit(database.executor);
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        await expect(verdict).resolves.toBe("failed");
+        expect(rejected).toHaveBeenCalledTimes(1);
+        expect(rejected.mock.calls[0]?.[0]).toMatchObject({ collection: "notes", row: { _id: id, text: "early, unstored" } });
+    });
+
+    // The stored write the early action waits on can then be refused for good. The action must
+    // report that failure as its own verdict, once, rather than complete as if it were sent.
+    it("fails an early action's transaction when the write the outbox stored for it is refused", async () => {
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const { client, sent } = offlineClient({ outbox: () => sink as ReturnType<typeof createExecutorOutboxSink>, refuseSends: true });
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const database = notesDatabase(client, { onWriteRejected: rejected }) as unknown as {
+            actions: { notes: (input: { text: string }) => { id: string; transaction: { isPersisted: { promise: Promise<unknown> }; state: string } } };
+            executor: OfflineExecutor;
+        };
+
+        sink = createExecutorOutboxSink(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        const { transaction } = database.actions.notes({ text: "early, refused" });
+        const verdict = transaction.isPersisted.promise.then(
+            () => "persisted",
+            () => "failed",
+        );
+
+        await awaitInit(database.executor);
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        await expect(verdict).resolves.toBe("failed");
+        expect(rejected).toHaveBeenCalledTimes(1);
+    });
+
+    // The sink cannot store a write on a follower, so it declines it, and the
+    // client keeps the write in its own queue instead.
+    it("keeps a follower tab's raw offline write in the client's queue when the outbox is wired", async () => {
+        await startLeader();
+
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const { client, sent } = offlineClient({ outbox: () => sink as ReturnType<typeof createExecutorOutboxSink> });
+        const follower = defineCollections(client, {});
+
+        executors.push(follower.executor);
+        await awaitInit(follower.executor);
+        sink = createExecutorOutboxSink(follower.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        // Held by the client's queue, so it settles only once the write is sent.
+        const queued = client.mutation(ref("messages:send"), { text: "raw from a follower" } as never);
+
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        expect(client.pendingCount()).toBe(1);
+
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        await expect(queued).resolves.toBe("ok");
+        expect(sent).toStrictEqual(["raw from a follower"]);
+        expect(follower.pendingCount()).toBe(0);
+    });
+
+    // A transaction the executor will not store is never retried, so a failure it
+    // cannot recover from on its own is reported rather than dropped in silence.
+    it("reports a follower's insert that could not be sent or queued", async () => {
+        await startLeader();
+
+        const { client, sent } = offlineClient({ failSends: true, queueBeforeFirstConnect: false });
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const follower = notesDatabase(client, { onWriteRejected: rejected });
+
+        await awaitInit(follower.executor);
+
+        follower.actions.notes({ text: "lost?" });
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        expect(rejected).toHaveBeenCalledTimes(1);
+        expect(rejected.mock.calls[0]?.[0]).toMatchObject({ collection: "notes", row: { text: "lost?" } });
     });
 });

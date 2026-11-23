@@ -1,9 +1,18 @@
+import { OutboxDeclinedError } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { NonRetriableError } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { OutboxExecutor, OutboxMutationMetadata, Row, SyncWriter } from "../src/internals";
-import { createExecutorOutboxSink, createOptimisticOnlineDetector, makeDiffEmit, OUTBOX_MUTATION_FN_NAME, runOutboxMutation, toMap } from "../src/internals";
+import {
+    createExecutorOutboxSink,
+    createOptimisticOnlineDetector,
+    makeDiffEmit,
+    OUTBOX_MUTATION_FN_NAME,
+    runOutboxMutation,
+    takeOutboxRejection,
+    toMap,
+} from "../src/internals";
 
 /**
  * A fake `OfflineExecutor` slice: every `createOfflineTransaction(...).mutate()`
@@ -28,6 +37,8 @@ const fakeExecutor = (): { committed: OutboxMutationMetadata[]; executor: Outbox
                 };
             },
             getPendingCount: () => outbox.length,
+            isOfflineEnabled: true,
+            waitForInit: async () => undefined,
         },
         outbox,
     };
@@ -90,6 +101,43 @@ describe(createExecutorOutboxSink, () => {
         expect(outbox.map((entry) => entry.id)).toStrictEqual(["tx-1", "tx-2"]);
     });
 
+    // A tab that does not lead the outbox gets a transaction that runs once,
+    // unstored. The sink must refuse the write before touching the executor, so
+    // the client's own queue is the only place it lives: never in both.
+    it("declines a write the executor cannot store, without creating a transaction", async () => {
+        const created = vi.fn<OutboxExecutor["createOfflineTransaction"]>();
+        const executor: OutboxExecutor = {
+            createOfflineTransaction: created,
+            getPendingCount: () => 0,
+            isOfflineEnabled: false,
+            waitForInit: async () => undefined,
+        };
+
+        await expect(createExecutorOutboxSink(executor).enqueue({ ...outboxMutation(1), onRejected: () => undefined })).rejects.toBeInstanceOf(
+            OutboxDeclinedError,
+        );
+        expect(created).not.toHaveBeenCalled();
+        expect(takeOutboxRejection("c1:1")).toBeUndefined();
+    });
+
+    it("holds a write until the executor has settled leadership, then stores it", async () => {
+        const { committed, executor } = fakeExecutor();
+        let started!: () => void;
+        const init = new Promise<void>((resolve) => {
+            started = resolve;
+        });
+        const enqueued = createExecutorOutboxSink({ ...executor, waitForInit: async () => init }).enqueue(outboxMutation(1));
+
+        await Promise.resolve();
+
+        expect(committed).toHaveLength(0);
+
+        started();
+        await enqueued;
+
+        expect(committed).toHaveLength(1);
+    });
+
     it("uses the configured reserved mutationFn name", async () => {
         const seen: string[] = [];
         const executor: OutboxExecutor = {
@@ -99,6 +147,8 @@ describe(createExecutorOutboxSink, () => {
                 return { mutate: () => undefined };
             },
             getPendingCount: () => 0,
+            isOfflineEnabled: true,
+            waitForInit: async () => undefined,
         };
 
         await createExecutorOutboxSink(executor).enqueue(outboxMutation(1));

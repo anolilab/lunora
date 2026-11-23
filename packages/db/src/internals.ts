@@ -1,5 +1,5 @@
 import type { OutboxMutation, OutboxSink } from "@lunora/client";
-import { isAuthReplayFailure } from "@lunora/client";
+import { isAuthReplayFailure, OutboxDeclinedError } from "@lunora/client";
 import type { Collection } from "@tanstack/db";
 import { createCollection, safeRandomUUID } from "@tanstack/db";
 import type { OnlineDetector } from "@tanstack/offline-transactions";
@@ -79,6 +79,14 @@ interface WriteProvenance extends Record<string, unknown> {
 
     /** Issuing identity fingerprint; a replay drops the write when it no longer matches. */
     identity: string | null;
+
+    /**
+     * Set on a write the executor will run once and never store (this tab does
+     * not lead the outbox, or leadership is not settled yet). Never persisted,
+     * because such a transaction never is. Its one run is the write itself, not a
+     * replay, so it is sent as a fresh write the client may queue.
+     */
+    oneShot?: true;
     /** Captured, not re-read at replay: a queued write follows the shard it was made against even if the app reboots pointed at another. */
     shardKey?: string;
 }
@@ -88,7 +96,7 @@ interface OutboxMutationMetadata extends WriteProvenance {
     args: Record<string, unknown>;
     clientId: string;
     functionPath: string;
-    /** Stable `${clientId}:${mutationId}` replay key; passed back as the mutation id so a committed-but-unacked replay is server-idempotent. */
+    /** Unique-per-write replay key (see `OutboxMutation.idempotencyKey`); passed back as the mutation id so a committed-but-unacked replay is server-idempotent. */
     idempotencyKey: string;
     mutationId: number;
 }
@@ -112,6 +120,9 @@ interface OutboxExecutor {
         mutationFnName: string;
     }) => OutboxTransaction;
     getPendingCount: () => number;
+    /** Whether `createOfflineTransaction` hands out a stored, retried transaction (this tab leads the outbox) or one that runs once, unstored. */
+    readonly isOfflineEnabled: boolean;
+    waitForInit: () => Promise<void>;
 }
 
 /**
@@ -153,6 +164,66 @@ const createOutboxCarrier = (): Collection<Row, string> =>
             },
         },
     });
+
+/**
+ * Executor → its `onWriteRejected` route, for a write the sink handed over but the
+ * executor never stored. Registered by `defineCollections`, which owns the option.
+ */
+const outboxUnstoredReporters = new WeakMap<OutboxExecutor, (event: { collection: string; error: Error }) => void>();
+
+/**
+ * The metadata of every raw write whose replay handler has started. The executor
+ * runs the handler only after it has stored the write, so a commit that fails for
+ * a write NOT in here failed to store it. Keyed by the metadata object itself (the
+ * executor hands the handler the one the sink created), so it dies with the write.
+ */
+const outboxReplaysStarted = new WeakSet<object>();
+
+/**
+ * Each raw write the sink stored, by idempotency key, until its transaction settles: sent, or given
+ * up for good. A one-shot collection write that reaches the sink only after this tab won the outbox
+ * is stored rather than sent, and waits on this so its row stays on screen until then.
+ */
+const outboxSettlements = new Map<string, Promise<void>>();
+
+/**
+ * Keys a one-shot collection write is sending under, and will wait on. A failure to store one is
+ * reported by that wait, which knows the collection and row; and its settlement is kept until the
+ * wait reads it, since a store failure can settle before the send returns.
+ */
+const outboxWaiters = new Set<string>();
+
+/**
+ * Run `send`, then wait until the raw write the sink stored for it under `idempotencyKey`, if any,
+ * is sent or dropped. Rejects with the stored write's failure.
+ */
+const sendAndAwaitOutboxWrite = async (idempotencyKey: string, send: () => Promise<unknown>): Promise<void> => {
+    outboxWaiters.add(idempotencyKey);
+
+    try {
+        await send();
+        await outboxSettlements.get(idempotencyKey);
+    } finally {
+        outboxWaiters.delete(idempotencyKey);
+        outboxSettlements.delete(idempotencyKey);
+    }
+};
+
+/** Failures of stored writes whose rejection has already reached `onWriteRejected`. */
+const reportedOutboxFailures = new WeakSet<Error>();
+
+/** Whether `error` is a stored write's failure that was already reported, so a waiter must not report it again. */
+const isReportedOutboxFailure = (error: unknown): boolean => error instanceof Error && reportedOutboxFailures.has(error);
+
+/** Record that a raw write reached its replay handler (called by `defineCollections`). */
+const noteOutboxReplayStarted = (metadata: OutboxMutationMetadata): void => {
+    outboxReplaysStarted.add(metadata);
+};
+
+/** Associate an executor with the reporter for writes it failed to store (called by `defineCollections`). */
+const registerOutboxUnstoredReporter = (executor: OutboxExecutor, report: (event: { collection: string; error: Error }) => void): void => {
+    outboxUnstoredReporters.set(executor, report);
+};
 
 /** Associate an executor with its transport carrier (called by `defineCollections`). */
 const registerOutboxCarrier = (executor: OutboxExecutor, carrier: Collection<Row, string>): void => {
@@ -231,7 +302,21 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
          */
         pending: (): boolean => executor.getPendingCount() > 0,
 
-        enqueue(mutation: OutboxMutation): Promise<void> {
+        async enqueue(mutation: OutboxMutation): Promise<void> {
+            // Leadership is only known once the executor has started. Until then,
+            // and in a tab that does not lead, the executor would run the write
+            // once, unstored, and lose it to the first transient failure: decline
+            // it, and the client keeps it in its own queue. No await from here to
+            // `createOfflineTransaction`, which branches on the same flag.
+            const started = await executor.waitForInit().then(
+                () => true,
+                () => false,
+            );
+
+            if (!started || !executor.isOfflineEnabled) {
+                throw new OutboxDeclinedError();
+            }
+
             // Cap: reject at capacity before persisting, so an already-queued
             // durable write is never silently lost. Mirrors `OfflineQueue` and the
             // `OutboxSink` contract (`OFFLINE_QUEUE_OVERFLOW`).
@@ -240,7 +325,7 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
 
                 error.code = "OFFLINE_QUEUE_OVERFLOW";
 
-                return Promise.reject(error);
+                throw error;
             }
 
             // Held in memory (not in `metadata`, which is serialized): the replay
@@ -293,12 +378,56 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
 
             // Commit explicitly (not via `autoCommit`, whose upstream failure
             // handler rethrows inside its own .catch — every terminal verdict
-            // would surface as an unhandled rejection) and swallow the outcome:
-            // retries are the executor's job and permanent drops are reported
-            // through the replay handler / `onWriteRejected`, not this promise.
-            transaction.commit?.().catch(() => undefined);
+            // would surface as an unhandled rejection). A failure of a write that
+            // was STORED is swallowed: retries are the executor's job, and a
+            // permanent drop is reported by the replay handler. A write the
+            // executor failed to store (storage quota at write time) never reaches
+            // that handler and nothing retries it, while the client has already
+            // shown it as saved — so it is rolled back and reported here.
+            const committed = transaction.commit?.();
 
-            return Promise.resolve();
+            if (committed === undefined) {
+                return;
+            }
+
+            // Runs after the `set` below: a promise reaction never runs synchronously.
+            const forget = (): void => {
+                outboxSettlements.delete(mutation.idempotencyKey);
+            };
+            // Rejects for a write that failed, so an action waiting on it (see `sendAndAwaitOutboxWrite`)
+            // fails too. A stored write's failure was reported by the replay handler, so it is marked as
+            // such; an unstored one is reported here, unless its waiter reports it with its collection
+            // and row, and then it is kept for that waiter, which may not have asked for it yet.
+            const settled = committed.then(forget, (error: unknown) => {
+                const stored = outboxReplaysStarted.has(metadata);
+                const waited = outboxWaiters.has(mutation.idempotencyKey);
+                const unstored = new Error(`offline write could not be stored: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+
+                if (!waited) {
+                    forget();
+                }
+
+                if (!stored) {
+                    takeOutboxRejection(mutation.idempotencyKey)?.();
+
+                    if (!waited) {
+                        outboxUnstoredReporters.get(executor)?.({ collection: mutation.functionPath, error: unstored });
+                    }
+                }
+
+                const raw = error instanceof Error ? error : new Error(String(error));
+                const failure = stored ? raw : unstored;
+
+                if (stored || !waited) {
+                    reportedOutboxFailures.add(failure);
+                }
+
+                throw failure;
+            });
+
+            // Nobody may be waiting; the failure is already reported, so an unheard rejection is noise.
+            settled.catch(() => undefined);
+            outboxSettlements.set(mutation.idempotencyKey, settled);
         },
     };
 };
@@ -520,10 +649,14 @@ export {
     createExecutorOutboxSink,
     createOptimisticOnlineDetector,
     createOutboxCarrier,
+    isReportedOutboxFailure,
     makeDiffEmit,
+    noteOutboxReplayStarted,
     OUTBOX_MUTATION_FN_NAME,
     registerOutboxCarrier,
+    registerOutboxUnstoredReporter,
     runOutboxMutation,
+    sendAndAwaitOutboxWrite,
     takeOutboxRejection,
     terminalVerdict,
     toMap,

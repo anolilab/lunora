@@ -176,9 +176,17 @@ the _pre-existing_ persisted queue, writes left over from a prior session can si
 until the leader flushes them. If the leader is a backgrounded/offline tab while a
 foreground tab is online, those carried-over writes wait for the leader (the writes
 stay durable and replay exactly-once; only their latency is affected). New writes
-made in any tab flush over that tab's own socket. Apps with heavy multi-tab offline
-use should prefer [`@lunora/db`](/docs/packages/db) collections, whose outbox is
-fully leader-coordinated.
+made in any tab flush over that tab's own socket.
+
+[`@lunora/db`](/docs/packages/db) collections store writes in a separate outbox,
+and only the tab that leads it stores and retries them. A write made in any other
+tab, or in the moment after load before leadership is settled, rides this tab's
+built-in queue instead, under the rules above: it is persisted when no `outbox` is
+wired into the client, and held in memory only when one is (wiring an outbox turns
+the queue's persistence default off), so a tab closed before it reconnects loses
+it. Order is not guaranteed between such writes and those in the outbox. Where the
+election runs on Web Locks, a tab that starts as a follower stays one while it is
+open, even after the leader closes.
 
 ## Sync status
 
