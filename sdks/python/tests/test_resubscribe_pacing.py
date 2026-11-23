@@ -195,6 +195,25 @@ class TestResubscribePacing(unittest.TestCase):
 
         self.assertGreaterEqual(client.next_subscription_retry_at(), late + RESUBSCRIBE_ACK_TIMEOUT)
 
+    def test_a_queued_one_whose_args_no_longer_encode_does_not_stall_the_rest(self):
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client.attach_socket(lambda _frame: None)
+        args = [{"channel": f"c{index}"} for index in range(5)]
+        for each in args:
+            client.subscribe("messages:list", each, lambda _value: None)
+        sent: list = []
+        client.attach_socket(sent.append)
+        sent.clear()
+        client.resend_subscriptions()
+
+        # The caller mutated a queued subscription's args into something the wire cannot carry.
+        args[3]["bad"] = object()
+
+        client.handle_frame({"id": "sub_1", "type": "ack"})
+
+        self.assertNotIn("sub_4", _subscribes(sent))
+        self.assertIn("sub_5", _subscribes(sent), "the next queued one still goes out")
+
     def test_shape_subscriptions_are_not_paced(self):
         client = LunoraClient("https://app.example", client_id="client-test")
         client.attach_socket(lambda _frame: None)

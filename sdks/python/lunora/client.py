@@ -1287,14 +1287,19 @@ class LunoraClient:
             # Unsubscribed while it waited its turn: nothing to re-send.
             if sub is None:
                 continue
+            # Built before any state moves: args the caller mutated into something the wire cannot
+            # carry must not escape into the frame handler and stall the queue behind them.
+            try:
+                frame = build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
+            except (TypeError, ValueError):
+                _log.exception("lunora: subscription %s has args that no longer encode; not re-subscribed", sub.id)
+                continue
             # The resubscribe resumes from the last applied cursor, so a dropped change is
             # replayed; if it is still unmergeable the flag is set again.
             was_poisoned = sub.poisoned
             sub.poisoned = False
             sub.discard_run()
-            batch.append(
-                (sub, build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch), was_poisoned)
-            )
+            batch.append((sub, frame, was_poisoned))
             self._resubscribe_slots[sub.id] = now + RESUBSCRIBE_ACK_TIMEOUT
         return batch
 
@@ -1930,6 +1935,10 @@ class LunoraClient:
                         (self._call_later or loop.call_later)(max(0.0, deadline - time.monotonic()), partial(resubscribe_timed_out, deadline))
                     )
 
+            def retry_hint_due(deadline: float) -> None:
+                if watchdogs_alive["value"]:
+                    self.retry_due_subscriptions(deadline)
+
             def stop_resubscribe_watchdogs() -> None:
                 watchdogs_alive["value"] = False
                 for handle in watchdog_handles:
@@ -1968,7 +1977,9 @@ class LunoraClient:
                         # due and lose the retry. A later frame that replaced or cancelled the
                         # deadline still makes this a no-op.
                         delay = max(0.0, armed - time.monotonic())
-                        (self._call_later or loop.call_later)(delay, partial(self.retry_due_subscriptions, armed))
+                        # Kept with the watchdogs so it dies with this socket: left running, it would
+                        # free the next socket's pacing slots early.
+                        watchdog_handles.append((self._call_later or loop.call_later)(delay, partial(retry_hint_due, armed)))
                     # Only a frame the client recognised proves a live server;
                     # `null` or an unknown `type` must not reset the backoff. An
                     # `error` frame does not either: a TOKEN_EXPIRED arrives just before
