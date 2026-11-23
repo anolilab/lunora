@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Keeps real-clock waits out of unit tests.
+ * Keeps real-clock waits out of unit tests and the helpers they share.
  *
  * The repo rule is that tests wait on a milestone, never on a clock: a fixed
  * `sleep(200)` is flaky on a loaded runner or slow everywhere, and "after N ms
@@ -30,10 +30,14 @@ const PATTERNS = [
     new RegExp(String.raw`setTimeout\(\(\) => \{[^}]*?\b(?:resolve|r)\([^)]*\);?\s*\},\s*${DELAY}\)`, "su"),
 ];
 const TEST_FILE = /\.test\.tsx?$/u;
-const SKIPPED_DIRS = new Set(["dist", "node_modules", "workerd"]);
+// A shared fixture under `__tests__/` (`settle()` in `model-fixtures.ts`) sleeps on behalf of every
+// test that imports it, which a test-file-only sweep would wave through.
+const TEST_HELPER = /\.tsx?$/u;
+// `workerd` and `celld` suites drive a real runtime or a live child process, where a clock is the point.
+const SKIPPED_DIRS = new Set(["celld", "dist", "node_modules", "workerd"]);
 
-/** Every test file under `dir`, skipping the `workerd` suites (they run in a real runtime where a clock is the point) and build output. */
-const walk = (dir) => {
+/** Every test file under `dir`, plus every TypeScript file under a `__tests__` directory, skipping the live-runtime suites and build output. */
+const walk = (dir, inTests = false) => {
     const found = [];
 
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -41,9 +45,9 @@ const walk = (dir) => {
 
         if (entry.isDirectory()) {
             if (!SKIPPED_DIRS.has(entry.name)) {
-                found.push(...walk(path));
+                found.push(...walk(path, inTests || entry.name === "__tests__"));
             }
-        } else if (TEST_FILE.test(entry.name)) {
+        } else if (TEST_FILE.test(entry.name) || (inTests && TEST_HELPER.test(entry.name))) {
             found.push(path);
         }
     }

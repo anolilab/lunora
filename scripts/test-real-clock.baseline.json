@@ -1,5 +1,9 @@
 [
     {
+        "file": "packages/agent/__tests__/telemetry/model-fixtures.ts",
+        "reason": "pending conversion: `settle()` sleeps 20 ms for detached span ends and OTLP POSTs in the braintrust/otlp/sentry suites; each needs its own milestone. The stream `gapMs` delays stay: they make the span duration those suites measure."
+    },
+    {
         "file": "packages/agent/__tests__/telemetry/tool-execution.test.ts",
         "reason": "pending conversion"
     },
