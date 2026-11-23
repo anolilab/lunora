@@ -519,12 +519,22 @@ const RLS_RELATION_GATE_SYMBOL = Symbol.for("lunora.ctxdb.rls-relation-gate");
  * republishes `ctx.db` by spread, which does not carry a non-enumerable key, so
  * the second `rls()` wraps the MASK wrapper instead of resuming. That nesting is
  * the correct one: resuming from the pre-mask writers would route policy tables
- * around the mask and hand back the columns it redacts. The cost is that under
- * `.rls("required")` a table only the LATER step gates is then reached through
- * the earlier wrapper, which does not know it and defers to the guard — so it
- * denies. Fail-closed, and the remedy is to declare both tables in one bundle.
+ * around the mask and hand back the columns it redacts. A relation child still
+ * gets every step's read policy: the later step's relation filter rides the
+ * read through the mask, and the earlier step composes it with its own (see
+ * `relationFilterFor`), so the mask stays on the child's rows. A DIRECT read of
+ * a table only the later step gates is still reached through the earlier
+ * wrapper, which does not know it and defers to the guard — so under
+ * `.rls("required")` it denies. Fail-closed, and the remedy is to declare that
+ * table in the earlier bundle too.
  */
 const RLS_CHAIN_SYMBOL = Symbol.for("lunora.rls.wrapped-chain");
+
+/**
+ * Every relation read filter an `rls()` step minted, with the per-table read base it answers
+ * from. Module-private, so a filter a caller passes in a read's args can never be mistaken for one.
+ */
+const relationReadBases = new WeakMap<object, (table: string) => { baseWhere: undefined | WhereInput; restricts: boolean }>();
 
 /**
  * One `.use(rls(...))` step: the policies it declared, indexed by table, plus
@@ -1043,6 +1053,48 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     };
 
     relationGuard?.trust(relationReadFilter);
+    relationReadBases.set(relationReadFilter, readBase);
+
+    /**
+     * The relation read filter for a read that arrived carrying another `rls()` step's filter. A
+     * `mask()` between two steps ends the chain (see {@link RLS_CHAIN_SYMBOL}), so the later step
+     * wraps the mask and its filter reaches this step only as the read's `relationBaseWhere`.
+     * Replacing it would drop that step's child policies; instead both steps answer for every
+     * child: their read bases AND, as `.use(rls(...))` steps do on a direct read, and a child
+     * neither step restricts still goes through the guard's gate. Only a filter an `rls()` step
+     * minted is honoured — one a caller passes has no entry in {@link relationReadBases}.
+     */
+    const relationFilterFor = (incoming: unknown): ((table: string) => undefined | WhereInput) => {
+        const outer = typeof incoming === "function" ? relationReadBases.get(incoming) : undefined;
+
+        if (outer === undefined) {
+            return relationReadFilter;
+        }
+
+        const composedBase = (table: string): { baseWhere: undefined | WhereInput; restricts: boolean } => {
+            const own = readBase(table);
+            const theirs = outer(table);
+
+            return {
+                baseWhere: intersectBaseWheres([own.baseWhere, theirs.baseWhere].filter((predicate) => narrowsReads(predicate))),
+                restricts: own.restricts || theirs.restricts,
+            };
+        };
+        const composed = (table: string): undefined | WhereInput => {
+            const { baseWhere, restricts } = composedBase(table);
+
+            if (!restricts) {
+                relationGuard?.gate(table);
+            }
+
+            return baseWhere;
+        };
+
+        relationGuard?.trust(composed);
+        relationReadBases.set(composed, composedBase);
+
+        return composed;
+    };
 
     /**
      * Resolve the raw row for `table`'s `id` and whether that table is policy-gated. The owner is the named table,
@@ -1355,7 +1407,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return route(tableName).count(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args.baseWhere, baseWhere),
-                relationBaseWhere: relationReadFilter,
+                relationBaseWhere: relationFilterFor(args.relationBaseWhere),
                 // Flagged only when the policies actually NARROW the table — the
                 // writer refuses a count it cannot compute exactly, and an
                 // allow-all policy leaves it exactly computable. Same test as
@@ -1446,7 +1498,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return route(tableName).findFirst(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
-                relationBaseWhere: relationReadFilter,
+                relationBaseWhere: relationFilterFor(args?.relationBaseWhere),
             });
         },
 
@@ -1456,7 +1508,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return route(tableName).findFirstOrThrow(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
-                relationBaseWhere: relationReadFilter,
+                relationBaseWhere: relationFilterFor(args?.relationBaseWhere),
             });
         },
 
@@ -1468,7 +1520,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return target.explain(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
-                relationBaseWhere: relationReadFilter,
+                relationBaseWhere: relationFilterFor(args?.relationBaseWhere),
             });
         },
 
@@ -1478,7 +1530,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return route(tableName).findMany(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
-                relationBaseWhere: relationReadFilter,
+                relationBaseWhere: relationFilterFor(args?.relationBaseWhere),
             });
         },
 
@@ -1855,7 +1907,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return route(tableName).aggregate(tableName, {
                 ...options,
                 baseWhere: mergeBaseWhere(options.baseWhere, baseWhere),
-                relationBaseWhere: relationReadFilter,
+                relationBaseWhere: relationFilterFor(options.relationBaseWhere),
             });
         },
 
@@ -1865,7 +1917,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return route(tableName).groupBy(tableName, {
                 ...options,
                 baseWhere: mergeBaseWhere(options.baseWhere, baseWhere),
-                relationBaseWhere: relationReadFilter,
+                relationBaseWhere: relationFilterFor(options.relationBaseWhere),
             });
         },
 
