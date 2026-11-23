@@ -10,7 +10,7 @@
  * and is not listed fails the check, and so does a listed file that no longer
  * does, which forces the baseline to shrink as files are converted.
  *
- * Deliberately a regex sweep, not an AST walk: it flags the two spellings the
+ * Deliberately a regex sweep, not an AST walk: it flags the three spellings the
  * suite actually uses, and the baseline is the worklist for later batches.
  */
 import { readdirSync, readFileSync } from "node:fs";
@@ -22,8 +22,13 @@ const baselinePath = join(rootDir, "scripts", "test-real-clock.baseline.json");
 
 // A delay of two or more digits, `_` separators allowed (lint requires them from five digits up),
 // or a named one (a `settle(ms = 25)` helper); a third argument passes a value to resolve with.
+// The third spelling is a timer whose callback does some work and then resolves the awaited promise.
 const DELAY = String.raw`(?:[0-9]{2}[0-9_]*|[A-Za-z_$][\w$]*)`;
-const PATTERNS = [new RegExp(String.raw`sleep\([0-9]{2}[0-9_]*\)`, "u"), new RegExp(String.raw`setTimeout\((?:resolve|r), ${DELAY}[,)]`, "u")];
+const PATTERNS = [
+    new RegExp(String.raw`sleep\([0-9]{2}[0-9_]*\)`, "u"),
+    new RegExp(String.raw`setTimeout\((?:resolve|r), ${DELAY}[,)]`, "u"),
+    new RegExp(String.raw`setTimeout\(\(\) => \{[^}]*?\b(?:resolve|r)\([^)]*\);?\s*\},\s*${DELAY}\)`, "su"),
+];
 const TEST_FILE = /\.test\.tsx?$/u;
 const SKIPPED_DIRS = new Set(["dist", "node_modules", "workerd"]);
 

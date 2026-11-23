@@ -288,16 +288,17 @@ describe("signOut", () => {
         // Not a fixed count: `vi.waitFor` re-runs its assertion until it passes.
         expect.hasAssertions();
 
-        // A Lunora client whose `/get-session` answers a tick later, as a real
-        // one does: the identity moves to "user-b" only when it lands.
+        // A Lunora client whose `/get-session` answers later, as a real one
+        // does: the identity moves to "user-b" only when the test lets it land.
         let identity = "user-a";
+        let answer = (): void => undefined;
         const release = onSessionChanged(
             async () =>
                 new Promise<void>((resolve) => {
-                    setTimeout(() => {
+                    answer = () => {
                         identity = "user-b";
                         resolve();
-                    }, 20);
+                    };
                 }),
         );
         const seen: string[] = [];
@@ -312,6 +313,8 @@ describe("signOut", () => {
 
         // Not yet: the probe is still in flight.
         expect(seen).toStrictEqual([]);
+
+        answer();
 
         await vi.waitFor(() => {
             expect(seen).toStrictEqual(["user-b"]);

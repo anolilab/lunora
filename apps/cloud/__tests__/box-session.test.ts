@@ -494,8 +494,21 @@ describe("boxSessionDO", () => {
 
                 setOrg1(store, { suspendedAt: 1 });
 
+                const pushRoutes = session.pushRoutes.bind(session);
+                // The handshake's signature checks finish on the thread pool, so no fixed turn count reaches its push.
+                const reconnectPushRequested = new Promise<void>((resolve) => {
+                    session.pushRoutes = async (): Promise<boolean> => {
+                        const push = pushRoutes();
+
+                        resolve();
+
+                        return push;
+                    };
+                });
                 const reconnecting = handshake(session, state, key, "box_1");
 
+                await reconnectPushRequested;
+                // An unserialised reconnect push would now read the current table and send it before the held one lands.
                 await settle();
                 held.release();
 
