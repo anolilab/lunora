@@ -17,7 +17,9 @@ const globalSchema: SchemaLike = {
     tables: { counters: { indexes: [], shape: { n: col("number") }, shardMode: { kind: "global" } } },
 };
 
-type GlobalStub = Partial<Record<"count" | "delete" | "deleteMany" | "findMany" | "get" | "patch" | "patchIf" | "replace" | "restore", unknown>>;
+type GlobalStub = Partial<
+    Record<"aggregate" | "count" | "delete" | "deleteMany" | "findMany" | "get" | "groupBy" | "patch" | "patchIf" | "replace" | "restore", unknown>
+>;
 
 /**
  * Live subscriptions on this shard read `.global()` rows, and the write lands in D1.
@@ -466,5 +468,65 @@ describe("nested counts under a .global() relation", () => {
         expect(onRead).toHaveBeenCalledWith("posts", "*scan", undefined);
         expect(onRead).toHaveBeenCalledWith("memberships", "*scan", undefined);
         expect(onRead).toHaveBeenCalledWith("teams", "*scan", undefined);
+    });
+});
+
+describe("global reads filtered by a relation predicate", () => {
+    // posts' policy reaches memberships, and memberships' policy reaches teams. D1 reads both
+    // while answering a posts read, so a change to either has to re-run it.
+    const relationSchema: SchemaLike = {
+        tables: {
+            memberships: {
+                indexes: [],
+                relationMap: { team: { field: "teamId", kind: "one", references: "_id", table: "teams" } },
+                shape: { postId: col("string"), teamId: col("string"), userId: col("string") },
+                shardMode: { kind: "global" },
+            },
+            posts: {
+                indexes: [],
+                relationMap: { members: { field: "postId", kind: "many", references: "_id", table: "memberships" } },
+                shape: { title: col("string") },
+                shardMode: { kind: "global" },
+            },
+            teams: { indexes: [], shape: { name: col("string") }, shardMode: { kind: "global" } },
+        },
+    };
+    const baseWhere = { members: { some: { userId: "u1" } } };
+    const relationBaseWhere = (table: string): Record<string, unknown> | undefined =>
+        table === "memberships" ? { team: { is: { name: "core" } } } : undefined;
+
+    const stubs: GlobalStub = {
+        aggregate: vi.fn<() => Promise<number>>(async () => 1),
+        count: vi.fn<() => Promise<number>>(async () => 1),
+        groupBy: vi.fn<() => Promise<unknown[]>>(async () => []),
+    };
+
+    it.each([
+        ["findMany", (writer: DatabaseWriterLike) => writer.findMany("posts", { baseWhere, relationBaseWhere })],
+        ["count", (writer: DatabaseWriterLike) => writer.count("posts", { baseWhere, relationBaseWhere })],
+        ["aggregate", (writer: DatabaseWriterLike) => writer.aggregate("posts", { baseWhere, field: "title", op: "max", relationBaseWhere })],
+        ["groupBy", (writer: DatabaseWriterLike) => writer.groupBy("posts", { baseWhere, by: ["title"], relationBaseWhere })],
+    ])("%s records the scan of every table the policy reaches", async (_name, read) => {
+        expect.hasAssertions();
+
+        const onRead = vi.fn<NonNullable<CtxDbOptions["onRead"]>>();
+        const { writer } = setup(stubs, { onRead, schema: relationSchema });
+
+        await read(writer);
+
+        expect(onRead).toHaveBeenCalledWith("posts", "*scan", undefined);
+        expect(onRead).toHaveBeenCalledWith("memberships", "*scan", undefined);
+        expect(onRead).toHaveBeenCalledWith("teams", "*scan", undefined);
+    });
+
+    it("findMany records the tables a relation predicate in the caller's filter reaches", async () => {
+        expect.hasAssertions();
+
+        const onRead = vi.fn<NonNullable<CtxDbOptions["onRead"]>>();
+        const { writer } = setup({}, { onRead, schema: relationSchema });
+
+        await writer.findMany("posts", { where: { members: { none: { userId: "u2" } } } });
+
+        expect(onRead).toHaveBeenCalledWith("memberships", "*scan", undefined);
     });
 });

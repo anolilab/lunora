@@ -2923,6 +2923,21 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * Stamp the scan dependencies of a read the D1 writer answers: the table itself, and every
+     * table a relation predicate in its policy (`baseWhere`) or filter reaches, along with what
+     * those tables' own policies reach. D1 reads those tables itself and reports none of them
+     * here, so without these a membership change would leave a live result showing rows the
+     * policy no longer admits.
+     */
+    const stampGlobalRead = (tableName: string, readOptions: Pick<RestrictableQueryOptions, "baseWhere" | "relationBaseWhere" | "where">): void => {
+        onRead(tableName, SCAN_DEP);
+
+        for (const table of relationPredicateTables(mergeWhere(readOptions.baseWhere, readOptions.where), schema, tableName, readOptions.relationBaseWhere)) {
+            onRead(table, SCAN_DEP);
+        }
+    };
+
+    /**
      * Tell this DO's live subscriptions that a `.global()` row changed. The write lands in D1, so
      * neither the row image nor its index positions are known here. Without them a subscriber is
      * invalidated across its whole table, which is always sound.
@@ -3144,14 +3159,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         if (globalWriter) {
             // Global (D1) child: parallel scalar counts through the D1 writer.
             // The D1 writer's count() resolves relation predicates itself, under the policies it is handed.
-            // Stamp a scan dependency: any row in the child table can shift a count.
-            onRead(relationTable, SCAN_DEP);
-
-            // So can any row of a table the policy reaches through a relation (a membership row): the
-            // D1 writer reads those itself and reports none of them here.
-            for (const table of relationPredicateTables(policyWhere, schema, relationTable, relationBaseWhere)) {
-                onRead(table, SCAN_DEP);
-            }
+            // Any row in the child table, or in a table its policy reaches, can shift a count.
+            stampGlobalRead(relationTable, { relationBaseWhere, where: policyWhere });
 
             return fanOutScalarCounts((t, w) => globalWriter.count(t, { relationBaseWhere, where: w }), relationTable, whereField, values, policyWhere);
         }
@@ -3683,7 +3692,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "aggregate");
 
             if (global) {
-                onRead(tableName, SCAN_DEP);
+                stampGlobalRead(tableName, aggOptions);
 
                 return global.aggregate(tableName, aggOptions);
             }
@@ -3795,7 +3804,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "count");
 
             if (global) {
-                onRead(tableName, SCAN_DEP);
+                stampGlobalRead(tableName, normalizeCountArgument(whereOrOptions));
 
                 return global.count(tableName, whereOrOptions);
             }
@@ -4160,7 +4169,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // read still needs to refresh when the global table changes. We
                 // can't track per-row deps across the D1 boundary, so stamp the
                 // conservative `*scan` marker: any write to the table re-runs it.
-                onRead(tableName, SCAN_DEP);
+                stampGlobalRead(tableName, args);
 
                 if (args.consistency === "primary") {
                     reportRead(tableName, PRIMARY_READ);
@@ -4333,7 +4342,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "groupBy");
 
             if (global) {
-                onRead(tableName, SCAN_DEP);
+                stampGlobalRead(tableName, groupOptions);
 
                 return global.groupBy(tableName, groupOptions);
             }
