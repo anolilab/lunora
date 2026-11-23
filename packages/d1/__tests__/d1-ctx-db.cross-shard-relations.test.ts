@@ -1,4 +1,4 @@
-import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike, WhereInput, WithInput } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
@@ -99,6 +99,143 @@ describe("d1 reverse cross-backend relation loading", () => {
         expect(seen?.["where"]).toEqual({ AND: [{ ownerId: "u1" }, { globalId: { in: ["g1"] } }] });
         // …and the function form is projected to data for the NESTED `with` hops.
         expect(seen?.["relationPolicies"]).toEqual({ local: { ownerId: "u1" } });
+    });
+
+    it("asks the relation filter only for tables the hop can reach, so an unrelated table cannot fail it", async () => {
+        expect.assertions(3);
+
+        const schema: SchemaLike = {
+            tables: {
+                ...reverseSchema.tables,
+                local: { ...reverseSchema.tables["local"]!, relationMap: { tags: { field: "localId", kind: "many", references: "_id", table: "tags" } } },
+                secrets: { indexes: [], shape: { body: col("string") }, shardMode: { kind: "root" } },
+                tags: { indexes: [], shape: { localId: col("string") }, shardMode: { kind: "root" } },
+            },
+        };
+        let seen: Record<string, unknown> | undefined;
+        const writer = createD1ContextDatabase({
+            crossShardReader: async (_table, args) => {
+                seen = args as unknown as Record<string, unknown>;
+
+                return { continueCursor: null, isDone: true, page: [] };
+            },
+            exec: harness.exec,
+            schema,
+        });
+        const asked: string[] = [];
+        // Stands in for an rls() filter that refuses a protected table no policy reads.
+        const relationBaseWhere = (closed: string) => (table: string) => {
+            asked.push(table);
+
+            if (table === closed) {
+                throw new Error(`RLS_REQUIRED: ${table}`);
+            }
+
+            return undefined;
+        };
+
+        await seedParent(writer);
+        await writer.findMany("globals", { relationBaseWhere: relationBaseWhere("secrets"), with: { items: { with: { tags: true } } } });
+
+        expect(asked).not.toContain("secrets");
+        expect(seen?.["relationPolicies"]).toStrictEqual({});
+        // A table the nested `with` does reach still fails closed.
+        await expect(writer.findMany("globals", { relationBaseWhere: relationBaseWhere("tags"), with: { items: { with: { tags: true } } } })).rejects.toThrow(
+            "RLS_REQUIRED: tags",
+        );
+    });
+
+    describe("relations a read policy names", () => {
+        // `local` reaches `secrets` through `notes`, and `tags` reaches it through `note`; neither
+        // is named by the read's `with` or `where`, only by the policies the hop carries.
+        const schema: SchemaLike = {
+            tables: {
+                ...reverseSchema.tables,
+                local: {
+                    ...reverseSchema.tables["local"]!,
+                    relationMap: {
+                        notes: { field: "localId", kind: "many", references: "_id", table: "secrets" },
+                        tags: { field: "localId", kind: "many", references: "_id", table: "tags" },
+                    },
+                },
+                secrets: { indexes: [], shape: { body: col("string"), localId: col("string") }, shardMode: { kind: "root" } },
+                tags: {
+                    indexes: [],
+                    relationMap: { note: { field: "noteId", kind: "one", references: "_id", table: "secrets" } },
+                    shape: { localId: col("string"), noteId: col("string") },
+                    shardMode: { kind: "root" },
+                },
+            },
+        };
+
+        const readAcross = async (policies: Record<string, WhereInput | "closed">, withInput: WithInput): Promise<Record<string, unknown> | undefined> => {
+            let seen: Record<string, unknown> | undefined;
+            const writer = createD1ContextDatabase({
+                crossShardReader: async (_table, args) => {
+                    seen = args as unknown as Record<string, unknown>;
+
+                    return { continueCursor: null, isDone: true, page: [] };
+                },
+                exec: harness.exec,
+                schema,
+            });
+
+            await seedParent(writer);
+            await writer.findMany("globals", {
+                // Stands in for rls(): a table's read policy, or a refusal for a protected table with none.
+                relationBaseWhere: (table) => {
+                    const policy = policies[table];
+
+                    if (policy === "closed") {
+                        throw new Error(`RLS_REQUIRED: ${table}`);
+                    }
+
+                    return policy;
+                },
+                with: withInput,
+            });
+
+            return seen?.["relationPolicies"] as Record<string, unknown> | undefined;
+        };
+
+        it("carries the read policy of a relation the child's own policy filters by", async () => {
+            expect.assertions(1);
+
+            const policies = await readAcross({ local: { notes: { some: { body: "shared" } } }, secrets: { body: "visible" } }, { items: true });
+
+            // Without it the serving shard resolves `notes` over every secrets row.
+            expect(policies?.["secrets"]).toStrictEqual({ body: "visible" });
+        });
+
+        it("carries the read policy of a relation a nested table's policy filters by", async () => {
+            expect.assertions(1);
+
+            const policies = await readAcross(
+                { secrets: { body: "visible" }, tags: { note: { is: { body: "shared" } } } },
+                { items: { with: { tags: true } } },
+            );
+
+            expect(policies?.["secrets"]).toStrictEqual({ body: "visible" });
+        });
+
+        it("does not follow a relation name whose filter is a column filter, not a relation node", async () => {
+            expect.assertions(1);
+
+            // `notes` names a relation, but `{ some: 1, label: "x" }` is not all relation operators, so
+            // the engine reads it as a column filter and never loads `secrets`: asking would refuse a read
+            // that does not touch it.
+            await expect(readAcross({ local: { notes: { label: "x", some: 1 } }, secrets: "closed" }, { items: true })).resolves.toStrictEqual({
+                local: { notes: { label: "x", some: 1 } },
+            });
+        });
+
+        it("refuses when a policy filters by a protected relation that has no read policy", async () => {
+            expect.assertions(1);
+
+            await expect(readAcross({ local: { notes: { some: { body: "shared" } } }, secrets: "closed" }, { items: true })).rejects.toThrow(
+                "RLS_REQUIRED: secrets",
+            );
+        });
     });
 
     it("rEFUSES a masked read with a nested `with` across the hop instead of serving it unmasked", async () => {

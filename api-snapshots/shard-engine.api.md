@@ -6119,6 +6119,12 @@ interface GuardableSchema {
     readonly rlsMode?: "required";
     readonly tables: Record<string, {
         readonly isPublic?: boolean;
+        readonly relationMap?: Record<string, {
+            readonly table: string;
+            readonly through?: {
+                readonly table: string;
+            };
+        }>;
         readonly shardMode?: {
             readonly kind?: string;
         };
