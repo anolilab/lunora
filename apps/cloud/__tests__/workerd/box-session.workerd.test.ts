@@ -53,38 +53,53 @@ const connect = async (boxId: string) => {
 
     socket.accept();
 
+    // Frames reach a waiter from the message listener itself, so no wait depends on a timer.
     const received: CloudMessage[] = [];
+    const waiters: { reject: (error: Error) => void; resolve: (frame: CloudMessage) => void; type: CloudMessage["type"] }[] = [];
     const closed: { code?: number }[] = [];
 
     socket.addEventListener("message", (event) => {
         const decoded = decodeCloudMessage(event.data as string);
 
-        if (decoded.ok) {
+        if (!decoded.ok) {
+            return;
+        }
+
+        const waiter = waiters.find((candidate) => candidate.type === decoded.message.type);
+
+        if (waiter === undefined) {
             received.push(decoded.message);
+        } else {
+            waiters.splice(waiters.indexOf(waiter), 1);
+            waiter.resolve(decoded.message);
         }
     });
     socket.addEventListener("close", (event) => {
         closed.push({ code: event.code });
+
+        // No frame can follow a close: fail a waiter now rather than leave it to the test timeout.
+        for (const waiter of waiters.splice(0)) {
+            waiter.reject(new Error(`socket closed (${String(event.code)}) before a ${waiter.type} frame; got ${JSON.stringify(received)}`));
+        }
     });
 
     /** The next frame of `type` the control plane sends. */
     const next = async <T extends CloudMessage["type"]>(type: T): Promise<Extract<CloudMessage, { type: T }>> => {
-        for (let attempt = 0; attempt < 200; attempt += 1) {
-            const found = received.find((frame) => frame.type === type);
+        const found = received.find((frame) => frame.type === type);
 
-            if (found) {
-                received.splice(received.indexOf(found), 1);
+        if (found) {
+            received.splice(received.indexOf(found), 1);
 
-                return found as Extract<CloudMessage, { type: T }>;
-            }
-
-            // eslint-disable-next-line no-await-in-loop -- polling the socket's inbox
-            await new Promise((resolve) => {
-                setTimeout(resolve, 10);
-            });
+            return found as Extract<CloudMessage, { type: T }>;
         }
 
-        throw new Error(`no ${type} frame; got ${JSON.stringify(received)}`);
+        if (closed.length > 0) {
+            throw new Error(`socket closed before a ${type} frame; got ${JSON.stringify(received)}`);
+        }
+
+        return new Promise((resolve, reject) => {
+            waiters.push({ reject, resolve: resolve as (frame: CloudMessage) => void, type });
+        });
     };
 
     return { closed, next, socket };
