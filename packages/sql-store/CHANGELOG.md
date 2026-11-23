@@ -1,3 +1,7 @@
+## @lunora/sql-store [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.243...@lunora/sql-store@1.0.0-alpha.244) (2026-11-23)
+
+- security(shard-engine)!: apply relation policies to counts (#1679)
+
 ## @lunora/sql-store [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.242...@lunora/sql-store@1.0.0-alpha.243) (2026-11-23)
 
 - security(server)!: close two row-level-security gaps on shapes and relations (#1637)

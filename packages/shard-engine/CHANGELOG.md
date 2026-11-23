@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.204...@lunora/shard-engine@1.0.0-alpha.205) (2026-11-23)
+
+- security(shard-engine)!: apply relation policies to counts (#1679)
+
 ## @lunora/shard-engine [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.203...@lunora/shard-engine@1.0.0-alpha.204) (2026-11-23)
 
 - security(server)!: close two row-level-security gaps on shapes and relations (#1637)

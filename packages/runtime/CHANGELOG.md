@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.298...@lunora/runtime@1.0.0-alpha.299) (2026-11-23)
+
+- security(shard-engine)!: apply relation policies to counts (#1679)
+
 ## @lunora/runtime [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.297...@lunora/runtime@1.0.0-alpha.298) (2026-11-23)
 
 - fix: close leftover review findings in the sdks and tests (#1677)
