@@ -184,6 +184,18 @@ const validatedStepInput = async (step: ToolScriptStep, tool: AnyAgentTool, inpu
 };
 
 /**
+ * Leads every script step's call key and durable step name. A top-level call's step name starts `tool:` and the agent
+ * loop never hands out a call key starting with this, so no provider id, repeated or not, can name a step's key.
+ */
+const CODE_STEP_KEY_PREFIX = "code-step:";
+
+/** A key segment with backslash and colon escaped, so the one bare colon in a step's key splits it back unambiguously. */
+const escapeKeyPart = (part: string): string => part.replaceAll("\\", String.raw`\\`).replaceAll(":", String.raw`\:`);
+
+/** A step's key under its code call's key: prefixed out of the top-level namespace, both parts escaped. */
+const stepKeyOf = (parentKey: string, stepId: string): string => `${CODE_STEP_KEY_PREFIX}${escapeKeyPart(parentKey)}:${escapeKeyPart(stepId)}`;
+
+/**
  * Interpret a {@link ToolScript}: run each step in order, dispatching its `tool`
  * through the same {@link AgentToolContext} the loop hands a normal tool call
  * (so a composed tool inherits the durable step and RLS — but NOT its own
@@ -248,11 +260,13 @@ const runToolScript = async (
         const input = await validatedStepInput(step, tool, resolveReferences(step.input ?? {}, byId));
         // Give each sub-call its OWN idempotency key / tool-call id (derived from
         // the code tool's, suffixed by the step id) so two side-effecting sub-calls
-        // in one script don't collide on a shared key when they dedupe on it.
+        // in one script don't collide on a shared key when they dedupe on it. A
+        // bare suffix made step "x" of call "1" the key of a later call keyed "1:x".
         const stepContext: AgentToolContext = {
             ...context,
-            idempotencyKey: `${context.idempotencyKey}:${step.id}`,
-            toolCallId: `${context.toolCallId}:${step.id}`,
+            callKey: stepKeyOf(context.callKey ?? context.toolCallId, step.id),
+            idempotencyKey: stepKeyOf(context.idempotencyKey, step.id),
+            toolCallId: `${context.toolCallId}:${escapeKeyPart(step.id)}`,
         };
 
         const runStep = (): Promise<unknown> => Promise.resolve(tool.execute(input, stepContext));
@@ -403,4 +417,4 @@ const codeTool = (tools: Record<string, AnyAgentTool>, options: CodeToolOptions 
 };
 
 export type { CodeToolOptions, ToolScript, ToolScriptResult, ToolScriptStep };
-export { codeTool, resolveReferences, runToolScript };
+export { CODE_STEP_KEY_PREFIX, codeTool, resolveReferences, runToolScript };

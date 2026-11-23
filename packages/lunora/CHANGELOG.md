@@ -1,3 +1,7 @@
+## lunorash [1.0.0-alpha.481](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.480...lunorash@1.0.0-alpha.481) (2026-11-23)
+
+- Updated dependency @lunora/ratelimit@1.0.0-alpha.197
+
 ## lunorash [1.0.0-alpha.480](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.479...lunorash@1.0.0-alpha.480) (2026-11-22)
 
 - Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).

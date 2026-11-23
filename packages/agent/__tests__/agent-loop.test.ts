@@ -1376,6 +1376,8 @@ describe(runAgentLoop, () => {
         const marker = [...runtime.messages.values()].find((message) => message.status === "awaiting_approval");
 
         expect(marker?.toolName).toBe("charge");
+        // Every marker names its slot, so a decision is bound to it; a first occurrence's slot is its call id.
+        expect(marker).toMatchObject({ approvalSlot: "call_1" });
 
         // Phase B — a client approves; the SAME workflow instance replays (same
         // journal + store), the memoized turn/marker are skipped, and the tool runs.
@@ -2576,5 +2578,252 @@ describe("usage of a failed streamed turn", () => {
         // The retry is the same turn: its tokens count once, so the total is not the failed attempt added on top of it.
         expect(result).toMatchObject({ stopped: "final", usage: { inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 } });
         expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 });
+    });
+});
+
+describe("a tool-call id a later turn reuses", () => {
+    /** An agent whose `refund` and `charge` tools both need approval, and whose `echo` tool needs none. */
+    const reuseAgent = (runs: string[], chargeGate: boolean | ((input: unknown) => boolean) = true): AgentDefinition =>
+        defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => {
+                        runs.push("charge");
+
+                        return "charged";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: chargeGate,
+                }),
+                echo: defineAgentTool({
+                    description: "Echo the input.",
+                    execute: (input) => {
+                        runs.push("echo");
+
+                        return JSON.stringify(input);
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+                refund: defineAgentTool({
+                    description: "Refund the card.",
+                    execute: () => {
+                        runs.push("refund");
+
+                        return "refunded";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+    it("asks again for a different gated tool that reuses an approved call's id, and runs it only once that is approved", async () => {
+        expect.assertions(6);
+
+        const runs: string[] = [];
+        const agent = reuseAgent(runs);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("x", "refund", {}), toolTurn("x", "charge", { amount: 500 }), finalTurn("done")]);
+
+        journal.events.set("approval:x", { decision: "approve" });
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* parked on the second approval; never settles */
+        });
+        await parkedOn(paused, journal, "approval:1:x");
+
+        expect(runs).toStrictEqual(["refund"]);
+        expect(journal.resolvedWaitOptions.get("approval:1:x")?.type).toBe("agent-approval:1:x");
+        expect([...runtime.messages.values()].find((message) => message.status === "awaiting_approval")).toMatchObject({
+            approvalSlot: "1:x",
+            toolCallId: "x",
+            toolName: "charge",
+        });
+
+        journal.events.set("approval:1:x", { decision: "approve" });
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(result).toMatchObject({ stopped: "final", text: "done" });
+        expect(runs).toStrictEqual(["refund", "charge"]);
+        expect(
+            [...runtime.messages.values()].filter((message) => message.role === "tool" && message.toolCallId === "x").map((message) => message.content),
+        ).toStrictEqual(["refunded", "charged"]);
+    });
+
+    it("asks for a call whose predicate gate passed it in an earlier turn under the same id", async () => {
+        expect.assertions(2);
+
+        const runs: string[] = [];
+        const agent = reuseAgent(runs, (input) => (input as { amount: number }).amount > 50);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("x", "charge", { amount: 10 }), toolTurn("x", "charge", { amount: 500 }), finalTurn("done")]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* parked on the second call's approval; never settles */
+        });
+        await parkedOn(paused, journal, "approval:1:x");
+
+        expect(journal.waitedNames).toStrictEqual(["approval:1:x"]);
+        expect(runs).toStrictEqual(["charge"]);
+    });
+
+    it("asks for a gated call whose repeated id's slot equals an earlier call's own id", async () => {
+        expect.assertions(2);
+
+        const runs: string[] = [];
+        // `charge` is passed by its predicate, so its gate memo under its key records "no approval needed".
+        const agent = reuseAgent(runs, () => false);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([
+            toolTurn("x", "echo", {}),
+            toolTurn("2:x", "charge", { amount: 10 }),
+            toolTurn("x", "refund", {}),
+            finalTurn("done"),
+        ]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* parked on the refund's approval; never settles */
+        });
+        await parkedOn(paused, journal, "approval:2:2:x");
+
+        expect(runs).toStrictEqual(["echo", "charge"]);
+        expect(journal.waitedNames).toStrictEqual(["approval:2:2:x"]);
+    });
+
+    it("keeps a repeated call's slot off a key an earlier call in the same turn took", async () => {
+        expect.assertions(2);
+
+        const runs: string[] = [];
+        const agent = reuseAgent(runs, () => false);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const sameTurn: AgentGenerateResult = {
+            text: "",
+            toolCalls: [
+                { id: "1:x", input: { amount: 10 }, name: "charge" },
+                { id: "x", input: {}, name: "refund" },
+            ],
+        };
+        const generate = scriptedGenerate([toolTurn("x", "echo", {}), sameTurn, finalTurn("done")]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* parked on the refund's approval; never settles */
+        });
+        await parkedOn(paused, journal, "approval:1:1:x");
+
+        expect(runs).toStrictEqual(["echo", "charge"]);
+        expect(journal.waitedNames).toStrictEqual(["approval:1:1:x"]);
+    });
+
+    it("gives a first-seen id that equals an earlier repeated call's slot its own slot", async () => {
+        expect.assertions(2);
+
+        const runs: string[] = [];
+        const agent = reuseAgent(runs);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("x", "echo", { n: 1 }), toolTurn("x", "echo", { n: 2 }), toolTurn("1:x", "refund", {}), finalTurn("done")]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* parked on the refund's approval; never settles */
+        });
+        await parkedOn(paused, journal, "approval:2:1:x");
+
+        expect(journal.waitedNames).toStrictEqual(["approval:2:1:x"]);
+        expect(runs).toStrictEqual(["echo", "echo"]);
+    });
+
+    it("hands a tool its call key, turn-scoped for a reused id, beside the provider's id", async () => {
+        expect.assertions(1);
+
+        const seen: { callKey: string | undefined; toolCallId: string }[] = [];
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                probe: defineAgentTool({
+                    description: "Record the context.",
+                    execute: (_input, context) => {
+                        seen.push({ callKey: context.callKey, toolCallId: context.toolCallId });
+
+                        return "ok";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+            },
+        });
+        const generate = scriptedGenerate([toolTurn("x", "probe", {}), toolTurn("x", "probe", {}), finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: memoryRuntime().run, step: new DurableStepJournal() }));
+
+        expect(seen).toStrictEqual([
+            { callKey: "x", toolCallId: "x" },
+            { callKey: "1:x", toolCallId: "x" },
+        ]);
+    });
+
+    it("keys a provider id that reads as a code step's key apart from it", async () => {
+        expect.assertions(1);
+
+        const seen: (string | undefined)[] = [];
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                probe: defineAgentTool({
+                    description: "Record the context.",
+                    execute: (_input, context) => {
+                        seen.push(context.callKey);
+
+                        return "ok";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+            },
+        });
+        const generate = scriptedGenerate([toolTurn("code-step:1:x", "probe", {}), finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: memoryRuntime().run, step: new DurableStepJournal() }));
+
+        expect(seen).toStrictEqual(["0:code-step:1:x"]);
+    });
+
+    it("runs the same tool again under a reused id and keeps both results, and a replay runs neither again", async () => {
+        expect.assertions(5);
+
+        const runs: string[] = [];
+        const agent = reuseAgent(runs);
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("x", "echo", { n: 1 }), toolTurn("x", "echo", { n: 2 }), finalTurn("done")]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(runs).toStrictEqual(["echo", "echo"]);
+        expect(
+            [...runtime.messages.values()].filter((message) => message.role === "tool" && message.toolCallId === "x").map((message) => message.content),
+        ).toStrictEqual(['{"n":1}', '{"n":2}']);
+
+        // The first occurrence keeps the name a run recorded before repeated ids were scoped, so a replay finds its memo.
+        expect(journal.invoked.filter((name) => name.startsWith("tool:echo:"))).toStrictEqual(["tool:echo:x", "tool:echo:1:x"]);
+
+        const replay = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(replay).toMatchObject({ stopped: "final", text: "done" });
+        expect(runs).toStrictEqual(["echo", "echo"]);
     });
 });

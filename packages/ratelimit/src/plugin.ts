@@ -1,4 +1,5 @@
 import type { Plugin } from "@lunora/server";
+import { tagPerDispatchMiddleware } from "@lunora/server";
 
 import type { LimiterResolver } from "./middleware";
 import type { RateLimiter } from "./rate-limiter";
@@ -34,20 +35,22 @@ export interface RatelimitApiContext<Context> {
  * store the resolved {@link RateLimiter} was built with — so it is a
  * middleware-only plugin and is skipped by `installPlugins(...)`'s schema fold.
  *
- * Built as a plain {@link Plugin} literal (the key is the fixed string
- * `"ratelimit"`, so the `definePlugin` validation adds nothing) — this keeps
- * `@lunora/server` a type-only dependency of `@lunora/ratelimit`.
+ * Built as a plain {@link Plugin} literal: the key is the fixed string
+ * `"ratelimit"`, so the `definePlugin` validation adds nothing.
  */
 export const ratelimitPlugin = <Context = unknown>(
     limiter: LimiterResolver<Context>,
 ): Plugin<Record<never, never>, Context, Context & RatelimitApiContext<Context>> => {
     return {
         key: "ratelimit",
-        middleware: async ({ ctx, next }) => {
+        // Tagged PER-DISPATCH like `rateLimit`: the handler consumes budget through
+        // `ctx.api.ratelimit`, an effect of the request, so a reactive-cache hit
+        // that skips the handler would serve the request without charging it.
+        middleware: tagPerDispatchMiddleware(async ({ ctx, next }) => {
             const resolved = typeof limiter === "function" ? await limiter(ctx) : limiter;
             const existingApi = (ctx as { api?: Record<string, unknown> }).api ?? {};
 
             return next({ ctx: { api: { ...existingApi, ratelimit: resolved } } }) as Promise<Context & RatelimitApiContext<Context>>;
-        },
+        }),
     };
 };

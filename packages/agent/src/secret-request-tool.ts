@@ -278,7 +278,9 @@ const withSecret = async <Result>(context: AgentToolContext, secretRef: string, 
     const consumed = await context.step.do(`secret:consume:${context.idempotencyKey}:${secretRef}`, async () => {
         const secret = await context.run(toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.takeSecret), {
             claimant: context.idempotencyKey,
-            consumerCallId: context.toolCallId,
+            // The call's key, not its provider id: the claimant (the step name) is keyed on it, and a provider id
+            // repeated in a later turn is keyed apart from its first use.
+            consumerCallId: context.callKey ?? context.toolCallId,
             instanceId: context.instanceId,
             threadKey: context.threadKey,
             toolCallId: secretRef,

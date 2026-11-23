@@ -96,6 +96,7 @@ export type { PendingApproval, UseAgentApprovalsApi, UseAgentApprovalsOptions, U
 export { useAgentApprovals } from "./use-agent-approvals";
 export type {
     AgentApprovalGrant,
+    AgentApprovalTarget,
     AgentChatMessage,
     AgentLiveEvent,
     AgentProgressEvent,

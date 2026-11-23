@@ -195,7 +195,7 @@ class AppBuilder<Env extends object> {
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.hyperdriveGlobalDeclaration
                 ? {
-                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onWrite?: (table: string) => void; userId?: string | null | undefined }) => {
+                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onWrite?: (table: string, settledLate?: boolean) => void; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const declaration = this.hyperdriveGlobalDeclaration;
                           const exec = declaration?.exec(env) as SqlExec | undefined;

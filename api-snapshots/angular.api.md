@@ -24,6 +24,12 @@ interface AgentApprovalGrant {
 }
 ```
 
+### `AgentApprovalTarget` (type)
+
+```ts
+type AgentApprovalTarget = Pick<AgentChatMessage, "approvalSlot" | "toolCallId">;
+```
+
 ### `AgentChatApi` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

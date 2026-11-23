@@ -1,3 +1,7 @@
+## @lunora/do [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.291...@lunora/do@1.0.0-alpha.292) (2026-11-23)
+
+- fix(do): close the gaps reviewers found in the global refresh (#1674)
+
 ## @lunora/do [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.290...@lunora/do@1.0.0-alpha.291) (2026-11-23)
 
 - fix(do): refresh live queries on other shards after global writes (#1673)

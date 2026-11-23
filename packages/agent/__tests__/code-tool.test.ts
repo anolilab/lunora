@@ -20,7 +20,7 @@ const INHERITED_REF_PATTERNS = [/unknown result "constructor"/u, /unknown result
 
 // `step` is required on AgentToolContext — production always threads a real
 // durable handle — so a hand-built context supplies the pass-through double.
-const context = { step: passthroughStep } as AgentToolContext;
+const context = { idempotencyKey: "tool:code:call_1", step: passthroughStep, toolCallId: "call_1" } as AgentToolContext;
 
 /** A fake tool that records the input it was called with and returns `output`. */
 const fakeTool = (output: unknown, calls: unknown[] = []): AgentToolDefinition => {
@@ -241,6 +241,82 @@ describe(runToolScript, () => {
         expect(calls).toStrictEqual([]);
     });
 
+    it("gives each step its own call key derived from the code tool's", async () => {
+        const seen: (string | undefined)[] = [];
+        const tool: AgentToolDefinition = {
+            description: "t",
+            execute: (_input, ctx) => {
+                seen.push(ctx.callKey);
+
+                return "ok";
+            },
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
+            isLunoraAgentTool: true,
+        };
+        const baseContext = { callKey: "1:call_1", idempotencyKey: "tool:code:1:call_1", step: passthroughStep, toolCallId: "call_1" } as AgentToolContext;
+
+        await runToolScript({ steps: [{ id: "a", tool: "t" }] }, { t: tool }, baseContext, 16);
+
+        expect(seen).toStrictEqual([String.raw`code-step:1\:call_1:a`]);
+    });
+
+    it("keeps a step id that contains a colon from producing another call's key", async () => {
+        const seen: { callKey: string | undefined; idempotencyKey: string }[] = [];
+        const tool: AgentToolDefinition = {
+            description: "t",
+            execute: (_input, ctx) => {
+                seen.push({ callKey: ctx.callKey, idempotencyKey: ctx.idempotencyKey });
+
+                return "ok";
+            },
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
+            isLunoraAgentTool: true,
+        };
+
+        // Turn 0's call "1" runs step "x:y"; turn 1 repeats call id "x", keyed "1:x", and runs step "y".
+        await runToolScript(
+            { steps: [{ id: "x:y", tool: "t" }] },
+            { t: tool },
+            { callKey: "1", idempotencyKey: "tool:code:1", step: passthroughStep, toolCallId: "1" } as AgentToolContext,
+            16,
+        );
+        await runToolScript(
+            { steps: [{ id: "y", tool: "t" }] },
+            { t: tool },
+            { callKey: "1:x", idempotencyKey: "tool:code:1:x", step: passthroughStep, toolCallId: "x" } as AgentToolContext,
+            16,
+        );
+
+        expect(seen[0]?.callKey).not.toBe(seen[1]?.callKey);
+        expect(seen[0]?.idempotencyKey).not.toBe(seen[1]?.idempotencyKey);
+    });
+
+    it("keeps a step's keys apart from a later top-level call keyed with the step's suffix", async () => {
+        const seen: { callKey: string | undefined; idempotencyKey: string }[] = [];
+        const tool: AgentToolDefinition = {
+            description: "t",
+            execute: (_input, ctx) => {
+                seen.push({ callKey: ctx.callKey, idempotencyKey: ctx.idempotencyKey });
+
+                return "ok";
+            },
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
+            isLunoraAgentTool: true,
+        };
+
+        // Call "1" runs step "x". A later "code" call whose id repeats "x" is keyed "1:x", so its own step is "tool:code:1:x".
+        await runToolScript(
+            { steps: [{ id: "x", tool: "t" }] },
+            { t: tool },
+            { callKey: "1", idempotencyKey: "tool:code:1", step: passthroughStep, toolCallId: "1" } as AgentToolContext,
+            16,
+        );
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0]?.callKey).not.toBe("1:x");
+        expect(seen[0]?.idempotencyKey).not.toBe("tool:code:1:x");
+    });
+
     it("gives each step its own idempotency key / tool-call id derived from the code tool's", async () => {
         const seen: { idempotencyKey: string; toolCallId: string }[] = [];
         const tool: AgentToolDefinition = {
@@ -268,8 +344,8 @@ describe(runToolScript, () => {
         );
 
         expect(seen).toStrictEqual([
-            { idempotencyKey: "tool:code:call_1:a", toolCallId: "call_1:a" },
-            { idempotencyKey: "tool:code:call_1:b", toolCallId: "call_1:b" },
+            { idempotencyKey: String.raw`code-step:tool\:code\:call_1:a`, toolCallId: "call_1:a" },
+            { idempotencyKey: String.raw`code-step:tool\:code\:call_1:b`, toolCallId: "call_1:b" },
         ]);
     });
 

@@ -9,6 +9,7 @@ import dev.lunora.Submit.SubmitOptions;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -48,6 +49,21 @@ public final class Client {
      * in the low single digits, so this is far above any legitimate working set.
      */
     public static final int MAX_PENDING_POKES = 64;
+
+    /**
+     * How many re-sent {@code subscribe} frames a reconnect keeps unanswered at once before it
+     * waits for a reply. Each one runs its query server-side to build a snapshot, and most land on
+     * the one default-shard Durable Object, so an unpaced burst can knock it over
+     * (RESUBSCRIBE_CONCURRENCY in packages/client/src/client-tuning.ts, issue #796).
+     */
+    public static final int RESUBSCRIBE_CONCURRENCY = 3;
+
+    /**
+     * How long an unanswered re-subscribe holds its slot before the next one goes out without it. A
+     * slot no reply ever frees would stop every queued re-subscribe until the next reconnect, which
+     * is worse than the burst the pacing avoids.
+     */
+    public static final long RESUBSCRIBE_ACK_TIMEOUT_NANOS = 10_000_000_000L;
 
     /**
      * Which RPC method a call dispatches to. Generated code emits these constants rather than raw
@@ -227,6 +243,15 @@ public final class Client {
      * query subscription id. Guarded by {@code lock}.
      */
     private final Map<String, Long> pendingRetries = new HashMap<>();
+
+    /**
+     * Query subscription ids a reconnect has yet to re-send, in order, and the ones it has sent and
+     * not yet heard back about, each with the {@link System#nanoTime} deadline after which it stops
+     * holding a slot. See {@link #resendSubscriptions}. Guarded by {@code lock}.
+     */
+    private final ArrayDeque<String> resubscribeQueue = new ArrayDeque<>();
+
+    private final Map<String, Long> resubscribeSlots = new LinkedHashMap<>();
 
     private final Map<String, Shape> shapes = new LinkedHashMap<>();
     private final Map<String, PokeBuffer> pokes = new LinkedHashMap<>();
@@ -582,6 +607,7 @@ public final class Client {
             discardRuns();
             generation = ++this.attachGeneration;
             pendingRetries.clear();
+            clearResubscribes();
             provider = wsTokenProvider;
             credential = credentialGeneration;
         }
@@ -646,6 +672,7 @@ public final class Client {
             this.sender = null;
             this.attachGeneration++;
             pendingRetries.clear();
+            clearResubscribes();
             discardRuns();
 
             if (closeCode != null && closeCode == CLOSE_TOKEN_EXPIRED) {
@@ -899,6 +926,7 @@ public final class Client {
             closed = true;
             sender = null;
             pendingRetries.clear();
+            clearResubscribes();
             discardRuns();
             discarded = offlineQueue.clear();
             open = new ArrayList<>(streams);
@@ -1335,15 +1363,27 @@ public final class Client {
 
         return () -> {
             FrameSender current;
+            List<Resubscribe> batch = List.of();
 
             synchronized (lock) {
                 subscriptions.remove(id);
                 pendingRetries.remove(id);
                 current = sender;
+
+                // Its frame will never be answered now, so the slot it holds goes to the next one.
+                if (resubscribeSlots.remove(id) != null) {
+                    batch = takeResubscribes(System.nanoTime());
+                }
             }
 
             if (current != null) {
-                current.send(buildUnsubscribeFrame(id));
+                // The batch holds slots this call claimed: a failed unsubscribe write must not
+                // strand it.
+                try {
+                    current.send(buildUnsubscribeFrame(id));
+                } finally {
+                    sendResubscribes(current, batch, false);
+                }
             }
         };
     }
@@ -1496,15 +1536,20 @@ public final class Client {
         };
     }
 
-    /** Re-subscribes everything after a reconnect, carrying each resume cursor. */
+    /**
+     * Re-subscribes everything after a reconnect, carrying each resume cursor.
+     *
+     * <p>Query subscriptions go out at most {@link #RESUBSCRIBE_CONCURRENCY} at a time, as the
+     * reference client sends them: each of the rest is sent once {@link #handleFrame} sees a frame
+     * for one already sent, or once {@link #retryDueSubscriptions} finds one has gone unanswered
+     * for {@link #RESUBSCRIBE_ACK_TIMEOUT_NANOS} (the deadline is included in {@link
+     * #nextSubscriptionRetryAtNanos}). Shape subscriptions all go out here.
+     */
     public void resendSubscriptions() {
         FrameSender socket;
-        List<Map<String, Object>> frames = new ArrayList<>();
-        Map<String, Subscription> frozen = new LinkedHashMap<>();
+        List<Resubscribe> batch;
+        List<Map<String, Object>> shapeFrames = new ArrayList<>();
 
-        // The frames are BUILT under the lock, not just the iteration: each one
-        // reads `cursor`/`epoch`, which the frame handler writes. Snapshotting the
-        // entries and reading their cursors afterwards resends a torn one.
         synchronized (lock) {
             socket = sender;
 
@@ -1512,26 +1557,9 @@ public final class Client {
                 return;
             }
 
-            for (Map.Entry<String, Subscription> entry : subscriptions.entrySet()) {
-                Subscription subscription = entry.getValue();
-
-                // The replay from the old cursor re-applies the dropped change, and poisons again
-                // if it is still unmergeable. A send that fails below puts the freeze back.
-                if (subscription.poisoned) {
-                    frozen.put(entry.getKey(), subscription);
-                }
-
-                subscription.poisoned = false;
-                discardRun(subscription);
-                frames.add(
-                        buildSubscribeFrame(
-                                entry.getKey(),
-                                subscription.functionPath,
-                                subscription.args,
-                                null,
-                                subscription.cursor,
-                                subscription.epoch));
-            }
+            clearResubscribes();
+            resubscribeQueue.addAll(subscriptions.keySet());
+            batch = takeResubscribes(System.nanoTime());
 
             // BOTH registries. A resend that walks only the queries leaves every shape view
             // subscribed to a socket that no longer exists — silently, and for the rest of the
@@ -1539,7 +1567,7 @@ public final class Client {
             for (Map.Entry<String, Shape> entry : shapes.entrySet()) {
                 Shape shape = entry.getValue();
 
-                frames.add(
+                shapeFrames.add(
                         buildShapeSubscribeFrame(
                                 entry.getKey(),
                                 shape.name,
@@ -1549,23 +1577,136 @@ public final class Client {
             }
         }
 
-        for (Map<String, Object> frame : frames) {
-            try {
-                socket.send(frame);
-            } catch (RuntimeException error) {
-                // Nothing replayed the dropped change for the frames that never went out, so a
-                // later delta would move the cursor past it. The failed one and every unsent
-                // frame stay frozen; the ones already sent are replaying.
-                synchronized (lock) {
-                    for (Map.Entry<String, Subscription> entry : frozen.entrySet()) {
-                        entry.getValue().poisoned = true;
-                    }
-                }
+        sendResubscribes(socket, batch, true);
 
-                throw error;
+        for (Map<String, Object> frame : shapeFrames) {
+            socket.send(frame);
+        }
+    }
+
+    /** A queued re-subscribe built for sending, with the freeze its send lifted. */
+    private record Resubscribe(
+            String id, Subscription subscription, Map<String, Object> frame, boolean wasPoisoned) {}
+
+    /** Forgets the paced re-subscribe. Runs with the lock held. */
+    private void clearResubscribes() {
+        resubscribeQueue.clear();
+        resubscribeSlots.clear();
+    }
+
+    /**
+     * Builds the queued re-subscribes that fit in the free slots and claims a slot for each. Runs
+     * with the lock held.
+     *
+     * <p>Each frame is BUILT here, at the moment it goes out, not when it was queued: it reads the
+     * {@code cursor}/{@code epoch} the frame handler writes, and an identity change can clear them
+     * while the subscription waits its turn.
+     */
+    private List<Resubscribe> takeResubscribes(long nowNanos) {
+        List<Resubscribe> batch = new ArrayList<>();
+
+        while (resubscribeSlots.size() < RESUBSCRIBE_CONCURRENCY && !resubscribeQueue.isEmpty()) {
+            String id = resubscribeQueue.poll();
+            Subscription subscription = subscriptions.get(id);
+
+            // Unsubscribed while it waited its turn: nothing to re-send.
+            if (subscription == null) {
+                continue;
             }
 
-            frozen.remove(frame.get("id"));
+            // The replay from the old cursor re-applies the dropped change, and poisons again if
+            // it is still unmergeable. Lifted only now: a queued subscription is not replaying
+            // yet, so a delta reaching it must not move the cursor past the dropped change.
+            boolean wasPoisoned = subscription.poisoned;
+
+            subscription.poisoned = false;
+            discardRun(subscription);
+            batch.add(
+                    new Resubscribe(
+                            id,
+                            subscription,
+                            buildSubscribeFrame(
+                                    id,
+                                    subscription.functionPath,
+                                    subscription.args,
+                                    null,
+                                    subscription.cursor,
+                                    subscription.epoch),
+                            wasPoisoned));
+            resubscribeSlots.put(id, nowNanos + RESUBSCRIBE_ACK_TIMEOUT_NANOS);
+        }
+
+        return batch;
+    }
+
+    /**
+     * Sends what {@link #takeResubscribes} built, with the lock released.
+     *
+     * <p>A send that fails means the server never saw that replay or any after it, so their dropped
+     * changes are still unapplied and a later delta must not advance the cursor past them: their
+     * freeze comes back. Off the caller's own resend ({@code raiseErrors} false) the failure is not
+     * raised: an exception out of {@link #handleFrame} ends the socket read loop, and the dead
+     * socket's detach starts the next resend anyway.
+     */
+    private void sendResubscribes(
+            FrameSender socket, List<Resubscribe> batch, boolean raiseErrors) {
+        if (batch.isEmpty()) {
+            return;
+        }
+
+        int sent = 0;
+
+        try {
+            for (; sent < batch.size(); sent++) {
+                socket.send(batch.get(sent).frame());
+            }
+        } catch (RuntimeException failure) {
+            synchronized (lock) {
+                // A replaced socket's resend owns these now: its replay must not be refrozen, and
+                // its queue is not this one's to refill.
+                if (sender == socket) {
+                    List<Resubscribe> unsent = batch.subList(sent, batch.size());
+
+                    for (Resubscribe entry : unsent) {
+                        if (entry.wasPoisoned()) {
+                            entry.subscription().poisoned = true;
+                        }
+
+                        resubscribeSlots.remove(entry.id());
+                    }
+
+                    // Back to the front of the line, in order, or nothing would ever send them on
+                    // a socket that stays open.
+                    for (int index = unsent.size() - 1; index >= 0; index--) {
+                        if (subscriptions.containsKey(unsent.get(index).id())) {
+                            resubscribeQueue.addFirst(unsent.get(index).id());
+                        }
+                    }
+                }
+            }
+
+            if (raiseErrors) {
+                throw failure;
+            }
+
+            return;
+        }
+
+        // The frames went out after the lock was released, so an unsubscribe on another thread
+        // may have reached the socket first; follow it with another, or the server keeps a
+        // subscription this client no longer holds.
+        List<String> dropped = new ArrayList<>();
+
+        synchronized (lock) {
+            for (Resubscribe resubscribe : batch) {
+                if (!subscriptions.containsKey(resubscribe.id())) {
+                    dropped.add(resubscribe.id());
+                }
+            }
+        }
+
+        for (String id : dropped) {
+            socket.send(buildUnsubscribeFrame(id));
         }
     }
 
@@ -1573,6 +1714,10 @@ public final class Client {
      * Re-subscribes every query whose retry hint has come due at {@link System#nanoTime}, and
      * returns how many frames it sent. Nothing is sent, and nothing is dropped, while no socket is
      * attached. The caller arms its own timer for {@link #nextSubscriptionRetryAtNanos}.
+     *
+     * <p>It also frees each slot of {@link #resendSubscriptions}' pacing that has gone unanswered
+     * past its deadline, and sends (and counts) the queued re-subscribes that then fit. Those keep
+     * their resume cursor.
      */
     public int retryDueSubscriptions() {
         return retryDueSubscriptions(System.nanoTime());
@@ -1663,17 +1808,39 @@ public final class Client {
             socket.send(buildUnsubscribeFrame(id));
         }
 
-        return frames.size();
+        // Claimed only now: a batch claimed before a send above failed would keep its slots and
+        // lose its freeze without ever going out.
+        List<Resubscribe> batch;
+
+        synchronized (lock) {
+            // A socket attached while the frames above were written has its own pacing, which this
+            // run must neither expire nor drain onto the socket it captured.
+            if (sender == socket) {
+                resubscribeSlots.values().removeIf(deadline -> deadline - nowNanos <= 0);
+                batch = takeResubscribes(nowNanos);
+            } else {
+                batch = List.of();
+            }
+        }
+
+        sendResubscribes(socket, batch, true);
+
+        return frames.size() + batch.size();
     }
 
-    /** The earliest pending retry deadline in {@link System#nanoTime} terms, or null if none. */
+    /**
+     * The earliest pending retry or paced re-subscribe deadline in {@link System#nanoTime} terms,
+     * or null if none.
+     */
     public Long nextSubscriptionRetryAtNanos() {
         synchronized (lock) {
             Long earliest = null;
 
-            for (long deadline : pendingRetries.values()) {
-                if (earliest == null || deadline - earliest < 0) {
-                    earliest = deadline;
+            for (Map<String, Long> deadlines : List.of(pendingRetries, resubscribeSlots)) {
+                for (long deadline : deadlines.values()) {
+                    if (earliest == null || deadline - earliest < 0) {
+                        earliest = deadline;
+                    }
                 }
             }
 
@@ -1721,6 +1888,23 @@ public final class Client {
 
         String kind = frame.get("type") instanceof String text ? text : "";
         String id = frame.get("id") instanceof String text ? text : "";
+
+        // ANY frame bearing a re-sent subscription's id proves the server has taken it off its
+        // plate: an `ack`, but equally the `error` that refuses it or a `data` that overtakes its
+        // ack. Releasing here rather than per type keeps an unanticipated frame, or a case that
+        // returns early, from stalling the drain.
+        FrameSender pacedSocket;
+        List<Resubscribe> paced = List.of();
+
+        synchronized (lock) {
+            pacedSocket = sender;
+
+            if (resubscribeSlots.remove(id) != null && pacedSocket != null) {
+                paced = takeResubscribes(System.nanoTime());
+            }
+        }
+
+        sendResubscribes(pacedSocket, paced, false);
 
         // The server answered this subscription, so a retry it was waiting on is moot. A `data`,
         // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be

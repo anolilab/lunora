@@ -10,7 +10,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Protocol-conformance tests: drive the Java SDK against the shared golden fixtures in {@code
@@ -86,6 +85,9 @@ public final class ConformanceTest {
         // The subscription-retry cases (the live-query retry hint), in their own file for the same
         // reason.
         SubscriptionRetryTest.run();
+
+        // The paced re-subscribe after a reconnect, in its own file for the same reason.
+        ResubscribePacingTest.run();
 
         assertManifestCovered();
 
@@ -1499,13 +1501,18 @@ public final class ConformanceTest {
         reader.join();
 
         // Attached only now; the count is the attach's connect frame plus one subscribe per call.
-        AtomicInteger resent = new AtomicInteger();
+        // The resend is paced, so each re-sent subscribe is answered to let the next one out.
+        List<Object> resent = new ArrayList<>();
 
-        client.attachSocket(frame -> resent.incrementAndGet(), null);
+        client.attachSocket(frame -> resent.add(frame.get("id")), null);
         client.resendSubscriptions();
 
+        for (int answered = 1; answered < resent.size(); answered++) {
+            client.handleFrame("{\"id\":\"" + resent.get(answered) + "\",\"type\":\"ack\"}");
+        }
+
         check(
-                resent.get() == threads * perThread + 1,
+                resent.size() == threads * perThread + 1,
                 "every concurrent subscribe survived with a distinct id");
     }
 

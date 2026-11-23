@@ -515,7 +515,8 @@ Each helper takes an optional leading `client`, like the stores above.
   `run(input)` to start a turn, `cancel()` to stop it, and the readable stores
   `pending` and `status`.
 - `agentChat(options)` returns an `AgentChatHandle` for the thread's chat. It
-  exposes the approval controls, such as `approve(toolCallId, note?)`, and the
+  exposes the approval controls, such as `approve(approval, note?)`, which takes the
+  pending `awaiting_approval` message and sends its `toolCallId` and `approvalSlot`, and the
   live `approvalGrants` store. Pass the same app stream reference as `stream` to
   receive live token deltas.
 - `agentState<T>(options)` returns `{ state, error }` stores for the thread's live
@@ -539,7 +540,7 @@ Each event discriminates on `type`:
 | ------------------- | ------------------------------------------------------ | ----------- |
 | `call`              | `toolCallId`, `toolName`, `input`, `seq`               | durable     |
 | `result`            | `toolCallId?`, `toolName?`, `output`, `status?`, `seq` | durable     |
-| `awaiting-approval` | `toolCallId?`, `toolName?`, `seq`                      | durable     |
+| `awaiting-approval` | `approvalSlot?`, `toolCallId?`, `toolName?`, `seq`     | durable     |
 | `progress`          | `toolCallId`, `data`                                   | live stream |
 
 Durable events come first, oldest first by `seq`, followed by the ephemeral
