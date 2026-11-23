@@ -1,4 +1,4 @@
-import { dirname, relative } from "node:path";
+import { dirname, relative, sep } from "node:path";
 
 import type { Finding } from "@lunora/advisor";
 import type { Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
@@ -370,6 +370,61 @@ const exportSiteLine = (source: SourceFile, exportName: string): number => {
     return supplier?.getStartLineNumber() ?? 1;
 };
 
+/** Whether the local binding `name` in `source` comes from an `import type` / `import { type … }`. */
+const isTypeOnlyImport = (source: SourceFile, name: string): boolean =>
+    source
+        .getImportDeclarations()
+        .some((statement) =>
+            statement
+                .getNamedImports()
+                .some(
+                    (specifier) =>
+                        (specifier.getAliasNode() ?? specifier.getNameNode()).getText() === name && (statement.isTypeOnly() || specifier.isTypeOnly()),
+                ),
+        );
+
+/**
+ * Whether every statement that exports `exportName` from `source` exports only its type. The
+ * checker resolves `export type { gate }` to the same declaration a value export does, yet no
+ * value leaves the module, so there is no registration to drop.
+ */
+const isTypeOnlyExport = (source: SourceFile, exportName: string): boolean => {
+    const sites: boolean[] = [];
+
+    for (const statement of source.getExportDeclarations()) {
+        for (const specifier of statement.getNamedExports()) {
+            if (exportNameText(specifier.getAliasNode() ?? specifier.getNameNode()) === exportName) {
+                sites.push(
+                    statement.isTypeOnly() ||
+                        specifier.isTypeOnly() ||
+                        (!statement.hasModuleSpecifier() && isTypeOnlyImport(source, exportNameText(specifier.getNameNode()))),
+                );
+            }
+        }
+    }
+
+    if (sites.length === 0) {
+        // Only an `export *` can supply it; `export type *` carries no values.
+        sites.push(
+            ...source
+                .getExportDeclarations()
+                .filter(
+                    (statement) =>
+                        statement.isNamespaceExport() && statement.getModuleSpecifierSourceFile()?.getExportedDeclarations().has(exportName) === true,
+                )
+                .map((statement) => statement.isTypeOnly()),
+        );
+    }
+
+    return sites.length > 0 && sites.every(Boolean);
+};
+
+/**
+ * Codegen's own output under `lunora/_generated/`, judged on the path relative to `lunora/` so a
+ * checkout under some other `_generated` directory, or app code in `src/_generated/`, is still read.
+ */
+const isGeneratedOutput = (lunoraDirectory: string, path: string): boolean => relative(lunoraDirectory, path).split(sep)[0] === "_generated";
+
 /**
  * Registrations a `lunora/` file exports but does not declare: `export { gate } from "…"`,
  * `import { gate } from "…"; export { gate }`, `export * from "…"`. Every walk above reads the
@@ -385,7 +440,7 @@ const reExportFindings = (
     relativePath: string,
     registrations: Registrations,
     walked: ReadonlySet<SourceFile>,
-    projectRoot: string,
+    lunoraDirectory: string,
 ): Finding[] => {
     const findings: Finding[] = [];
 
@@ -396,7 +451,14 @@ const reExportFindings = (
         );
         const home = declaration?.getSourceFile();
 
-        if (declaration === undefined || home === undefined || home === source || walked.has(home) || home.getFilePath().includes("/_generated/")) {
+        if (
+            declaration === undefined ||
+            home === undefined ||
+            home === source ||
+            walked.has(home) ||
+            isGeneratedOutput(lunoraDirectory, home.getFilePath()) ||
+            isTypeOnlyExport(source, exportName)
+        ) {
             continue;
         }
 
@@ -414,7 +476,7 @@ const reExportFindings = (
                     exportName,
                     registration,
                     exportSiteLine(source, exportName),
-                    reExportedFrom(relative(projectRoot, home.getFilePath())),
+                    reExportedFrom(relative(dirname(lunoraDirectory), home.getFilePath())),
                 ),
             );
         }
@@ -428,11 +490,11 @@ const fileFindings = (
     relativePath: string,
     registrations: Registrations,
     walked: ReadonlySet<SourceFile>,
-    projectRoot: string,
+    lunoraDirectory: string,
 ): Finding[] => [
     ...namedExportFindings(source, relativePath, registrations),
     ...defaultExportFindings(source, relativePath, registrations),
-    ...reExportFindings(source, relativePath, registrations, walked, projectRoot),
+    ...reExportFindings(source, relativePath, registrations, walked, lunoraDirectory),
 ];
 
 /**
@@ -510,10 +572,9 @@ const discoverUnregisteredProcedures = (project: Project, lunoraDirectory: strin
         return source === undefined ? [] : [{ relativePath: lunoraRelativePath(lunoraDirectory, filePath), source }];
     });
     const walked = new Set(sources.map(({ source }) => source));
-    const projectRoot = dirname(lunoraDirectory);
 
     for (const { relativePath, source } of sources) {
-        findings.push(...fileFindings(source, relativePath, registrations, walked, projectRoot));
+        findings.push(...fileFindings(source, relativePath, registrations, walked, lunoraDirectory));
         witnesses.push(...registeredDeclarations(source, relativePath, registrations));
     }
 

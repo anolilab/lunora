@@ -609,6 +609,69 @@ export const viaFactory = makeQuery();
         expect(run(discovered).filter((finding) => finding.name === "procedure_not_registered")).toStrictEqual([]);
     });
 
+    it("stays silent for an authorizer re-exported into lunora/ as a type only", () => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        write("type-reexport.ts", `export type { gate } from "../src/auth/whisper";\n`);
+        write("specifier.ts", `export { type gate } from "../src/auth/whisper";\n`);
+        write("type-relay.ts", `import type { gate } from "../src/auth/whisper";\n\nexport { gate };\n`);
+        write("specifier-relay.ts", `import { type gate } from "../src/auth/whisper";\n\nexport { gate as guard };\n`);
+        load("type-reexport.ts", "specifier.ts", "type-relay.ts", "specifier-relay.ts");
+
+        // No value leaves these modules, so there is no authorizer to drop.
+        expect(run(discoverFunctions(project, join(workdir, "lunora"))).filter((finding) => finding.name === "procedure_not_registered")).toStrictEqual([]);
+    });
+
+    it("still fails the build when a type-only export of an authorizer sits beside a value export", () => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        write("mixed.ts", `export type { gate as gateType } from "../src/auth/whisper";\nexport { gate } from "../src/auth/whisper";\n`);
+        load("mixed.ts");
+
+        const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter((finding) => finding.name === "procedure_not_registered");
+
+        expect(findings.map((finding) => [finding.metadata["exportName"], finding.level])).toStrictEqual([["gate", "ERROR"]]);
+    });
+
+    it("fails the build for an authorizer re-exported from app code that lives in a `_generated` directory", () => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/_generated/whisper.ts", SHARED_AUTH);
+        write("reexport.ts", `export { gate } from "../src/_generated/whisper";\n`);
+        load("reexport.ts");
+
+        const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter((finding) => finding.name === "procedure_not_registered");
+
+        expect(findings.map((finding) => [finding.metadata["exportName"], finding.level])).toStrictEqual([["gate", "ERROR"]]);
+    });
+
+    it("fails the build for a re-exported authorizer in a project checked out under a `_generated` directory", () => {
+        expect.assertions(1);
+
+        const parent = workdir;
+
+        workdir = join(parent, "_generated", "app");
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+
+        try {
+            writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+            writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+            write("reexport.ts", `export { gate } from "../src/auth/whisper";\n`);
+            load("reexport.ts");
+
+            const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter((finding) => finding.name === "procedure_not_registered");
+
+            expect(findings.map((finding) => [finding.metadata["exportName"], finding.level])).toStrictEqual([["gate", "ERROR"]]);
+        } finally {
+            workdir = parent;
+        }
+    });
+
     it("blocks the build for a factory-produced whisper authorizer", () => {
         expect.assertions(1);
 
