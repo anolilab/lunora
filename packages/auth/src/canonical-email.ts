@@ -32,9 +32,15 @@ type UserHooks = NonNullable<DatabaseHooks["user"]>;
 type UserCreateBefore = NonNullable<NonNullable<UserHooks["create"]>["before"]>;
 type UserUpdateBefore = NonNullable<NonNullable<UserHooks["update"]>["before"]>;
 
-/** The fields a hook's `{ data }` result replaces, merged as better-auth merges it. `| null`: a plain-JS hook can return one. */
-const replacedData = (result: unknown): Record<string, unknown> | undefined =>
-    typeof result === "object" && result !== null && "data" in result ? (result as { data: Record<string, unknown> }).data : undefined;
+/**
+ * The fields a hook's `{ data }` result replaces, merged as better-auth merges it. A plain-JS hook can
+ * return `null` for either; a spread of `null` adds nothing, so that replaces nothing here either.
+ */
+const replacedData = (result: unknown): Record<string, unknown> | undefined => {
+    const data = typeof result === "object" && result !== null && "data" in result ? result.data : undefined;
+
+    return typeof data === "object" && data !== null ? (data as Record<string, unknown>) : undefined;
+};
 
 /** The address a hook's write leaves in place: the hook's own when it set the key (even to `undefined`), else the caller's. */
 const writtenEmail = (replaced: Record<string, unknown> | undefined, data: Record<string, unknown>): unknown =>

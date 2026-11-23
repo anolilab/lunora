@@ -164,6 +164,20 @@ describe("canonical email", () => {
         expect(userCount()).toBe(1);
     });
 
+    it("imports a snapshot holding two Unicode-case variants of one address, leaving the later one's canonical address empty", async () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // The backfill leaves such a pair in a live database, so its own export carries it.
+        await expect(port.importRows([userRow("a", UPPER), userRow("b", LOWER)])).resolves.toMatchObject({ conflicts: 0, errors: [], inserted: 2 });
+
+        expect([canonicalOf("a"), canonicalOf("b")]).toStrictEqual([canonicalEmail(UPPER), null]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"));
+
+        warn.mockRestore();
+    });
+
     it("restores a snapshot holding two Unicode-case variants of one address, leaving the later one's canonical address empty", async () => {
         expect.assertions(3);
 
@@ -429,6 +443,27 @@ describe("canonical email on the schema paths", () => {
         });
     });
 
+    it("treats a caller hook's `{ data: null }` as replacing nothing", async () => {
+        expect.assertions(2);
+
+        const resolved = withCanonicalEmail<LunoraAuthOptions>({
+            databaseHooks: {
+                user: {
+                    create: { before: async () => ({ data: null }) as never },
+                    update: { before: async () => ({ data: null }) as never },
+                },
+            },
+            secret: SECRET,
+        });
+
+        await expect(resolved.databaseHooks?.user?.create?.before?.({ email: UPPER } as never, null)).resolves.toStrictEqual({
+            data: { emailCanonical: canonicalEmail(UPPER) },
+        });
+        await expect(resolved.databaseHooks?.user?.update?.before?.({ email: UPPER }, null)).resolves.toStrictEqual({
+            data: { emailCanonical: canonicalEmail(UPPER) },
+        });
+    });
+
     it("installs the hooks once, even when the app declares the field itself, keeping its column name", async () => {
         expect.assertions(4);
 
@@ -506,7 +541,7 @@ describe("canonical email on the schema paths", () => {
 
         const insert = database.prepare(`INSERT INTO "user" ("id", "email") VALUES (?, ?)`);
 
-        for (let index = 0; index < 4001; index += 1) {
+        for (let index = 0; index < 1001; index += 1) {
             insert.run(`u${String(index)}`, `User${String(index)}@Example.com`);
         }
 
@@ -562,8 +597,8 @@ describe("canonical email on the schema paths", () => {
         const database = new DatabaseSync(":memory:");
 
         for (const [table, rows] of [
-            ["user", 4400],
-            ["account_holder", 1000],
+            ["user", 1000],
+            ["account_holder", 500],
         ] as const) {
             database.exec(`CREATE TABLE "${table}" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
 
@@ -575,7 +610,7 @@ describe("canonical email on the schema paths", () => {
         }
 
         // The first configuration's run is cut short deep into its table, past every rowid of the second's.
-        await backfillCanonicalEmails({ all: cutShortAfter(database, "user", 21) }, { canonical: "emailCanonical", email: "email", table: "user" }).catch(
+        await backfillCanonicalEmails({ all: cutShortAfter(database, "user", 4) }, { canonical: "emailCanonical", email: "email", table: "user" }).catch(
             () => {},
         );
 

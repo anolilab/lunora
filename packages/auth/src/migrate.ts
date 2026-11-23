@@ -266,11 +266,11 @@ const migrating = new WeakMap<object, Promise<void>>();
  * dev/playground and small deployments.
  */
 export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOptions }): Promise<void> => {
-    const { options } = auth;
+    const { options: given } = auth;
 
-    assertMigratableDatabase(options);
+    assertMigratableDatabase(given);
 
-    const inFlight = migrating.get(options);
+    const inFlight = migrating.get(given);
 
     if (inFlight) {
         await inFlight;
@@ -278,6 +278,10 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
         return;
     }
 
+    // The columns `resolveAuthOptions` declares (`user.emailCanonical`, the rate-limit table) are what
+    // `createAuth` writes, so raw options passed as `{ options }` migrate the same schema an instance has.
+    // Idempotent on an instance's options, which are resolved already.
+    const options = resolveAuthOptions(given);
     const run = (async (): Promise<void> => {
         const { runMigrations } = await getMigrations(withD1MigrationSupport(options));
 
@@ -290,12 +294,12 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
     // Record the promise synchronously (before the first await above resolves)
     // so concurrent callers single-flight onto this run. On failure, evict the
     // cached promise so the next call can retry instead of replaying the error.
-    migrating.set(options, run);
+    migrating.set(given, run);
 
     try {
         await run;
     } catch (error) {
-        migrating.delete(options);
+        migrating.delete(given);
 
         throw error;
     }

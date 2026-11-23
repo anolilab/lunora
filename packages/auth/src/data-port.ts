@@ -32,7 +32,7 @@ import { getAuthTables } from "better-auth/db";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { AUTH_AUDIT_TABLE } from "./audit";
 import type { CanonicalEmailColumn } from "./canonical-email";
-import { withCanonicalEmailValue } from "./canonical-email";
+import { warnDuplicates, withCanonicalEmailValue } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
 
@@ -294,12 +294,45 @@ const importRefusalOf = (table: string, isAuthTable: (table: string) => boolean)
 };
 
 /**
+ * Drops a `user` row's canonical address when an earlier row of the snapshot holds it. A snapshot of a
+ * database the backfill left duplicates in carries them; the later one is written as the backfill leaves it,
+ * empty, rather than refused or dropped, so the rows that reference it still have their user. A variant of
+ * an address only the target holds still collides, like an exact duplicate.
+ */
+const heldCanonical = (column: CanonicalEmailColumn | undefined): { dropped: () => number; without: (row: Row, table: string) => Row } => {
+    const held = new Set<string>();
+    let dropped = 0;
+
+    return {
+        dropped: () => dropped,
+        without: (row, table) => {
+            const address = column?.table === table ? row[column.canonical] : undefined;
+
+            if (typeof address !== "string") {
+                return row;
+            }
+
+            if (held.has(address)) {
+                dropped += 1;
+
+                return Object.fromEntries(Object.entries(row).filter(([name]) => name !== column?.canonical));
+            }
+
+            held.add(address);
+
+            return row;
+        },
+    };
+};
+
+/**
  * Insert wire-encoded rows, skipping any that collide with an existing key or
  * unique value. Only columns the table has are written, so a row from a newer
  * plugin set still lands, minus what this schema cannot hold — and never a
  * credential column, so an import cannot plant a provider token. A `user` row's
  * canonical address is recomputed from its `email`, so an address that differs from
- * a held one only by case or Unicode form collides like an exact duplicate.
+ * one the target holds only by case or Unicode form collides like an exact duplicate
+ * ({@link heldCanonical} for one an earlier row of the import holds).
  */
 const insertAuthRows = async (
     sql: AuthSqlReader,
@@ -310,6 +343,7 @@ const insertAuthRows = async (
 ): Promise<AuthImportResult> => {
     const result: AuthImportResult = { conflicts: 0, errors: [], inserted: 0 };
     const columns = new Map<string, string[]>();
+    const seen = heldCanonical(canonicalEmail);
 
     for (const [index, { doc, table }] of rows.entries()) {
         const refusal = importRefusalOf(table, isAuthTable);
@@ -334,7 +368,7 @@ const insertAuthRows = async (
             continue;
         }
 
-        const row = withCanonicalEmailValue(decodedRow.row, table, canonicalEmail);
+        const row = seen.without(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail), table);
         const names = Object.keys(row).filter((name) => known.includes(name));
 
         if (names.length === 0) {
@@ -358,6 +392,10 @@ const insertAuthRows = async (
         } catch (error) {
             result.errors.push({ index, message: `"${table}": ${safeCause(error)}`, table });
         }
+    }
+
+    if (canonicalEmail !== undefined) {
+        warnDuplicates(seen.dropped(), canonicalEmail);
     }
 
     return result;
@@ -404,28 +442,6 @@ const replaceRowRefusal = (row: Row, table: string): string | undefined =>
     Object.keys(row).length === 0 ? `no column of the row exists on "${table}"` : undefined;
 
 /**
- * `row` without its canonical address when an earlier `user` row of the snapshot holds it. A snapshot of a
- * database the backfill left duplicates in carries them, and the replace empties the table first, so the
- * snapshot's own rows are the only ones its unique index sees collide: the later one is restored as the
- * backfill leaves it, empty, and reported by the next backfill.
- */
-const withoutHeldCanonical = (row: Row, table: string, column: CanonicalEmailColumn | undefined, held: Set<string>): Row => {
-    const address = column?.table === table ? row[column.canonical] : undefined;
-
-    if (typeof address !== "string") {
-        return row;
-    }
-
-    if (held.has(address)) {
-        return Object.fromEntries(Object.entries(row).filter(([name]) => name !== column?.canonical));
-    }
-
-    held.add(address);
-
-    return row;
-};
-
-/**
  * The statements that make `tables` hold exactly `rows` — every table (and
  * `clearTables`) emptied children-first, then the rows inserted parents-first —
  * plus what they will delete. Nothing runs here; the caller runs the list as
@@ -438,11 +454,11 @@ const planAuthReplace = async (
     clearTables: ReadonlyArray<string>,
     credentialColumns: CredentialColumns,
     canonicalEmail: CanonicalEmailColumn | undefined,
-): Promise<{ deleted: number; errors: AuthReplaceResult["errors"]; statements: Statement[] }> => {
+): Promise<{ deleted: number; dropped: number; errors: AuthReplaceResult["errors"]; statements: Statement[] }> => {
     const errors: AuthReplaceResult["errors"] = [];
     const columns = new Map<string, string[]>();
     const decoded: { row: Row; table: string }[] = [];
-    const held = new Set<string>();
+    const seen = heldCanonical(canonicalEmail);
 
     for (const table of [...clearTables, ...tables]) {
         // eslint-disable-next-line no-await-in-loop -- once per table
@@ -464,11 +480,9 @@ const planAuthReplace = async (
             continue;
         }
 
-        const row = withoutHeldCanonical(
+        const row = seen.without(
             Object.fromEntries(Object.entries(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail)).filter(([name]) => known.includes(name))),
             table,
-            canonicalEmail,
-            held,
         );
 
         const refusal = replaceRowRefusal(row, table);
@@ -511,7 +525,7 @@ const planAuthReplace = async (
         }),
     ];
 
-    return { deleted, errors, statements };
+    return { deleted, dropped: seen.dropped(), errors, statements };
 };
 
 /**
@@ -521,8 +535,9 @@ const planAuthReplace = async (
  * refused like `insertAuthRows` refuses it. The live-credential tables are
  * cleared with the rest; the audit log is never written nor deleted. Credential
  * columns are dropped from every row, so a restored `account` arrives without
- * provider tokens, and a `user` row's canonical address is recomputed, so a snapshot
- * holding two case- or Unicode-variants of one address rolls back on the unique index.
+ * provider tokens, and a `user` row's canonical address is recomputed. A later row of the
+ * snapshot whose address an earlier one holds once case and Unicode form are ignored is
+ * restored with an empty canonical value ({@link heldCanonical}), and reported.
  */
 const replaceAuthRows = async (
     sql: AuthSqlReader,
@@ -556,6 +571,10 @@ const replaceAuthRows = async (
         await atomic(plan.statements);
     } catch (error) {
         return { deleted: 0, errors: [{ index: -1, message: `auth replace rolled back: ${safeCause(error)}`, table: "" }], inserted: 0 };
+    }
+
+    if (canonicalEmail !== undefined) {
+        warnDuplicates(plan.dropped, canonicalEmail);
     }
 
     return { deleted: plan.deleted, errors: [], inserted: rows.length };
