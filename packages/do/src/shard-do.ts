@@ -4227,6 +4227,8 @@ abstract class ShardDO {
                 }
             });
         }
+
+        await this.flushAfterDispatch(`lifecycle:${event}:flush`);
     }
 
     /**
@@ -4354,6 +4356,8 @@ abstract class ShardDO {
                 this.recordShardInitError(functionPath, error);
             }
         }
+
+        await this.flushAfterDispatch("shardInit:flush");
     }
 
     /**
@@ -12068,7 +12072,11 @@ abstract class ShardDO {
             this.withRequestIdentity(parsed.userId, parsed.identity, undefined, () =>
                 this.handleRpc(parsed.functionPath, parsed.args, undefined, undefined, undefined, sensitive),
             ),
-        );
+        ).catch(async (error: unknown) => {
+            await this.flushAfterDispatch("runAs:flush");
+
+            throw error;
+        });
 
         // The forged dispatch may have written through the writer (a mutation run
         // as the user); flush touched tables so live subscribers re-run, matching
@@ -12078,6 +12086,18 @@ abstract class ShardDO {
         this.recordAudit(args, "runAs", { detail: { functionPath: parsed.functionPath, runAsUserId: parsed.userId } });
 
         return adminResponse(result);
+    }
+
+    /**
+     * Drain the tables a dispatch outside `/rpc` recorded, however it ended: a `.global()` write
+     * reached D1 before the throw and is not undone by the Durable Object's rollback, and a
+     * rolled-back table only costs a re-read of committed state. A flush failure is recorded,
+     * never thrown, so it cannot replace the dispatch's own outcome.
+     */
+    private async flushAfterDispatch(tag: string): Promise<void> {
+        await this.flushChangedTables().catch((error: unknown) => {
+            this.recordShapeError(tag, error);
+        });
     }
 
     /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
@@ -19410,6 +19430,8 @@ abstract class ShardDO {
                     message: sensitive?.text(thrownText) ?? thrownText,
                     timestamp: Date.now(),
                 });
+                sensitive?.clear();
+                await this.flushAfterDispatch(`socket:${route.functionPath}:flush`);
 
                 return;
             }
@@ -19431,6 +19453,8 @@ abstract class ShardDO {
                 });
             }
         }
+
+        await this.flushAfterDispatch(`socket:${route.functionPath}:flush`);
     }
 
     /**
@@ -19764,6 +19788,8 @@ abstract class ShardDO {
                 return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error, sensitive);
             }
         });
+
+        await this.flushAfterDispatch(`room:${functionPath}:flush`);
 
         if (!admitted) {
             return false;
