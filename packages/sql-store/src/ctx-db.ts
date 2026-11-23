@@ -342,6 +342,15 @@ interface SqlCtxDbOptions {
     maxRelationKeys?: number;
 
     /**
+     * Called with the table each time a row write through this writer is stored, including a write a
+     * trigger makes through the writer it is handed. The shard routes it to the same changed-table set its
+     * own `.global()` writes broadcast to: a trigger's write to another global table happens inside this
+     * writer, where the shard engine's broadcast never sees it, so without this a live query on that
+     * table kept the pre-trigger row.
+     */
+    onWrite?: (table: string) => void;
+
+    /**
      * Object identifying the database this store provisions, so the one-shot
      * `CREATE TABLE/INDEX IF NOT EXISTS` sweep is shared by every ctx-db built
      * against it instead of repeating per instance.
@@ -2912,6 +2921,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             if (!wrote) {
                 return false;
             }
+
+            // Announced before a surrounding transaction commits: a rollback only costs subscribers a
+            // re-read of what did commit, while a write announced late, or never, leaves them stale.
+            options.onWrite?.(tableName);
 
             const progress = { batched: false, dispatched: false };
 

@@ -123,7 +123,7 @@ export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     /** `origin` is the origin the current `/rpc` request reached the worker on — the fallback base for signed object URLs when no `publicBaseUrl` is configured. `undefined` off the synchronous dispatch path. */
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;
-    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;
+    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;
     sourceClient?: (env: Record<string, unknown>, binding: string) => { query: <Row = Record<string, unknown>>(text: string, params?: readonly unknown[]) => Promise<Row[]> } | undefined;
     /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). This shard registers its key for each `.shardBy()` table it writes, so cross-shard export, sync and migrations reach it. */
     shardRegistry?: (env: Record<string, unknown>) => unknown;
@@ -601,7 +601,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);
         }
 
-        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity, readBookmark?: string): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -614,7 +614,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
             // subscription caller — never read from the shared per-request field
             // here — so a concurrent RPC can't leak its identity into this re-run.
-            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
+            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange, readBookmark });
             const result = await registered.handler(ctx, args);
 
             // Ranges come from THIS run's reads, never a shared field on the DO:
@@ -1353,7 +1353,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
         }
 
-        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; replayKey?: boolean | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
+        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; readBookmark?: string | undefined; replayKey?: boolean | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -1518,14 +1518,16 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // so both write to the same trace.
             const span = this.makeDispatchSpan(traceAnchor, observability, options.sensitive);
 
-            const bookmark = this.getInboundBookmark();
+            const bookmark = options.readBookmark ?? this.getInboundBookmark();
+            let writeBookmark: string | undefined;
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),
                 get identity(): Record<string, unknown> | undefined {
                     return readIdentity();
                 },
-                onBookmark: (bookmarkValue: string | undefined) => { if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
+                onBookmark: (bookmarkValue: string | undefined) => { writeBookmark = bookmarkValue; if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
+                onWrite: (table: string) => { this.recordGlobalWrite(table, writeBookmark); },
                 get userId(): string | undefined {
                     return readUserId();
                 },
@@ -1550,7 +1552,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     },
                 },
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
+                    if (writeBookmark !== undefined && (schema as unknown as SchemaLike).tables[delta.table]?.shardMode?.kind === "global") {
+                        this.recordGlobalWrite(delta.table, writeBookmark);
+                    } else {
+                        this.recordChangedTable(delta.table, delta.indexKeys);
+                    }
                 },
                 // Read at call time, not captured: the baseline belongs to the
                 // dispatch in flight, and a queued mutation admitted after a
@@ -1761,7 +1767,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                         reference.__lunoraRef,
                         fnArgs,
                         runOptions?.untracked === true
-                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", scope: options.scope, sensitive: options.sensitive })
+                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", readBookmark: options.readBookmark, scope: options.scope, sensitive: options.sensitive })
                             : queryContext(),
                         kind,
                     );

@@ -1987,6 +1987,23 @@ const cloneArgsOnFirstUse = (args: Record<string, unknown>): (() => Record<strin
     };
 };
 
+/** The D1 Sessions constraint passed in a bookmark's place: the session's first read goes to the primary. */
+const D1_PRIMARY_CONSTRAINT = "first-primary";
+
+/**
+ * The bookmark a refresh batch's `.global()` reads start at. One write's bookmark is read at directly. D1
+ * bookmarks are opaque, so of two or more no newest can be chosen: the batch reads at the primary, which has
+ * seen every one of them. None (no global write, or a Hyperdrive backend, which reports none) leaves the
+ * reader as it was.
+ */
+const refreshReadBookmark = (bookmarks: ReadonlySet<string> | undefined): string | undefined => {
+    if (bookmarks === undefined || bookmarks.size === 0) {
+        return undefined;
+    }
+
+    return bookmarks.size === 1 ? [...bookmarks][0] : D1_PRIMARY_CONSTRAINT;
+};
+
 /** Canonical string of EVERY {@link SubscriptionIdentity} field: sockets share a live-query run only when it is equal. */
 const subscriptionIdentityKey = (identity: SubscriptionIdentity): string =>
     // eslint-disable-next-line unicorn/no-null -- stableStringify folds absent fields to an explicit null
@@ -3020,6 +3037,15 @@ abstract class ShardDO {
      * alongside {@link ShardDO.pendingChangedTables}.
      */
     private pendingChangedKeys: Map<string, IndexKeyEntry[] | undefined> | undefined = undefined;
+
+    /**
+     * D1 bookmarks the `.global()` writes behind {@link ShardDO.pendingChangedTables} reported, recorded with
+     * their tables by {@link ShardDO.recordGlobalWrite} so they travel with them however dispatches interleave.
+     */
+    private pendingChangedBookmarks: Set<string> | undefined = undefined;
+
+    /** Coalesced twin of {@link ShardDO.pendingChangedBookmarks}; see {@link refreshReadBookmark}. */
+    private pendingRefreshBookmarks: Set<string> | undefined = undefined;
 
     /** Coalesced twin of {@link ShardDO.pendingChangedKeys} for the in-flight refresh pass. */
     private pendingRefreshKeys: Map<string, IndexKeyEntry[] | undefined> | undefined = undefined;
@@ -6868,12 +6894,19 @@ abstract class ShardDO {
      * fields from a deferred (`waitUntil`) or concurrently-interleaved context.
      * A refresh runs while the write that triggered it still owns those fields,
      * so reading `ip` there would hand every subscriber the MUTATING caller's IP.
+     *
+     * `refreshBookmark` is the D1 bookmark a refresh's `.global()` reads must start at,
+     * threaded by value for the same reason (see {@link refreshReadBookmark}). The
+     * inbound bookmark on the instance belongs to whichever dispatch holds it now,
+     * not to the write that scheduled this run. `undefined` keeps the reader's own
+     * choice.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
     protected executeSubscription(
         _functionPath: string,
         _args: Record<string, unknown>,
         _identity?: SubscriptionIdentity,
+        _refreshBookmark?: string,
     ): Promise<SubscriptionOutcome | null> {
         // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such subscription"; the codegen subclass overrides and also returns null
         return Promise.resolve(null);
@@ -7952,6 +7985,22 @@ abstract class ShardDO {
         // query already sees the post-write state.
         if (!this.ctxDbCacheWired) {
             this.reactiveCache?.invalidateTable(table);
+        }
+    }
+
+    /**
+     * A row the `.global()` writer stored, reported by the writer itself (its `onWrite`), so a write a
+     * trigger made inside it is announced too: the shard engine's broadcast only sees the writes it issued.
+     * `bookmark` is the D1 bookmark the writer's session held after the write; the refresh reads at it.
+     */
+    protected recordGlobalWrite(table: string, bookmark: string | undefined): void {
+        // The engine's cache invalidation runs only for the writes it issued; a trigger's is invisible to it.
+        this.reactiveCache?.invalidateTable(table);
+        this.recordChangedTable(table);
+
+        if (bookmark !== undefined) {
+            this.pendingChangedBookmarks ??= new Set<string>();
+            this.pendingChangedBookmarks.add(bookmark);
         }
     }
 
@@ -13925,6 +13974,7 @@ abstract class ShardDO {
         args: Record<string, unknown>,
         isAdmin: boolean,
         identity: SubscriptionIdentity,
+        refreshBookmark?: string,
     ): Promise<SubscriptionOutcome | null> {
         if (isAdmin) {
             return this.executeAdminSubscription(functionPath, args);
@@ -13943,7 +13993,7 @@ abstract class ShardDO {
         // field on `this`: a deferred subscription re-run interleaves with
         // unrelated RPC dispatches, so a shared field would stamp one request's
         // slices onto another subscriber's memo and suppress its invalidations.
-        const outcome = await this.executeSubscription(functionPath, args, identity);
+        const outcome = await this.executeSubscription(functionPath, args, identity, refreshBookmark);
 
         if (outcome?.identityTracked === true) {
             this.settleIdentityUse(functionPath, outcome);
@@ -14019,18 +14069,19 @@ abstract class ShardDO {
         isAdmin: boolean,
         attachment: SocketAttachment,
         cache: Map<string, SharedReactiveRun>,
+        refreshBookmark: string | undefined,
     ): Promise<SubscriptionOutcome | null> {
         if (this.deliveryAuthorization) {
-            return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
+            return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment), refreshBookmark);
         }
         const { key, leader } = this.reactiveRunKey(functionPath, args, attachment);
         const cached = cache.get(key);
 
         if (cached !== undefined) {
-            return this.joinReactiveRun(cached, functionPath, handedArgs, isAdmin, attachment);
+            return this.joinReactiveRun(cached, functionPath, handedArgs, isAdmin, attachment, refreshBookmark);
         }
 
-        const pending = this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
+        const pending = this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment), refreshBookmark);
 
         cache.set(key, { leader, pending });
 
@@ -14079,12 +14130,14 @@ abstract class ShardDO {
         handedArgs: () => Record<string, unknown>,
         isAdmin: boolean,
         attachment: SocketAttachment,
+        refreshBookmark?: string,
     ): Promise<SubscriptionOutcome | null> {
         if (run.leader === undefined || run.leader === subscriptionIdentityKey(attachment)) {
             return run.pending;
         }
 
-        const ownRun = (): Promise<SubscriptionOutcome | null> => this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
+        const ownRun = (): Promise<SubscriptionOutcome | null> =>
+            this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment), refreshBookmark);
 
         // An unmarked path's outcome is encoded in settle, so a missing encoding means it failed.
         return run.pending.then(
@@ -14712,9 +14765,11 @@ abstract class ShardDO {
     private async flushChangedTables(): Promise<void> {
         const changed = this.pendingChangedTables;
         const changedKeys = this.pendingChangedKeys;
+        const changedBookmarks = this.pendingChangedBookmarks;
 
         this.pendingChangedTables = undefined;
         this.pendingChangedKeys = undefined;
+        this.pendingChangedBookmarks = undefined;
 
         if (!changed || changed.size === 0) {
             return;
@@ -14745,6 +14800,11 @@ abstract class ShardDO {
         }
 
         this.pendingRefreshKeys = mergeChangedKeys(this.pendingRefreshKeys, changedKeys, changed);
+
+        for (const bookmark of changedBookmarks ?? []) {
+            this.pendingRefreshBookmarks ??= new Set<string>();
+            this.pendingRefreshBookmarks.add(bookmark);
+        }
 
         // Single-waiter coalescing: if a refresh pass is already draining, it
         // will observe the tables we just merged before it finishes, so a burst
@@ -14815,10 +14875,12 @@ abstract class ShardDO {
         try {
             let batch = this.pendingRefreshTables;
             let batchKeys = this.pendingRefreshKeys;
+            let batchBookmarks = this.pendingRefreshBookmarks;
 
             while (batch && batch.size > 0) {
                 this.pendingRefreshTables = undefined;
                 this.pendingRefreshKeys = undefined;
+                this.pendingRefreshBookmarks = undefined;
 
                 // Resolve the post-write cut once per coalesced batch; it covers
                 // every write merged into this batch. Run the legacy refresh and
@@ -14828,7 +14890,7 @@ abstract class ShardDO {
 
                 // eslint-disable-next-line no-await-in-loop -- passes are intentionally sequential: each observes the prior pass's committed state and the tables merged while it ran
                 await Promise.all([
-                    this.refreshSubscriptions(batch, frameCursor, frameEpoch, batchKeys),
+                    this.refreshSubscriptions(batch, frameCursor, frameEpoch, batchKeys, refreshReadBookmark(batchBookmarks)),
                     this.pokeShapeSubscribers(batch, frameCursor, frameEpoch),
                     this.relay?.onFlush(batch, frameCursor ?? 0),
                 ]);
@@ -14844,6 +14906,7 @@ abstract class ShardDO {
 
                 batch = this.pendingRefreshTables;
                 batchKeys = this.pendingRefreshKeys;
+                batchBookmarks = this.pendingRefreshBookmarks;
             }
 
             // Every consumer that was going to advance its durable cursor for
@@ -15002,6 +15065,7 @@ abstract class ShardDO {
         frameCursor: number | undefined,
         frameEpoch: string | undefined,
         changedKeys?: Map<string, IndexKeyEntry[] | undefined>,
+        refreshBookmark?: string,
     ): Promise<void> {
         // Delivery authorization settles every subscription on every flush, so it never skips a socket.
         const sockets = [...this.runner.sockets()].filter((ws) => this.deliveryAuthorization !== undefined || this.socketIndex.mayCare(ws, changed));
@@ -15079,7 +15143,15 @@ abstract class ShardDO {
                         this.sendSubscriptionSettlement(ws, subId, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit, true);
                         return;
                     }
-                    const outcome = await this.resolveReactiveOutcomeDeduped(functionPath, args, handedArgs, isAdmin, attachment, reactiveRunCache);
+                    const outcome = await this.resolveReactiveOutcomeDeduped(
+                        functionPath,
+                        args,
+                        handedArgs,
+                        isAdmin,
+                        attachment,
+                        reactiveRunCache,
+                        refreshBookmark,
+                    );
 
                     if (!outcome) {
                         // A clean resolve to "nothing to deliver" still ends the failure streak.
@@ -18970,6 +19042,10 @@ abstract class ShardDO {
                 break;
             }
         }
+
+        // An authorizer is registered as a query and typed with a read-only `ctx.db`, but the ctx it
+        // runs on carries the shard's writer at runtime, so a handler that casts past the type can write.
+        await this.flushAfterDispatch("whisper:flush");
 
         return allowed;
     }

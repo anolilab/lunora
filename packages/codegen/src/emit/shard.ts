@@ -495,14 +495,14 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // field under `noImplicitAny`. The Hyperdrive thunk below stays narrow on
     // purpose — it is handed the same object and simply never reads the extras.
     const d1ConfigField = hasD1Global
-        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
         : "";
 
     // Hyperdrive-backed `.global()` tables receive their writer via an optional
     // `hyperdriveGlobal` thunk (mirrors `d1`); the host builds it with the global
     // writer factory from `@lunora/hyperdrive/global` over a Hyperdrive driver.
     const hyperdriveGlobalConfigField = hasHyperdriveGlobal
-        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
+        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onWrite?: (table: string) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
         : "";
 
     // External-source ingest (plan 077): the host supplies one resolver that turns a
@@ -569,10 +569,20 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // every deployment while the RLS docs described `maxRelationKeys` as a cap
     // users could raise. Only keys the app set are present, so the spread never
     // clobbers an engine default with `undefined`.
+    // With `.global()` tables, a global row's broadcast carries the bookmark its write left, as the
+    // writer's `onWrite` does (see `globalDatabaseLine`). Recorded bare, the same table re-recorded
+    // after a sibling already drained it would refresh again at no bookmark, after the run that read at it.
+    const broadcastBody = hasGlobalTables
+        ? `                    if (writeBookmark !== undefined && (schema as unknown as SchemaLike).tables[delta.table]?.shardMode?.kind === "global") {
+                        this.recordGlobalWrite(delta.table, writeBookmark);
+                    } else {
+                        this.recordChangedTable(delta.table, delta.indexKeys);
+                    }`
+        : "                    this.recordChangedTable(delta.table, delta.indexKeys);";
     const databaseOptions = `{
                 ...this.ctxDbTuning(),${authField}
                 broadcast: (delta) => {
-                    this.recordChangedTable(delta.table, delta.indexKeys);
+${broadcastBody}
                 },
                 // Read at call time, not captured: the baseline belongs to the
                 // dispatch in flight, and a queued mutation admitted after a
@@ -663,19 +673,28 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // unpinned. A non-`/rpc` caller (an alarm, a lifecycle dispatch) passes no
     // sink and the bookmark is dropped: there is no response to carry it.
     //
+    // A refresh re-run is handed `readBookmark` by value: the bookmark of the writes that
+    // scheduled it (see `refreshReadBookmark` in @lunora/do). The inbound bookmark on the
+    // instance belongs to whichever dispatch holds it when the deferred refresh runs.
+    //
+    // `onWrite` reports every row the global writer stores, a trigger's included, with the
+    // bookmark that write left in `writeBookmark`, so the refresh it schedules reads at it.
+    //
     // Assigned to a named local (not passed as an inline object literal) so
     // handing it to the narrower Hyperdrive thunk's `request` parameter type —
     // which does not declare these fields — doesn't trip an excess-property
     // error; the Hyperdrive factory simply never reads the extra properties.
     const globalDatabaseLine = hasGlobalTables
-        ? `            const bookmark = this.getInboundBookmark();
+        ? `            const bookmark = options.readBookmark ?? this.getInboundBookmark();
+            let writeBookmark: string | undefined;
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),
                 get identity(): Record<string, unknown> | undefined {
                     return readIdentity();
                 },
-                onBookmark: (bookmarkValue: string | undefined) => { if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
+                onBookmark: (bookmarkValue: string | undefined) => { writeBookmark = bookmarkValue; if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
+                onWrite: (table: string) => { this.recordGlobalWrite(table, writeBookmark); },
                 get userId(): string | undefined {
                     return readUserId();
                 },

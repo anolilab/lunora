@@ -55,6 +55,8 @@ class FailingWriteShard extends ShardDO {
 
     public mutationPaths = new Set<string>(["counters:fail", "messages:fail"]);
 
+    public whisperAuthorizers: string[] = [];
+
     public runDisconnect(): Promise<void> {
         return this.dispatchLifecycle("disconnect", { event: {}, identity: null, ip: undefined, userId: undefined } as never);
     }
@@ -93,8 +95,11 @@ class FailingWriteShard extends ShardDO {
         return this.mutationPaths.has(functionPath);
     }
 
-    // eslint-disable-next-line class-methods-use-this -- test double: every lifecycle moment runs the failing write
     protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string> {
+        if (event === "whisper") {
+            return this.whisperAuthorizers;
+        }
+
         return event === "disconnect" || event === "init" ? ["counters:fail"] : [];
     }
 
@@ -218,6 +223,19 @@ describe("a dispatch that wrote a .global() row and then threw refreshes its sub
 
         sockets.push(member);
         await shard.webSocketMessage(member as unknown as WebSocket, JSON.stringify({ topic: "room:chat", type: "whisper_subscribe" }));
+
+        expect(pushed(watcher, "counters")).toHaveLength(2);
+    });
+
+    it("a whisper authorizer, which is typed read-only but runs on a ctx that can write", async () => {
+        expect.assertions(1);
+
+        const { shard, sockets, watcher } = await setup();
+        const member = new FakeSocket({ subs: {}, userId: "member" });
+
+        shard.whisperAuthorizers = ["counters:fail"];
+        sockets.push(member);
+        await shard.webSocketMessage(member as unknown as WebSocket, JSON.stringify({ topic: "cursors", type: "whisper_subscribe" }));
 
         expect(pushed(watcher, "counters")).toHaveLength(2);
     });

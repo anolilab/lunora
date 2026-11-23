@@ -324,7 +324,7 @@ __COMMITTED_CATCH__            } finally {
         protected override scheduleOutboxScheduler(): SchedulerLike | undefined {
 __OUTBOX_SCHEDULER__        }`;
 
-const SUBSCRIPTION_METHODS = `        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
+const SUBSCRIPTION_METHODS = `        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity, readBookmark?: string): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -408,7 +408,7 @@ const dispatchMethods = (hasRooms: boolean, lazyFunctions = false, stampsOutbox 
         .replace("__OUTBOX_SCHEDULER__", outboxScheduler);
 };
 
-const SUBSCRIPTION_RUN_PLAIN = `            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange });
+const SUBSCRIPTION_RUN_PLAIN = `            const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange, readBookmark });
             const result = await registered.handler(ctx, args);
 `;
 
@@ -419,7 +419,7 @@ const SUBSCRIPTION_RUN_SENSITIVE = `            const sensitive = this.openSensi
             let result: unknown;
 
             try {
-                const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange, sensitive });
+                const ctx = this.buildCtx({ functionPath, headroom: this.subscriptionHeadroom(functionPath, identity), identity, onRead: footprint.onRead, onReadRange: footprint.onReadRange, readBookmark, sensitive });
 
                 result = await registered.handler(ctx, args);
             } catch (error) {
