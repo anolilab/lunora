@@ -4749,8 +4749,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // rank and search indexes and every subscriber disagreeing with the
                 // table for good. Inside a transaction too: a mutation that catches
                 // this error commits the earlier chunks. The companion writes ride the
-                // same transaction, so a rollback takes them back with the rows; only
-                // the write reports for those rows go out regardless, which is accepted.
+                // same transaction, so a rollback takes them back with the rows; a write
+                // report already sent for one is not taken back, which is accepted.
                 await catchUpCommittedRows(tableName, rows.slice(0, written));
 
                 throw error;
