@@ -5312,18 +5312,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // eslint-disable-next-line unicorn/no-null -- clearing the soft-delete marker writes SQL NULL into the column
             await writer.patch(table, id, { [field]: null });
 
-            // The soft delete REMOVED this row's rank-companion entry; `patch`'s
-            // rank sync skips re-adding it (the sort fields are unchanged, so its
-            // fast path assumes the entry is already present). Force the re-insert
-            // here. Search was kept (read-filtered) and the aggregate companion re-added the row on
-            // `patch`'s own `-prev + next` step (the marker going null is what
-            // makes `next` qualify), so neither needs anything extra here; the
-            // vector re-upsert rode `patch`'s `onWrite("update")`.
+            // The soft delete removed this row's rank-companion entry, and `patch`
+            // re-inserts it: liveness is part of `syncRankIndexEntry`'s fast-path
+            // key, so the marker going null takes the DELETE+INSERT branch. Search
+            // was kept (read-filtered), the aggregate companion re-added the row on
+            // `patch`'s own `-prev + next` step, and the vector re-upsert rode
+            // `patch`'s `onWrite("update")`.
             //
-            // The image is re-read rather than taken from `located`: an update hook may have changed a
-            // ranked field during `patch`, in which case `patch` already inserted the entry. The DELETE
-            // in front makes the re-insert hold either way, and also clears an entry the row kept from a
-            // write that reached it while deleted on a shard predating that refusal.
+            // The DELETE+INSERT below repeats that on purpose, as a safety net for
+            // an entry a deleted row kept from a write that reached it on a shard
+            // that predates refusing writes to a soft-deleted row. The image
+            // is re-read rather than taken from `located` because an update hook may
+            // have changed a ranked field during `patch`.
             const restored = wasDeleted ? locateRowById(id, table)?.row : undefined;
 
             if (restored) {
