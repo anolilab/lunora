@@ -466,6 +466,35 @@ describe("createWorker — scheduled dispatch per-record dedup key", () => {
         expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({ id: "sync-user", pool: "sync" });
     });
 
+    it("refuses a dedupKey the SchedulerDO would not have written with 400 INVALID_INPUT, never reaching the shard", async () => {
+        expect.assertions(3);
+
+        let shardCalls = 0;
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        shardCalls += 1;
+
+                        return Response.json({ result: null }, { status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: schedulerSpy().namespace, shardDO });
+
+        // A newline is header-illegal: spent as the mutation id it made the shard forward's `new Request` throw a 500.
+        const response = await dispatch(worker, { args: {}, dedupKey: "bad\nkey", functionPath: "jobs:sync", id: "sync-user" });
+        const body: { error: { code: string } } = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.error.code).toBe("INVALID_INPUT");
+        expect(shardCalls).toBe(0);
+    });
+
     it("starts a scheduled workflow under the dedupKey as its instance id", async () => {
         expect.assertions(2);
 

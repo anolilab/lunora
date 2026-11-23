@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, TERMINAL_RETENTION_MS } from "@lunora/scheduler";
+import { assertDedupKey, assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, TERMINAL_RETENTION_MS } from "@lunora/scheduler";
 import type { RetryPolicy, ScheduledJob, ScheduledJobView, Scheduler } from "@lunora/server";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
@@ -181,6 +181,10 @@ const createFakeScheduler = (
     const completedKeys = new Map<string, number>();
 
     const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}, requestedId?: string, dedupKey?: string): string => {
+        // Outside a transaction (an action) the deferral facade hands the call straight through
+        // without its key check, so the fake applies the SchedulerDO's own grammar here.
+        assertDedupKey(dedupKey);
+
         // Stand in for the same round trip production makes, so a test double
         // neither accepts what production rejects nor rejects what it accepts.
         //

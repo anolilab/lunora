@@ -27,6 +27,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { DirectShardDirectory } from "@lunora/platform";
 import { resolveShard, toErrorResponse } from "@lunora/runtime";
+import { assertDedupKey } from "@lunora/scheduler";
 
 import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
 import {
@@ -83,14 +84,17 @@ const readRawBody = async (request: Request): Promise<string> => {
     return text;
 };
 
+// A supplied key is held to the grammar the SchedulerDO enforces when the job is written: only a
+// forged or hand-built body carries another, and a header-illegal one (a newline) would make the
+// shard forward's `new Request` throw a 500 instead of answering 400.
 const dedupKey = (candidate: Record<string, unknown>): string | undefined => {
-    for (const value of [candidate["dedupKey"], candidate["id"]]) {
-        if (typeof value === "string" && value.length > 0) {
-            return value;
-        }
+    const supplied = assertDedupKey(candidate["dedupKey"]);
+
+    if (supplied !== undefined) {
+        return supplied;
     }
 
-    return undefined;
+    return typeof candidate["id"] === "string" && candidate["id"].length > 0 ? candidate["id"] : undefined;
 };
 
 const handle = async (request: Request, options: NodeDispatchRouteOptions): Promise<Response> => {

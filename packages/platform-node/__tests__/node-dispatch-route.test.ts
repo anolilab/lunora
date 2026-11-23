@@ -90,6 +90,21 @@ describe("createNodeDispatchRoute", () => {
         expect(invoke).toHaveBeenCalledTimes(2);
     });
 
+    it("refuses a dedupKey the SchedulerDO would not have written with 400 INVALID_INPUT and never invokes", async () => {
+        expect.assertions(3);
+
+        const { invoke, route } = build();
+        // A newline is header-illegal: spent as the mutation id it made the shard forward's `new Request` throw a 500.
+        const response = await route(
+            post(JSON.stringify({ args: {}, dedupKey: "bad\nkey", functionPath: "notes:add", id: "job-1" }), { authorization: `Bearer ${TOKEN}` }),
+        );
+        const body = (await response.json()) as { error: { code: string } };
+
+        expect(response.status).toBe(400);
+        expect(body.error.code).toBe("INVALID_INPUT");
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
     it("refuses a wrong bearer with DISPATCH_UNAUTHENTICATED and never invokes", async () => {
         expect.assertions(3);
 

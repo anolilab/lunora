@@ -1,7 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-/** The workflow engine's instance-id grammar and its 100-char ceiling: a dedup key is spent verbatim as an instance id. */
-const DEDUP_KEY_PATTERN = /^\w[\w-]{0,99}$/u;
+import { DEDUP_KEY_GRAMMAR_MESSAGE, isDedupKey } from "../../../shared/dedup-key";
 
 /**
  * Refuse a caller's `RunOptions.dedupKey` the receivers cannot carry, or pass it through.
@@ -17,8 +16,8 @@ const assertDedupKey = (requested: unknown): string | undefined => {
         return undefined;
     }
 
-    if (typeof requested !== "string" || !DEDUP_KEY_PATTERN.test(requested)) {
-        throw new LunoraError("INVALID_INPUT", "@lunora/scheduler: `dedupKey` must match ^[A-Za-z0-9_][A-Za-z0-9_-]{0,99}$", { status: 400 });
+    if (!isDedupKey(requested)) {
+        throw new LunoraError("INVALID_INPUT", `@lunora/scheduler: ${DEDUP_KEY_GRAMMAR_MESSAGE}`, { status: 400 });
     }
 
     return requested;

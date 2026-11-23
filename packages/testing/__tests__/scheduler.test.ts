@@ -845,6 +845,18 @@ describe("fake scheduler production parity", () => {
         );
     });
 
+    it("rejects a dedup key the SchedulerDO refuses when an action schedules outside a transaction", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        const schedule = async (dedupKey: string): Promise<string> =>
+            t.action(async (ctx) => ctx.scheduler.runAfter(0, "log:appendLog", { message: "keyed" }, { dedupKey }));
+
+        await expect(schedule("-bad")).rejects.toMatchObject({ code: "INVALID_INPUT" });
+        await expect(schedule("good_key-1")).resolves.toMatch(/\S/u);
+    });
+
     it("rejects a non-finite runAt instant, and accepts an overdue one", async () => {
         expect.assertions(2);
 

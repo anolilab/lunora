@@ -13,6 +13,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { collectPages } from "../../../shared/collect-pages";
+import { DEDUP_KEY_GRAMMAR_MESSAGE, isDedupKey } from "../../../shared/dedup-key";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
 import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
@@ -4303,7 +4304,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // re-fires, and leaving it without an id let one scheduled workflow run its whole
         // pipeline once per retry attempt. `candidate.id` itself stays the pool-slot identity.
         const recordId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
-        const dedupKey = typeof candidate.dedupKey === "string" && candidate.dedupKey.length > 0 ? candidate.dedupKey : recordId;
+        // A supplied key the SchedulerDO would have refused is a forged or hand-built body: refuse
+        // it here, or a header-illegal character makes the shard forward's `new Request` throw.
+        if (candidate.dedupKey !== undefined && !isDedupKey(candidate.dedupKey)) {
+            throw new LunoraError(`Scheduler dispatch: ${DEDUP_KEY_GRAMMAR_MESSAGE}`, { code: "INVALID_INPUT", status: 400 });
+        }
+
+        const dedupKey = candidate.dedupKey ?? recordId;
 
         // A workflow/agent target starts a durable instance (the args become its
         // `params`) rather than dispatching a function to a shard — the
