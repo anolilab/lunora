@@ -260,6 +260,37 @@ describe(runToolScript, () => {
         expect(seen).toStrictEqual(["1:call_1:a"]);
     });
 
+    it("keeps a step id that contains a colon from producing another call's key", async () => {
+        const seen: { callKey: string | undefined; idempotencyKey: string }[] = [];
+        const tool: AgentToolDefinition = {
+            description: "t",
+            execute: (_input, ctx) => {
+                seen.push({ callKey: ctx.callKey, idempotencyKey: ctx.idempotencyKey });
+
+                return "ok";
+            },
+            inputSchema: jsonSchema({ additionalProperties: true, type: "object" }),
+            isLunoraAgentTool: true,
+        };
+
+        // Turn 0's call "1" runs step "x:y"; turn 1 repeats call id "x", keyed "1:x", and runs step "y".
+        await runToolScript(
+            { steps: [{ id: "x:y", tool: "t" }] },
+            { t: tool },
+            { callKey: "1", idempotencyKey: "tool:code:1", step: passthroughStep, toolCallId: "1" } as AgentToolContext,
+            16,
+        );
+        await runToolScript(
+            { steps: [{ id: "y", tool: "t" }] },
+            { t: tool },
+            { callKey: "1:x", idempotencyKey: "tool:code:1:x", step: passthroughStep, toolCallId: "x" } as AgentToolContext,
+            16,
+        );
+
+        expect(seen[0]?.callKey).not.toBe(seen[1]?.callKey);
+        expect(seen[0]?.idempotencyKey).not.toBe(seen[1]?.idempotencyKey);
+    });
+
     it("gives each step its own idempotency key / tool-call id derived from the code tool's", async () => {
         const seen: { idempotencyKey: string; toolCallId: string }[] = [];
         const tool: AgentToolDefinition = {

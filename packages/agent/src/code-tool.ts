@@ -183,6 +183,9 @@ const validatedStepInput = async (step: ToolScriptStep, tool: AnyAgentTool, inpu
     throw new LunoraError("BAD_REQUEST", `@lunora/agent: code step "${step.id}" input is invalid for tool "${step.tool}": ${result.error.message}`);
 };
 
+/** A step id as a key segment, with backslash and colon escaped so it never contains the separator. Unchanged without either. */
+const escapeKeyPart = (part: string): string => part.replaceAll("\\", String.raw`\\`).replaceAll(":", String.raw`\:`);
+
 /**
  * Interpret a {@link ToolScript}: run each step in order, dispatching its `tool`
  * through the same {@link AgentToolContext} the loop hands a normal tool call
@@ -248,12 +251,15 @@ const runToolScript = async (
         const input = await validatedStepInput(step, tool, resolveReferences(step.input ?? {}, byId));
         // Give each sub-call its OWN idempotency key / tool-call id (derived from
         // the code tool's, suffixed by the step id) so two side-effecting sub-calls
-        // in one script don't collide on a shared key when they dedupe on it.
+        // in one script don't collide on a shared key when they dedupe on it. The
+        // model picks the step id, so its colons are escaped: unescaped, step "x:y"
+        // under key "1" and step "y" under a repeated call's key "1:x" were one key.
+        const stepSuffix = escapeKeyPart(step.id);
         const stepContext: AgentToolContext = {
             ...context,
-            callKey: `${context.callKey ?? context.toolCallId}:${step.id}`,
-            idempotencyKey: `${context.idempotencyKey}:${step.id}`,
-            toolCallId: `${context.toolCallId}:${step.id}`,
+            callKey: `${context.callKey ?? context.toolCallId}:${stepSuffix}`,
+            idempotencyKey: `${context.idempotencyKey}:${stepSuffix}`,
+            toolCallId: `${context.toolCallId}:${stepSuffix}`,
         };
 
         const runStep = (): Promise<unknown> => Promise.resolve(tool.execute(input, stepContext));
