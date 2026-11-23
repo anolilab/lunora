@@ -3,6 +3,22 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-23T23:12:37.648Z",
+      "key": "@lunora/client@1.0.0-alpha.301"
+    },
+    {
+      "at": "2026-11-23T23:12:37.648Z",
+      "key": "@lunora/codegen@1.0.0-alpha.435"
+    },
+    {
+      "at": "2026-11-23T23:12:37.648Z",
+      "key": "@lunora/db@1.0.0-alpha.286"
+    },
+    {
+      "at": "2026-11-23T23:12:37.648Z",
+      "key": "@lunora/payment@1.0.0-alpha.276"
+    },
+    {
       "at": "2026-11-23T22:10:00.404Z",
       "key": "@lunora/shard-engine@1.0.0-alpha.205"
     },
@@ -385,24 +401,8 @@
     {
       "at": "2026-11-20T09:18:08.271Z",
       "key": "@lunora/studio@1.0.0-alpha.387"
-    },
-    {
-      "at": "2026-11-20T09:18:08.271Z",
-      "key": "@lunora/config@1.0.0-alpha.467"
-    },
-    {
-      "at": "2026-11-20T09:18:08.271Z",
-      "key": "@lunora/platform-node@1.0.0-alpha.221"
-    },
-    {
-      "at": "2026-11-20T09:18:08.271Z",
-      "key": "@lunora/cli@1.0.0-alpha.503"
-    },
-    {
-      "at": "2026-11-20T08:04:51.462Z",
-      "key": "@lunora/sql-store@1.0.0-alpha.238"
     }
   ],
-  "updatedAt": "2026-11-23T22:10:00.404Z",
+  "updatedAt": "2026-11-23T23:12:37.648Z",
   "version": 1
 }
