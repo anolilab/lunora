@@ -55,6 +55,12 @@
  * the setup and its security-relevant defaults.
  */
 
+// Programmatic API keys: non-session credentials a user or service mints for
+// scripts, CI, and machine clients, with their own expiry, rate limits, and
+// permissions. Its own package rather than a `better-auth/plugins` subpath. Wrapped so
+// the admin plane can read where the keys are stored.
+export { default as apiKey } from "./api-key";
+
 /**
  * Close self-serve sign-up to invited addresses only: an account is created only
  * for an email an administrator has invited with `createSignUpInvitation`.
@@ -89,11 +95,6 @@ export { mcp, mcpDiscoveryPaths, requireMcpAuth } from "./mcp-auth";
  */
 export type { UiConfigOptions, UiConfigOrganization, UiConfigPayload } from "./ui-config";
 export { uiConfig } from "./ui-config";
-
-// Programmatic API keys: non-session credentials a user or service mints for
-// scripts, CI, and machine clients, with their own expiry, rate limits, and
-// permissions. Its own package rather than a `better-auth/plugins` subpath.
-export { apiKey } from "@better-auth/api-key";
 
 // Client ID Metadata Documents: a client uses an HTTPS URL as its `client_id`, and
 // the authorization server fetches the client's metadata from it instead of

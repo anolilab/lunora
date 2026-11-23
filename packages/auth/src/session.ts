@@ -71,23 +71,21 @@ const validateSessionPolicy = (policy: SessionPolicy): SessionPolicy => {
  * });
  * ```
  *
- * - `rolling` — balanced default: 7-day absolute expiry, rotated once per day,
- *   with a 60s signed-cookie session cache so bursts of authenticated calls
- *   skip the per-request DB session read.
+ * - `rolling` — balanced default: 7-day absolute expiry, rotated once per day.
+ *   It leaves `cookieCache` to `createAuth`'s default: a 60s signed-cookie
+ *   session cache, or none with the `admin()` plugin so a ban is immediate.
  * - `strict` — short, security-sensitive: 1-hour expiry, 15-minute rotation,
  *   cookie cache **off** (fast revocation / short freshness is the whole point).
  * - `longLived` — low-friction consumer apps: 30-day expiry, daily rotation,
- *   with the same 60s cookie cache as `rolling`.
+ *   with the same cookie-cache default as `rolling`.
  */
 const sessionPresets: Record<"longLived" | "rolling" | "strict", SessionPolicy> = {
     longLived: {
-        cookieCache: { enabled: true, maxAge: 60 },
         expiresIn: 30 * DAY,
         freshAge: DAY,
         updateAge: DAY,
     },
     rolling: {
-        cookieCache: { enabled: true, maxAge: 60 },
         expiresIn: 7 * DAY,
         freshAge: DAY,
         updateAge: DAY,

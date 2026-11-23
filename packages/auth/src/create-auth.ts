@@ -4,6 +4,7 @@ import { getIP } from "better-auth/api";
 import { betterAuth } from "better-auth/minimal";
 
 import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
+import { effectiveCookieCache } from "./cookie-cache";
 import { authDiscoveryPaths } from "./discovery";
 import { withOrgSessionRefresh } from "./org-session-refresh";
 import { validateSessionPolicy } from "./session";
@@ -456,6 +457,9 @@ export type LunoraAuth = ReturnType<typeof fullBetterAuth>;
  * The one tradeoff — a revoked session stays valid until the cache expires —
  * is bounded by that TTL; callers who need immediate revocation opt out with
  * `session: { cookieCache: { enabled: false } }` (or the `strict` preset).
+ * With better-auth's `admin()` plugin installed the default is OFF instead, so
+ * a ban holds from the user's next request; the cost is one session read per
+ * resolution. An explicit `cookieCache` still wins.
  * With the organization plugin on, a small plugin re-issues that cache cookie
  * whenever an `/organization/*` endpoint moved the caller's active organization
  * or team (see `org-session-refresh.ts`), so a membership change is not hidden
@@ -488,7 +492,7 @@ export const resolveAuthOptions = (options: LunoraAuthOptions): LunoraAuthOption
     return withOrgSessionRefresh({
         ...hardened,
         ...rateLimit,
-        ...(hardened.session?.cookieCache === undefined ? { session: { ...hardened.session, cookieCache: { enabled: true, maxAge: 60 } } } : {}),
+        ...(hardened.session?.cookieCache === undefined ? { session: { ...hardened.session, cookieCache: effectiveCookieCache(hardened) } } : {}),
     });
 };
 
