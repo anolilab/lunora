@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { aggregateTableName } from "../src/aggregate-tally";
 import type { SchemaLike } from "../src/ctx-db";
@@ -40,6 +40,7 @@ describe("insertManyUnsafe — a later chunk fails", () => {
 
     afterEach(() => {
         harness.close();
+        vi.restoreAllMocks();
     });
 
     it("leaves every committed row with its companions and its write report", async () => {
@@ -170,9 +171,11 @@ describe("insertManyUnsafe — a later chunk fails", () => {
     });
 
     it("keeps the insert error and catches up every committed row when one row's catch-up fails", async () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         runShardMigrations(harness.sql, schema);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         const reported: string[] = [];
         const writer = createShardContextDatabase({
@@ -196,5 +199,8 @@ describe("insertManyUnsafe — a later chunk fails", () => {
 
         // Every committed row but the one whose hook threw was still reported.
         expect(reported).toHaveLength(32);
+        // The dropped failure still leaves a trace naming the table and the row.
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/"r1" in "items"/u), expect.objectContaining({ message: "write hook failed" }));
     });
 });

@@ -3261,7 +3261,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * Companions + write report for rows an `insertManyUnsafe` chunk committed before a later chunk
      * threw. Each row on its own, failures dropped: one row's companion error must not leave the
      * rows after it unsynced, nor replace the insert error that stopped the batch, which is the one
-     * the caller has to act on. A row whose companions failed is not reported.
+     * the caller has to act on, so each is logged instead. A row whose companions failed is not
+     * reported.
      *
      * Every row's companions go in before the first report is awaited: another write can land in
      * that await, and a row it deletes must not be put back in the indexes (or its insert logged
@@ -3273,7 +3274,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 syncCompanionsForInsert(tableName, id, document);
 
                 return true;
-            } catch {
+            } catch (error) {
+                // eslint-disable-next-line no-console -- the insert error owns the throw, so this is the only trace of a row left out of its indexes
+                console.warn(`[@lunora/shard-engine] insertManyUnsafe: companions of committed row "${id}" in "${tableName}" could not be synced:`, error);
+
                 return false;
             }
         });
@@ -3283,8 +3287,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // Raw hook, not `onWrite`: the batch was metered before the insert.
                 // eslint-disable-next-line no-await-in-loop -- sequential write-hook fan-out, mirrors the single insert
                 await reportWrite({ doc: document, id, op: "insert", table: tableName });
-            } catch {
-                // Dropped: see above.
+            } catch (error) {
+                // eslint-disable-next-line no-console -- the insert error owns the throw, so this is the only trace of a committed row's missed report
+                console.warn(`[@lunora/shard-engine] insertManyUnsafe: write report of committed row "${id}" in "${tableName}" failed:`, error);
             }
         }
     };
