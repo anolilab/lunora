@@ -782,30 +782,26 @@ const deleteOrganizationTeamMemberships = async (context_: Awaited<LunoraAuth["$
  * better-auth's `findUserByEmail` matches the stored address exactly, so an account written before addresses
  * were lowercased, or imported as it was, would slip past it; the canonical column is an exact, indexed match.
  *
- * A row with no canonical value yet is matched on its address with ASCII case folded, as before the column
- * existed: one written before it and not yet backfilled (a non-D1 database, a D1 table larger than one
- * backfill pass), or a pre-existing duplicate the backfill leaves empty. The `IS NULL` range of the canonical
- * index is empty once a table is backfilled, so this costs an index probe rather than a scan.
+ * A row with no canonical value yet has its address folded here instead: one written before the column and
+ * not yet backfilled, or a pre-existing duplicate the backfill leaves empty. Matching those in SQL cannot be
+ * done safely (`LOWER()` folds ASCII only, and nothing in SQLite normalises Unicode form), so they are read
+ * and compared in JS. They are read through the canonical index's `IS NULL` range, a set the backfill only
+ * shrinks, so once a table is filled this is one empty count.
  */
 const assertEmailFree = async (context_: AuthContext, email: string, exceptUserId: string | undefined): Promise<void> => {
-    const [held, unfilled] = await Promise.all([
-        context_.adapter.findMany<{ id: string }>({
-            limit: 2,
-            model: "user",
-            where: [{ field: CANONICAL_EMAIL_FIELD, value: canonicalEmail(email) }],
-        }),
-        context_.adapter.findMany<{ id: string }>({
-            limit: 2,
-            model: "user",
-            where: [
-                // eslint-disable-next-line unicorn/no-null -- better-auth compiles a `null` value to `IS NULL`
-                { field: CANONICAL_EMAIL_FIELD, value: null },
-                { field: "email", mode: "insensitive", value: email },
-            ],
-        }),
+    const canonical = canonicalEmail(email);
+    // eslint-disable-next-line unicorn/no-null -- better-auth compiles a `null` value to `IS NULL`
+    const unfilled = [{ field: CANONICAL_EMAIL_FIELD, value: null }];
+    const [held, unfilledCount] = await Promise.all([
+        context_.adapter.findMany<{ id: string }>({ limit: 2, model: "user", where: [{ field: CANONICAL_EMAIL_FIELD, value: canonical }] }),
+        context_.adapter.count({ model: "user", where: unfilled }),
     ]);
+    // An adapter's `findMany` defaults to a small limit, so the count sets it.
+    const unfilledRows =
+        unfilledCount > 0 ? await context_.adapter.findMany<{ email?: unknown; id: string }>({ limit: unfilledCount, model: "user", where: unfilled }) : [];
+    const holders = [...held, ...unfilledRows.filter((row) => typeof row.email === "string" && canonicalEmail(row.email) === canonical)];
 
-    if ([...held, ...unfilled].some((holder) => holder.id !== exceptUserId)) {
+    if (holders.some((holder) => holder.id !== exceptUserId)) {
         throw new LunoraAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");
     }
 };

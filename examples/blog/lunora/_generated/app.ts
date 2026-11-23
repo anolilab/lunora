@@ -288,6 +288,8 @@ class AppBuilder<Env extends object> {
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
         let authInit: Promise<void> | null = null;
+        // Set once auth is up on D1: another pass of the migration's bounded backfill, run after a request until it is done.
+        let authMigration: (() => Promise<void>) | null = null;
         // One memo per env for THIS assembled worker: every worker it builds reuses it, but a second
         // `assemble()` has its own auth closure and must not share.
         const identityMemos: IdentityMemoStore = new WeakMap();
@@ -327,9 +329,15 @@ class AppBuilder<Env extends object> {
             // Loaded on first request, not at module evaluation: the migrator pulls in kysely and
             // the better-auth migrator, which would otherwise sit in the worker startup closure.
             const { createMigrationAuth, ensureMigrated } = await import("@lunora/auth/migrate");
-            await ensureMigrated(createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+            const migrationAuth = createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never });
+            await ensureMigrated(migrationAuth);
 
             auth = requestAuth;
+            // A table larger than one pass fills over later requests; once it is done this costs nothing.
+            authMigration = () =>
+                ensureMigrated(migrationAuth).catch((error: unknown) => {
+                    console.error("[lunora] auth backfill pass failed; the next request retries it:", error);
+                });
         };
 
         // Single-flighted on the PROMISE, not on `auth`. Every `fetch` awaits this
@@ -365,7 +373,12 @@ class AppBuilder<Env extends object> {
             fetch: async (request: Request, rawEnv: unknown, context: ExecutionContextLike): Promise<Response> => {
                 const env = rawEnv as Env;
                 const deferred = await loadDeferredModules();
+                // Read before `ensureAuth`, so the request that ran the first backfill pass does not run the next one too.
+                const continueMigration = authMigration;
                 await ensureAuth(env);
+                if (continueMigration) {
+                    context.waitUntil?.(continueMigration());
+                }
                 worker ??= buildWorker(env, deferred);
 
                 return worker.fetch(request, rawEnv, context);

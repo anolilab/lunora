@@ -12,7 +12,7 @@ import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import type { AuthDataPortLike } from "../src/data-port";
 import { authCredentialColumns, authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "../src/data-port";
 import { authDoSchemaStatements } from "../src/do-schema";
-import { backfillInvitationEmailsSync, invitationEmailColumns } from "../src/invitation-email-backfill";
+import { backfillInvitationEmails, backfillInvitationEmailsSync, invitationEmailColumns } from "../src/invitation-email-backfill";
 import { inviteOnly } from "../src/invite-only";
 import { admin } from "../src/plugins";
 import authTables from "../src/schema";
@@ -172,26 +172,30 @@ describe("canonical email", () => {
         expect(userCount()).toBe(0);
     });
 
-    it("looks the address up by exact match on the canonical column, never a LOWER() scan", async () => {
+    it("looks the address up by exact match on the canonical column, and reads no row once the table is filled", async () => {
         expect.assertions(2);
 
         const all = vi.spyOn(executor, "all");
 
         await adminApi.createUser({ email: UPPER, name: "Held" });
 
-        const lookups = all.mock.calls.map(([sql]) => sql).filter((sql) => sql.startsWith(`SELECT * FROM "user"`));
+        const lookups = all.mock.calls.map(([sql]) => sql).filter((sql) => sql.startsWith(`SELECT * FROM "user"`) || sql.startsWith(`SELECT COUNT`));
 
         expect(lookups).toStrictEqual([
             `SELECT * FROM "user" WHERE (("emailCanonical" = ?)) LIMIT ?`,
-            `SELECT * FROM "user" WHERE (("emailCanonical" IS NULL) AND (LOWER("email") = LOWER(?))) LIMIT ?`,
+            `SELECT COUNT(*) AS __count FROM "user" WHERE (("emailCanonical" IS NULL))`,
         ]);
-        // The unfilled-row lookup reads the canonical index's `IS NULL` range, not the table.
-        expect((database.prepare(`EXPLAIN QUERY PLAN ${lookups[1]!}`).all("x", 2) as { detail: string }[]).map((step) => step.detail).join("\n")).toContain(
-            "USING INDEX user_emailCanonical_uidx",
+        // The unfilled-row count reads the canonical index's `IS NULL` range, not the table.
+        expect((database.prepare(`EXPLAIN QUERY PLAN ${lookups[1]!}`).all() as { detail: string }[]).map((step) => step.detail).join("\n")).toContain(
+            "USING COVERING INDEX user_emailCanonical_uidx",
         );
     });
 
-    it("refuses an admin create and email change to the address of a row the backfill has not filled", async () => {
+    it.each([
+        ["ASCII case", "Alice@Example.com", "alice@example.com", "ALICE@example.com"],
+        ["non-ASCII case", UPPER, LOWER, LOWER],
+        ["Unicode form", DECOMPOSED, LOWER, UPPER],
+    ])("refuses an admin create and email change to the address of a row the backfill has not filled (%s)", async (_, legacy, created, changed) => {
         expect.assertions(3);
 
         const mover = await adminApi.createUser({ email: "mover@example.com", name: "Mover" });
@@ -199,11 +203,27 @@ describe("canonical email", () => {
         // A row written before the column existed, on a database the backfill has not reached.
         database
             .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('legacy', 'Legacy', ?, 0, 'x', 'x')`)
-            .run("Alice@Example.com");
+            .run(legacy);
 
-        await expect(adminApi.createUser({ email: "alice@example.com", name: "Twin" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
-        await expect(adminApi.updateUser({ data: { email: "ALICE@example.com" }, userId: mover.id })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+        await expect(adminApi.createUser({ email: created, name: "Twin" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+        await expect(adminApi.updateUser({ data: { email: changed }, userId: mover.id })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
         expect(userCount()).toBe(2);
+    });
+
+    it("reads every unfilled row, not the adapter's default page of them", async () => {
+        expect.assertions(1);
+
+        const insert = database.prepare(
+            `INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (?, 'Legacy', ?, 0, 'x', 'x')`,
+        );
+
+        for (let index = 0; index < 150; index += 1) {
+            insert.run(`legacy${String(index)}`, `legacy${String(index)}@example.com`);
+        }
+
+        insert.run("last", UPPER);
+
+        await expect(adminApi.createUser({ email: LOWER, name: "Twin" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
     });
 
     it("never lets an internal-adapter update set or clear the canonical address without changing the address", async () => {
@@ -258,6 +278,27 @@ describe("canonical email on the schema paths", () => {
 
         expect(created).toStrictEqual({ data: { email: "rewritten@example.com", emailCanonical: "rewritten@example.com" } });
         expect(updated).toStrictEqual({ data: { emailCanonical: canonicalEmail(UPPER) } });
+    });
+
+    it("derives no canonical value when a caller's update hook withholds the address", async () => {
+        expect.assertions(1);
+
+        const resolved = withCanonicalEmail<LunoraAuthOptions>({
+            databaseHooks: {
+                user: {
+                    update: {
+                        before: async () => {
+                            return { data: { email: undefined } };
+                        },
+                    },
+                },
+            },
+            secret: SECRET,
+        });
+
+        await expect(resolved.databaseHooks?.user?.update?.before?.({ email: UPPER }, null)).resolves.toStrictEqual({
+            data: { email: undefined, emailCanonical: undefined },
+        });
     });
 
     it("installs the hooks once, even when the app declares the field itself, keeping its column name", async () => {
@@ -333,13 +374,51 @@ describe("canonical email on the schema paths", () => {
 
         await backfillCanonicalEmails({ all }, column);
 
-        // 20 pages of 200: a read and one UPDATE each.
-        expect(all).toHaveBeenCalledTimes(40);
+        // 20 pages of 200, a read and one UPDATE each, plus creating, reading and writing the resume point.
+        expect(all).toHaveBeenCalledTimes(43);
         expect(unfilled()).toBe(1);
 
         await backfillCanonicalEmails({ all }, column);
 
         expect(unfilled()).toBe(0);
+    });
+
+    it("resumes a capped run where the last stopped, so rows it cannot fill never starve the rows behind them", async () => {
+        expect.assertions(4);
+
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
+        database
+            .prepare(`INSERT INTO "user" ("id", "email", "emailCanonical") VALUES ('held', ?, ?)`)
+            .run("duplicateaddress@example.com", "duplicateaddress@example.com");
+
+        const insert = database.prepare(`INSERT INTO "user" ("id", "email") VALUES (?, ?)`);
+        const local = "duplicateaddress";
+
+        // More case variants of the held address than one run reads; none can be filled.
+        for (let index = 0; index < 4200; index += 1) {
+            const variant = local.replaceAll(/[a-z]/gu, (letter, position: number) =>
+                Math.floor(index / 2 ** position) % 2 === 1 ? letter.toUpperCase() : letter,
+            );
+
+            insert.run(`dup${String(index)}`, `${variant}@Example.com`);
+        }
+
+        insert.run("behind", "Behind@Example.com");
+
+        const column = { canonical: "emailCanonical", email: "email", table: "user" };
+        const canonicalOfBehind = (): unknown =>
+            (database.prepare(`SELECT "emailCanonical" FROM "user" WHERE "id" = 'behind'`).get() as { emailCanonical: unknown }).emailCanonical;
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await expect(backfillCanonicalEmails(executorFor(database), column)).resolves.toStrictEqual({ complete: false, duplicates: 4000 });
+        expect(canonicalOfBehind()).toBeNull();
+
+        await expect(backfillCanonicalEmails(executorFor(database), column)).resolves.toStrictEqual({ complete: true, duplicates: 200 });
+        expect(canonicalOfBehind()).toBe("behind@example.com");
+
+        warn.mockRestore();
     });
 
     it("adds and backfills the column on a Durable Object that predates it, leaving a pre-existing duplicate empty", async () => {
@@ -439,6 +518,35 @@ describe("invitation addresses stored before canonical form", () => {
         warn.mockRestore();
     });
 
+    it("resumes a capped run past newer rows already in canonical form, and stops reading once a pass is done", async () => {
+        expect.assertions(4);
+
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(
+            `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "createdAt" integer NOT NULL, "expiresAt" integer NOT NULL)`,
+        );
+        invitation(database, "older", DECOMPOSED, 1);
+
+        // Newer and non-ASCII, so the read matches them, but already canonical: nothing to rewrite.
+        for (let index = 0; index < 4000; index += 1) {
+            invitation(database, `settled${String(index)}`, `é${String(index)}@example.com`, 2 + index);
+        }
+
+        const columns = invitationEmailColumns(resolveAuthOptions(inviteOptions))!;
+        const all = vi.fn<SqlExecutor["all"]>(executorFor(database).all);
+
+        await expect(backfillInvitationEmails({ all }, columns)).resolves.toStrictEqual({ complete: false, unchanged: [] });
+        await expect(backfillInvitationEmails({ all }, columns)).resolves.toStrictEqual({ complete: true, unchanged: [] });
+        expect(emails(database)["older"]).toBe(canonicalEmail(DECOMPOSED));
+
+        all.mockClear();
+        await backfillInvitationEmails({ all }, columns);
+
+        // Creating and reading the resume point; no invitation is read again.
+        expect(all).toHaveBeenCalledTimes(2);
+    });
+
     it("rewrites them on a Durable Object's cold start", async () => {
         expect.assertions(1);
 
@@ -455,7 +563,11 @@ describe("invitation addresses stored before canonical form", () => {
             await authDo.fetch(new Request(`https://example.test${RESOLVE_SESSION_PATH}`, { headers: { [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET } }));
         };
 
-        await coldStart();
+        // The schema as an earlier `@lunora/auth` left it, holding an invitation stored before NFC.
+        for (const statement of authDoSchemaStatements(resolveAuthOptions(inviteOptions))) {
+            database.exec(statement);
+        }
+
         invitation(database, "decomposed", DECOMPOSED, 1);
         await coldStart();
 

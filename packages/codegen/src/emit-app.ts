@@ -67,7 +67,15 @@ const eventWorkerWiring = (
 ): { ensureAuthCall: string; ensureRawAuthCall: string; eventWorker: string; eventWorkerLine: string } => {
     const build = `buildWorker(rawEnv as Env${deferredArgument})`;
 
-    const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
+    const ensureAuthCall = hasAuth
+        ? `
+                // Read before \`ensureAuth\`, so the request that ran the first backfill pass does not run the next one too.
+                const continueMigration = authMigration;
+                await ensureAuth(env);
+                if (continueMigration) {
+                    context.waitUntil?.(continueMigration());
+                }`
+        : "";
     const ensureRawAuthCall = hasAuth ? `\n                await ensureAuth(rawEnv as Env);` : "";
 
     return hasAuth
@@ -242,7 +250,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
 
     // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
     const authState = hasAuth
-        ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n        // One memo per env for THIS assembled worker: every worker it builds reuses it, but a second\n        // \`assemble()\` has its own auth closure and must not share.\n        const identityMemos: IdentityMemoStore = new WeakMap();\n`
+        ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n        // Set once auth is up on D1: another pass of the migration's bounded backfill, run after a request until it is done.\n        let authMigration: (() => Promise<void>) | null = null;\n        // One memo per env for THIS assembled worker: every worker it builds reuses it, but a second\n        // \`assemble()\` has its own auth closure and must not share.\n        const identityMemos: IdentityMemoStore = new WeakMap();\n`
         : "";
     const ensureAuthBlock = hasAuth
         ? `
@@ -281,9 +289,15 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
             // Loaded on first request, not at module evaluation: the migrator pulls in kysely and
             // the better-auth migrator, which would otherwise sit in the worker startup closure.
             const { createMigrationAuth, ensureMigrated } = await import("@lunora/auth/migrate");
-            await ensureMigrated(createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+            const migrationAuth = createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never });
+            await ensureMigrated(migrationAuth);
 
             auth = requestAuth;
+            // A table larger than one pass fills over later requests; once it is done this costs nothing.
+            authMigration = () =>
+                ensureMigrated(migrationAuth).catch((error: unknown) => {
+                    console.error("[lunora] auth backfill pass failed; the next request retries it:", error);
+                });
         };
 
         // Single-flighted on the PROMISE, not on \`auth\`. Every \`fetch\` awaits this

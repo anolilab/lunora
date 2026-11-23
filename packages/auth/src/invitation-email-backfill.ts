@@ -8,7 +8,16 @@ import type { BetterAuthOptions } from "better-auth";
 import { getAuthTables } from "better-auth/db";
 
 import type { BackfillExecutor, BackfillSteps } from "./canonical-email";
-import { BACKFILL_MAX_PAGES, BACKFILL_PAGE_ROWS, canonicalEmail, quote, runBackfill, runBackfillSync } from "./canonical-email";
+import {
+    BACKFILL_MAX_PAGES,
+    BACKFILL_PAGE_ROWS,
+    canonicalEmail,
+    quote,
+    readBackfillState,
+    runBackfill,
+    runBackfillSync,
+    writeBackfillState,
+} from "./canonical-email";
 import { INVITATION_MODEL } from "./invite-only";
 
 /** The physical names the rewrite reads; `undefined` from {@link invitationEmailColumns} without `inviteOnly()`. */
@@ -110,6 +119,17 @@ const rewritePage = function* rewritePage(
     }
 };
 
+const INVITATION_BACKFILL = "signUpInvitation.email";
+
+/** Recorded once a pass has read every invitation: new ones are written in canonical form, so none can need it again. */
+const DONE = "done";
+
+/** What one run did: whether it read the last invitation, and which it left unchanged. */
+interface InvitationBackfillReport {
+    complete: boolean;
+    unchanged: string[];
+}
+
 /**
  * The rewrite as a sequence of statements, run like the user backfill.
  *
@@ -120,13 +140,24 @@ const rewritePage = function* rewritePage(
  * reported, never deleted. One that already holds the canonical form is a holder like any
  * other: when it is the older of the two it keeps the address, because freeing it would mean
  * rewriting that row instead; the newer one is reported.
- * @returns The ids of the invitations left unchanged because another holds their folded address.
+ *
+ * That read keeps matching a non-ASCII address once it is canonical, and an invitation left
+ * unchanged, so a run that stops on its page budget records where it stopped and the next
+ * resumes there, and a pass that reaches the end records that it is done. Without either,
+ * every run would re-read the same newest rows and never reach an older one. A later run
+ * finds a holder on the table, not in this run's memory, so resuming loses nothing.
  */
-const invitationBackfillSteps = function* invitationBackfillSteps(columns: InvitationEmailColumns, maxPages: number): BackfillSteps<string[]> {
+const invitationBackfillSteps = function* invitationBackfillSteps(columns: InvitationEmailColumns, maxPages: number): BackfillSteps<InvitationBackfillReport> {
     const sql = invitationStatements(columns);
     const settled = new Set<string>();
     const unchanged: string[] = [];
-    let cursor: unknown[] = [];
+    const resumed = yield* readBackfillState(INVITATION_BACKFILL);
+
+    if (resumed === DONE) {
+        return { complete: true, unchanged };
+    }
+
+    let cursor: unknown[] = Array.isArray(resumed) ? resumed : [];
 
     for (let page = 0; page < maxPages; page += 1) {
         const rows = yield { params: [...cursor, BACKFILL_PAGE_ROWS], sql: sql.read(cursor.length > 0) };
@@ -142,13 +173,17 @@ const invitationBackfillSteps = function* invitationBackfillSteps(columns: Invit
         const last = rows.at(-1);
 
         if (rows.length < BACKFILL_PAGE_ROWS || last === undefined) {
-            break;
+            yield* writeBackfillState(INVITATION_BACKFILL, DONE);
+
+            return { complete: true, unchanged };
         }
 
         cursor = [last["createdAt"], last["rid"]];
     }
 
-    return unchanged;
+    yield* writeBackfillState(INVITATION_BACKFILL, cursor);
+
+    return { complete: false, unchanged };
 };
 
 const warnUnchanged = (unchanged: string[]): void => {
@@ -163,15 +198,14 @@ const warnUnchanged = (unchanged: string[]): void => {
 
 /**
  * Rewrite invitation addresses to canonical form through an async executor (D1), at most
- * `BACKFILL_MAX_PAGES` pages per call.
- * @returns The ids of the invitations left unchanged because another holds their folded address.
+ * `BACKFILL_MAX_PAGES` pages per call, each call resuming where the last stopped.
  */
-const backfillInvitationEmails = async (executor: BackfillExecutor, columns: InvitationEmailColumns): Promise<string[]> => {
-    const unchanged = await runBackfill(invitationBackfillSteps(columns, BACKFILL_MAX_PAGES), executor);
+const backfillInvitationEmails = async (executor: BackfillExecutor, columns: InvitationEmailColumns): Promise<InvitationBackfillReport> => {
+    const report = await runBackfill(invitationBackfillSteps(columns, BACKFILL_MAX_PAGES), executor);
 
-    warnUnchanged(unchanged);
+    warnUnchanged(report.unchanged);
 
-    return unchanged;
+    return report;
 };
 
 /**
@@ -179,12 +213,12 @@ const backfillInvitationEmails = async (executor: BackfillExecutor, columns: Inv
  * @returns The ids of the invitations left unchanged because another holds their folded address.
  */
 const backfillInvitationEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], columns: InvitationEmailColumns): string[] => {
-    const unchanged = runBackfillSync(invitationBackfillSteps(columns, Number.POSITIVE_INFINITY), exec);
+    const { unchanged } = runBackfillSync(invitationBackfillSteps(columns, Number.POSITIVE_INFINITY), exec);
 
     warnUnchanged(unchanged);
 
     return unchanged;
 };
 
-export type { InvitationEmailColumns };
+export type { InvitationBackfillReport, InvitationEmailColumns };
 export { backfillInvitationEmails, backfillInvitationEmailsSync, invitationEmailColumns };

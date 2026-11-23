@@ -1,10 +1,11 @@
 import { getAuthTablesWithResolvedIndexes, invalidateSchemaChecks } from "@better-auth/core/db/internal";
 import { LunoraError } from "@lunora/errors";
 import { betterAuth } from "better-auth";
+import { getAdapter } from "better-auth/db/adapter";
 import { getMigrations } from "better-auth/db/migration";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { authCanonicalEmailColumn, backfillCanonicalEmails } from "./canonical-email";
+import { authCanonicalEmailColumn, backfillCanonicalEmails, backfillCanonicalEmailsThroughAdapter, warnDuplicates } from "./canonical-email";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { prepareAuthOptions, resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
@@ -168,35 +169,37 @@ const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void>
 /**
  * Fill `user.emailCanonical` on rows that predate the column. The migrator adds it
  * (nullable, uniquely indexed) like any other field; the value needs Unicode
- * lowercasing SQLite does not have, so it is computed here rather than in DDL. Runs on
- * every `ensureMigrated`, a bounded number of pages each time, and finds nothing to do once
- * a database is backfilled.
+ * lowercasing SQLite does not have, so it is computed here rather than in DDL.
  *
- * Also rewrites `signUpInvitation.email` to the same canonical form, under the same page
+ * On D1, a bounded number of pages per call, each call resuming where the last stopped (the
+ * cursor is kept in the database), so a table larger than one call's budget fills over later
+ * calls. It also rewrites `signUpInvitation.email` to the same canonical form, under the same
  * budget: invitations issued before it was NFC-normalised would otherwise not be found.
  *
- * D1 only, like {@link dropLegacyIssuerColumn}: any other dialect's rows keep a `NULL`
- * canonical value until rewritten. The admin plane's duplicate-address check matches such
- * rows on the address with ASCII case folded, as it did before the column.
+ * Any other database goes through better-auth's adapter, to the end of the table: the SQL the
+ * D1 path runs is SQLite's. Invitations are not rewritten there; they expire, and the
+ * adapter cannot narrow the read to the ones that need it, so every call would read them all.
+ * @returns Whether every backfill reached the end of its table.
  */
-const backfillCanonicalEmailColumn = async (options: LunoraAuthOptions): Promise<void> => {
+const backfillCanonicalEmailColumn = async (options: LunoraAuthOptions): Promise<boolean> => {
     const { database } = options as { database?: unknown };
     const column = authCanonicalEmailColumn(options);
 
     if (!isD1Database(database)) {
-        return;
+        if (column !== undefined) {
+            warnDuplicates(await backfillCanonicalEmailsThroughAdapter(await getAdapter(options)), column);
+        }
+
+        return true;
     }
 
-    if (column !== undefined) {
-        await backfillCanonicalEmails(d1Executor(database), column);
-    }
-
+    const executor = d1Executor(database);
+    const users = column === undefined ? undefined : await backfillCanonicalEmails(executor, column);
     // Invitations issued before their addresses were stored in canonical form, which every lookup now matches on.
     const invitations = invitationEmailColumns(options);
+    const invited = invitations === undefined ? undefined : await backfillInvitationEmails(executor, invitations);
 
-    if (invitations !== undefined) {
-        await backfillInvitationEmails(d1Executor(database), invitations);
-    }
+    return (users?.complete ?? true) && (invited?.complete ?? true);
 };
 
 /**
@@ -227,7 +230,7 @@ const invalidateAuthSchemaChecks = (options: LunoraAuthOptions): void => {
 };
 
 /**
- * Single-flight cache of in-flight (and completed) migration runs, keyed by the
+ * Single-flight cache of in-flight (and completed) schema migrations, keyed by the
  * `options` reference. Storing the *promise* — rather than a post-completion
  * flag — closes a TOCTOU race: concurrent callers that arrive before the first
  * run resolves all await the same promise instead of each launching the DDL
@@ -241,6 +244,56 @@ const invalidateAuthSchemaChecks = (options: LunoraAuthOptions): void => {
  */
 const migrating = new WeakMap<object, Promise<void>>();
 
+/** The backfill pass in flight per `options`, so concurrent callers share one rather than racing over the same rows. */
+const backfilling = new WeakMap<object, Promise<boolean>>();
+
+/** The `options` whose backfills have reached the end of their tables; later calls skip them. */
+const backfilled = new WeakSet<object>();
+
+const migrateSchema = (options: LunoraAuthOptions): Promise<void> => {
+    const inFlight = migrating.get(options);
+
+    if (inFlight) {
+        return inFlight;
+    }
+
+    const run = (async (): Promise<void> => {
+        const { runMigrations } = await getMigrations(withD1MigrationSupport(options));
+
+        await runMigrations();
+        await dropLegacyIssuerColumn(options);
+        invalidateAuthSchemaChecks(options);
+    })();
+
+    // Record the promise synchronously (before the first await above resolves)
+    // so concurrent callers single-flight onto this run. On failure, evict the
+    // cached promise so the next call can retry instead of replaying the error.
+    migrating.set(options, run);
+
+    return run.catch((error: unknown) => {
+        migrating.delete(options);
+
+        throw error;
+    });
+};
+
+const backfill = async (options: LunoraAuthOptions): Promise<void> => {
+    if (backfilled.has(options)) {
+        return;
+    }
+
+    let run = backfilling.get(options);
+
+    if (run === undefined) {
+        run = backfillCanonicalEmailColumn(options).finally(() => backfilling.delete(options));
+        backfilling.set(options, run);
+    }
+
+    if (await run) {
+        backfilled.add(options);
+    }
+};
+
 /**
  * Apply better-auth's required schema (`user`, `session`, `account`,
  * `verification`) to the configured database. Idempotent — better-auth
@@ -252,6 +305,10 @@ const migrating = new WeakMap<object, Promise<void>>();
  * caching against the options object — which captures the binding — is
  * sufficient.
  *
+ * The canonical-email backfill is not cached until it finishes: on D1 each call runs one
+ * bounded pass, so call this again (the generated worker does, after each request) until a
+ * table larger than one pass is filled. Once it is, a call costs nothing.
+ *
  * For production you should prefer pre-applying the schema at deploy time
  * via `compileMigrationsSql` + `wrangler d1 execute`; this helper exists for
  * dev/playground and small deployments.
@@ -261,35 +318,8 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
 
     assertMigratableDatabase(options);
 
-    const inFlight = migrating.get(options);
-
-    if (inFlight) {
-        await inFlight;
-
-        return;
-    }
-
-    const run = (async (): Promise<void> => {
-        const { runMigrations } = await getMigrations(withD1MigrationSupport(options));
-
-        await runMigrations();
-        await backfillCanonicalEmailColumn(options);
-        await dropLegacyIssuerColumn(options);
-        invalidateAuthSchemaChecks(options);
-    })();
-
-    // Record the promise synchronously (before the first await above resolves)
-    // so concurrent callers single-flight onto this run. On failure, evict the
-    // cached promise so the next call can retry instead of replaying the error.
-    migrating.set(options, run);
-
-    try {
-        await run;
-    } catch (error) {
-        migrating.delete(options);
-
-        throw error;
-    }
+    await migrateSchema(options);
+    await backfill(options);
 };
 
 /**
@@ -312,9 +342,10 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  *
  * The same goes for `user.emailCanonical`: the compiled DDL adds the column, but filling it
  * on existing rows needs Unicode lowercasing SQLite lacks, so `ensureMigrated` (which the
- * generated worker runs on its first auth request) does it. Until then the admin plane's
- * duplicate-address check finds a pre-existing account by its address with ASCII case
- * folded only, so a variant differing in non-ASCII case or Unicode form gets past it.
+ * generated worker runs on its first auth request, and again after later ones until it is
+ * done) does it. Until then the admin plane's duplicate-address check folds the addresses
+ * of the rows still unfilled itself, so the check holds; better-auth's own sign-up check,
+ * which matches the address exactly, does not see a variant of an unfilled row's address.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
     const resolved = resolveAuthOptions(options);

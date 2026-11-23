@@ -45,9 +45,13 @@ const replacedData = (result: unknown): Record<string, unknown> | undefined =>
  * layer leaves out of the `UPDATE`. better-auth merges a hook's data over the caller's, so
  * dropping the key from ours would not drop it from theirs, and any `updateUser` caller
  * could otherwise point a user at another account's canonical address or clear its own.
+ *
+ * A hook that sets `email` to `undefined` withholds the address from the write, so the
+ * presence of the key decides, not its value: deriving from the caller's `email` then would
+ * store a canonical value for an address that was never written.
  */
 const withCanonicalData = (replaced: Record<string, unknown> | undefined, data: Record<string, unknown>): Record<string, unknown> => {
-    const email = replaced?.["email"] ?? data["email"];
+    const email = replaced !== undefined && "email" in replaced ? replaced["email"] : data["email"];
 
     return { ...replaced, [CANONICAL_EMAIL_FIELD]: typeof email === "string" ? canonicalEmail(email) : undefined };
 };
@@ -161,8 +165,9 @@ const BACKFILL_PAGE_ROWS = 200;
 
 /**
  * Pages one async run fills at most: two D1 queries a page, well inside the per-invocation
- * query budget the first request's `ensureMigrated` shares with the request itself. A
- * larger table fills over later runs; until then `assertEmailFree` covers its unfilled rows.
+ * query budget the request that runs it shares with it. A larger table fills over later
+ * runs, each resuming where the last stopped; until then `assertEmailFree` covers its
+ * unfilled rows.
  */
 const BACKFILL_MAX_PAGES = 20;
 
@@ -180,6 +185,64 @@ interface BackfillExecutor {
 /** One statement the backfill needs run, answered with the rows it returns. */
 type BackfillStep = { params: unknown[]; sql: string };
 
+/** A backfill's statements, each answered with the rows it returns; the generator's result is the run's report. */
+type BackfillSteps<R> = Generator<BackfillStep, R, Record<string, unknown>[]>;
+
+/**
+ * Where each backfill resumes, one row per backfill. A run capped by D1's query budget would
+ * otherwise start over at the first row every time, and rows it must leave as they are (a
+ * duplicate it cannot fill, an invitation already in canonical form) could take every later
+ * run's whole budget and keep it from the rows behind them. In the database itself, because
+ * the next run may be another isolate's.
+ */
+const BACKFILL_STATE_TABLE = "__lunora_auth_backfill__";
+
+const readBackfillState = function* readBackfillState(name: string): BackfillSteps<unknown> {
+    const table = quote(BACKFILL_STATE_TABLE);
+
+    yield { params: [], sql: `CREATE TABLE IF NOT EXISTS ${table} ("name" TEXT NOT NULL PRIMARY KEY, "cursor" TEXT NOT NULL)` };
+
+    const [row] = yield { params: [name], sql: `SELECT "cursor" FROM ${table} WHERE "name" = ?` };
+    const cursor = row?.["cursor"];
+
+    return typeof cursor === "string" ? (JSON.parse(cursor) as unknown) : undefined;
+};
+
+/** Record where the backfill's next run resumes; `undefined` starts it from the beginning. */
+const writeBackfillState = function* writeBackfillState(name: string, cursor: unknown): BackfillSteps<void> {
+    const table = quote(BACKFILL_STATE_TABLE);
+
+    yield cursor === undefined
+        ? { params: [name], sql: `DELETE FROM ${table} WHERE "name" = ?` }
+        : {
+              params: [name, JSON.stringify(cursor)],
+              sql: `INSERT INTO ${table} ("name", "cursor") VALUES (?, ?) ON CONFLICT ("name") DO UPDATE SET "cursor" = excluded."cursor"`,
+          };
+};
+
+const USER_BACKFILL = "user.emailCanonical";
+
+/** What one run did: whether it reached the end of the table, and how many rows it had to leave empty. */
+interface CanonicalBackfillReport {
+    complete: boolean;
+    duplicates: number;
+}
+
+/** A page's rows to fill as `[rowid, email, canonical]`: the first per canonical value, as two in one statement would both pass `NOT EXISTS`. */
+const pageFills = (rows: Record<string, unknown>[]): Map<string, [unknown, string, string]> => {
+    const fills = new Map<string, [unknown, string, string]>();
+
+    for (const row of rows) {
+        const { email } = row;
+
+        if (typeof email === "string" && !fills.has(canonicalEmail(email))) {
+            fills.set(canonicalEmail(email), [row["rid"], email, canonicalEmail(email)]);
+        }
+    }
+
+    return fills;
+};
+
 /**
  * The backfill as a sequence of statements, so the synchronous Durable Object storage and
  * the asynchronous D1 binding run the same logic.
@@ -191,15 +254,20 @@ type BackfillStep = { params: unknown[]; sql: string };
  * address's value; and only while no other row holds that value, so a collision skips the
  * row instead of failing the statement. Those rows are duplicates the old byte-exact index
  * let in, and which account keeps the address is the operator's call, not a migration's:
- * they stay `NULL`, are counted, and are reported on every run until resolved. `IS NULL`
+ * they stay `NULL`, are counted, and are reported on every pass until resolved. `IS NULL`
  * is a range of the canonical column's own index, so a fully backfilled table costs one
  * empty read.
+ *
+ * A run that stops on its page budget records the last row it read, and the next resumes
+ * after it. One that reaches the end clears that, so the next pass starts over and fills a
+ * duplicate the operator has since resolved.
  */
-const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxPages: number): Generator<BackfillStep, number, Record<string, unknown>[]> {
+const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxPages: number): BackfillSteps<CanonicalBackfillReport> {
     const table = quote(column.table);
     const canonical = quote(column.canonical);
     const email = quote(column.email);
-    let after = 0;
+    const resumed = yield* readBackfillState(USER_BACKFILL);
+    let after = typeof resumed === "number" ? resumed : 0;
     let duplicates = 0;
 
     for (let page = 0; page < maxPages; page += 1) {
@@ -207,20 +275,9 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
             params: [after, BACKFILL_PAGE_ROWS],
             sql: `SELECT rowid AS "rid", ${email} AS "email" FROM ${table} WHERE ${canonical} IS NULL AND rowid > ? ORDER BY rowid LIMIT ?`,
         };
-        // The first row of the page per canonical value: two in one statement would both pass `NOT EXISTS`.
-        const fills = new Map<string, [unknown, string, string]>();
+        const fills = pageFills(rows);
 
-        for (const row of rows) {
-            if (typeof row["email"] === "string") {
-                const value = canonicalEmail(row["email"]);
-
-                if (fills.has(value)) {
-                    duplicates += 1;
-                } else {
-                    fills.set(value, [row["rid"], row["email"], value]);
-                }
-            }
-        }
+        duplicates += rows.filter((row) => typeof row["email"] === "string").length - fills.size;
 
         if (fills.size > 0) {
             const filled = yield {
@@ -238,13 +295,19 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
         const last = rows.at(-1)?.["rid"];
 
         if (rows.length < BACKFILL_PAGE_ROWS || typeof last !== "number") {
-            break;
+            if (resumed !== undefined) {
+                yield* writeBackfillState(USER_BACKFILL, undefined);
+            }
+
+            return { complete: true, duplicates };
         }
 
         after = last;
     }
 
-    return duplicates;
+    yield* writeBackfillState(USER_BACKFILL, after);
+
+    return { complete: false, duplicates };
 };
 
 const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn): void => {
@@ -256,9 +319,6 @@ const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn): void 
         );
     }
 };
-
-/** A backfill's statements, each answered with the rows it returns; the generator's result is the run's report. */
-type BackfillSteps<R> = Generator<BackfillStep, R, Record<string, unknown>[]>;
 
 /** Run `steps` through an async executor (D1). */
 const runBackfill = async <R>(steps: BackfillSteps<R>, executor: BackfillExecutor): Promise<R> => {
@@ -293,15 +353,14 @@ const runBackfillSync = <R>(steps: BackfillSteps<R>, exec: (sql: string, params:
 
 /**
  * Fill the canonical column for rows written before it existed, through an async executor
- * (D1), at most {@link BACKFILL_MAX_PAGES} pages per call.
- * @returns How many rows read could not be filled, because another row holds their canonical value.
+ * (D1), at most {@link BACKFILL_MAX_PAGES} pages per call, each call resuming where the last stopped.
  */
-const backfillCanonicalEmails = async (executor: BackfillExecutor, column: CanonicalEmailColumn): Promise<number> => {
-    const duplicates = await runBackfill(backfillSteps(column, BACKFILL_MAX_PAGES), executor);
+const backfillCanonicalEmails = async (executor: BackfillExecutor, column: CanonicalEmailColumn): Promise<CanonicalBackfillReport> => {
+    const report = await runBackfill(backfillSteps(column, BACKFILL_MAX_PAGES), executor);
 
-    warnDuplicates(duplicates, column);
+    warnDuplicates(report.duplicates, column);
 
-    return duplicates;
+    return report;
 };
 
 /**
@@ -310,25 +369,108 @@ const backfillCanonicalEmails = async (executor: BackfillExecutor, column: Canon
  * @returns How many rows could not be filled because another row holds their canonical value.
  */
 const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], column: CanonicalEmailColumn): number => {
-    const duplicates = runBackfillSync(backfillSteps(column, Number.POSITIVE_INFINITY), exec);
+    const { duplicates } = runBackfillSync(backfillSteps(column, Number.POSITIVE_INFINITY), exec);
 
     warnDuplicates(duplicates, column);
 
     return duplicates;
 };
 
-export type { BackfillExecutor, BackfillStep, BackfillSteps, CanonicalEmailColumn };
+/**
+ * The subset of better-auth's adapter the adapter-driven backfill below uses, declared
+ * rather than imported for the reason {@link BackfillExecutor} gives.
+ */
+interface BackfillAdapter {
+    findMany: <T>(query: {
+        limit: number;
+        model: string;
+        sortBy: { direction: "asc"; field: string };
+        where: { field: string; operator?: "gt"; value: string | null }[];
+    }) => Promise<T[]>;
+    findOne: <T>(query: { model: string; where: { field: string; value: string | null }[] }) => Promise<T | null>;
+    update: <T>(query: { model: string; update: Record<string, unknown>; where: { field: string; value: string | null }[] }) => Promise<T | null>;
+}
+
+/**
+ * The same backfill through better-auth's adapter, for a database the SQL above cannot
+ * target (Postgres, MySQL, any other Kysely dialect): no `rowid`, no `UPDATE ... FROM
+ * json_each`, so a row at a time, keyed on `id`. Runs to the end on every call; those
+ * engines have no per-invocation query budget to stop for. The guards match the SQL's: a
+ * row is written only while it still holds the address read and no canonical value, and
+ * skipped while another row holds its value. A row another writer claims the value for
+ * between the check and the write fails on the unique index; the run rejects and the next
+ * one counts the row as a duplicate.
+ * @returns How many rows could not be filled because another row holds their canonical value.
+ */
+const backfillCanonicalEmailsThroughAdapter = async (adapter: BackfillAdapter): Promise<number> => {
+    let after: string | undefined;
+    let duplicates = 0;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- each page starts after the last one's final id
+        const rows = await adapter.findMany<{ email?: unknown; id: string }>({
+            limit: BACKFILL_PAGE_ROWS,
+            model: "user",
+            sortBy: { direction: "asc", field: "id" },
+            where: [
+                // eslint-disable-next-line unicorn/no-null -- better-auth compiles a `null` value to `IS NULL`
+                { field: CANONICAL_EMAIL_FIELD, value: null },
+                ...(after === undefined ? [] : [{ field: "id", operator: "gt" as const, value: after }]),
+            ],
+        });
+
+        for (const row of rows) {
+            if (typeof row.email !== "string") {
+                continue;
+            }
+
+            const value = canonicalEmail(row.email);
+
+            // eslint-disable-next-line no-await-in-loop -- the check must see the rows this run has already filled
+            if ((await adapter.findOne({ model: "user", where: [{ field: CANONICAL_EMAIL_FIELD, value }] })) === null) {
+                // eslint-disable-next-line no-await-in-loop -- one guarded write per row; see the doc comment
+                await adapter.update({
+                    model: "user",
+                    update: { [CANONICAL_EMAIL_FIELD]: value },
+                    where: [
+                        { field: "id", value: row.id },
+                        { field: "email", value: row.email },
+                        // eslint-disable-next-line unicorn/no-null -- better-auth compiles a `null` value to `IS NULL`
+                        { field: CANONICAL_EMAIL_FIELD, value: null },
+                    ],
+                });
+            } else {
+                duplicates += 1;
+            }
+        }
+
+        const last = rows.at(-1);
+
+        if (rows.length < BACKFILL_PAGE_ROWS || last === undefined) {
+            return duplicates;
+        }
+
+        after = last.id;
+    }
+};
+
+export type { BackfillAdapter, BackfillExecutor, BackfillStep, BackfillSteps, CanonicalBackfillReport, CanonicalEmailColumn };
 export {
     authCanonicalEmailColumn,
     BACKFILL_MAX_PAGES,
     BACKFILL_PAGE_ROWS,
+    BACKFILL_STATE_TABLE,
     backfillCanonicalEmails,
     backfillCanonicalEmailsSync,
+    backfillCanonicalEmailsThroughAdapter,
     CANONICAL_EMAIL_FIELD,
     canonicalEmail,
     quote,
+    readBackfillState,
     runBackfill,
     runBackfillSync,
+    warnDuplicates,
     withCanonicalEmail,
     withCanonicalEmailValue,
+    writeBackfillState,
 };
