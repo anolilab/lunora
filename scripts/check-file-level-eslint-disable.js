@@ -11,6 +11,8 @@
  * enable re-enables every rule, a named one only the rules it lists. Directives
  * are read from real comments, so one quoted in a string or template is ignored.
  * A disable/enable pair that encloses every statement counts as file-level too.
+ * In a Vue or Svelte component each `<script>` block is read the same way, and
+ * an `<!-- eslint-disable -->` comment left open counts as file-level.
  *
  * With GITHUB_BASE_REF set (a pull request), a baseline entry the base
  * branch's baseline lacks fails the check as well.
@@ -35,7 +37,7 @@ const walk = (dir, out) => {
             if (!SKIPPED_DIRS.has(entry.name)) {
                 walk(join(dir, entry.name), out);
             }
-        } else if (/\.(?:[cm]?[jt]s|[jt]sx)$/.test(entry.name) && !/\.gen\.[cm]?[jt]sx?$/.test(entry.name)) {
+        } else if (/\.(?:[cm]?[jt]s|[jt]sx|vue|svelte)$/.test(entry.name) && !/\.gen\.[cm]?[jt]sx?$/.test(entry.name)) {
             out.push(join(dir, entry.name));
         }
     }
@@ -44,7 +46,7 @@ const walk = (dir, out) => {
 // Every linted tree: a package's tests and smoke apps are linted as well as its `src/`.
 const roots = [join(rootDir, "shared")];
 
-for (const parent of ["apps", "packages"]) {
+for (const parent of ["apps", "examples", "packages"]) {
     for (const entry of readdirSync(join(rootDir, parent), { withFileTypes: true })) {
         if (entry.isDirectory()) {
             roots.push(join(rootDir, parent, entry.name));
@@ -95,22 +97,10 @@ const ALL_RULES = "*";
  * or a disable/enable pair that encloses every statement (an enable after the last line excuses
  * nothing). Each disabled rule remembers where its disable sits; a bare enable closes them all.
  */
-const isFileLevel = (fileName, text) => {
-    const { comments, source } = parse(fileName, text);
-    const { statements } = source;
-    const firstStart = statements.length === 0 ? undefined : statements[0].getStart(source);
-    const lastEnd = statements.length === 0 ? undefined : statements.at(-1).end;
+const leavesRuleDisabled = (directives, enclosesFile) => {
     const open = new Map();
-    const enclosesFile = (disabledAt, enabledAt) => firstStart !== undefined && disabledAt <= firstStart && enabledAt >= lastEnd;
 
-    for (const range of comments) {
-        const match = DIRECTIVE.exec(text.slice(range.pos, range.end));
-
-        if (match === null) {
-            continue;
-        }
-
-        const [, verb, list = ""] = match;
+    for (const { list, pos, verb } of directives) {
         const named = list
             .split(",")
             .map((rule) => rule.trim())
@@ -120,7 +110,7 @@ const isFileLevel = (fileName, text) => {
         if (verb === "disable") {
             for (const rule of rules) {
                 if (!open.has(rule)) {
-                    open.set(rule, range.pos);
+                    open.set(rule, pos);
                 }
             }
 
@@ -130,7 +120,7 @@ const isFileLevel = (fileName, text) => {
         const closing = named.length === 0 ? [...open.keys()] : rules.filter((rule) => open.has(rule));
 
         for (const rule of closing) {
-            if (enclosesFile(open.get(rule), range.pos)) {
+            if (enclosesFile(open.get(rule), pos)) {
                 return true;
             }
 
@@ -141,13 +131,38 @@ const isFileLevel = (fileName, text) => {
     return open.size > 0;
 };
 
+const isFileLevel = (fileName, text) => {
+    const { comments, source } = parse(fileName, text);
+    const { statements } = source;
+    const firstStart = statements.length === 0 ? undefined : statements[0].getStart(source);
+    const lastEnd = statements.length === 0 ? undefined : statements.at(-1).end;
+    const directives = comments.flatMap((range) => {
+        const match = DIRECTIVE.exec(text.slice(range.pos, range.end));
+
+        return match === null ? [] : [{ list: match[2] ?? "", pos: range.pos, verb: match[1] }];
+    });
+
+    return leavesRuleDisabled(directives, (disabledAt, enabledAt) => firstStart !== undefined && disabledAt <= firstStart && enabledAt >= lastEnd);
+};
+
+const SCRIPT_BLOCK = /<script\b[^>]*>([\s\S]*?)<\/script>/g;
+const HTML_DIRECTIVE = /<!--\s*eslint-(disable|enable)(?!-line|-next-line)(?:\s+([\s\S]*?))?\s*(?:--\s[\s\S]*?)?-->/g;
+
+/** A Vue or Svelte component: each `<script>` block is read like a module, and an `<!-- eslint-disable -->` left open covers the rest of the template. */
+const isComponentFileLevel = (fileName, text) =>
+    [...text.matchAll(SCRIPT_BLOCK)].some(([, body]) => isFileLevel(`${fileName}.ts`, body)) ||
+    leavesRuleDisabled(
+        [...text.matchAll(HTML_DIRECTIVE)].map((match) => ({ list: match[2] ?? "", pos: match.index, verb: match[1] })),
+        () => false,
+    );
+
 const violating = [];
 
 for (const file of files) {
     const text = readFileSync(file, "utf8");
 
     // Parsing is the expensive part, and almost no file mentions a block directive at all.
-    if (MAYBE_DIRECTIVE.test(text) && isFileLevel(file, text)) {
+    if (MAYBE_DIRECTIVE.test(text) && (/\.(?:vue|svelte)$/.test(file) ? isComponentFileLevel(file, text) : isFileLevel(file, text))) {
         violating.push(relative(rootDir, file).split("\\").join("/"));
     }
 }
