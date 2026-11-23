@@ -12,6 +12,7 @@ const immediate = async (): Promise<void> => {};
 const SUB_AGENT_ERRORED = /Sub-agent "research" errored/u;
 const SUB_AGENT_TERMINATED = /Sub-agent "research" terminated/u;
 const DID_NOT_FINISH = /did not finish within/u;
+const FIRST_CALL_CHILD_ID = /^sub-research-b0724d177b75c671$/u;
 const NO_WORKFLOW_BINDING = /no "ResearchAgentWorkflow" on ctx.exports or env/u;
 const REQUIRES_NAME = /requires a `name`/u;
 const NON_EMPTY_DESCRIPTION = /non-empty `description`/u;
@@ -276,6 +277,18 @@ describe(agentAsTool, () => {
         const toolRow = [...runtime.messages.values()].find((message) => message.role === "tool" && message.toolName === "research");
 
         expect(toolRow?.content).toBe("child result");
+    });
+
+    it("starts its own child run for a call whose key is turn-scoped, keeping the first call's ids", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const { keys, run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 0 }]);
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        await tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run, { callKey: "call_9" }));
+        await tool.execute({ prompt: "again" }, context({ ResearchAgentWorkflow: binding }, run, { callKey: "1:call_9" }));
+
+        expect(binding.created.map((created) => created.id)).toStrictEqual(["sub-research-b0724d177b75c671", expect.not.stringMatching(FIRST_CALL_CHILD_ID)]);
+        expect(keys.some((key) => key.includes("thread-1::sub::research::1:call_9"))).toBe(true);
     });
 
     it("rejects a missing name or description", () => {

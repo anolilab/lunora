@@ -747,6 +747,85 @@ describe("secret request component", () => {
         });
     });
 
+    describe("the agent a wake-up reaches", () => {
+        /** A thread created by `support` and continued by `billing`, whose run wf-2 is paused on a secret request. */
+        const reusedThread = async (agent: string | undefined) => {
+            const { store } = spyStore();
+            const { functions } = agentComponent();
+            const { database, rows } = fakeDatabase();
+            const sent: { agent: string; id: string; type: string }[] = [];
+            const handle = (name: string) => {
+                return {
+                    sendEvent: async (id: string, event: { payload: unknown; type: string }) => {
+                        sent.push({ agent: name, id, type: event.type });
+                    },
+                };
+            };
+            const ctx = { agentSecrets: store, agents: { billing: handle("billing"), support: handle("support") }, auth: { userId: "user-a" }, db: database };
+
+            await call(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", owner: "user-a" });
+            await call(functions.agentEnsureThread, ctx, { agent: "billing", instanceId: "wf-2", key: "t-1", onConcurrentRun: "replace", owner: "user-a" });
+            await call(functions.agentOpenSecretRequest, ctx, {
+                ...(agent === undefined ? {} : { agent }),
+                consumerTool: "charge",
+                expiresAt: Date.now() + DEADLINE_MS,
+                instanceId: "wf-2",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+            await call(functions.agentAppendMessage, ctx, {
+                content: 'Awaiting a secret for tool "requestKey".',
+                messageKey: "wf-2:secret:call_1",
+                role: "tool",
+                status: "awaiting_secret",
+                threadKey: "t-1",
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+
+            return { ctx, functions, rows, sent };
+        };
+
+        it("wakes the agent that asked for the secret on supply, not the agent that created a reused thread", async () => {
+            expect.assertions(2);
+
+            const { ctx, functions, sent } = await reusedThread("billing");
+
+            await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+                resolved: true,
+            });
+            expect(sent).toStrictEqual([{ agent: "billing", id: "wf-2", type: "agent-secret:call_1" }]);
+        });
+
+        it("wakes the agent that asked for the secret on decline, not the agent that created a reused thread", async () => {
+            expect.assertions(2);
+
+            const { ctx, functions, sent } = await reusedThread("billing");
+
+            await expect(call(functions.agentDeclineSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({ resolved: true });
+            expect(sent).toStrictEqual([{ agent: "billing", id: "wf-2", type: "agent-secret:call_1" }]);
+        });
+
+        it("records the asking agent on the request row", async () => {
+            expect.assertions(1);
+
+            const { rows } = await reusedThread("billing");
+
+            expect(requestRow(rows)["agent"]).toBe("billing");
+        });
+
+        it("falls back to the thread's agent for a request that names none", async () => {
+            expect.assertions(1);
+
+            const { ctx, functions, sent } = await reusedThread(undefined);
+
+            await call(functions.agentDeclineSecret, ctx, { threadKey: "t-1", toolCallId: "call_1" });
+
+            expect(sent).toStrictEqual([{ agent: "support", id: "wf-2", type: "agent-secret:call_1" }]);
+        });
+    });
+
     describe("agentOpenSecretRequest", () => {
         it("creates no second row when a paused call replays", async () => {
             expect.assertions(2);

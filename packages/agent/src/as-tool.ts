@@ -204,10 +204,13 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         // only variable part of the 100-character budget. It keeps the raw id
         // out of the instance id only — `childThreadKey` is not an instance id
         // and stays readable.
-        const childThreadKey = `${context.threadKey}::sub::${name}::${context.toolCallId}`;
+        // The call key, not the provider's id: a provider can reuse an id in a later turn, and that call must start its own
+        // child rather than attach to the earlier, finished one. On a first use the two are equal, so its ids stay as they were.
+        const callKey = context.callKey ?? context.toolCallId;
+        const childThreadKey = `${context.threadKey}::sub::${name}::${callKey}`;
         // The parent run's instance id is part of the digest: a tool-call id can repeat across runs on different shards, and a child keyed by
         // it alone would be attached to another tenant's run.
-        const childInstanceId = `sub-${name}-${fnv1a64Hex(`${context.instanceId}:${name}:${context.toolCallId}`)}`;
+        const childInstanceId = `sub-${name}-${fnv1a64Hex(`${context.instanceId}:${name}:${callKey}`)}`;
         // The child thread inherits the PARENT's verified owner. Created without
         // one it was ownerless, so `agents:agentThread`/`agentMessages` admitted
         // any caller who knew the (derivable) key — a sub-thread of an owned

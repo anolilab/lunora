@@ -481,7 +481,7 @@ Each event discriminates on `type`:
 | ------------------- | ------------------------------------------------------ | ----------- |
 | `call`              | `toolCallId`, `toolName`, `input`, `seq`               | durable     |
 | `result`            | `toolCallId?`, `toolName?`, `output`, `status?`, `seq` | durable     |
-| `awaiting-approval` | `toolCallId?`, `toolName?`, `seq`                      | durable     |
+| `awaiting-approval` | `approvalSlot?`, `toolCallId?`, `toolName?`, `seq`     | durable     |
 | `progress`          | `toolCallId`, `data`                                   | live stream |
 
 Durable events come first, oldest first by `seq`, followed by the ephemeral
@@ -830,7 +830,7 @@ Subscribes to one thread's live synced state. It returns `{ state, error }`, wit
 
 **Type:** `(options: UseAgentApprovalsOptions) => UseAgentApprovalsResult`
 
-Lists the caller's pending human-in-the-loop approvals. Each entry carries what `agentResolveApproval` needs to approve or reject it.
+Lists the caller's pending human-in-the-loop approvals. Each entry carries what `agentResolveApproval` needs, `approvalSlot` included, so it can be passed straight to `useAgentChat`'s `approve` or `reject`.
 
 #### `useAgentToolEvents`
 

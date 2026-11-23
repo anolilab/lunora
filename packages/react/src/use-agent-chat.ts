@@ -18,6 +18,8 @@ import useSubscription from "./use-subscription";
  * table in `packages/agent/src/component.ts`.
  */
 interface AgentChatMessage {
+    /** On an `awaiting_approval` message: the slot its run waits under, which a decision must name. */
+    approvalSlot?: string;
     content: string;
     createdAt?: number;
 
@@ -82,9 +84,15 @@ type AgentMessagesReference = FunctionReference<"query", { key: string; limit?: 
 /** The `agents:agentResolveApproval` reference — resolves a human-in-the-loop tool approval. */
 type AgentApprovalReference = FunctionReference<
     "mutation",
-    { decision: "approve" | "approve_for_thread" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string },
+    { approvalSlot: string; decision: "approve" | "approve_for_thread" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string },
     { resolved: boolean }
 >;
+
+/**
+ * The pending approval a decision answers: its `awaiting_approval` message, its `awaiting-approval` tool event or its
+ * inbox item. A provider can reuse a tool-call id in a later turn, so a decision names the approval's slot as well.
+ */
+type AgentApprovalTarget = Pick<AgentChatMessage, "approvalSlot" | "toolCallId">;
 
 /** The `agents:agentSupplySecret` reference — stores a person's value for a paused `requestSecretTool` call. */
 type AgentSupplySecretReference = FunctionReference<"mutation", { secret: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;
@@ -176,13 +184,13 @@ interface UseAgentChatResult {
     approvalGrants: ReadonlyArray<AgentApprovalGrant>;
 
     /** Approve a paused human-in-the-loop tool call (optionally with a note). */
-    approve: (toolCallId: string, note?: string) => Promise<void>;
+    approve: (approval: AgentApprovalTarget, note?: string) => Promise<void>;
 
     /**
      * Approve a paused tool call and grant that tool for the rest of the thread, so
      * later calls to it run without pausing. Undo with {@link UseAgentChatResult.revokeGrant}.
      */
-    approveForThread: (toolCallId: string, note?: string) => Promise<void>;
+    approveForThread: (approval: AgentApprovalTarget, note?: string) => Promise<void>;
 
     /**
      * Terminate the in-flight run and mark its thread `"cancelled"`. Resolves as a
@@ -196,7 +204,7 @@ interface UseAgentChatResult {
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
     messages: ReadonlyArray<AgentChatMessage>;
     /** Reject a paused human-in-the-loop tool call (optionally with a reason). */
-    reject: (toolCallId: string, note?: string) => Promise<void>;
+    reject: (approval: AgentApprovalTarget, note?: string) => Promise<void>;
     /** Remove a thread-scoped approval grant so the tool's gate applies again to later calls. */
     revokeGrant: (toolName: string) => Promise<void>;
     /** Start (or continue) a run with a user message; extra args merge over `sendArgs`. Appends an optimistic user turn. */
@@ -369,19 +377,25 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         }
     };
 
-    const resolve = async (decision: "approve" | "approve_for_thread" | "reject", toolCallId: string, note?: string): Promise<void> => {
+    const resolve = async (decision: "approve" | "approve_for_thread" | "reject", approval: AgentApprovalTarget, note?: string): Promise<void> => {
         if (instanceId === undefined) {
             throw new Error(`useAgentChat: cannot ${decision} — no in-flight run (thread has no instanceId)`);
         }
 
-        await resolveMutate({ decision, instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
+        const { approvalSlot, toolCallId } = approval;
+
+        if (approvalSlot === undefined || toolCallId === undefined) {
+            throw new Error(`useAgentChat: cannot ${decision} — pass the pending approval, which carries its toolCallId and approvalSlot`);
+        }
+
+        await resolveMutate({ approvalSlot, decision, instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
     };
 
-    const approve = (toolCallId: string, note?: string): Promise<void> => resolve("approve", toolCallId, note);
+    const approve = (approval: AgentApprovalTarget, note?: string): Promise<void> => resolve("approve", approval, note);
 
-    const approveForThread = (toolCallId: string, note?: string): Promise<void> => resolve("approve_for_thread", toolCallId, note);
+    const approveForThread = (approval: AgentApprovalTarget, note?: string): Promise<void> => resolve("approve_for_thread", approval, note);
 
-    const reject = (toolCallId: string, note?: string): Promise<void> => resolve("reject", toolCallId, note);
+    const reject = (approval: AgentApprovalTarget, note?: string): Promise<void> => resolve("reject", approval, note);
 
     // No optimistic delete: the grants subscription re-pushes the list once the revoke commits.
     const revokeGrant = async (toolName: string): Promise<void> => {
@@ -428,6 +442,7 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
 
 export type {
     AgentApprovalGrant,
+    AgentApprovalTarget,
     AgentChatMessage,
     AgentLiveEvent,
     AgentProgressEvent,

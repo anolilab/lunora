@@ -5,6 +5,7 @@ export type { AgentThreadRecord, AgentThreadStatus, CreateAgentApi, CreateAgentO
 export { createAgent } from "./create-agent";
 export type {
     AgentApprovalGrant,
+    AgentApprovalTarget,
     AgentChatMessage,
     AgentLiveEvent,
     AgentProgressEvent,

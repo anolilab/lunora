@@ -545,7 +545,7 @@ describe("auto-registered agent runtime functions", () => {
         expect(content).toContain('agentState: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         expect(content).toContain('agentThread: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         expect(content).toContain(
-            'agentResolveApproval: FunctionReference<"mutation", { decision: "approve" | "approve_for_thread" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;',
+            'agentResolveApproval: FunctionReference<"mutation", { approvalSlot: string; decision: "approve" | "approve_for_thread" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;',
         );
         expect(content).toContain('agentApprovalGrants: FunctionReference<"query", { key: string }, { createdAt: number; toolName: string }[]>;');
         expect(content).toContain('agentRevokeApprovalGrant: FunctionReference<"mutation", { threadKey: string; toolName: string }, { revoked: boolean }>;');
@@ -659,6 +659,7 @@ describe("auto-registered agent runtime functions", () => {
         expect(describeArgs(runtime.agentState.args)).toStrictEqual({ key: { kind: "string", optional: false } });
         expect(describeArgs(runtime.agentThread.args)).toStrictEqual({ key: { kind: "string", optional: false } });
         expect(describeArgs(runtime.agentResolveApproval.args)).toStrictEqual({
+            approvalSlot: { kind: "string", optional: false },
             decision: { kind: "union", literals: ["approve", "approve_for_thread", "reject"], optional: false },
             instanceId: { kind: "string", optional: false },
             note: { kind: "string", optional: true },

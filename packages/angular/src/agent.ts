@@ -50,6 +50,8 @@ interface AgentThreadRecord {
  * @experimental
  */
 interface AgentChatMessage {
+    /** On an `awaiting_approval` message: the slot its run waits under, which a decision must name. */
+    approvalSlot?: string;
     content: string;
     createdAt?: number;
 

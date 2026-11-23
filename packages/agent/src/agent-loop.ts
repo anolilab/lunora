@@ -6,6 +6,7 @@ import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import appCallOptions from "./app-call-options";
+import { CODE_STEP_KEY_PREFIX } from "./code-tool";
 import { approvalTimeoutMs, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
 import { resolveAgentModel, usageOfFailedTurn } from "./generate";
 import { readHistoryWindow } from "./history-window";
@@ -326,25 +327,29 @@ const isWaitTimeoutError = (error: unknown): boolean => error instanceof Error &
  * {@link approvalTimeoutMs}) so a never-answered approval ends as a rejection
  * instead of hibernating the run forever.
  *
- * The wait's match `type` is scoped to THIS call (`agent-approval:<call.id>`,
+ * The wait's match `type` is scoped to THIS call (`agent-approval:<slot>`,
  * the same format `component.ts`'s `agentResolveApproval` sends) — native CF
  * Workflows matches an incoming event against a waiter by `type`, not by the
  * durable step name, so without this an approval meant for a different
  * pending tool call on the same instance could resolve this one instead.
+ *
+ * `slot` is the call's key (see {@link callKeyOf}), stored on the marker: a decision must name it, so it resolves the
+ * call it was issued for and not a later call that reused the provider's id.
  */
-const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Promise<ApprovalDecision> => {
+const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall, slot: string): Promise<ApprovalDecision> => {
     const { agent, deleteMessage, instanceId, patchThread, persist, step } = turnContext;
     const timeoutMs = approvalTimeoutMs(agent.approvalTimeout);
 
     // Memoized by name: a replay after the decision must not re-insert the marker that
     // the decision retired, nor move its deadline forward from the replay's clock.
-    await step.do(`approval:request:${call.id}`, async (): Promise<void> => {
+    await step.do(`approval:request:${slot}`, async (): Promise<void> => {
         await persist({
             content: `Awaiting approval to run tool "${call.name}".`,
             expiresAt: Date.now() + timeoutMs,
-            messageKey: `${instanceId}:approval:${call.id}`,
+            messageKey: `${instanceId}:approval:${slot}`,
             role: "tool",
             approvalAgent: turnContext.agentName,
+            approvalSlot: slot,
             status: "awaiting_approval",
             toolCallId: call.id,
             toolName: call.name,
@@ -353,9 +358,9 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     });
 
     const decision = await step
-        .waitForEvent<ApprovalDecision>(`approval:${call.id}`, {
+        .waitForEvent<ApprovalDecision>(`approval:${slot}`, {
             timeout: timeoutMs,
-            type: `agent-approval:${call.id}`,
+            type: `agent-approval:${slot}`,
         })
         .then((event): ApprovalDecision => {
             return {
@@ -390,7 +395,7 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
     // docstring. The real outcome lands on the tool-result row next.
     // All three outcomes strand the same marker, so this is not on the timeout
     // branch alone.
-    await deleteMessage(`${instanceId}:approval:${call.id}`);
+    await deleteMessage(`${instanceId}:approval:${slot}`);
 
     // Resume: back to running before we act on the decision.
     await patchThread({ status: "running" });
@@ -419,6 +424,49 @@ const SECRET_OUTCOME_REASON: Record<Exclude<SecretOutcome, "supplied">, string> 
 const secretSlotOf = (turn: number, callId: string): string => `${String(turn)}:${callId}`;
 
 /**
+ * The key an ordinary tool call's steps, wait, event and rows are stored under. A provider can reuse a tool-call id in a
+ * later turn of the same run, and keys built from the bare id would hand the later call the earlier one's memoized gate,
+ * approval and output. Only a taken id carries the turn: a first occurrence keeps the bare id, so a run parked across
+ * a deploy still finds every step it already recorded under that name. The turn prefix repeats until the key is free,
+ * because a provider id can itself look like a slot (`2:x`). An id that reads as a code step's key takes the prefix
+ * too, so it cannot reach that step's memoized output.
+ */
+const callKeyOf = (turn: number, callId: string, earlierCallKeys: ReadonlySet<string>): string => {
+    let key = callId;
+
+    while (earlierCallKeys.has(key) || key.startsWith(CODE_STEP_KEY_PREFIX)) {
+        key = secretSlotOf(turn, key);
+    }
+
+    return key;
+};
+
+/** Key one turn's calls in order, each taken into `taken` before the next is keyed, so two calls of a turn never share one. */
+const assignCallKeys = (turn: number, callIds: ReadonlyArray<string>, taken: Set<string>): string[] =>
+    callIds.map((callId) => {
+        const key = callKeyOf(turn, callId, taken);
+
+        taken.add(key);
+
+        return key;
+    });
+
+/** The keys earlier turns' calls were stored under. `steps[turn]` is that turn's memoized decision, so a replay rebuilds the same set. */
+const earlierCallKeysOf = (steps: ReadonlyArray<AgentStepInfo>): Set<string> => {
+    const keys = new Set<string>();
+
+    for (const [turn, earlier] of steps.entries()) {
+        assignCallKeys(
+            turn,
+            earlier.toolCalls.map((earlierCall) => earlierCall.toolCallId),
+            keys,
+        );
+    }
+
+    return keys;
+};
+
+/**
  * Pause the run on a `requestSecretTool` call until a human supplies or declines a
  * value. Same shape as {@link awaitApproval}, with the request row as the authority:
  *
@@ -439,6 +487,7 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
 
     await step.do(`secret:request:${slot}`, async (): Promise<void> => {
         await run(openSecretRef, {
+            agent: turnContext.agentName,
             consumerTool,
             expiresAt: Date.now() + timeoutMs,
             instanceId,
@@ -579,7 +628,7 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
     });
 };
 
-const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number): Promise<void> => {
+const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number, callKey: string): Promise<void> => {
     const {
         agent,
         agentName,
@@ -599,9 +648,9 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
         threadKey,
         tools,
     } = turnContext;
-    const stepName = `tool:${call.name}:${call.id}`;
+    const stepName = `tool:${call.name}:${callKey}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
-    const messageKey = `${instanceId}:tool:${call.id}`;
+    const messageKey = `${instanceId}:tool:${callKey}`;
 
     // The model can only call declared tools (the schema constrains it), but a
     // hallucinated name must not crash the run — record it as a failed result
@@ -650,6 +699,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
     };
 
     const toolContext = {
+        callKey,
         depth,
         env,
         exports,
@@ -668,14 +718,25 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.
-    const gateContext: AgentApprovalContext = { depth, env, getState, idempotencyKey: stepName, instanceId, run, shardKey, threadKey, toolCallId: call.id };
-    // Distinct from `stepName` (`tool:${call.name}:${call.id}`) so
+    const gateContext: AgentApprovalContext = {
+        callKey,
+        depth,
+        env,
+        getState,
+        idempotencyKey: stepName,
+        instanceId,
+        run,
+        shardKey,
+        threadKey,
+        toolCallId: call.id,
+    };
+    // Distinct from `stepName` (`tool:${call.name}:${callKey}`) so
     // `@lunora/workflow`'s BY-NAME step memoization can never confuse the gate's
     // durable result with the tool's own (see the advisor's duplicate-step-name
-    // lint for this collision class). Keyed on `call.id` alone (the
-    // replay-stable identity `stepName` and `approval:${call.id}` already
+    // lint for this collision class). Keyed on `callKey` alone (the
+    // replay-stable identity `stepName` and `approval:${callKey}` already
     // trust), so it stays collision-free per call.
-    const gateStepName = `tool:approval-gate:${call.id}`;
+    const gateStepName = `tool:approval-gate:${callKey}`;
 
     // Human-in-the-loop: a gated tool pauses the run until a client approves or
     // rejects it. A rejection skips the tool and records why, so the next LLM
@@ -685,7 +746,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
     const isGranted = async (): Promise<boolean> => (await run(approvalGrantedRef, { agent: agentName, key: threadKey, toolName: call.name })) === true;
 
     if (await resolveNeedsApproval(tool, call.input, step, gateStepName, gateContext, isGranted)) {
-        const { decision, note, scope } = await awaitApproval(turnContext, call);
+        const { decision, note, scope } = await awaitApproval(turnContext, call, callKey);
 
         if (decision === "reject") {
             const reason = note === undefined ? "" : ` Reason: ${note}`;
@@ -1542,11 +1603,17 @@ const handleTurn = async (
     // the pending call, and the rows correlate results.
     await persist({ content: decision.text, messageKey: `${instanceId}:assistant:${String(turn)}`, role: "assistant", toolCalls: decision.toolCalls });
 
+    const callKeys = assignCallKeys(
+        turn,
+        decision.toolCalls.map((call) => call.id),
+        earlierCallKeysOf(steps),
+    );
+
     // Tool calls run sequentially: their step names memoize each one
     // independently, so a crash between two calls resumes after the completed one.
-    for (const call of decision.toolCalls) {
+    for (const [index, call] of decision.toolCalls.entries()) {
         // eslint-disable-next-line no-await-in-loop -- sequential durable steps ARE the execution model
-        await runToolCall(turnContext, call, turn);
+        await runToolCall(turnContext, call, turn, callKeys[index] ?? call.id);
     }
 
     await notifyStepFinish(turnContext, { text: decision.text, toolCalls: decision.toolCalls, turn, ...stepUsage });
