@@ -1,3 +1,7 @@
+## @lunora/solid [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.293...@lunora/solid@1.0.0-alpha.294) (2026-11-23)
+
+- fix: keep migrate generate from overwriting, make presence follow room changes (#1643)
+
 ## @lunora/solid [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.292...@lunora/solid@1.0.0-alpha.293) (2026-11-23)
 
 - security(agent)!: stop a reused tool-call id skipping approval (#1657)

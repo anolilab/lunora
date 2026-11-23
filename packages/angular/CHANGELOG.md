@@ -1,3 +1,7 @@
+## @lunora/angular [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.272...@lunora/angular@1.0.0-alpha.273) (2026-11-23)
+
+- fix: keep migrate generate from overwriting, make presence follow room changes (#1643)
+
 ## @lunora/angular [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.271...@lunora/angular@1.0.0-alpha.272) (2026-11-23)
 
 - security(agent)!: stop a reused tool-call id skipping approval (#1657)

@@ -1,3 +1,7 @@
+## @lunora/do [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.294...@lunora/do@1.0.0-alpha.295) (2026-11-23)
+
+- fix: four data-path bugs in rank, sql-store and dispatch metrics (#1636)
+
 ## @lunora/do [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.293...@lunora/do@1.0.0-alpha.294) (2026-11-23)
 
 - fix(scheduler): run a job scheduled under an id that already fired (#1652)

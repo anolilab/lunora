@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.437](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.436...@lunora/codegen@1.0.0-alpha.437) (2026-11-23)
+
+- fix: keep migrate generate from overwriting, make presence follow room changes (#1643)
+
 ## @lunora/codegen [1.0.0-alpha.436](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.435...@lunora/codegen@1.0.0-alpha.436) (2026-11-23)
 
 - fix(scheduler): run a job scheduled under an id that already fired (#1652)

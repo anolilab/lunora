@@ -1,3 +1,7 @@
+## @lunora/sql-store [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.244...@lunora/sql-store@1.0.0-alpha.245) (2026-11-23)
+
+- fix: four data-path bugs in rank, sql-store and dispatch metrics (#1636)
+
 ## @lunora/sql-store [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.243...@lunora/sql-store@1.0.0-alpha.244) (2026-11-23)
 
 - security(shard-engine)!: apply relation policies to counts (#1679)

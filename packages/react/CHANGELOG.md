@@ -1,3 +1,7 @@
+## @lunora/react [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.304...@lunora/react@1.0.0-alpha.305) (2026-11-23)
+
+- fix: keep migrate generate from overwriting, make presence follow room changes (#1643)
+
 ## @lunora/react [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.303...@lunora/react@1.0.0-alpha.304) (2026-11-23)
 
 - security(agent)!: stop a reused tool-call id skipping approval (#1657)

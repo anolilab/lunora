@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.509](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.508...@lunora/cli@1.0.0-alpha.509) (2026-11-23)
+
+- fix: keep migrate generate from overwriting, make presence follow room changes (#1643)
+
 ## @lunora/cli [1.0.0-alpha.508](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.507...@lunora/cli@1.0.0-alpha.508) (2026-11-23)
 
 - security(runtime)!: require the root token to export or import auth tables (#1658)

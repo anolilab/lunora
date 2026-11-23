@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.302...@lunora/client@1.0.0-alpha.303) (2026-11-23)
+
+- fix: keep migrate generate from overwriting, make presence follow room changes (#1643)
+
 ## @lunora/client [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.301...@lunora/client@1.0.0-alpha.302) (2026-11-23)
 
 - fix(scheduler): run a job scheduled under an id that already fired (#1652)

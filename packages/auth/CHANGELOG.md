@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.271...@lunora/auth@1.0.0-alpha.272) (2026-11-23)
+
+- fix(auth): close leftover admin and audit review findings (#1678)
+
 ## @lunora/auth [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.270...@lunora/auth@1.0.0-alpha.271) (2026-11-23)
 
 - security(auth): record admin operations in the audit trail (#1660)
