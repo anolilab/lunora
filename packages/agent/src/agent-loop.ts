@@ -6,6 +6,7 @@ import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import appCallOptions from "./app-call-options";
+import { CODE_STEP_KEY_PREFIX } from "./code-tool";
 import { approvalTimeoutMs, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
 import { resolveAgentModel, usageOfFailedTurn } from "./generate";
 import { readHistoryWindow } from "./history-window";
@@ -427,12 +428,13 @@ const secretSlotOf = (turn: number, callId: string): string => `${String(turn)}:
  * later turn of the same run, and keys built from the bare id would hand the later call the earlier one's memoized gate,
  * approval and output. Only a taken id carries the turn: a first occurrence keeps the bare id, so a run parked across
  * a deploy still finds every step it already recorded under that name. The turn prefix repeats until the key is free,
- * because a provider id can itself look like a slot (`2:x`).
+ * because a provider id can itself look like a slot (`2:x`). An id that reads as a code step's key takes the prefix
+ * too, so it cannot reach that step's memoized output.
  */
 const callKeyOf = (turn: number, callId: string, earlierCallKeys: ReadonlySet<string>): string => {
     let key = callId;
 
-    while (earlierCallKeys.has(key)) {
+    while (earlierCallKeys.has(key) || key.startsWith(CODE_STEP_KEY_PREFIX)) {
         key = secretSlotOf(turn, key);
     }
 

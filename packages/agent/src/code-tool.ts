@@ -183,8 +183,17 @@ const validatedStepInput = async (step: ToolScriptStep, tool: AnyAgentTool, inpu
     throw new LunoraError("BAD_REQUEST", `@lunora/agent: code step "${step.id}" input is invalid for tool "${step.tool}": ${result.error.message}`);
 };
 
-/** A step id as a key segment, with backslash and colon escaped so it never contains the separator. Unchanged without either. */
+/**
+ * Leads every script step's call key and durable step name. A top-level call's step name starts `tool:` and the agent
+ * loop never hands out a call key starting with this, so no provider id, repeated or not, can name a step's key.
+ */
+const CODE_STEP_KEY_PREFIX = "code-step:";
+
+/** A key segment with backslash and colon escaped, so the one bare colon in a step's key splits it back unambiguously. */
 const escapeKeyPart = (part: string): string => part.replaceAll("\\", String.raw`\\`).replaceAll(":", String.raw`\:`);
+
+/** A step's key under its code call's key: prefixed out of the top-level namespace, both parts escaped. */
+const stepKeyOf = (parentKey: string, stepId: string): string => `${CODE_STEP_KEY_PREFIX}${escapeKeyPart(parentKey)}:${escapeKeyPart(stepId)}`;
 
 /**
  * Interpret a {@link ToolScript}: run each step in order, dispatching its `tool`
@@ -251,15 +260,13 @@ const runToolScript = async (
         const input = await validatedStepInput(step, tool, resolveReferences(step.input ?? {}, byId));
         // Give each sub-call its OWN idempotency key / tool-call id (derived from
         // the code tool's, suffixed by the step id) so two side-effecting sub-calls
-        // in one script don't collide on a shared key when they dedupe on it. The
-        // model picks the step id, so its colons are escaped: unescaped, step "x:y"
-        // under key "1" and step "y" under a repeated call's key "1:x" were one key.
-        const stepSuffix = escapeKeyPart(step.id);
+        // in one script don't collide on a shared key when they dedupe on it. A
+        // bare suffix made step "x" of call "1" the key of a later call keyed "1:x".
         const stepContext: AgentToolContext = {
             ...context,
-            callKey: `${context.callKey ?? context.toolCallId}:${stepSuffix}`,
-            idempotencyKey: `${context.idempotencyKey}:${stepSuffix}`,
-            toolCallId: `${context.toolCallId}:${stepSuffix}`,
+            callKey: stepKeyOf(context.callKey ?? context.toolCallId, step.id),
+            idempotencyKey: stepKeyOf(context.idempotencyKey, step.id),
+            toolCallId: `${context.toolCallId}:${escapeKeyPart(step.id)}`,
         };
 
         const runStep = (): Promise<unknown> => Promise.resolve(tool.execute(input, stepContext));
@@ -410,4 +417,4 @@ const codeTool = (tools: Record<string, AnyAgentTool>, options: CodeToolOptions 
 };
 
 export type { CodeToolOptions, ToolScript, ToolScriptResult, ToolScriptStep };
-export { codeTool, resolveReferences, runToolScript };
+export { CODE_STEP_KEY_PREFIX, codeTool, resolveReferences, runToolScript };
