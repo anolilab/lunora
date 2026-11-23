@@ -52,6 +52,7 @@ import { decodeWire, encodeWire } from "@lunora/wire";
 
 import { contentDigest } from "../../../shared/content-digest";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
+import type { CanonicalEmailColumn } from "./canonical-email";
 import type { CredentialColumns } from "./data-port";
 import { insertAuthRows, isUnmovableAuthTable, redactCredentials, replaceAuthRows } from "./data-port";
 import type { DoStorageLike } from "./do-store";
@@ -154,6 +155,9 @@ interface MoveOrder {
 }
 
 interface MoveContext {
+    /** Where `user.emailCanonical` lives (`authCanonicalEmailColumn`); import and replace recompute it. Known once `prepare` has run. */
+    canonicalEmail: () => CanonicalEmailColumn | undefined;
+
     /**
      * The provider-token columns by physical names (`authCredentialColumns`): the
      * export's `exportPage` nulls them and import and replace drop them, while the
@@ -785,6 +789,7 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
                 (body["rows"] ?? []) as { doc: Row; table: string }[],
                 (table) => importable.has(table),
                 context.credentialColumns(),
+                context.canonicalEmail(),
             );
         }
         case "manifest": {
@@ -828,7 +833,12 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
                     }),
                 (body["rows"] ?? []) as { doc: Row; table: string }[],
                 tables,
-                { clearTables: credentials, credentialColumns: context.credentialColumns(), dryRun: body["dryRun"] === true },
+                {
+                    canonicalEmail: context.canonicalEmail(),
+                    clearTables: credentials,
+                    credentialColumns: context.credentialColumns(),
+                    dryRun: body["dryRun"] === true,
+                },
             );
         }
         case "rescan": {

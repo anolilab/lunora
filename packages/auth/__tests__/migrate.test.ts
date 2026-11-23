@@ -6,6 +6,7 @@ import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 import { describe, expect, it, vi } from "vitest";
 
+import { resolveAuthOptions } from "../src/create-auth";
 import { compileMigrationsSql, createMigrationAuth, ensureMigrated } from "../src/migrate";
 
 vi.mock(import("better-auth/db/migration"), () => {
@@ -292,6 +293,44 @@ describe("ensureMigrated", () => {
         const database = fakeD1();
 
         await expect(ensureMigrated({ options: { database } })).resolves.toBeUndefined();
+    });
+
+    it("fills `user.emailCanonical` on rows the migrator added the column to, leaving a pre-existing duplicate empty", async () => {
+        // The migrator adds the column and its unique index like any field; the value needs
+        // Unicode lowercasing SQLite lacks, so ensureMigrated computes it. Two rows that the old
+        // byte-exact index let in cannot both get it: which account keeps the address is not a
+        // migration's call.
+        expect.assertions(2);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1((sqlite) => {
+            // What the migrator leaves behind: the column added, nullable, under a unique index.
+            sqlite.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text)`);
+            sqlite.exec(`CREATE UNIQUE INDEX "user_emailCanonical_uidx" ON "user" ("emailCanonical")`);
+            sqlite.exec(
+                `INSERT INTO "user" ("id", "email") VALUES ('first', 'ÉLISE@example.com'), ('twin', 'élise@example.com'), ('other', 'Other@Example.com')`,
+            );
+        });
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await ensureMigrated({ options: resolveAuthOptions({ database, secret: "x".repeat(32) }) });
+
+        const rows = await database.prepare(`SELECT "id", "emailCanonical" FROM "user" ORDER BY "id"`).all();
+
+        expect(
+            rows.results.map((row) => {
+                return { ...(row as object) };
+            }),
+        ).toStrictEqual([
+            { emailCanonical: "élise@example.com", id: "first" },
+            { emailCanonical: "other@example.com", id: "other" },
+            { emailCanonical: null, id: "twin" },
+        ]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"));
+
+        warn.mockRestore();
     });
 
     it("invalidates a schema verdict cached for this database, so the migration's fix is seen", async () => {

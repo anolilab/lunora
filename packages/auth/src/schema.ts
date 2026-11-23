@@ -4,6 +4,7 @@ import type { ColumnValidator, Validator } from "@lunora/values";
 import { v } from "@lunora/values";
 import { getAuthTables } from "better-auth/db";
 
+import { withCanonicalEmail } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
 
 /**
@@ -123,7 +124,9 @@ const fieldValidator = (attribute: AuthFieldAttribute): Validator => {
  * adapter and these tables make them typed + queryable via `ctx.db`.
  */
 const authTables = (options: LunoraAuthOptions): Record<string, TableDefinition> => {
-    const tables = getAuthTables(options);
+    // The canonical-email column is Lunora's, not the caller's, so it is declared here
+    // as `resolveAuthOptions` declares it for the instance that writes the rows.
+    const tables = getAuthTables(withCanonicalEmail(options));
     const schema: Record<string, TableDefinition> = {};
 
     for (const table of Object.values(tables)) {

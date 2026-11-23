@@ -108,6 +108,7 @@ import { LunoraError } from "@lunora/errors";
 import type { BetterAuthOptions, BetterAuthPlugin } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 
+import { canonicalEmail } from "./canonical-email";
 import type { LunoraAuth } from "./create-auth";
 
 /** The model name the invitations table is registered (and migrated) under. */
@@ -156,7 +157,7 @@ interface SignUpInvitation {
     /** When an account was created for this address; `null` while the invitation is unspent. */
     acceptedAt: Date | null;
     createdAt: Date;
-    /** The invited address, lowercased — the only thing an invitation is matched on. */
+    /** The invited address in canonical form (`canonicalEmail`) — the only thing an invitation is matched on. */
     email: string;
     expiresAt: Date;
     id: string;
@@ -295,16 +296,13 @@ const digestsMatch = (a: string, b: string): boolean => {
     return difference === 0;
 };
 
-/** The address an invitation is matched on: trimmed and lowercased, as better-auth stores `user.email`. */
-const normalizeEmail = (email: string): string => email.trim().toLowerCase();
-
 /** Read `user.email` off a hook payload, normalized. The parameter is structural so both hook signatures pass without a cast. */
 const emailOf = (user: { email?: unknown }): string | undefined => {
     if (typeof user.email !== "string") {
         return undefined;
     }
 
-    const normalized = normalizeEmail(user.email);
+    const normalized = canonicalEmail(user.email);
 
     return normalized === "" ? undefined : normalized;
 };
@@ -452,7 +450,7 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
                 {
                     handler: createAuthMiddleware(async (context) => {
                         const body = (context.body ?? {}) as { email?: unknown; inviteToken?: unknown };
-                        const email = typeof body.email === "string" ? normalizeEmail(body.email) : "";
+                        const email = typeof body.email === "string" ? canonicalEmail(body.email) : "";
                         const presented = typeof body.inviteToken === "string" ? body.inviteToken : "";
 
                         // One rejection for every failure below, so the response
@@ -587,7 +585,7 @@ const createSignUpInvitation = async (
     auth: LunoraAuth,
     input: { email: string; expiresInSeconds?: number; invitedBy?: string },
 ): Promise<IssuedSignUpInvitation> => {
-    const email = normalizeEmail(input.email);
+    const email = canonicalEmail(input.email);
 
     if (!looksLikeEmail(email)) {
         throw new LunoraError("VALIDATION_ERROR", `not an email address to invite: ${JSON.stringify(input.email)}`);
@@ -682,7 +680,7 @@ const listSignUpInvitations = async (auth: LunoraAuth, options: { pendingOnly?: 
 const revokeSignUpInvitation = async (auth: LunoraAuth, input: { email: string }): Promise<void> => {
     const context = await auth.$context;
 
-    await context.adapter.delete({ model: INVITATION_MODEL, where: [{ field: "email", value: normalizeEmail(input.email) }] });
+    await context.adapter.delete({ model: INVITATION_MODEL, where: [{ field: "email", value: canonicalEmail(input.email) }] });
 };
 
 /** Rows read per pass while pruning. Small enough to stay cheap on a scheduled worker, large enough that a backlog drains in few round-trips. */

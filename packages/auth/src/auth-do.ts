@@ -33,6 +33,8 @@ import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
 import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
 import { AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable } from "./audit";
+import type { CanonicalEmailColumn } from "./canonical-email";
+import { authCanonicalEmailColumn, backfillCanonicalEmailsSync } from "./canonical-email";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
 import type { CredentialColumns } from "./data-port";
@@ -174,6 +176,9 @@ class LunoraAuthDO {
     /** Physical names of the live-credential tables, renamed models included, known once `#ensureReady` has run. */
     #credentialTables: string[] = [];
 
+    /** Where `user.emailCanonical` lives physically, known once `#ensureReady` has run. */
+    #canonicalEmail: CanonicalEmailColumn | undefined;
+
     /**
      * @param state The Durable Object state — its `storage` becomes better-auth's database.
      * @param optionsFactory Builds the better-auth options. Called once, lazily, on the first request.
@@ -210,6 +215,7 @@ class LunoraAuthDO {
 
         this.#credentialTables = authCredentialTableNames(resolved);
         this.#credentialColumns = authCredentialColumns(resolved);
+        this.#canonicalEmail = authCanonicalEmailColumn(resolved);
 
         // The copy into a pinned object (and the data port's export) goes parents
         // first — every table after the tables it references — and the unbounded
@@ -232,18 +238,28 @@ class LunoraAuthDO {
             // better-auth's migrator is kysely-only and this storage is not a kysely
             // dialect, so the schema is derived from better-auth's own resolved
             // tables instead. Every statement is IF NOT EXISTS.
-            for (const statement of authDoSchemaStatements(resolved)) {
-                // The cursor is lazy in workerd — iterating is what runs the statement.
-                [...this.#storage.sql.exec(statement)];
-            }
-
             // `CREATE TABLE IF NOT EXISTS` covers a table that did not exist; it says
             // nothing about a table that exists with FEWER columns than the current
             // plugin set needs. Adding `admin()` to a deployed app is exactly that
             // case (`role` / `banned` / `banExpires` land on `user`), so the missing
             // columns are added rather than left to fail on the next write.
+            //
+            // Added BEFORE the schema statements: those create every index, and an index
+            // on a new column (`user.emailCanonical`'s unique one) fails with `no such
+            // column` on a table that does not have it yet. A table that does not exist
+            // reports no columns and gets no ALTER; the statements below create it.
             for (const statement of authDoColumnAdditions(resolved, (table) => this.#columnNames(table))) {
+                // The cursor is lazy in workerd — iterating is what runs the statement.
                 [...this.#storage.sql.exec(statement)];
+            }
+
+            for (const statement of authDoSchemaStatements(resolved)) {
+                [...this.#storage.sql.exec(statement)];
+            }
+
+            // Rows written before `user.emailCanonical` existed get it from their address.
+            if (this.#canonicalEmail !== undefined) {
+                backfillCanonicalEmailsSync((query, parameters) => [...this.#storage.sql.exec(query, ...parameters)], this.#canonicalEmail);
             }
 
             // The mirror image, and the only column this ever removes. See
@@ -389,6 +405,7 @@ class LunoraAuthDO {
         try {
             const body: Record<string, unknown> = await request.json();
             const result = await handleMoveRequest(this.#storage, body, {
+                canonicalEmail: () => this.#canonicalEmail,
                 credentialColumns: () => this.#credentialColumns,
                 credentialTables: () => this.#credentialTables,
                 // The tables are gone: materialise them again on the next request rather

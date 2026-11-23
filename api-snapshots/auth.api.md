@@ -697,6 +697,16 @@ interface AuthUserFieldSpec {
 type AuthWhereClause = NonNullable<Parameters<CustomAdapter["findOne"]>[0]["where"]>[number];
 ```
 
+### `CanonicalEmailColumn` (interface)
+
+```ts
+interface CanonicalEmailColumn {
+    canonical: string;
+    email: string;
+    table: string;
+}
+```
+
 ### `CookieCache` (type)
 
 ```ts
@@ -1039,6 +1049,12 @@ const authAuditBeforeHook: () => ReturnType<typeof createAuthMiddleware>;
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
 ```
 
+### `authCanonicalEmailColumn` (const)
+
+```ts
+const authCanonicalEmailColumn: (options: BetterAuthOptions) => CanonicalEmailColumn | undefined;
+```
+
 ### `authCredentialColumns` (const)
 
 ```ts
@@ -1096,6 +1112,12 @@ const buildAuditEntry: (context: AuditHookContext, { now, trustProxyHeaders }?: 
     now?: number;
     trustProxyHeaders?: boolean;
 }) => AppendAuthAuditEntry | undefined;
+```
+
+### `canonicalEmail` (const)
+
+```ts
+const canonicalEmail: (email: string) => string;
 ```
 
 ### `classifyEmail` (const)
@@ -1159,7 +1181,7 @@ const createSignUpInvitation: (auth: LunoraAuth, input: {
 ### `createSqlAuthDataPort` (const)
 
 ```ts
-const createSqlAuthDataPort: (executor: SqlExecutor, tables: ReadonlyArray<string>, credentialTables?: ReadonlyArray<string>, credentialColumns?: CredentialColumns) => AuthDataPortLike;
+const createSqlAuthDataPort: (executor: SqlExecutor, tables: ReadonlyArray<string>, credentialTables?: ReadonlyArray<string>, credentialColumns?: CredentialColumns, canonicalEmail?: CanonicalEmailColumn) => AuthDataPortLike;
 ```
 
 ### `createSqlAuthStore` (const)
@@ -2022,6 +2044,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/worker`
+
+### `authCanonicalEmailColumn` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `authCredentialColumns` (const)
 

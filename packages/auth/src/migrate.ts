@@ -4,10 +4,12 @@ import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
+import { authCanonicalEmailColumn, backfillCanonicalEmails } from "./canonical-email";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { prepareAuthOptions, resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
+import { d1Executor } from "./sql-store";
 
 /**
  * Reject a `database` better-auth's migrator cannot drive, *before* handing it
@@ -163,6 +165,24 @@ const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void>
 };
 
 /**
+ * Fill `user.emailCanonical` on rows that predate the column. The migrator adds it
+ * (nullable, uniquely indexed) like any other field; the value needs Unicode
+ * lowercasing SQLite does not have, so it is computed here rather than in DDL. Runs on
+ * every `ensureMigrated`, and finds nothing to do once a database is backfilled.
+ *
+ * D1 only, like {@link dropLegacyIssuerColumn}: any other dialect's rows keep a `NULL`
+ * canonical value until rewritten.
+ */
+const backfillCanonicalEmailColumn = async (options: LunoraAuthOptions): Promise<void> => {
+    const { database } = options as { database?: unknown };
+    const column = authCanonicalEmailColumn(options);
+
+    if (column !== undefined && isD1Database(database)) {
+        await backfillCanonicalEmails(d1Executor(database), column);
+    }
+};
+
+/**
  * Bump this database's schema revision, so a schema verdict `lunoraD1Adapter`'s
  * check cached before the migration is re-taken rather than replayed.
  *
@@ -236,6 +256,7 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
         const { runMigrations } = await getMigrations(withD1MigrationSupport(options));
 
         await runMigrations();
+        await backfillCanonicalEmailColumn(options);
         await dropLegacyIssuerColumn(options);
         invalidateAuthSchemaChecks(options);
     })();
@@ -271,6 +292,11 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  * to make that moot. `ensureMigrated` handles it automatically; on this path, run
  * `legacyIssuerCleanupStatements()` once against a database that still has the column.
  * Leaving it in place fails every sign-up with `NOT NULL constraint failed: account.issuer`.
+ *
+ * The same goes for `user.emailCanonical`: the compiled DDL adds the column, but filling it
+ * on existing rows needs Unicode lowercasing SQLite lacks, so `ensureMigrated` (which the
+ * generated worker runs on its first auth request) does it. Until then a pre-existing
+ * account is not found by the admin plane's duplicate-address check.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
     const resolved = resolveAuthOptions(options);

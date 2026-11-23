@@ -31,6 +31,8 @@ import { getAuthTables } from "better-auth/db";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { AUTH_AUDIT_TABLE } from "./audit";
+import type { CanonicalEmailColumn } from "./canonical-email";
+import { withCanonicalEmailValue } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
 
@@ -295,13 +297,16 @@ const importRefusalOf = (table: string, isAuthTable: (table: string) => boolean)
  * Insert wire-encoded rows, skipping any that collide with an existing key or
  * unique value. Only columns the table has are written, so a row from a newer
  * plugin set still lands, minus what this schema cannot hold — and never a
- * credential column, so an import cannot plant a provider token.
+ * credential column, so an import cannot plant a provider token. A `user` row's
+ * canonical address is recomputed from its `email`, so an address that differs from
+ * a held one only by case or Unicode form collides like an exact duplicate.
  */
 const insertAuthRows = async (
     sql: AuthSqlReader,
     rows: ReadonlyArray<{ doc: Row; table: string }>,
     isAuthTable: (table: string) => boolean,
     credentialColumns: CredentialColumns,
+    canonicalEmail?: CanonicalEmailColumn,
 ): Promise<AuthImportResult> => {
     const result: AuthImportResult = { conflicts: 0, errors: [], inserted: 0 };
     const columns = new Map<string, string[]>();
@@ -329,7 +334,7 @@ const insertAuthRows = async (
             continue;
         }
 
-        const { row } = decodedRow;
+        const row = withCanonicalEmailValue(decodedRow.row, table, canonicalEmail);
         const names = Object.keys(row).filter((name) => known.includes(name));
 
         if (names.length === 0) {
@@ -400,6 +405,7 @@ const planAuthReplace = async (
     tables: ReadonlyArray<string>,
     clearTables: ReadonlyArray<string>,
     credentialColumns: CredentialColumns,
+    canonicalEmail: CanonicalEmailColumn | undefined,
 ): Promise<{ deleted: number; errors: AuthReplaceResult["errors"]; statements: Statement[] }> => {
     const errors: AuthReplaceResult["errors"] = [];
     const columns = new Map<string, string[]>();
@@ -425,7 +431,7 @@ const planAuthReplace = async (
             continue;
         }
 
-        const row = Object.fromEntries(Object.entries(decodedRow.row).filter(([name]) => known.includes(name)));
+        const row = Object.fromEntries(Object.entries(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail)).filter(([name]) => known.includes(name)));
 
         // Refused here rather than at the commit: `INSERT INTO t () VALUES ()` is a syntax error, and the dry run that
         // vets a staged restore before its shards are swapped has to see it, or the restore fails half-written.
@@ -477,16 +483,17 @@ const planAuthReplace = async (
  * refused like `insertAuthRows` refuses it. The live-credential tables are
  * cleared with the rest; the audit log is never written nor deleted. Credential
  * columns are dropped from every row, so a restored `account` arrives without
- * provider tokens.
+ * provider tokens, and a `user` row's canonical address is recomputed, so a snapshot
+ * holding two case- or Unicode-variants of one address rolls back on the unique index.
  */
 const replaceAuthRows = async (
     sql: AuthSqlReader,
     atomic: (statements: ReadonlyArray<Statement>) => Promise<void>,
     rows: ReadonlyArray<{ doc: Row; table: string }>,
     tables: ReadonlyArray<string>,
-    options: { clearTables: ReadonlyArray<string>; credentialColumns: CredentialColumns; dryRun?: boolean },
+    options: { canonicalEmail?: CanonicalEmailColumn; clearTables: ReadonlyArray<string>; credentialColumns: CredentialColumns; dryRun?: boolean },
 ): Promise<AuthReplaceResult> => {
-    const { clearTables, credentialColumns, dryRun = false } = options;
+    const { canonicalEmail, clearTables, credentialColumns, dryRun = false } = options;
     const refused = rows.flatMap(({ table }, index) => (isUnmovableAuthTable(table) ? [{ index, message: `"${table}" is never restored`, table }] : []));
 
     if (refused.length > 0) {
@@ -497,7 +504,7 @@ const replaceAuthRows = async (
     const cleared = [...new Set([...clearTables, ...tables.filter((table) => isUnmovableAuthTable(table))])].filter(
         (table) => table.toLowerCase() !== AUTH_AUDIT_TABLE.toLowerCase(),
     );
-    const plan = await planAuthReplace(sql, rows, carried, cleared, credentialColumns);
+    const plan = await planAuthReplace(sql, rows, carried, cleared, credentialColumns, canonicalEmail);
 
     if (plan.errors.length > 0) {
         return { deleted: 0, errors: plan.errors, inserted: 0 };
@@ -522,12 +529,14 @@ const replaceAuthRows = async (
  * @param tables The auth tables to carry, parents first — {@link authTableNames}, minus any the schema already declares (those travel as ordinary table rows).
  * @param credentialTables The live-credential tables a replace clears — {@link authCredentialTableNames}, minus the same.
  * @param credentialColumns The provider-token columns an export nulls and an import drops — {@link authCredentialColumns}.
+ * @param canonicalEmail Where `user.emailCanonical` lives — `authCanonicalEmailColumn`; an import and a replace recompute it from `email`.
  */
 const createSqlAuthDataPort = (
     executor: SqlExecutor,
     tables: ReadonlyArray<string>,
     credentialTables: ReadonlyArray<string> = [],
     credentialColumns: CredentialColumns = {},
+    canonicalEmail?: CanonicalEmailColumn,
 ): AuthDataPortLike => {
     const { batch } = executor;
 
@@ -538,12 +547,17 @@ const createSqlAuthDataPort = (
                 tables.filter((table) => !isUnmovableAuthTable(table)),
                 credentialColumns,
             ),
-        importRows: async (rows) => insertAuthRows(executor, rows, (table) => tables.includes(table), credentialColumns),
+        importRows: async (rows) => insertAuthRows(executor, rows, (table) => tables.includes(table), credentialColumns, canonicalEmail),
         ...(batch === undefined
             ? {}
             : {
                   replaceRows: async (rows, options) =>
-                      replaceAuthRows(executor, batch, rows, tables, { clearTables: credentialTables, credentialColumns, dryRun: options?.dryRun }),
+                      replaceAuthRows(executor, batch, rows, tables, {
+                          canonicalEmail,
+                          clearTables: credentialTables,
+                          credentialColumns,
+                          dryRun: options?.dryRun,
+                      }),
               }),
     };
 };

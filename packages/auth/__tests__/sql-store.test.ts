@@ -4,7 +4,7 @@ import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
-import { createAuth } from "../src/create-auth";
+import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import type { SqlExecutor } from "../src/sql-store";
 import { createSqlAuthStore, d1Executor } from "../src/sql-store";
 import type { AuthRow, AuthStore, AuthWhereClause } from "../src/store";
@@ -182,9 +182,10 @@ describe("createSqlAuthStore — better-auth end to end on SQLite", () => {
     beforeEach(() => {
         database = new DatabaseSync(":memory:");
 
-        // Lunora owns the auth schema; here we materialise it straight from
-        // better-auth's own table map so the store writes into real tables.
-        for (const table of Object.values(getAuthTables(options))) {
+        // Lunora owns the auth schema; here we materialise it from better-auth's own
+        // table map for the resolved options `createAuth` runs with (which declare
+        // `user.emailCanonical`), so the store writes into real tables.
+        for (const table of Object.values(getAuthTables(resolveAuthOptions(options)))) {
             const columns = [
                 `"id" TEXT PRIMARY KEY`,
                 ...Object.entries(table.fields).map(([field, attribute]) => `"${attribute.fieldName ?? field}" ${affinity(attribute.type)}`),
