@@ -214,6 +214,22 @@ class TestResubscribePacing(unittest.TestCase):
         self.assertNotIn("sub_4", _subscribes(sent))
         self.assertIn("sub_5", _subscribes(sent), "the next queued one still goes out")
 
+    def test_the_callers_resend_raises_for_args_that_no_longer_encode(self):
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client.attach_socket(lambda _frame: None)
+        args = [{"channel": f"c{index}"} for index in range(5)]
+        for each in args:
+            client.subscribe("messages:list", each, lambda _value: None)
+        sent: list = []
+        client.attach_socket(sent.append)
+        sent.clear()
+
+        args[4]["bad"] = object()
+
+        with self.assertRaises(TypeError):
+            client.resend_subscriptions()
+        self.assertEqual(_subscribes(sent), [], "nothing goes out on a half re-subscribed socket")
+
     def test_shape_subscriptions_are_not_paced(self):
         client = LunoraClient("https://app.example", client_id="client-test")
         client.attach_socket(lambda _frame: None)
