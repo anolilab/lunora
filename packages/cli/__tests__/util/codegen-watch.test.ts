@@ -859,6 +859,8 @@ describe("startCodegenWatch", () => {
 
                 expect(calls).toHaveLength(1);
             } finally {
+                // `close()` waits for the in-flight hook, so a failure before the release above must not leave it pending.
+                finishHook.resolve(undefined);
                 await handle.close();
                 rmSync(workdir, { force: true, recursive: true });
             }
