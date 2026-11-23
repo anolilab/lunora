@@ -17881,7 +17881,7 @@ abstract class ShardDO {
             this.reactiveCache?.invalidateTable(table);
         }
 
-        this.mergeSubscriptionRefresh(moved, undefined, new Set([(poll.visible ? poll.bookmark : undefined) ?? D1_PRIMARY_CONSTRAINT]));
+        this.mergeSubscriptionRefresh(moved, undefined, new Set([poll.bookmark ?? D1_PRIMARY_CONSTRAINT]));
         await this.startSubscriptionRefresh();
     }
 

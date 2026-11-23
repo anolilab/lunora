@@ -2883,7 +2883,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         }
 
         const late = abandonedWork(failure);
-
         const evicts = exec.transaction === undefined;
 
         if (evicts) {

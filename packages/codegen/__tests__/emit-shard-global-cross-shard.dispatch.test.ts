@@ -294,15 +294,10 @@ describe("emitted shard — a .global() write refreshes live queries on another 
     it("refreshes another shard's live query at the primary when its changelog read fails", async () => {
         expect.assertions(2);
 
-        const { a, b, log, watcher } = await (async () => {
-            const pair = createPair();
-            const seen = await subscribe(pair.b, pair.bSockets);
+        const { a, b, bSockets, log } = createPair();
+        const watcher = await subscribe(b, bSockets);
 
-            await pair.b.alarm();
-
-            return { ...pair, watcher: seen };
-        })();
-
+        await b.alarm();
         await call(a, "cross:insert", { name: "while-blind" });
         log.failChangelog = true;
         await b.alarm();
