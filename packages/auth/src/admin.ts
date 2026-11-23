@@ -6,7 +6,7 @@ import { apiKeyStorage } from "./api-key-storage";
 import type { LunoraAuth } from "./create-auth";
 // Aliased: this module exposes methods of the same names, and a method body
 // calling an identically-named import is a needless double-take.
-import { createSignUpInvitation as issueSignUpInvitation } from "./invite-only";
+import { createSignUpInvitation as issueSignUpInvitation, INVITATION_MODEL, normalizeEmail } from "./invite-only";
 
 /**
  * A timestamp as it leaves the admin API: epoch-ms (better-auth stores `Date`s,
@@ -807,7 +807,14 @@ const writeClaimingEmail = async <R>(
         return await write();
     } catch (error) {
         if (email !== undefined) {
-            await assertEmailFree(context_, email, exceptUserId);
+            try {
+                await assertEmailFree(context_, email, exceptUserId);
+            } catch (lookupError) {
+                // Only a confirmed holder replaces the write's error; a failed lookup says nothing about the write.
+                if (lookupError instanceof LunoraAuthAdminError && lookupError.code === "USER_ALREADY_EXISTS") {
+                    throw lookupError;
+                }
+            }
         }
 
         throw error;
@@ -1277,7 +1284,8 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
         // email, create the row, then link a credential account when a password is given).
         createUser: ({ data, email, name, password, role }) =>
             withContext(async (context_) => {
-                const normalizedEmail = email.toLowerCase();
+                // `data` is spread over the top-level fields below, so its `email` is the address the row gets.
+                const normalizedEmail = (typeof data?.["email"] === "string" ? data["email"] : email).toLowerCase();
 
                 await assertEmailFree(context_, normalizedEmail, undefined);
 
@@ -1294,6 +1302,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 const safeData = { ...data };
 
                 delete safeData["isAnonymous"];
+                delete safeData["email"];
 
                 const user = await writeClaimingEmail(context_, normalizedEmail, undefined, async () =>
                     context_.internalAdapter.createUser(
@@ -1453,20 +1462,20 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
         listSignUpInvitations: ({ limit, offset }) =>
             withContext((context_) =>
-                page<AuthSignUpInvitation>(context_, "signUpInvitation", {
+                page<AuthSignUpInvitation>(context_, INVITATION_MODEL, {
                     limit,
                     offset,
                     sortBy: { direction: "desc", field: "createdAt" },
                 }),
             ),
 
-        // Addresses are stored trimmed and lowercased, so the delete matches on the same form.
+        // Matches on the stored form of the address, through the same normaliser the invite-only plugin writes with.
         revokeSignUpInvitation: ({ email }) =>
             withContext(async (context_) => {
                 await deleteExisting(
                     context_,
-                    "signUpInvitation",
-                    [{ field: "email", value: email.trim().toLowerCase() }],
+                    INVITATION_MODEL,
+                    [{ field: "email", value: normalizeEmail(email) }],
                     ["sign-up invitation not found", "SIGN_UP_INVITATION_NOT_FOUND"],
                 );
             }),

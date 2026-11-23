@@ -148,6 +148,36 @@ describe("createAuthAdmin", () => {
         await expect(adminApi.createUser({ email: "race@example.com", name: "Loser" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
     });
 
+    it("checks and saves the address `data.email` overrides on create", async () => {
+        expect.assertions(3);
+
+        await adminApi.createUser({ email: "held@example.com", name: "Held" });
+
+        await expect(adminApi.createUser({ data: { email: "Held@Example.com" }, email: "free@example.com", name: "Twin" })).rejects.toMatchObject({
+            code: "USER_ALREADY_EXISTS",
+        });
+
+        const user = await adminApi.createUser({ data: { email: "Other@Example.com" }, email: "free@example.com", name: "Other" });
+
+        expect(user.email).toBe("other@example.com");
+        expect(database["user"]?.some((row) => (row as { email: string }).email === "free@example.com")).toBe(false);
+    });
+
+    it("keeps a failed write's error when the follow-up address lookup fails too", async () => {
+        expect.assertions(1);
+
+        const context = await auth.$context;
+        const writeError = new Error("D1_ERROR: network connection lost");
+
+        vi.spyOn(context.internalAdapter, "createUser").mockImplementationOnce(() => {
+            vi.spyOn(context.adapter, "findMany").mockRejectedValueOnce(new Error("lookup failed"));
+
+            throw writeError;
+        });
+
+        await expect(adminApi.createUser({ email: "fresh@example.com", name: "Fresh" })).rejects.toMatchObject({ message: writeError.message });
+    });
+
     it("lets a user keep its own address in another casing, and leaves an update without an email alone", async () => {
         expect.assertions(3);
 
