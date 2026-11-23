@@ -188,7 +188,17 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         // holder.
         const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
 
+        let unsubscribe: (() => void) | undefined;
+        let disposed = false;
+
+        // The one teardown for this room: a normal room change or unmount, a setup rollback, and the
+        // owner disposed while `subscribe` replays. Idempotent, so `leave` goes out exactly once.
         const dispose = (): void => {
+            if (disposed) {
+                return;
+            }
+
+            disposed = true;
             live = false;
             mounted = false;
             clearInterval(intervalHandle);
@@ -198,9 +208,13 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
             }
 
             releaseConnectionContext();
-        };
+            unsubscribe?.();
 
-        let unsubscribe: () => void;
+            // The old room stops listing this session now, instead of when its last heartbeat ages out.
+            if (leave !== undefined) {
+                presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
+            }
+        };
 
         disposeArming = dispose;
 
@@ -234,21 +248,14 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         }
 
         // A read through a call: `subscribe` can flip the flag, which control-flow narrowing cannot see.
+        // The owner's cleanup ran `dispose` before `subscribe` returned the handle, so close it now.
         if (isOwnerDisposed()) {
             unsubscribe();
 
             return undefined;
         }
 
-        return () => {
-            dispose();
-            unsubscribe();
-
-            // The old room stops listing this session now, instead of when its last heartbeat ages out.
-            if (leave !== undefined) {
-                presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
-            }
-        };
+        return dispose;
     });
 
     return { error, present, sessionId, setData };

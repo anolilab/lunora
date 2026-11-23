@@ -583,13 +583,74 @@ describe("createPresence (Solid)", () => {
         createRoot((dispose) => {
             disposeRoot = dispose;
 
-            return <LunoraProvider client={fake.client}>{<Presence />}</LunoraProvider>;
+            return (
+                <LunoraProvider client={fake.client}>
+                    <Presence />
+                </LunoraProvider>
+            );
         });
 
         await flushAsync();
 
         expect(fake.connectionContextHolders.map((holder) => holder.released)).toStrictEqual([true]);
         expect(fake.subscribeCalls.map((call) => call.unsubscribed)).toStrictEqual([true]);
+    });
+
+    it("sends the room's leave once when its root is disposed while its subscription replays a refusal", async () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const original = fake.client.subscribe.bind(fake.client);
+        const leaveSent = Promise.withResolvers<undefined>();
+        const LEAVE = { __lunoraRef: "presence:leave" } as never;
+        const mutation = vi.spyOn(fake.client, "mutation").mockImplementation(async (reference) => {
+            if ((reference as unknown as Record<string, string>)["__lunoraRef"] === "presence:leave") {
+                leaveSent.resolve(undefined);
+            }
+
+            return undefined;
+        });
+        let disposeRoot = (): void => {};
+
+        // A replayed refusal reaches onError before subscribe returns.
+        vi.spyOn(fake.client, "subscribe").mockImplementation((...args: Parameters<typeof original>) => {
+            const unsubscribe = original(...args);
+
+            fake.subscribeCalls.at(-1)?.onError?.({ code: "FORBIDDEN", message: "no" });
+
+            return unsubscribe;
+        });
+
+        const Presence = (): null => {
+            createPresence("a", {
+                heartbeat: HEARTBEAT,
+                intervalMs: 60_000,
+                leave: LEAVE,
+                listPresent: LIST_PRESENT,
+                onError: () => {
+                    disposeRoot();
+                },
+                sessionId: "sess-fixed",
+            });
+
+            return null;
+        };
+
+        createRoot((dispose) => {
+            disposeRoot = dispose;
+
+            return (
+                <LunoraProvider client={fake.client}>
+                    <Presence />
+                </LunoraProvider>
+            );
+        });
+
+        await leaveSent.promise;
+
+        expect(
+            mutation.mock.calls.filter((call) => (call[0] as unknown as Record<string, string>)["__lunoraRef"] === "presence:leave").map((call) => call[1]),
+        ).toStrictEqual([{ roomId: "a", sessionId: "sess-fixed" }]);
     });
 
     it("never queues a heartbeat for offline replay", async () => {
