@@ -1422,15 +1422,23 @@ final class ConformanceTests: XCTestCase {
         group.wait()
 
         // Attached only now, so the count below sees resend frames alone.
-        let resent = ResentCounter()
+        let resent = ResentRecorder()
 
         // Only the resent subscribe frames count: the connect frame that opens the socket is not one.
         client.attachSocket { frame in
-            if frame["type"] as? String == "subscribe" { resent.increment() }
+            if frame["type"] as? String == "subscribe", let id = frame["id"] as? String { resent.ids.append(id) }
         }
         client.resendSubscriptions()
 
-        XCTAssertEqual(resent.value, threads * perThread, "every concurrent subscribe survived with a distinct id")
+        // The resend is paced, so each re-sent subscribe is answered to let the next one out.
+        var answered = 0
+
+        while answered < resent.ids.count {
+            client.handleFrame("{\"id\":\"\(resent.ids[answered])\",\"type\":\"ack\"}")
+            answered += 1
+        }
+
+        XCTAssertEqual(resent.ids.count, threads * perThread, "every concurrent subscribe survived with a distinct id")
     }
 }
 
@@ -1440,12 +1448,8 @@ private final class ResultBox<T>: @unchecked Sendable {
     var value: T?
 }
 
-/// Counts frames from the resend, which runs on this thread — a plain `var`
+/// Records the ids the resend sends, on this thread — a plain `var`
 /// captured by an `@escaping` closure would not compile under strict concurrency.
-private final class ResentCounter {
-    private var count = 0
-
-    var value: Int { count }
-
-    func increment() { count += 1 }
+private final class ResentRecorder {
+    var ids: [String] = []
 }
