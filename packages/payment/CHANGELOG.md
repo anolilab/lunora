@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.275...@lunora/payment@1.0.0-alpha.276) (2026-11-23)
+
+- fix(payment)!: stop double refunds and a paid subscriber losing access (#1653)
+
 ## @lunora/payment [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.274...@lunora/payment@1.0.0-alpha.275) (2026-11-17)
 
 - fix(payment): bound the usage sweep's scan of deferred rows (#1611)

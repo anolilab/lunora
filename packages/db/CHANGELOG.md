@@ -1,3 +1,7 @@
+## @lunora/db [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.285...@lunora/db@1.0.0-alpha.286) (2026-11-23)
+
+- fix(db): stop the offline outbox losing or repeating writes (#1654)
+
 ## @lunora/db [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.284...@lunora/db@1.0.0-alpha.285) (2026-11-04)
 
 - Release 1.0.0-alpha.285. Commit a2f1851 set this version and it was never published, so it is released from HEAD.

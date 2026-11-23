@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.435](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.434...@lunora/codegen@1.0.0-alpha.435) (2026-11-23)
+
+- fix(payment)!: stop double refunds and a paid subscriber losing access (#1653)
+
 ## @lunora/codegen [1.0.0-alpha.434](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.433...@lunora/codegen@1.0.0-alpha.434) (2026-11-23)
 
 - security(auth): record admin operations in the audit trail (#1660)

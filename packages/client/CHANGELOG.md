@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.300...@lunora/client@1.0.0-alpha.301) (2026-11-23)
+
+- fix(db): stop the offline outbox losing or repeating writes (#1654)
+
 ## @lunora/client [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.299...@lunora/client@1.0.0-alpha.300) (2026-11-16)
 
 - fix(client): drop pending optimistic layers on a user switch (#1608)
