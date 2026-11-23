@@ -1,3 +1,7 @@
+## @lunora/server [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.276...@lunora/server@1.0.0-alpha.277) (2026-11-23)
+
+- security(server)!: close two row-level-security gaps on shapes and relations (#1637)
+
 ## @lunora/server [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.275...@lunora/server@1.0.0-alpha.276) (2026-11-14)
 
 - fix(server): refuse a soft-delete join table on a through relation (#1529)

@@ -40,7 +40,8 @@ interface ChangelogAnswer {
 }
 
 /**
- * `boards:list` reads the global table `boards`; `notes:list` reads only the local table `notes`.
+ * `boards:list` reads the global table `boards`; `notes:list` reads only the local table `notes`;
+ * `none:list` resolves to nothing to deliver, so it never records what it read.
  * `changelog` is the next answers the global changelog gives, one per tick.
  */
 class PollingShard extends ShardDO {
@@ -77,7 +78,16 @@ class PollingShard extends ShardDO {
             this.refreshes.push({ functionPath, readBookmark });
         }
 
+        if (functionPath === "none:list") {
+            return Promise.resolve(null);
+        }
+
         return Promise.resolve({ result: this.refreshes.length, tables: new Set([functionPath.split(":")[0] as string]) });
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test double: the schema's one global table
+    protected override globalTables(): ReadonlySet<string> {
+        return new Set(["boards"]);
     }
 
     protected override polledGlobalTables(): ReadonlySet<string> {
@@ -238,5 +248,115 @@ describe("the global poll tick and live queries", () => {
 
         expect(alarms).toStrictEqual([]);
         expect(shard.changelogReads).toBe(0);
+    });
+
+    it("does not keep polling for a flag subscription, which reads no table", async () => {
+        expect.assertions(1);
+
+        const { shard, sockets } = await setup([]);
+        const woken = new FakeSocket();
+
+        woken.serializeAttachment({ subs: { flag: { args: {}, functionPath: "__lunora_flags__:beta" } } });
+        sockets.push(woken);
+        shard.changelog = [{ cursor: 1, tables: [] }];
+
+        await shard.alarm();
+
+        expect(shard.changelogReads).toBe(0);
+    });
+
+    it("stops polling for a live query once a refresh ran it and it still recorded nothing", async () => {
+        expect.assertions(2);
+
+        const { shard, sockets } = await setup([]);
+        const woken = new FakeSocket();
+
+        woken.serializeAttachment({ subs: { none: { args: {}, functionPath: "none:list" } } });
+        sockets.push(woken);
+        shard.changelog = [
+            { cursor: 1, tables: [] },
+            { cursor: 2, tables: [] },
+        ];
+
+        // The first tick is a full pass: it runs the query, which records no tables.
+        await shard.alarm();
+
+        expect(shard.refreshes.map((refresh) => refresh.functionPath)).toStrictEqual(["none:list"]);
+
+        await shard.alarm();
+
+        expect(shard.changelogReads).toBe(1);
+    });
+
+    it("refreshes every polled table at the primary when the changelog read fails", async () => {
+        expect.assertions(1);
+
+        const { shard } = await setup(["boards:list"]);
+
+        shard.changelog = [{ cursor: 1, tables: [] }];
+        await shard.alarm();
+        shard.refreshes.length = 0;
+        // No answer: the changelog read failed.
+        await shard.alarm();
+
+        expect(shard.refreshes).toStrictEqual([{ functionPath: "boards:list", readBookmark: "first-primary" }]);
+    });
+
+    it("counts a resubscribed id again, though the query it replaced recorded nothing", async () => {
+        expect.assertions(1);
+
+        const { shard, sockets } = await setup([]);
+        const woken = new FakeSocket();
+
+        woken.serializeAttachment({ subs: { reused: { args: {}, functionPath: "none:list" } } });
+        sockets.push(woken);
+        shard.changelog = [
+            { cursor: 1, tables: [] },
+            { cursor: 2, tables: [] },
+        ];
+
+        // The first tick runs it and it records nothing; then the client reuses the id for another query.
+        await shard.alarm();
+        await shard.webSocketMessage(
+            woken as unknown as WebSocket,
+            JSON.stringify({ id: "reused", query: { args: {}, functionPath: "none:list" }, type: "subscribe" }),
+        );
+        await shard.alarm();
+
+        expect(shard.changelogReads).toBe(2);
+    });
+
+    it("refreshes blind, after a failed changelog read, at most once per resync interval", async () => {
+        expect.assertions(1);
+
+        const { shard } = await setup(["boards:list"]);
+
+        // Every read fails, as when the changelog table is missing.
+        await shard.alarm();
+        await shard.alarm();
+        await shard.alarm();
+
+        expect(shard.refreshes).toHaveLength(1);
+    });
+
+    it("warns once that a live query reads a global table nothing polls for", async () => {
+        expect.assertions(1);
+
+        const { shard, sockets } = await setup(["boards:list"], (configured) => {
+            configured.setPolled(new Set());
+        });
+        const second = new FakeSocket();
+
+        sockets.push(second);
+        await shard.webSocketMessage(
+            second as unknown as WebSocket,
+            JSON.stringify({ id: "again", query: { args: {}, functionPath: "boards:list" }, type: "subscribe" }),
+        );
+
+        const warnings = (shard as unknown as { logs: { entries: () => { level: string; message: string }[] } }).logs
+            .entries()
+            .filter((entry) => entry.level === "warn" && entry.message.includes(".cdc()"));
+
+        expect(warnings).toHaveLength(1);
     });
 });

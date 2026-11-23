@@ -54,7 +54,7 @@ type AgentToolEvent =
     | { data: unknown; toolCallId: string; type: "progress" }
     | { input: unknown; seq: number; toolCallId: string; toolName: string; type: "call" }
     | { output: string; seq: number; status?: "approved" | "rejected"; toolCallId?: string; toolName?: string; type: "result" }
-    | { seq: number; toolCallId?: string; toolName?: string; type: "awaiting-approval" }
+    | { approvalSlot?: string; seq: number; toolCallId?: string; toolName?: string; type: "awaiting-approval" }
     | { seq: number; toolCallId?: string; toolName?: string; type: "awaiting-secret" };
 
 interface UseAgentToolEventsResult {
@@ -94,6 +94,7 @@ const toPauseEvent = (message: AgentChatMessage): AgentToolEvent | undefined => 
     return {
         seq: message.seq,
         type,
+        ...(message.approvalSlot === undefined ? {} : { approvalSlot: message.approvalSlot }),
         ...(message.toolCallId === undefined ? {} : { toolCallId: message.toolCallId }),
         ...(message.toolName === undefined ? {} : { toolName: message.toolName }),
     };

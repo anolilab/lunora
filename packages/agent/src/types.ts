@@ -73,7 +73,8 @@ export interface AgentStepLike {
  *
  * The `idempotencyKey` is the deterministic durable-step name
  * (`tool:<name>:<toolCallId>`, further suffixed per script step for a
- * `codeTool`). A COMPLETED tool step is never re-run on a workflow replay
+ * `codeTool`). A call whose id repeats one from an earlier turn of the same run
+ * carries that turn in its key (`tool:<name>:<turn>:<toolCallId>`). A COMPLETED tool step is never re-run on a workflow replay
  * (native step memoization) — but a step that FAILS mid-body is retried
  * at-least-once, so a side-effecting tool (charge a card, send a mail) must
  * dedupe on this key itself. `functionTool` forwards it to the dispatched
@@ -85,6 +86,13 @@ export interface AgentStepLike {
  * @experimental
  */
 export interface AgentToolContext {
+    /**
+     * The key this call's steps and rows are stored under: {@link AgentToolContext.toolCallId} on its first use in the run,
+     * turn-scoped (`<turn>:<id>`) when a provider reuses the id in a later turn. Key anything a tool derives per call
+     * (a sub-run, a stored object) on this, or a reused id finds the earlier call's. Absent outside the agent loop.
+     */
+    callKey?: string;
+
     /**
      * How many sub-agent delegations deep this run already is — 0 for a run a
      * user started, one more per `agent.asTool` hop. The loop copies it off

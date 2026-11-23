@@ -21,6 +21,12 @@ const makeStreamRef = (reference: string): FunctionReference<"stream", { key: st
 const MESSAGES_REF = "agents:agentMessages";
 const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
+
+/** Two approvals pending under one provider id: the later turn's call waits under a turn-scoped slot. */
+const PENDING_TWICE = [
+    { approvalSlot: "call-1", content: "Awaiting approval", role: "tool", seq: 1, status: "awaiting_approval", toolCallId: "call-1" },
+    { approvalSlot: "1:call-1", content: "Awaiting approval", role: "tool", seq: 2, status: "awaiting_approval", toolCallId: "call-1" },
+];
 const GRANTS_REF = "agents:agentApprovalGrants";
 const REVOKE_REF = "agents:agentRevokeApprovalGrant";
 const SUPPLY_REF = "agents:agentSupplySecret";
@@ -299,19 +305,35 @@ describe(createAgentChat, () => {
 
         pushTo(fake.subscriptions, THREAD_REF, { instanceId: "wf-1", status: "awaiting_input" });
 
-        await latest?.approve("call-1");
+        await latest?.approve({ approvalSlot: "call-1", toolCallId: "call-1" });
 
         expect(fake.mutationCalls).toContainEqual({
-            args: { decision: "approve", instanceId: "wf-1", threadKey: "t1", toolCallId: "call-1" },
+            args: { approvalSlot: "call-1", decision: "approve", instanceId: "wf-1", threadKey: "t1", toolCallId: "call-1" },
             functionPath: APPROVAL_REF,
         });
 
-        await latest?.reject("call-2", "not allowed");
+        await latest?.reject({ approvalSlot: "call-2", toolCallId: "call-2" }, "not allowed");
 
         expect(fake.mutationCalls).toContainEqual({
-            args: { decision: "reject", instanceId: "wf-1", note: "not allowed", threadKey: "t1", toolCallId: "call-2" },
+            args: { approvalSlot: "call-2", decision: "reject", instanceId: "wf-1", note: "not allowed", threadKey: "t1", toolCallId: "call-2" },
             functionPath: APPROVAL_REF,
         });
+
+        // Two approvals pending under one provider id: approving the later one sends its slot alone,
+        // and an approval that names no slot is refused before it reaches the server.
+        pushTo(fake.subscriptions, MESSAGES_REF, PENDING_TWICE);
+
+        const later = latest?.messages().find((message) => message.approvalSlot === "1:call-1");
+
+        await latest?.approve(later ?? {});
+
+        await expect(latest?.approve({ toolCallId: "call-1" })).rejects.toThrow("approvalSlot");
+
+        expect(fake.mutationCalls.filter((call) => call.functionPath === APPROVAL_REF).map((call) => call.args)).toStrictEqual([
+            { approvalSlot: "call-1", decision: "approve", instanceId: "wf-1", threadKey: "t1", toolCallId: "call-1" },
+            { approvalSlot: "call-2", decision: "reject", instanceId: "wf-1", note: "not allowed", threadKey: "t1", toolCallId: "call-2" },
+            { approvalSlot: "1:call-1", decision: "approve", instanceId: "wf-1", threadKey: "t1", toolCallId: "call-1" },
+        ]);
 
         await latest?.cancel();
 
@@ -390,7 +412,7 @@ describe(createAgentChat, () => {
             { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
         );
 
-        await expect(latest?.approve("call-1")).rejects.toThrow("no in-flight run");
+        await expect(latest?.approve({ approvalSlot: "call-1", toolCallId: "call-1" })).rejects.toThrow("no in-flight run");
     });
 
     it("approveForThread sends approve_for_thread through agentResolveApproval", async () => {
@@ -408,10 +430,17 @@ describe(createAgentChat, () => {
 
         pushTo(fake.subscriptions, THREAD_REF, { instanceId: "wf-1", status: "awaiting_input" });
 
-        await latest?.approveForThread("call-1", "ok for this thread");
+        await latest?.approveForThread({ approvalSlot: "call-1", toolCallId: "call-1" }, "ok for this thread");
 
         expect(fake.mutationCalls).toContainEqual({
-            args: { decision: "approve_for_thread", instanceId: "wf-1", note: "ok for this thread", threadKey: "t1", toolCallId: "call-1" },
+            args: {
+                approvalSlot: "call-1",
+                decision: "approve_for_thread",
+                instanceId: "wf-1",
+                note: "ok for this thread",
+                threadKey: "t1",
+                toolCallId: "call-1",
+            },
             functionPath: APPROVAL_REF,
         });
     });

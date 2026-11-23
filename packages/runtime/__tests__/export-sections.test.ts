@@ -201,14 +201,25 @@ describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, 
         expect(target.auth.get("session")!.get("s1")).toStrictEqual({ id: "s1", userId: "u1" });
         expect(target.kv.get("CACHE")!.get("binary")).toStrictEqual({ metadata: { kind: "bin" }, value: binary });
         expect(target.kv.get("CACHE")!.get("text")).toStrictEqual({ expiration: future, value: new TextEncoder().encode("hello") });
-        expect(target.kv.get("FLAGS")!.get("huge")).toStrictEqual({ expiration: future, metadata: { big: true }, value: huge });
+
+        const { value: hugeValue, ...hugeRest } = target.kv.get("FLAGS")!.get("huge")!;
+
+        expect(hugeRest).toStrictEqual({ expiration: future, metadata: { big: true } });
+        // Bytes by `Buffer.equals`, not a deep equality: vitest walks a typed array element by element, about
+        // 1.7 s per MiB under coverage, which put this test past its timeout on a loaded CI runner.
+        expect(hugeValue).toBeInstanceOf(Uint8Array);
+        expect(Buffer.from(hugeValue).equals(huge)).toBe(true);
         expect(target.buckets.get("default")!.get("small.txt")).toStrictEqual({
             bytes: new TextEncoder().encode("small"),
             contentType: "text/plain",
             customMetadata: { owner: "u1" },
         });
         expect(target.buckets.get("default")!.get("empty")?.bytes).toStrictEqual(new Uint8Array(0));
-        expect(target.buckets.get("avatars")!.get("large.bin")?.bytes).toStrictEqual(large);
+
+        const largeBytes = target.buckets.get("avatars")!.get("large.bin")!.bytes;
+
+        expect(largeBytes).toBeInstanceOf(Uint8Array);
+        expect(Buffer.from(largeBytes).equals(large)).toBe(true);
         // The staged chunks are cleaned up once the object is assembled.
         expect([...target.buckets.get("avatars")!.keys()]).toStrictEqual(["large.bin"]);
         expect([...target.buckets.get("default")!.keys()].filter((key) => key.startsWith("_lunora/"))).toStrictEqual([]);

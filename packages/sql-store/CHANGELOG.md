@@ -1,3 +1,11 @@
+## @lunora/sql-store [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.242...@lunora/sql-store@1.0.0-alpha.243) (2026-11-23)
+
+- security(server)!: close two row-level-security gaps on shapes and relations (#1637)
+
+## @lunora/sql-store [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.241...@lunora/sql-store@1.0.0-alpha.242) (2026-11-23)
+
+- fix(do): close the gaps reviewers found in the global refresh (#1674)
+
 ## @lunora/sql-store [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.240...@lunora/sql-store@1.0.0-alpha.241) (2026-11-23)
 
 - fix(do): refresh live queries on other shards after global writes (#1673)

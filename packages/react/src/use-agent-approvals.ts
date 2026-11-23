@@ -6,11 +6,12 @@ import useSubscription from "./use-subscription";
 
 /**
  * One human-in-the-loop approval a run is paused on, on a thread the caller
- * owns. Carries the triple `agents.agentResolveApproval` takes, so a UI can
- * approve or reject straight from the list.
+ * owns. Carries the ids `agents.agentResolveApproval` takes, `approvalSlot`
+ * included, so a UI can hand an item straight to `useAgentChat`'s `approve` or `reject`.
  */
 interface PendingApproval {
     agent: string;
+    approvalSlot: string;
     content: string;
     instanceId: string;
     requestedAt: number;

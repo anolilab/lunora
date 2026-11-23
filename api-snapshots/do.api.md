@@ -642,7 +642,8 @@ abstract class ShardDO {
     protected windowStreamReads(headroom: TransactionHeadroomTracker, frames: AsyncIterable<unknown>): AsyncIterable<unknown>;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
-    protected recordGlobalWrite(table: string, bookmark: string | undefined): void;
+    protected recordGlobalWrite(table: string, bookmark: string | undefined, writer?: object): void;
+    protected recordLateGlobalWrite(table: string): void;
     protected flushMigrationProgress(): Promise<void>;
     protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined, pinned?: {
         trace: TraceAnchor | undefined;
@@ -677,6 +678,7 @@ abstract class ShardDO {
         tables: string[];
     } | undefined>;
     protected polledGlobalTables(): ReadonlySet<string>;
+    protected globalTables(): ReadonlySet<string>;
 }
 ```
 

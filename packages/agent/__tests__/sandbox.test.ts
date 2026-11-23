@@ -109,6 +109,15 @@ describe(browserTool, () => {
         });
     });
 
+    it("renders a call whose key is turn-scoped to its own object", async () => {
+        const tool = browserTool({ bucket: "SHOTS" });
+        const { calls, context } = recordingContext();
+
+        await tool.execute({ op: "screenshot", url: "https://example.com" }, { ...context, callKey: "1:call-1" });
+
+        expect(calls[0]?.args).toMatchObject({ path: "t-1/1:call-1.png" });
+    });
+
     it("honors a custom description", () => {
         expect(browserTool({ description: "Custom" }).description).toBe("Custom");
     });

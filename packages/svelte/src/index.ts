@@ -4,6 +4,7 @@ export type { AgentApi, AgentHandle, AgentOptions, AgentThreadRecord, AgentThrea
 export { agent } from "./agent";
 export type {
     AgentApprovalGrant,
+    AgentApprovalTarget,
     AgentChatApi,
     AgentChatHandle,
     AgentChatMessage,

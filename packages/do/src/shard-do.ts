@@ -3056,8 +3056,26 @@ abstract class ShardDO {
     /**
      * D1 bookmarks the `.global()` writes behind {@link ShardDO.pendingChangedTables} reported, recorded with
      * their tables by {@link ShardDO.recordGlobalWrite} so they travel with them however dispatches interleave.
+     * Keyed by the writer that reported each, which keeps only its latest: one session's bookmark only
+     * moves forward, so the last covers every earlier write of that writer.
      */
-    private pendingChangedBookmarks: Set<string> | undefined = undefined;
+    private pendingChangedBookmarks: Map<object, string> | undefined = undefined;
+
+    /**
+     * The `.global()` tables behind {@link ShardDO.pendingChangedTables}. A write the writer announced
+     * before its transaction committed invalidated the reactive cache too early to cover a read made
+     * during that transaction, so the flush, which runs after the commit, invalidates them again.
+     */
+    private pendingGlobalWriteTables: Set<string> | undefined = undefined;
+
+    /** Live queries a refresh ran that recorded no result, so the poll cannot learn what they read. */
+    private readonly unrecordedQueries = new WeakMap<object, Set<string>>();
+
+    /** Whether this instance has warned that a live query reads a `.global()` table nothing polls for. */
+    private warnedUnpolledGlobalRead = false;
+
+    /** When the poll last re-ran global live queries without a changelog answer; see {@link ShardDO.refreshFromGlobalPoll}. */
+    private lastBlindRefreshAt: number | undefined;
 
     /** Coalesced twin of {@link ShardDO.pendingChangedBookmarks}; see {@link refreshReadBookmark}. */
     private pendingRefreshBookmarks: Set<string> | undefined = undefined;
@@ -6617,6 +6635,8 @@ abstract class ShardDO {
         // discarded) and the client never gets the snapshot it asked for. The new
         // subscription has no memo yet, so the socket is visited on every flush until one indexes it.
         this.socketIndex.resubscribed(ws, subId);
+        // What the replaced query recorded says nothing about the new one, which the poll must count until it is run.
+        this.unrecordedQueries.get(ws)?.delete(subId);
         this.restartFailureStreakUnlessRetry(ws, subId, previous, query);
 
         return "ok";
@@ -6655,6 +6675,7 @@ abstract class ShardDO {
         }
 
         this.socketIndex.forgetMemo(ws, subId);
+        this.unrecordedQueries.get(ws)?.delete(subId);
         this.subscriptionFailures.clear(ws, subId);
         this.deliveryRegistrations.get(ws)?.delete(subId);
     }
@@ -8007,16 +8028,35 @@ abstract class ShardDO {
      * A row the `.global()` writer stored, reported by the writer itself (its `onWrite`), so a write a
      * trigger made inside it is announced too: the shard engine's broadcast only sees the writes it issued.
      * `bookmark` is the D1 bookmark the writer's session held after the write; the refresh reads at it.
+     * `writer` identifies the session that reported it: a later report from the same writer replaces
+     * the earlier one, so one dispatch's writes contribute one bookmark. Omitted, each call counts as a
+     * writer of its own.
      */
-    protected recordGlobalWrite(table: string, bookmark: string | undefined): void {
+    protected recordGlobalWrite(table: string, bookmark: string | undefined, writer: object = {}): void {
         // The engine's cache invalidation runs only for the writes it issued; a trigger's is invisible to it.
         this.reactiveCache?.invalidateTable(table);
         this.recordChangedTable(table);
+        this.pendingGlobalWriteTables ??= new Set<string>();
+        this.pendingGlobalWriteTables.add(table);
 
         if (bookmark !== undefined) {
-            this.pendingChangedBookmarks ??= new Set<string>();
-            this.pendingChangedBookmarks.add(bookmark);
+            this.pendingChangedBookmarks ??= new Map<object, string>();
+            this.pendingChangedBookmarks.set(writer, bookmark);
         }
+    }
+
+    /**
+     * A `.global()` write the writer could only announce once its statement settled past its deadline,
+     * after the dispatch that issued it had already flushed. Nothing else would flush it, so this does,
+     * reading at the primary: the session's bookmark for an abandoned statement is unknown.
+     */
+    protected recordLateGlobalWrite(table: string): void {
+        this.recordGlobalWrite(table, D1_PRIMARY_CONSTRAINT);
+        this.runner.background(
+            this.flushChangedTables().catch((error: unknown) => {
+                this.recordShapeError("global:late-write", error);
+            }),
+        );
     }
 
     /**
@@ -14781,14 +14821,26 @@ abstract class ShardDO {
         const changed = this.pendingChangedTables;
         const changedKeys = this.pendingChangedKeys;
         const changedBookmarks = this.pendingChangedBookmarks;
+        const globalWrites = this.pendingGlobalWriteTables;
 
         this.pendingChangedTables = undefined;
         this.pendingChangedKeys = undefined;
         this.pendingChangedBookmarks = undefined;
+        this.pendingGlobalWriteTables = undefined;
 
         if (!changed || changed.size === 0) {
             return;
         }
+
+        // Past the commit: a read cached while a global write's transaction was open holds the old row.
+        for (const table of globalWrites ?? []) {
+            this.reactiveCache?.invalidateTable(table);
+        }
+
+        // Merged before the awaits below, in the order the writes committed: a later write whose flush
+        // got past them first would otherwise take the lower generation, and this one's refresh, read at
+        // its older bookmark, could replace the newer value. Merged together, the batch reads at both.
+        this.mergeSubscriptionRefresh(new Set(changed), changedKeys, changedBookmarks === undefined ? undefined : new Set(changedBookmarks.values()));
 
         // A failed arm must not fail a write that already committed; the next
         // cold start's bootstrap sweep re-derives the alarm from the table.
@@ -14803,19 +14855,18 @@ abstract class ShardDO {
             await this.deferPastResponse(this.registerWrittenShard(changed));
         }
 
-        await this.queueSubscriptionRefresh(changed, changedKeys, changedBookmarks);
+        await this.startSubscriptionRefresh();
     }
 
     /**
-     * Merge `changed` into the coalesced refresh state and start the drain unless one is running.
-     * Shared by a local write's flush and the global poll tick, which learns of another shard's
-     * `.global()` write, so both coalesce into one pass.
+     * Merge `changed` into the coalesced refresh state. Shared by a local write's flush and the global
+     * poll tick, which learns of another shard's `.global()` write, so both coalesce into one pass.
      */
-    private async queueSubscriptionRefresh(
+    private mergeSubscriptionRefresh(
         changed: Set<string>,
         changedKeys: Map<string, IndexKeyEntry[] | undefined> | undefined,
         changedBookmarks: ReadonlySet<string> | undefined,
-    ): Promise<void> {
+    ): void {
         this.writeGeneration += 1;
 
         // Merge the written tables into the coalesced refresh set.
@@ -14832,6 +14883,13 @@ abstract class ShardDO {
         for (const bookmark of changedBookmarks ?? []) {
             this.pendingRefreshBookmarks ??= new Set<string>();
             this.pendingRefreshBookmarks.add(bookmark);
+        }
+    }
+
+    /** Start the drain of the merged refresh state, unless one is running or nothing is pending. */
+    private async startSubscriptionRefresh(): Promise<void> {
+        if (this.pendingRefreshTables === undefined) {
+            return;
         }
 
         // Single-waiter coalescing: if a refresh pass is already draining, it
@@ -15184,6 +15242,7 @@ abstract class ShardDO {
                     if (!outcome) {
                         // A clean resolve to "nothing to deliver" still ends the failure streak.
                         this.subscriptionFailures.clear(ws, subId);
+                        this.noteUnrecordedQuery(ws, subId);
 
                         return;
                     }
@@ -15445,10 +15504,7 @@ abstract class ShardDO {
             return;
         }
 
-        // Another shard's write to a global table it read reaches this query only through the poll tick.
-        if (setsIntersect(outcome.tables, this.polledGlobalTables())) {
-            await this.scheduleGlobalPoll();
-        }
+        await this.watchGlobalReads(functionPath, outcome.tables);
 
         const { sinceEpoch, sinceSeq } = query;
         // CDC cursors cannot prove that the client's value used the current authority epoch.
@@ -17261,6 +17317,15 @@ abstract class ShardDO {
     }
 
     /**
+     * Every `.global()` table of the schema, changelog or not, so a shard can tell its operator that a
+     * live query reads one nothing polls for. The codegen subclass overrides it.
+     */
+    // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- base-class override hook (the codegen subclass names the schema's global tables), co-located with the changelog read it pairs with
+    protected globalTables(): ReadonlySet<string> {
+        return NO_POLLED_GLOBAL_TABLES;
+    }
+
+    /**
      * The two answers a `/rpc` can earn between the replica gate and
      * `beginDispatch`: a reserved admin RPC (served under its own scope and
      * bearer gate) and the paid-procedure backstop.
@@ -17728,20 +17793,75 @@ abstract class ShardDO {
         let readers = 0;
 
         for (const ws of this.runner.sockets()) {
+            const unrecorded = this.unrecordedQueries.get(ws);
+
             for (const [subId, query] of Object.entries(this.readAttachment(ws).subs)) {
-                if (!query.functionPath || query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+                // A flag read is tied to no table at all.
+                if (!query.functionPath || query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX) || query.functionPath.startsWith(FLAGS_FUNCTION_PREFIX)) {
                     continue;
                 }
 
                 const memo = this.socketIndex.memo(ws, subId);
 
-                if (memo === undefined || setsIntersect(memo.tables, polled)) {
+                // Without a memo it counts until one refresh has run it and it still recorded nothing.
+                if (memo === undefined ? unrecorded?.has(subId) !== true : setsIntersect(memo.tables, polled)) {
                     readers += 1;
                 }
             }
         }
 
         return readers;
+    }
+
+    /**
+     * Another shard's write to a global table a live query read reaches it only through the poll tick, so
+     * reading a polled table arms the tick; reading one nothing polls for is warned about instead.
+     */
+    private async watchGlobalReads(functionPath: string, tables: ReadonlySet<string>): Promise<void> {
+        if (setsIntersect(tables, this.polledGlobalTables())) {
+            await this.scheduleGlobalPoll();
+
+            return;
+        }
+
+        this.warnIfGlobalReadUnpolled(functionPath, tables);
+    }
+
+    /** Record that a refresh ran `subId` and it recorded no result to learn its tables from. */
+    private noteUnrecordedQuery(ws: ShardSocketLike, subId: string): void {
+        let unrecorded = this.unrecordedQueries.get(ws);
+
+        if (unrecorded === undefined) {
+            unrecorded = new Set<string>();
+            this.unrecordedQueries.set(ws, unrecorded);
+        }
+
+        unrecorded.add(subId);
+    }
+
+    /**
+     * Warn once per instance that a live query reads a `.global()` table this shard cannot poll for:
+     * without the global changelog (`.cdc()` on the app), another shard's write to it never reaches
+     * this query, and nothing else would say so.
+     */
+    private warnIfGlobalReadUnpolled(functionPath: string, tables: ReadonlySet<string>): void {
+        if (this.warnedUnpolledGlobalRead || this.polledGlobalTables().size > 0) {
+            return;
+        }
+
+        const read = [...tables].filter((table) => this.globalTables().has(table));
+
+        if (read.length === 0) {
+            return;
+        }
+
+        this.warnedUnpolledGlobalRead = true;
+        this.logs.push({
+            functionPath,
+            level: "warn",
+            message: `live query reads .global() table(s) ${read.join(", ")}, but CDC is off: a write to them on another shard will not refresh it. Call .cdc() on the app to turn on the global changelog.`,
+            timestamp: Date.now(),
+        });
     }
 
     /**
@@ -17753,12 +17873,30 @@ abstract class ShardDO {
      * result is not pushed again.
      */
     private async refreshFromGlobalPoll(poll: GlobalPollRead): Promise<void> {
+        // A changelog that cannot be read often stays that way (a table never migrated), and a rerun of every global
+        // live query at the primary on each tick would bill it every time, so a blind pass runs at most once per
+        // resync interval, as a shape's unconditional re-read does, and says why.
         if (!poll.visible) {
-            return;
+            const now = Date.now();
+
+            if (this.lastBlindRefreshAt !== undefined && now - this.lastBlindRefreshAt < ShardDO.GLOBAL_SHAPE_RESYNC_MS) {
+                return;
+            }
+
+            this.lastBlindRefreshAt = now;
+            this.logs.push({
+                functionPath: "global:poll",
+                level: "warn",
+                message:
+                    "the global changelog could not be read, so live queries on .global() tables re-run at the primary once per resync interval until it can",
+                timestamp: now,
+            });
         }
 
         const polled = this.polledGlobalTables();
-        const moved = new Set([...(poll.tables ?? polled)].filter((table) => polled.has(table)));
+        // A changelog read that failed says nothing about what moved, so everything polled may have. A
+        // store that is down fails those reruns too, and each failing query then backs off on its own.
+        const moved = new Set([...(poll.visible ? (poll.tables ?? polled) : polled)].filter((table) => polled.has(table)));
 
         if (moved.size === 0) {
             return;
@@ -17769,7 +17907,8 @@ abstract class ShardDO {
             this.reactiveCache?.invalidateTable(table);
         }
 
-        await this.queueSubscriptionRefresh(moved, undefined, new Set([poll.bookmark ?? D1_PRIMARY_CONSTRAINT]));
+        this.mergeSubscriptionRefresh(moved, undefined, new Set([poll.bookmark ?? D1_PRIMARY_CONSTRAINT]));
+        await this.startSubscriptionRefresh();
     }
 
     /**

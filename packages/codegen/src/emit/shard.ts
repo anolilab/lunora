@@ -495,14 +495,14 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // field under `noImplicitAny`. The Hyperdrive thunk below stays narrow on
     // purpose — it is handed the same object and simply never reads the extras.
     const d1ConfigField = hasD1Global
-        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string, settledLate?: boolean) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
         : "";
 
     // Hyperdrive-backed `.global()` tables receive their writer via an optional
     // `hyperdriveGlobal` thunk (mirrors `d1`); the host builds it with the global
     // writer factory from `@lunora/hyperdrive/global` over a Hyperdrive driver.
     const hyperdriveGlobalConfigField = hasHyperdriveGlobal
-        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onWrite?: (table: string) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
+        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onWrite?: (table: string, settledLate?: boolean) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
         : "";
 
     // External-source ingest (plan 077): the host supplies one resolver that turns a
@@ -572,9 +572,11 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // With `.global()` tables, a global row's broadcast carries the bookmark its write left, as the
     // writer's `onWrite` does (see `globalDatabaseLine`). Recorded bare, the same table re-recorded
     // after a sibling already drained it would refresh again at no bookmark, after the run that read at it.
+    // A global delta has no index keys to lose here: the engine sends none for a row stored elsewhere.
+    // Both report under `globalWriteSession`, so this dispatch contributes only its latest bookmark.
     const broadcastBody = hasGlobalTables
         ? `                    if (writeBookmark !== undefined && (schema as unknown as SchemaLike).tables[delta.table]?.shardMode?.kind === "global") {
-                        this.recordGlobalWrite(delta.table, writeBookmark);
+                        this.recordGlobalWrite(delta.table, writeBookmark, globalWriteSession);
                     } else {
                         this.recordChangedTable(delta.table, delta.indexKeys);
                     }`
@@ -687,6 +689,7 @@ ${broadcastBody}
     const globalDatabaseLine = hasGlobalTables
         ? `            const bookmark = options.readBookmark ?? this.getInboundBookmark();
             let writeBookmark: string | undefined;
+            const globalWriteSession = {};
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),
@@ -694,7 +697,7 @@ ${broadcastBody}
                     return readIdentity();
                 },
                 onBookmark: (bookmarkValue: string | undefined) => { writeBookmark = bookmarkValue; if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
-                onWrite: (table: string) => { this.recordGlobalWrite(table, writeBookmark); },
+                onWrite: (table: string, settledLate?: boolean) => { if (settledLate === true) { this.recordLateGlobalWrite(table); } else { this.recordGlobalWrite(table, writeBookmark, globalWriteSession); } },
                 get userId(): string | undefined {
                     return readUserId();
                 },

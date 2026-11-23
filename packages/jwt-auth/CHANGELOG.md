@@ -1,3 +1,7 @@
+## @lunora/jwt-auth [1.0.0-alpha.15](https://github.com/anolilab/lunora/compare/@lunora/jwt-auth@1.0.0-alpha.14...@lunora/jwt-auth@1.0.0-alpha.15) (2026-11-23)
+
+- security(jwt-auth): require an audience on the generic resolver (#1635)
+
 ## @lunora/jwt-auth [1.0.0-alpha.14](https://github.com/anolilab/lunora/compare/@lunora/jwt-auth@1.0.0-alpha.13...@lunora/jwt-auth@1.0.0-alpha.14) (2026-11-02)
 
 

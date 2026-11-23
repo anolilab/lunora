@@ -458,6 +458,17 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         expect([...runtime.messages.values()].filter((message) => message.role === "tool" && message.toolCallId === "0:call_1")).toHaveLength(1);
     });
 
+    it("names the agent whose run asked on the request, so a supply wakes that agent's workflow", async () => {
+        expect.assertions(1);
+
+        const agent = secretAgent([]);
+        const { host, journal, runtime } = await setup();
+
+        await pauseAt(agent, journal, runtime, scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("done")]));
+
+        expect(host.rows.get("agent_secret_requests")?.[0]?.["agent"]).toBe("support");
+    });
+
     it("holds a request open for less than the host keeps a supplied value, however long approvalTimeout is", async () => {
         expect.assertions(2);
 
@@ -752,8 +763,16 @@ describe("withSecret — the consuming step", () => {
     };
 
     /** A consuming tool's context whose dispatches reach the real component. */
-    const consumerContext = (host: SecretHost, step: AgentStepLike, claims: string[], idempotencyKey: string, toolCallId: string): AgentToolContext =>
+    const consumerContext = (
+        host: SecretHost,
+        step: AgentStepLike,
+        claims: string[],
+        idempotencyKey: string,
+        toolCallId: string,
+        callKey?: string,
+    ): AgentToolContext =>
         ({
+            ...(callKey === undefined ? {} : { callKey }),
             idempotencyKey,
             instanceId: INSTANCE,
             run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) => {
@@ -767,6 +786,19 @@ describe("withSecret — the consuming step", () => {
             threadKey: THREAD,
             toolCallId,
         }) as unknown as AgentToolContext;
+
+    it("lets a call whose provider id repeated an earlier turn's take the secret under its turn-scoped key", async () => {
+        expect.assertions(2);
+
+        const host = await secretHost(new WaitJournal());
+        const ref = await suppliedRequest(host, "0:call_1", SECRET);
+        const claims: string[] = [];
+        // The loop keys a repeated id `1:call_2`, so its step, and with it the claimant, carries that key.
+        const context = consumerContext(host, new WaitJournal(), claims, "tool:charge:1:call_2", "call_2", "1:call_2");
+
+        await expect(withSecret(context, ref, (secret) => secret.length)).resolves.toBe(SECRET.length);
+        expect(claims).toStrictEqual(["tool:charge:1:call_2"]);
+    });
 
     it("refuses a callback result that carries the secret only inside an Error", async () => {
         expect.assertions(1);
