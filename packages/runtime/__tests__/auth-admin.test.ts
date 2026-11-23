@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { lunoraAuthAdapter } from "../../auth/src/adapter";
 import { createAuthAdmin } from "../../auth/src/admin";
 import { createAuth } from "../../auth/src/create-auth";
-import { apiKey } from "../../auth/src/plugins";
+import { apiKey, passkey } from "../../auth/src/plugins";
 import { createMemoryAuthStore } from "../../auth/src/store";
 import type { AuthAdmin, AuthAuditWrite, AuthAuditWriter, ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
@@ -472,6 +472,21 @@ describe("createWorker — auth admin audit trail", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
 
         const response = await worker.fetch(post(`${AUTH}/api-keys/delete`, { apiKeyId: "f".repeat(64) }), {}, fakeContext);
+
+        expect(response.status).toBe(404);
+        expect(writer.rows).toStrictEqual([]);
+    });
+
+    it("answers 404 and writes no row for a revoke of a passkey that does not exist", async () => {
+        expect.assertions(2);
+
+        const plane = createAuthAdmin(
+            createAuth({ baseURL: "http://localhost", database: lunoraAuthAdapter(createMemoryAuthStore()), plugins: [passkey()], secret: "x".repeat(32) }),
+        );
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        const response = await worker.fetch(post(`${AUTH}/passkeys/delete`, { passkeyId: "f".repeat(64) }), {}, fakeContext);
 
         expect(response.status).toBe(404);
         expect(writer.rows).toStrictEqual([]);

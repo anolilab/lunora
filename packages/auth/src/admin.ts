@@ -687,6 +687,21 @@ const deleteMemberIfUnchanged = async (context_: AuthContext, memberId: string, 
 };
 
 /**
+ * Delete the row `where` names and refuse when there was none. A plain `delete` reports nothing, so a removal of an
+ * id that matches no row, or one a concurrent call already took, would answer as if it had removed something.
+ */
+const deleteExisting = async (
+    context_: AuthContext,
+    model: string,
+    where: Parameters<AuthContext["adapter"]["deleteMany"]>[0]["where"],
+    notFound: readonly [message: string, code: string],
+): Promise<void> => {
+    if ((await context_.adapter.deleteMany({ model, where })) === 0) {
+        throw new LunoraAuthAdminError(...notFound);
+    }
+};
+
+/**
  * Remove every membership of a user without orphaning an organization: demote
  * each owned membership through {@link demoteOwner}, then delete each membership
  * through {@link deleteMemberIfUnchanged}. Any refusal or failure undoes the
@@ -890,7 +905,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
         cancelInvitation: ({ invitationId }) =>
             withContext(async (context_) => {
-                await context_.adapter.delete({ model: "invitation", where: [{ field: "id", value: invitationId }] });
+                await deleteExisting(context_, "invitation", [{ field: "id", value: invitationId }], ["invitation not found", "INVITATION_NOT_FOUND"]);
             }),
 
         capabilities: () => withContext((context_) => Promise.resolve(deriveCapabilities(context_.options))),
@@ -1033,12 +1048,12 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     await context_.adapter.deleteMany({ model: "organizationRole", where: [{ field: "organizationId", value: organizationId }] });
                 }
 
-                await context_.adapter.delete({ model: "organization", where: [{ field: "id", value: organizationId }] });
+                await deleteExisting(context_, "organization", [{ field: "id", value: organizationId }], ["organization not found", "ORGANIZATION_NOT_FOUND"]);
             }),
 
         deleteOrgRole: ({ roleId }) =>
             withContext(async (context_) => {
-                await context_.adapter.delete({ model: "organizationRole", where: [{ field: "id", value: roleId }] });
+                await deleteExisting(context_, "organizationRole", [{ field: "id", value: roleId }], ["organization role not found", "ORG_ROLE_NOT_FOUND"]);
             }),
 
         // Create a pending email invitation. `inviterId` is DB-required; when the
@@ -1109,12 +1124,12 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
         removeTeam: ({ teamId }) =>
             withContext(async (context_) => {
                 await context_.adapter.deleteMany({ model: "teamMember", where: [{ field: "teamId", value: teamId }] });
-                await context_.adapter.delete({ model: "team", where: [{ field: "id", value: teamId }] });
+                await deleteExisting(context_, "team", [{ field: "id", value: teamId }], ["team not found", "TEAM_NOT_FOUND"]);
             }),
 
         removeTeamMember: ({ teamMemberId }) =>
             withContext(async (context_) => {
-                await context_.adapter.delete({ model: "teamMember", where: [{ field: "id", value: teamMemberId }] });
+                await deleteExisting(context_, "teamMember", [{ field: "id", value: teamMemberId }], ["team member not found", "TEAM_MEMBER_NOT_FOUND"]);
             }),
 
         updateMemberRole: ({ memberId, role }) =>
@@ -1328,7 +1343,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
         deletePasskey: ({ passkeyId }) =>
             withContext(async (context_) => {
-                await context_.adapter.delete({ model: "passkey", where: [{ field: "id", value: passkeyId }] });
+                await deleteExisting(context_, "passkey", [{ field: "id", value: passkeyId }], ["passkey not found", "PASSKEY_NOT_FOUND"]);
             }),
 
         disableTwoFactor: ({ userId }) =>
@@ -1486,7 +1501,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 });
 
                 if (!member || typeof member.organizationId !== "string" || typeof member.role !== "string") {
-                    await context_.adapter.delete({ model: "member", where: [{ field: "id", value: memberId }] });
+                    await deleteExisting(context_, "member", [{ field: "id", value: memberId }], ["member not found", "MEMBER_NOT_FOUND"]);
 
                     return;
                 }
@@ -1629,13 +1644,15 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
         unlinkAccount: ({ accountId, userId }) =>
             withContext(async (context_) => {
                 // Scope the delete to the owning user so an `accountId` can't reach another user's row.
-                await context_.adapter.delete({
-                    model: "account",
-                    where: [
+                await deleteExisting(
+                    context_,
+                    "account",
+                    [
                         { field: "id", value: accountId },
                         { connector: "AND", field: "userId", value: userId },
                     ],
-                });
+                    ["account not found", "ACCOUNT_NOT_FOUND"],
+                );
             }),
 
         updateUser: ({ data, userId }) =>

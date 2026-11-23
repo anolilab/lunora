@@ -378,15 +378,23 @@ const NAMED_TOKEN_AUTH_METHODS: ReadonlySet<keyof AuthAdmin> = new Set<keyof Aut
 
 /** HTTP status for a known client-input `authAdmin` error code; an unmapped code is a backend failure and reads 500. */
 const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
+    ACCOUNT_NOT_FOUND: 404,
     API_KEY_NOT_FOUND: 404,
     API_KEY_STORAGE_UNSUPPORTED: 409,
+    INVITATION_NOT_FOUND: 404,
     INVITER_REQUIRED: 400,
     LAST_ORGANIZATION_OWNER: 409,
+    MEMBER_NOT_FOUND: 404,
     MEMBERSHIP_CHANGED: 409,
+    ORG_ROLE_NOT_FOUND: 404,
     ORG_SLUG_INVALID: 400,
     ORG_SLUG_TAKEN: 409,
+    ORGANIZATION_NOT_FOUND: 404,
+    PASSKEY_NOT_FOUND: 404,
     PASSWORD_TOO_LONG: 400,
     PASSWORD_TOO_SHORT: 400,
+    TEAM_MEMBER_NOT_FOUND: 404,
+    TEAM_NOT_FOUND: 404,
     USER_ALREADY_EXISTS: 409,
     USER_NOT_FOUND: 404,
 };
