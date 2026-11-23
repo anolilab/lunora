@@ -25,6 +25,7 @@ import type {
     PaymentSession,
     PaymentState,
     PortalInput,
+    ProviderRefund,
     ReportUsageInput,
     Subscription,
     SubscriptionPatch,
@@ -80,6 +81,9 @@ const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
 };
 
 const notSupported = makeNotSupported("polar (merchant-of-record)");
+
+/** Polar's `RefundStatus` is pending | succeeded | failed | canceled; anything unrecognized may still move money. */
+const REFUND_STATUS_BY_POLAR_STATUS: Record<string, ProviderRefund["status"]> = { canceled: "failed", failed: "failed", succeeded: "succeeded" };
 
 /**
  * The one Polar update a patch maps to: a seat count, a plan change, or nothing. The caller reads the
@@ -237,7 +241,15 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             // customer never received — and, because the refunded total then equals what was asked
             // for, the facade's over-refund guard rejects every later attempt to actually issue it.
             // Wait for `succeeded`; `refund.updated` is what carries the pending → succeeded step.
-            if (readString(object, "status") !== "succeeded") {
+            const status = readString(object, "status");
+
+            // A terminal failure moves no money, but it is the only signal that lets a facade refund
+            // still pending on this order be retried.
+            if (status === "failed" || status === "canceled") {
+                return { ...base, refundId: readString(object, "id"), sessionId: readString(object, "order_id"), type: "payment.refund_failed" };
+            }
+
+            if (status !== "succeeded") {
                 return { ...base, type: "unhandled" };
             }
 
@@ -394,6 +406,24 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         },
 
         identifier: "polar",
+
+        listRefunds: async (sessionId) => {
+            const client = await loadClient();
+            const refunds: ProviderRefund[] = [];
+
+            for await (const page of await client.refunds.list({ limit: 100, orderId: sessionId })) {
+                for (const refund of page.result.items) {
+                    refunds.push({
+                        // Net plus its tax, as the refund webhook and `refundPayment` book it.
+                        amount: moneyFromMinor(refund.amount + refund.taxAmount, refund.currency),
+                        refundId: refund.id,
+                        status: REFUND_STATUS_BY_POLAR_STATUS[refund.status] ?? "pending",
+                    });
+                }
+            }
+
+            return refunds;
+        },
 
         parseWebhook: async ({ headers, payload }: WebhookInput): Promise<WebhookAction> => {
             const webhookId = headers.get("webhook-id") ?? "";

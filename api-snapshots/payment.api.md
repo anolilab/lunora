@@ -235,6 +235,9 @@ interface LunoraPayment {
     resumeSubscription: (subscriptionId: string, options?: {
         idempotencyKey?: string;
     }) => Promise<Subscription>;
+    settlePendingRefund: (input: {
+        sessionId: string;
+    }) => Promise<PaymentSession>;
     readonly store: PaymentStore;
     track: (input: TrackInput) => Promise<TrackResult>;
     updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
@@ -270,8 +273,9 @@ class MemoryPaymentStore implements PaymentStore {
     listUnreportedUsage(provider: ProviderId, limit: number, now: number): Promise<UsageEvent[]>;
     getReferenceRevision(referenceId: string): Promise<number>;
     bumpReferenceRevision(referenceId: string, ifRevision: number): Promise<boolean>;
-    markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean>;
-    releaseEvent(provider: ProviderId, eventId: string): Promise<void>;
+    markEventProcessed(provider: ProviderId, eventId: string, type: string): Promise<boolean>;
+    releaseEvent(provider: ProviderId, eventId: string, ifType?: string): Promise<void>;
+    getEventClaim(provider: ProviderId, eventId: string): Promise<string | undefined>;
     deferUsageReport(provider: ProviderId, idempotencyKey: string, retryAt: number): Promise<void>;
     markUsageReported(provider: ProviderId, idempotencyKey: string): Promise<void>;
     recordUsage(event: UsageEvent): Promise<boolean>;
@@ -333,6 +337,7 @@ interface PaymentAdapter {
     getPaymentStatus: (sessionId: string) => Promise<PaymentSession>;
     getSubscriptionStatus: (subscriptionId: string) => Promise<Subscription>;
     readonly identifier: ProviderId;
+    listRefunds?: (sessionId: string) => Promise<ProviderRefund[]>;
     parseWebhook: (input: WebhookInput) => Promise<WebhookAction>;
     refundPayment: (input: RefundInput) => Promise<RefundResult>;
     reportUsage?: (input: ReportUsageInput) => Promise<void>;
@@ -425,6 +430,12 @@ type PaymentEvent = {
     sessionId: string;
     type: "refund.replayed";
 } | {
+    booked: number;
+    provider: ProviderId;
+    referenceId?: string;
+    sessionId: string;
+    type: "refund.hold_released";
+} | {
     featureId: string;
     provider: ProviderId;
     referenceId: string;
@@ -496,6 +507,7 @@ interface PaymentStore {
     bumpReferenceRevision: (referenceId: string, ifRevision: number) => Promise<boolean>;
     deferUsageReport: (provider: ProviderId, idempotencyKey: string, retryAt: number) => Promise<void>;
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
+    getEventClaim: (provider: ProviderId, eventId: string) => Promise<string | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
     getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
     getReferenceRevision: (referenceId: string) => Promise<number>;
@@ -505,7 +517,7 @@ interface PaymentStore {
     markEventProcessed: (provider: ProviderId, eventId: string, type: string) => Promise<boolean>;
     markUsageReported: (provider: ProviderId, idempotencyKey: string) => Promise<void>;
     recordUsage: (event: UsageEvent) => Promise<boolean>;
-    releaseEvent: (provider: ProviderId, eventId: string) => Promise<void>;
+    releaseEvent: (provider: ProviderId, eventId: string, ifType?: string) => Promise<void>;
     sumUsage: (referenceId: string, featureId: string, since: number) => Promise<number>;
     sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, since: number) => Promise<ReadonlyMap<string, number>>;
     upsertCustomer: (customer: Customer) => Promise<void>;
@@ -561,6 +573,16 @@ interface ProviderCapabilities {
 
 ```ts
 type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
+```
+
+### `ProviderRefund` (interface)
+
+```ts
+interface ProviderRefund {
+    readonly amount: Money;
+    readonly refundId: string;
+    readonly status: "failed" | "pending" | "succeeded";
+}
 ```
 
 ### `ReconcileInput` (interface)
@@ -650,6 +672,7 @@ interface Subscription {
     readonly currentPeriodStart?: number;
     readonly id: string;
     readonly lastEventAt?: number;
+    readonly priceEventAt?: number;
     readonly priceId: string;
     readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
@@ -780,7 +803,7 @@ interface WebhookAction {
 ### `WebhookActionType` (type)
 
 ```ts
-type WebhookActionType = "payment.authorized" | "payment.captured" | "payment.failed" | "payment.refunded" | "subscription.active" | "subscription.canceled" | "subscription.past_due" | "subscription.paused" | "subscription.updated" | "unhandled";
+type WebhookActionType = "payment.authorized" | "payment.captured" | "payment.failed" | "payment.refund_failed" | "payment.refunded" | "subscription.active" | "subscription.canceled" | "subscription.past_due" | "subscription.paused" | "subscription.updated" | "unhandled";
 ```
 
 ### `WebhookHeaders` (interface)

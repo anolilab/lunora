@@ -30,6 +30,7 @@ import type {
     PaymentSession,
     PaymentState,
     PortalInput,
+    ProviderRefund,
     RefundInput,
     ReportUsageInput,
     Subscription,
@@ -109,8 +110,10 @@ const WHOLE_MINOR_UNITS = /^-?\d+$/;
  * string that is not a whole number is refused rather than scaled: Dodo does not document the
  * dispute amount's unit, and choosing between `"25.00"` meaning 25 and meaning 2500 is a 100x error
  * on a funds reversal. Returning `undefined` leaves the action with no amount, which `sync.ts`
- * records as a FULL reversal with the money untouched — loud and fail-closed — rather than writing a
- * confidently wrong figure into the ledger.
+ * cannot book: it acknowledges the event without touching the session and reports it as
+ * `invalid_refund_amount` (the `webhook.applied` observer event carries that reason). The session
+ * stays `captured`, and reconcile does not repair it because `paymentFromDodo` sums only
+ * `refunds[]`, so that observer reason is the only trace of the lost dispute.
  */
 const readMinorUnits = (object: Record<string, unknown>, key: string): bigint | undefined => {
     const value = object[key];
@@ -175,6 +178,37 @@ const refundedMinorOf = (payment: Record<string, unknown>): bigint => {
     }
 
     return total;
+};
+
+/**
+ * The refunds a Dodo `Payment` carries inline. `refunds.list` cannot filter by payment, so this list is
+ * the per-payment read. `review` may still move money, so it counts as pending, and so does a
+ * `succeeded` entry with no amount (nullable on `RefundListItem`) or no id: neither could be booked.
+ */
+const refundsFromDodo = (payment: Record<string, unknown>): ProviderRefund[] => {
+    const { refunds } = payment;
+
+    if (!Array.isArray(refunds)) {
+        return [];
+    }
+
+    const paymentCurrency = readString(payment, "currency") ?? "usd";
+
+    return refunds.map((entry) => {
+        const refund = asRecord(entry);
+        const refundId = readString(refund, "refund_id") ?? "";
+        const amount = readNumber(refund, "amount");
+        const status = readString(refund, "status");
+        let settled: ProviderRefund["status"] = "pending";
+
+        if (status === "failed") {
+            settled = "failed";
+        } else if (status === "succeeded" && amount !== undefined && refundId !== "") {
+            settled = "succeeded";
+        }
+
+        return { amount: moneyFromMinor(amount ?? 0, readString(refund, "currency") ?? paymentCurrency), refundId, status: settled };
+    });
 };
 
 const paymentFromDodo = (input: unknown): PaymentSession => {
@@ -258,6 +292,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 type: "payment.captured",
             };
         }
+        // Moves no money; it only lets a facade refund still pending on this payment be retried.
+        case "refund.failed": {
+            return { ...base, refundId: readString(object, "refund_id"), sessionId: readString(object, "payment_id"), type: "payment.refund_failed" };
+        }
 
         case "subscription.active":
         case "subscription.cancelled":
@@ -304,7 +342,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         }
 
         default: {
-            // payment.processing, refund.failed, other dispute.*, license_key.* — no state transition here.
+            // payment.processing, other dispute.*, license_key.* — no state transition here.
             return { ...base, type: "unhandled" };
         }
     }
@@ -397,6 +435,12 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
 
         identifier: "dodopayments",
 
+        listRefunds: async (sessionId) => {
+            const client = await loadClient();
+
+            return refundsFromDodo(asRecord(await client.payments.retrieve(sessionId)));
+        },
+
         parseWebhook: async ({ headers, payload }: WebhookInput): Promise<WebhookAction> => {
             const webhookId = headers.get("webhook-id") ?? "";
 
@@ -436,8 +480,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             // `refund.failed`). Reflect the refund's real status instead of optimistically claiming
             // "refunded"; the webhook-synced store stays authoritative for the final state. `pending`
             // says so explicitly, so the facade does not have to infer it from the SESSION's state —
-            // it holds its ledger back until `refund.succeeded` lands, because `refund.failed` carries
-            // no transition and would leave an optimistic write over-stating the row for good.
+            // it holds its ledger back until `refund.succeeded` lands, because `refund.failed` reverses
+            // no money and would leave an optimistic write over-stating the row for good.
             const settled = readString(refund, "status") === "succeeded";
             const state: PaymentState = settled ? "refunded" : "captured";
 

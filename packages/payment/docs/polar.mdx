@@ -308,7 +308,7 @@ Set or generate the **signing secret** and store it as `POLAR_WEBHOOK_SECRET`.
 <Step>
 
 Subscribe to the events you need: at minimum `order.paid`, `refund.created`,
-and the `subscription.*` family (see the table below).
+`refund.updated`, and the `subscription.*` family (see the table below).
 
 </Step>
 </Steps>
@@ -388,6 +388,7 @@ The adapter translates these Polar events into normalized transitions:
 | ------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `order.created`, `order.paid`                                             | `payment.captured`                                            | `order.created` maps only when the order's `status` is already paid, otherwise it is `unhandled` until `order.paid`. Amount from `total_amount` (falls back to `amount`); currency from `currency`. |
 | `refund.created`, `refund.updated`                                        | `payment.refunded` (delta)                                    | Only once `status` is `succeeded`. `amount + tax_amount` (tax-inclusive, like the capture); `sessionId` from `order_id`.                                                                            |
+| `refund.created`, `refund.updated` (status `failed` / `canceled`)         | `payment.refund_failed`                                       | Moves no money and changes no row; it releases the hold `refundPayment` keeps on an order while its refund is pending.                                                                              |
 | `subscription.created`, `subscription.active`                             | `subscription.active`                                         | Routed by the subscription's `status` field.                                                                                                                                                        |
 | `subscription.updated`, `.paused`, `.resumed`, `.past_due`, `.uncanceled` | `subscription.active` / `.past_due` / `.paused` / `.canceled` | Derived from `status`; an unrecognized `status` fails closed to `subscription.past_due`.                                                                                                            |
 | `subscription.canceled`                                                   | derived from `status`                                         | Status-driven.                                                                                                                                                                                      |
@@ -427,6 +428,16 @@ await ctx.payments.refundPayment({ sessionId: orderId, amount: money(500n, "USD"
     Refund through `ctx.payments.refundPayment`. Polar's [Create Refund](https://polar.sh/docs/api-reference/refunds/create) accepts no idempotency key, so
     nothing on the wire dedupes a retry: the facade's local refund ledger is the only thing that stops a repeated call from moving the money twice. It also
     authorizes the caller and rejects an over-refund before anything is issued.
+</Callout>
+
+<Callout type="info">
+    Polar can answer a refund as `pending`. A pending refund is not booked, so while it is pending the order is held: any further `refundPayment` on it — a
+    retry or a different amount — raises `INVALID_TRANSITION` ("a refund on this session is still pending; retry once it settles") without calling Polar. The
+    hold is released when `refund.updated` reports the refund `succeeded` (booked) or `failed` / `canceled`, so subscribe to `refund.updated`. Nothing else
+    releases it on its own. If that delivery is lost, or you do not subscribe, call `ctx.payments.settlePendingRefund({ sessionId: orderId })`: it lists the
+    order's refunds from Polar (the token needs `refunds:read`, which `refunds:write` includes), books a refund that succeeded exactly as the webhook would, so
+    a late webhook adds nothing, and releases the hold. A refund that failed, or none at all, releases it with nothing booked. One still pending keeps it.
+    A refund call that gets no answer from the provider (a network failure, a timeout, a 5xx) may still have issued the refund, so it holds the session the same way and raises `PROVIDER_ERROR` saying so; `settlePendingRefund` is the way out. A definite rejection (a 4xx) releases it. `settlePendingRefund` never releases a hold whose `refundPayment` call is still waiting on the provider. When the provider answered `pending` with a refund id, only an event about that refund releases the hold; a restated or failed earlier refund on the same session does not.
 </Callout>
 
 ## Billing portal

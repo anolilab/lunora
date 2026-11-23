@@ -25,6 +25,12 @@ export type PaymentEvent =
           updatedSubscriptions: number;
       }
     | { provider: ProviderId; referenceId?: string; refundId: string; sessionId: string; type: "refund.replayed" }
+
+    /**
+     * `settlePendingRefund` released a session's pending-refund hold on the provider's word. `booked` counts
+     * the refunds it recorded on the ledger; `0` means the provider reported the refund failed or reported none.
+     */
+    | { booked: number; provider: ProviderId; referenceId?: string; sessionId: string; type: "refund.hold_released" }
     | { featureId: string; provider: ProviderId; referenceId: string; type: "usage.report_failed" };
 
 export type PaymentObserver = (event: PaymentEvent) => void;

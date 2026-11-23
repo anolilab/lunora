@@ -38,6 +38,9 @@ export interface PaymentStore {
      */
     deferUsageReport: (provider: ProviderId, idempotencyKey: string, retryAt: number) => Promise<void>;
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
+
+    /** The `type` a claimed event id was recorded with (see {@link PaymentStore.markEventProcessed}), or `undefined` when unclaimed. */
+    getEventClaim: (provider: ProviderId, eventId: string) => Promise<string | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
 
     /** A payment session for `subscriptionId` that names an owner (non-blank `referenceId`), if any. */
@@ -99,8 +102,12 @@ export interface PaymentStore {
      * genuine store-write failure): the atomic insert-claim guards concurrent duplicates, but a
      * claim that outlives a failed apply would dedupe the retry and lose the effect — so the claim
      * is rolled back on failure. A no-op if the id was never claimed.
+     *
+     * With `ifType`, the claim is released only while it still carries that `type`: a marker whose
+     * claim encodes its owner can then be released by that owner alone, never after someone else
+     * re-claimed it.
      */
-    releaseEvent: (provider: ProviderId, eventId: string) => Promise<void>;
+    releaseEvent: (provider: ProviderId, eventId: string, ifType?: string) => Promise<void>;
 
     /**
      * The period total for a `(referenceId, featureId)` pair since `since` (epoch ms).
@@ -188,7 +195,7 @@ export const overlayProviderSubscription = (existing: Subscription | undefined, 
 export class MemoryPaymentStore implements PaymentStore {
     private readonly customers = new Map<string, Customer>();
 
-    private readonly processedEvents = new Set<string>();
+    private readonly processedEvents = new Map<string, string>();
 
     private readonly referenceRevisions = new Map<string, number>();
 
@@ -247,22 +254,30 @@ export class MemoryPaymentStore implements PaymentStore {
         return Promise.resolve(true);
     }
 
-    public markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean> {
+    public markEventProcessed(provider: ProviderId, eventId: string, type: string): Promise<boolean> {
         const key = recordKey(provider, eventId);
 
         if (this.processedEvents.has(key)) {
             return Promise.resolve(false);
         }
 
-        this.processedEvents.add(key);
+        this.processedEvents.set(key, type);
 
         return Promise.resolve(true);
     }
 
-    public releaseEvent(provider: ProviderId, eventId: string): Promise<void> {
-        this.processedEvents.delete(recordKey(provider, eventId));
+    public releaseEvent(provider: ProviderId, eventId: string, ifType?: string): Promise<void> {
+        const key = recordKey(provider, eventId);
+
+        if (ifType === undefined || this.processedEvents.get(key) === ifType) {
+            this.processedEvents.delete(key);
+        }
 
         return Promise.resolve();
+    }
+
+    public getEventClaim(provider: ProviderId, eventId: string): Promise<string | undefined> {
+        return Promise.resolve(this.processedEvents.get(recordKey(provider, eventId)));
     }
 
     public deferUsageReport(provider: ProviderId, idempotencyKey: string, retryAt: number): Promise<void> {

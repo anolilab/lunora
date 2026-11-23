@@ -266,6 +266,7 @@ Call the facade from an action. Every method authorizes the caller against the
 | `updateSubscription(subscriptionId, patch)`    | `Subscription`     | Change the plan (`priceId`) or seats (`quantity`) of the caller's own subscription; persists the result.        |
 | `resumeSubscription(subscriptionId, options?)` | `Subscription`     | Undo a period-end cancel (Creem: resume a paused subscription); persists the result.                            |
 | `refundPayment(input)`                         | `PaymentSession`   | Refund the caller's own captured payment, in full or in part; persists the result.                              |
+| `settlePendingRefund(input)`                   | `PaymentSession`   | Release a Polar/Dodo refund hold whose webhook never came, booking a refund the provider settled.               |
 | `capturePayment(input)`                        | `PaymentSession`   | Capture the caller's own authorized payment; persists the result.                                               |
 | `cancelPayment(sessionId, options?)`           | `PaymentSession`   | Cancel the caller's own uncaptured payment; persists the result.                                                |
 | `listSubscriptions(referenceId)`               | `Subscription[]`   | Synced subscriptions for a reference.                                                                           |
@@ -553,7 +554,7 @@ Builds a `Money` value, `{ currency, minorUnits: bigint }`, from integer minor u
 
 **Type:** `(event: PaymentEvent) => void`
 
-The type of the `observability` option. `PaymentEvent.type` is one of `webhook.applied`, `webhook.duplicate`, `subscription.duplicate`, `payment.failed`, `subscription.past_due`, `usage.report_failed`, `reconcile.drift`, `reconcile.completed`, `reconcile.error` or `refund.replayed`.
+The type of the `observability` option. `PaymentEvent.type` is one of `webhook.applied`, `webhook.duplicate`, `subscription.duplicate`, `payment.failed`, `subscription.past_due`, `usage.report_failed`, `reconcile.drift`, `reconcile.completed`, `reconcile.error`, `refund.replayed` or `refund.hold_released` (`settlePendingRefund` released a pending-refund hold; `booked` counts the refunds it recorded).
 
 ### `PaymentAdapter`
 

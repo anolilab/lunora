@@ -4,15 +4,15 @@ import type { PaymentAdapter } from "../src/adapter";
 import type { CreatePaymentOptions, WebhookOutcome } from "../src/create-payment";
 import { createPayment, webhookResponse } from "../src/create-payment";
 import { LunoraPaymentError } from "../src/errors";
-import { derivedIdempotencyKey } from "../src/idempotency";
+import { derivedIdempotencyKey, heldClaimFor, PENDING_REFUND_CLAIM_TYPE, pendingRefundHeldKey, pendingRefundKey } from "../src/idempotency";
 import { money } from "../src/money";
-import type { PaymentObserver } from "../src/observability";
+import type { PaymentEvent, PaymentObserver } from "../src/observability";
 import type { StripeClientLike } from "../src/providers/stripe";
 import { createStripeAdapter } from "../src/providers/stripe";
 import type { PaymentStore, RevisionGuard } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
-import type { CheckoutRequest, PaymentSession, Subscription, WebhookAction } from "../src/types";
+import type { CheckoutRequest, PaymentSession, ProviderRefund, Subscription, WebhookAction } from "../src/types";
 import { MAX_WEBHOOK_BODY_BYTES } from "../src/webhook-body";
 
 const subscription = (referenceId: string, state: Subscription["state"]): Subscription => {
@@ -1228,8 +1228,8 @@ describe("createPayment", () => {
 
         const result = await payment.refundPayment({ sessionId: "pay_1" });
 
-        // No money moved yet, so nothing is recorded: a later `refund.failed` maps to `unhandled` and
-        // reverses nothing, which would leave an optimistic write over-stating the row forever.
+        // No money moved yet, so nothing is recorded: a later `refund.failed` reverses nothing, which
+        // would leave an optimistic write over-stating the row forever.
         expect(result.refundedAmount.minorUnits).toBe(0n);
         expect(result.state).toBe("captured");
 
@@ -1251,6 +1251,668 @@ describe("createPayment", () => {
 
         expect(afterWebhook?.refundedAmount.minorUnits).toBe(1000n);
         expect(afterWebhook?.state).toBe("refunded");
+    });
+
+    describe("a refund the provider has not settled yet", () => {
+        const PENDING_MESSAGE = "a refund on this session is still pending; retry once it settles";
+
+        const pendingSetup = async (provider: "dodopayments" | "polar" | "stripe", answer: "pending" | "settled" = "pending") => {
+            const store = new MemoryPaymentStore();
+            const session = { ...paymentSession("user_1"), id: "ord_1", provider };
+
+            await store.upsertPaymentSession(session);
+
+            let issued = 0;
+            const refundPayment = vi.fn<PaymentAdapter["refundPayment"]>(async (input) => {
+                issued += 1;
+
+                return {
+                    ...session,
+                    pending: answer === "pending",
+                    refundedAmount: input.amount ?? session.capturedAmount,
+                    refundId: `ref_${String(issued)}`,
+                };
+            });
+            const payment = createPayment({
+                adapter: fakeAdapter({ identifier: provider, refundPayment }),
+                authorize: (referenceId) => referenceId === "user_1",
+                store,
+            });
+
+            return { payment, refundPayment, store };
+        };
+
+        it.each(["polar", "dodopayments"] as const)("refuses a second refund on a %s session before calling the provider", async (provider) => {
+            expect.assertions(4);
+
+            const { payment, refundPayment, store } = await pendingSetup(provider);
+
+            await payment.refundPayment({ sessionId: "ord_1" });
+
+            await expect(payment.refundPayment({ sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION", message: PENDING_MESSAGE });
+            // A different amount is refused too: the marker is per session.
+            await expect(payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(1);
+            await expect(store.getPaymentSession(provider, "ord_1")).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
+        });
+
+        it("lets a new refund through once the confirming webhook books the pending one", async () => {
+            expect.assertions(3);
+
+            const { payment, refundPayment, store } = await pendingSetup("polar");
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            await expect(
+                applyWebhookAction(store, {
+                    amount: money(300, "USD"),
+                    eventId: "evt_ok",
+                    provider: "polar",
+                    refundId: "ref_1",
+                    sessionId: "ord_1",
+                    type: "payment.refunded",
+                }),
+            ).resolves.toEqual({ applied: true, reason: "ok" });
+
+            await payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
+            // Booked once, by the webhook; the second refund is pending and not booked.
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
+        });
+
+        it("lets a retry through after payment.refund_failed, without touching the ledger", async () => {
+            expect.assertions(3);
+
+            const { payment, refundPayment, store } = await pendingSetup("dodopayments");
+
+            await payment.refundPayment({ sessionId: "ord_1" });
+
+            await expect(
+                applyWebhookAction(store, {
+                    eventId: "evt_fail",
+                    provider: "dodopayments",
+                    refundId: "ref_1",
+                    sessionId: "ord_1",
+                    type: "payment.refund_failed",
+                }),
+            ).resolves.toEqual({ applied: true, reason: "ok" });
+
+            await payment.refundPayment({ sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
+            await expect(store.getPaymentSession("dodopayments", "ord_1")).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
+        });
+
+        it("holds no marker after a settled refund or a failed provider call", async () => {
+            expect.assertions(2);
+
+            const settled = await pendingSetup("polar", "settled");
+
+            await settled.payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+            await settled.payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+
+            expect(settled.refundPayment).toHaveBeenCalledTimes(2);
+
+            const failing = await pendingSetup("polar");
+
+            failing.refundPayment.mockRejectedValueOnce(new LunoraPaymentError("PROVIDER_ERROR", "polar unavailable"));
+
+            await failing.payment.refundPayment({ sessionId: "ord_1" }).catch(() => undefined);
+            await failing.payment.refundPayment({ sessionId: "ord_1" });
+
+            expect(failing.refundPayment).toHaveBeenCalledTimes(2);
+        });
+
+        it("leaves Stripe, whose refund is keyed, unguarded", async () => {
+            expect.assertions(1);
+
+            const { payment, refundPayment } = await pendingSetup("stripe");
+
+            await payment.refundPayment({ sessionId: "ord_1" });
+            await payment.refundPayment({ sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe("settlePendingRefund", () => {
+        const PENDING_MESSAGE = "a refund on this session is still pending; retry once it settles";
+
+        const settleSetup = async (provider: "dodopayments" | "polar", owner = "user_1", store: MemoryPaymentStore = new MemoryPaymentStore()) => {
+            const session = { ...paymentSession(owner), id: "ord_1", provider };
+
+            await store.upsertPaymentSession(session);
+
+            let issued = 0;
+            const refundPayment = vi.fn<PaymentAdapter["refundPayment"]>(async (input) => {
+                issued += 1;
+
+                return { ...session, pending: true, refundedAmount: input.amount ?? session.capturedAmount, refundId: `ref_${String(issued)}` };
+            });
+            const providerRefunds: ProviderRefund[] = [];
+            const listRefunds = vi.fn<NonNullable<PaymentAdapter["listRefunds"]>>(async () => [...providerRefunds]);
+            const events: PaymentEvent[] = [];
+            const payment = createPayment({
+                adapter: fakeAdapter({ identifier: provider, listRefunds, refundPayment }),
+                authorize: (referenceId) => referenceId === "user_1",
+                observability: (event) => {
+                    events.push(event);
+                },
+                store,
+            });
+
+            return { events, listRefunds, payment, providerRefunds, refundPayment, store };
+        };
+
+        it("books a refund the provider settled without a webhook, once, and releases the hold", async () => {
+            expect.assertions(6);
+
+            const { events, payment, providerRefunds, refundPayment, store } = await settleSetup("polar");
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+            providerRefunds.push({ amount: money(300, "USD"), refundId: "ref_1", status: "succeeded" });
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({
+                refundedAmount: money(300, "USD"),
+                state: "partially_refunded",
+            });
+            expect(events.filter((event) => event.type === "refund.hold_released")).toStrictEqual([
+                { booked: 1, provider: "polar", referenceId: "user_1", sessionId: "ord_1", type: "refund.hold_released" },
+            ]);
+
+            // The hold is gone: the next refund reaches the provider.
+            await payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
+
+            // The confirming webhook arriving late finds the refund already booked.
+            await expect(
+                applyWebhookAction(store, {
+                    amount: money(300, "USD"),
+                    eventId: "evt_late",
+                    provider: "polar",
+                    refundId: "ref_1",
+                    sessionId: "ord_1",
+                    type: "payment.refunded",
+                }),
+            ).resolves.toEqual({ applied: false, reason: "duplicate" });
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
+
+            // A second settle has nothing new to book.
+            providerRefunds.push({ amount: money(200, "USD"), refundId: "ref_2", status: "pending" });
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
+        });
+
+        it.each([
+            ["failed", [{ amount: money(1000, "USD"), refundId: "ref_1", status: "failed" }]],
+            ["absent", []],
+        ] as const)("releases the hold with nothing booked when the provider's refund is %s", async (_case, reported) => {
+            expect.assertions(4);
+
+            const { events, payment, providerRefunds, refundPayment, store } = await settleSetup("dodopayments");
+
+            await payment.refundPayment({ sessionId: "ord_1" });
+            providerRefunds.push(...reported);
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
+            expect(events.filter((event) => event.type === "refund.hold_released")).toStrictEqual([
+                { booked: 0, provider: "dodopayments", referenceId: "user_1", sessionId: "ord_1", type: "refund.hold_released" },
+            ]);
+
+            await payment.refundPayment({ sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
+            await expect(store.getPaymentSession("dodopayments", "ord_1")).resolves.toMatchObject({ refundedAmount: money(0, "USD") });
+        });
+
+        it("adds no money when the ledger already holds the provider's settled refunds without their markers", async () => {
+            expect.assertions(5);
+
+            const { events, payment, providerRefunds, refundPayment, store } = await settleSetup("polar");
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+            // What reconcile's merge leaves: the provider's refunded total on the row, no per-refund marker.
+            await store.upsertPaymentSession({
+                ...paymentSession("user_1"),
+                id: "ord_1",
+                provider: "polar",
+                refundedAmount: money(300, "USD"),
+                state: "partially_refunded",
+            });
+            providerRefunds.push({ amount: money(300, "USD"), refundId: "ref_1", status: "succeeded" });
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
+            expect(events.filter((event) => event.type === "refund.hold_released")).toStrictEqual([
+                { booked: 0, provider: "polar", referenceId: "user_1", sessionId: "ord_1", type: "refund.hold_released" },
+            ]);
+
+            await expect(
+                applyWebhookAction(store, {
+                    amount: money(300, "USD"),
+                    eventId: "evt_late",
+                    provider: "polar",
+                    refundId: "ref_1",
+                    sessionId: "ord_1",
+                    type: "payment.refunded",
+                }),
+            ).resolves.toEqual({ applied: false, reason: "duplicate" });
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
+
+            // The hold is released: the next refund reaches the provider.
+            await payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
+        });
+
+        it("books only up to the provider's settled total when the ledger already holds part of it", async () => {
+            expect.assertions(2);
+
+            const { payment, providerRefunds, store } = await settleSetup("polar");
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+            await store.upsertPaymentSession({
+                ...paymentSession("user_1"),
+                id: "ord_1",
+                provider: "polar",
+                refundedAmount: money(100, "USD"),
+                state: "partially_refunded",
+            });
+            providerRefunds.push(
+                { amount: money(100, "USD"), refundId: "ref_0", status: "succeeded" },
+                { amount: money(300, "USD"), refundId: "ref_1", status: "succeeded" },
+            );
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(400, "USD") });
+            // Neither refund is booked again by a late webhook.
+            await expect(
+                Promise.all(
+                    providerRefunds.map(async (refund, index) =>
+                        applyWebhookAction(store, {
+                            amount: refund.amount,
+                            eventId: `evt_late_${String(index)}`,
+                            provider: "polar",
+                            refundId: refund.refundId,
+                            sessionId: "ord_1",
+                            type: "payment.refunded",
+                        }),
+                    ),
+                ),
+            ).resolves.toEqual([
+                { applied: false, reason: "duplicate" },
+                { applied: false, reason: "duplicate" },
+            ]);
+        });
+
+        it("keeps the hold while the provider still reports the refund pending, booking no settled sibling", async () => {
+            expect.assertions(4);
+
+            const { events, payment, providerRefunds, refundPayment } = await settleSetup("polar");
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+            providerRefunds.push(
+                { amount: money(100, "USD"), refundId: "ref_0", status: "succeeded" },
+                { amount: money(300, "USD"), refundId: "ref_1", status: "pending" },
+            );
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(0, "USD") });
+            await expect(payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({
+                code: "INVALID_TRANSITION",
+                message: PENDING_MESSAGE,
+            });
+
+            expect(refundPayment).toHaveBeenCalledTimes(1);
+            expect(events.some((event) => event.type === "refund.hold_released")).toBe(false);
+        });
+
+        it("refuses a caller who does not own the session the way refundPayment does, before asking the provider", async () => {
+            expect.assertions(4);
+
+            const { listRefunds, payment, store } = await settleSetup("polar", "user_2");
+
+            await store.markEventProcessed("polar", "pending-refund:ord_1", "marker.pending_refund");
+
+            const refused = await payment.refundPayment({ sessionId: "ord_1" }).catch((error: unknown) => error);
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).rejects.toStrictEqual(refused);
+
+            expect(refused).toMatchObject({ code: "NOT_FOUND" });
+            expect(listRefunds).not.toHaveBeenCalled();
+            // The hold is untouched.
+            await expect(store.markEventProcessed("polar", "pending-refund:ord_1", "marker.pending_refund")).resolves.toBe(false);
+        });
+
+        it("never releases the hold of a refund call still in flight", async () => {
+            expect.assertions(2);
+
+            const { listRefunds, payment, refundPayment } = await settleSetup("polar");
+            let answer: (() => void) | undefined;
+            let markReached: () => void = () => {};
+            const reachedProvider = new Promise<void>((resolve) => {
+                markReached = resolve;
+            });
+
+            refundPayment.mockImplementationOnce(async () => {
+                markReached();
+
+                return new Promise((resolve) => {
+                    answer = () => {
+                        resolve({ ...paymentSession("user_1"), id: "ord_1", pending: true, provider: "polar", refundId: "ref_1" });
+                    };
+                });
+            });
+
+            const inFlight = payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            await reachedProvider;
+            // The provider has nothing to report yet, which would release a settled-as-pending hold.
+            await payment.settlePendingRefund({ sessionId: "ord_1" });
+
+            await expect(payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            answer?.();
+            await inFlight;
+
+            expect(listRefunds).not.toHaveBeenCalled();
+        });
+
+        it("keeps a newer call's hold when an earlier call settles after a webhook released its own", async () => {
+            expect.assertions(1);
+
+            const { payment, refundPayment, store } = await settleSetup("polar");
+            let answer: (() => void) | undefined;
+            // The first call answers settled, late; the second answers pending.
+            let markReached: () => void = () => {};
+            const reachedProvider = new Promise<void>((resolve) => {
+                markReached = resolve;
+            });
+
+            refundPayment.mockImplementationOnce(async () => {
+                markReached();
+
+                return new Promise((resolve) => {
+                    answer = () => {
+                        resolve({ ...paymentSession("user_1"), id: "ord_1", provider: "polar", refundedAmount: money(300, "USD"), refundId: "ref_1" });
+                    };
+                });
+            });
+
+            const first = payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            await reachedProvider;
+            // The first refund's webhook lands while its call is still in flight and releases the hold.
+            await applyWebhookAction(store, {
+                amount: money(300, "USD"),
+                eventId: "evt_1",
+                provider: "polar",
+                refundId: "ref_1",
+                sessionId: "ord_1",
+                type: "payment.refunded",
+            });
+            await payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+
+            answer?.();
+            await first;
+
+            await expect(payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        });
+
+        it("keeps the hold after a provider call that failed without an answer, until settlePendingRefund reads the outcome", async () => {
+            expect.assertions(3);
+
+            const { payment, refundPayment } = await settleSetup("polar");
+
+            refundPayment.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+            await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({
+                code: "PROVIDER_ERROR",
+                message: expect.stringContaining("settlePendingRefund"),
+            });
+            await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            // The provider reports no refund: the call never reached it, so the hold is released.
+            await payment.settlePendingRefund({ sessionId: "ord_1" });
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
+        });
+
+        it("releases the hold when the provider definitely rejected the refund", async () => {
+            expect.assertions(1);
+
+            const { payment, refundPayment } = await settleSetup("polar");
+
+            refundPayment.mockRejectedValueOnce(Object.assign(new Error("refund amount too high"), { statusCode: 422 }));
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" }).catch(() => undefined);
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(2);
+        });
+
+        it("keeps a pending refund's hold through events for an earlier, already-booked refund", async () => {
+            expect.assertions(3);
+
+            const { payment, refundPayment, store } = await settleSetup("polar");
+
+            // Refund A settles at once and is booked; refund B (`ref_1`, the mock's first own id) is answered pending.
+            refundPayment.mockImplementationOnce(async () => {
+                return { ...paymentSession("user_1"), id: "ord_1", provider: "polar", refundedAmount: money(300, "USD"), refundId: "ref_a" };
+            });
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+            await payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+
+            // A restated confirmation for A, and a late failure report for A.
+            await applyWebhookAction(store, {
+                amount: money(300, "USD"),
+                eventId: "evt_a2",
+                provider: "polar",
+                refundId: "ref_a",
+                sessionId: "ord_1",
+                type: "payment.refunded",
+            });
+            await applyWebhookAction(store, { eventId: "evt_a3", provider: "polar", refundId: "ref_a", sessionId: "ord_1", type: "payment.refund_failed" });
+
+            await expect(payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            // B's own confirmation releases it.
+            await applyWebhookAction(store, {
+                amount: money(200, "USD"),
+                eventId: "evt_b",
+                provider: "polar",
+                refundId: "ref_1",
+                sessionId: "ord_1",
+                type: "payment.refunded",
+            });
+            await payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" });
+
+            expect(refundPayment).toHaveBeenCalledTimes(3);
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(500, "USD") });
+        });
+
+        it("books no money twice when a reconcile records the provider's total while the settlement books it", async () => {
+            expect.assertions(1);
+
+            /** Runs `onRead` once, right after a read: the reconcile landing between the settlement's read and its write. */
+            class RacingStore extends MemoryPaymentStore {
+                public onRead: (() => Promise<unknown>) | undefined;
+
+                public override async getPaymentSession(provider: PaymentSession["provider"], id: string): Promise<PaymentSession | undefined> {
+                    const row = await super.getPaymentSession(provider, id);
+                    const hook = this.onRead;
+
+                    this.onRead = undefined;
+                    await hook?.();
+
+                    return row;
+                }
+            }
+
+            const racing = new RacingStore();
+            const { listRefunds, payment, providerRefunds, store } = await settleSetup("polar", "user_1", racing);
+
+            await payment.refundPayment({ amount: money(500, "USD"), sessionId: "ord_1" });
+            providerRefunds.push({ amount: money(500, "USD"), refundId: "ref_1", status: "succeeded" });
+            listRefunds.mockImplementationOnce(async () => {
+                // Reconcile writes the provider's refunded total, with no per-refund marker.
+                racing.onRead = async () => {
+                    const row = await MemoryPaymentStore.prototype.getPaymentSession.call(racing, "polar", "ord_1");
+
+                    await racing.upsertPaymentSession({ ...row!, refundedAmount: money(500, "USD"), state: "partially_refunded" });
+                };
+
+                return [...providerRefunds];
+            });
+
+            await payment.settlePendingRefund({ sessionId: "ord_1" });
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(500, "USD") });
+        });
+
+        it("never leaves the hold released over a ledger short of the provider's settled total", async () => {
+            expect.assertions(3);
+
+            const { payment, providerRefunds, store } = await settleSetup("polar");
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+            providerRefunds.push(
+                { amount: money(300, "USD"), refundId: "ref_1", status: "succeeded" },
+                { amount: money(200, "USD"), refundId: "ref_0", status: "succeeded" },
+            );
+
+            // The settlement's ledger write fails: the refund markers are claimed, the ledger is not.
+            vi.spyOn(store, "upsertPaymentSession").mockRejectedValueOnce(new Error("store unavailable"));
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).rejects.toThrow("store unavailable");
+            // Short of the provider's 500, so the hold stays and no new refund can be issued against it.
+            await expect(payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            // The next settlement books the whole total, the claimed markers notwithstanding.
+            await payment.settlePendingRefund({ sessionId: "ord_1" });
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(500, "USD") });
+        });
+
+        it("leaves a newer call's hold standing when an event for the older refund releases its own", async () => {
+            expect.assertions(2);
+
+            const { payment, store } = await settleSetup("polar");
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            const newerPending = `${PENDING_REFUND_CLAIM_TYPE}:newer`;
+            const release = store.releaseEvent.bind(store);
+
+            // A newer call claims and holds the session right after the event released the older call's pending marker.
+            vi.spyOn(store, "releaseEvent").mockImplementation(async (provider, eventId, ifType) => {
+                await release(provider, eventId, ifType);
+
+                if (eventId === pendingRefundKey("ord_1") && (await store.getEventClaim(provider, eventId)) === undefined) {
+                    await store.markEventProcessed(provider, eventId, newerPending);
+                    // The newer call's hold replaces the stale one, as `holdPendingRefund` does.
+                    await release(provider, pendingRefundHeldKey("ord_1"));
+                    await store.markEventProcessed(provider, pendingRefundHeldKey("ord_1"), heldClaimFor(newerPending));
+                }
+            });
+
+            await applyWebhookAction(store, { eventId: "evt_failed", provider: "polar", refundId: "ref_1", sessionId: "ord_1", type: "payment.refund_failed" });
+
+            await expect(store.getEventClaim("polar", pendingRefundKey("ord_1"))).resolves.toBe(newerPending);
+            await expect(store.getEventClaim("polar", pendingRefundHeldKey("ord_1"))).resolves.toBe(heldClaimFor(newerPending));
+        });
+
+        it("does not overwrite a newer call's hold when its own pending marker was taken while it held", async () => {
+            expect.assertions(1);
+
+            const { payment, store } = await settleSetup("polar");
+            const newerPending = `${PENDING_REFUND_CLAIM_TYPE}:newer`;
+            const mark = store.markEventProcessed.bind(store);
+            let raced = false;
+
+            // Between this call's ownership check and its hold, an event releases its marker and a newer call claims and holds.
+            vi.spyOn(store, "markEventProcessed").mockImplementation(async (provider, eventId, type) => {
+                if (eventId === pendingRefundHeldKey("ord_1") && !raced) {
+                    raced = true;
+                    await store.releaseEvent(provider, pendingRefundKey("ord_1"));
+                    await mark(provider, pendingRefundKey("ord_1"), newerPending);
+                    await mark(provider, eventId, heldClaimFor(newerPending));
+                }
+
+                return mark(provider, eventId, type);
+            });
+
+            await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            await expect(store.getEventClaim("polar", pendingRefundHeldKey("ord_1"))).resolves.toBe(heldClaimFor(newerPending));
+        });
+
+        it("re-checks the refunded total once it holds the session, so a refund booked meanwhile is not issued again", async () => {
+            expect.assertions(2);
+
+            const { payment, refundPayment, store } = await settleSetup("polar");
+            const mark = store.markEventProcessed.bind(store);
+
+            // An earlier call's refund of the whole amount is booked, and its marker released, right before this call claims.
+            vi.spyOn(store, "markEventProcessed").mockImplementation(async (provider, eventId, type) => {
+                if (eventId === pendingRefundKey("ord_1")) {
+                    const row = await store.getPaymentSession("polar", "ord_1");
+
+                    await store.upsertPaymentSession({ ...row!, refundedAmount: money(1000, "USD"), state: "refunded" });
+                }
+
+                return mark(provider, eventId, type);
+            });
+
+            await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+            expect(refundPayment).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ["refunds the new remainder when a partial refund is booked before it claims", 300, 700],
+            ["refunds nothing, and holds nothing, when the whole amount is booked before it claims", 1000, 0],
+        ] as const)("a full refund %s", async (_case, bookedMeanwhile, expectedIssued) => {
+            expect.assertions(3);
+
+            const { payment, refundPayment, store } = await settleSetup("polar");
+            const mark = store.markEventProcessed.bind(store);
+
+            // Another call's refund is booked, and its marker released, between this call's first read and its claim.
+            vi.spyOn(store, "markEventProcessed").mockImplementation(async (provider, eventId, type) => {
+                if (eventId === pendingRefundKey("ord_1")) {
+                    const row = await store.getPaymentSession("polar", "ord_1");
+
+                    await store.upsertPaymentSession({
+                        ...row!,
+                        refundedAmount: money(bookedMeanwhile, "USD"),
+                        state: bookedMeanwhile === 1000 ? "refunded" : "partially_refunded",
+                    });
+                }
+
+                return mark(provider, eventId, type);
+            });
+
+            await expect(payment.refundPayment({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(bookedMeanwhile, "USD") });
+            expect(refundPayment.mock.calls.map(([input]) => input.amount)).toStrictEqual(expectedIssued === 0 ? [] : [money(expectedIssued, "USD")]);
+            // Held only while the provider reports the issued refund pending.
+            await expect(store.getEventClaim("polar", pendingRefundKey("ord_1")).then((claim) => claim !== undefined)).resolves.toBe(expectedIssued !== 0);
+        });
+
+        it("changes nothing on a session that holds no pending refund", async () => {
+            expect.assertions(4);
+
+            const { events, listRefunds, payment, providerRefunds, store } = await settleSetup("polar");
+
+            providerRefunds.push({ amount: money(500, "USD"), refundId: "ref_9", status: "succeeded" });
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
+
+            expect(listRefunds).not.toHaveBeenCalled();
+            expect(events).toStrictEqual([]);
+            // The probe handed its claim back, so a refund can still start.
+            await expect(store.markEventProcessed("polar", "pending-refund:ord_1", "marker.pending_refund")).resolves.toBe(true);
+        });
     });
 
     it("derives a distinct refund idempotency key per amount so partial refunds don't collide", async () => {

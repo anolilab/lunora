@@ -10,7 +10,9 @@ import { money } from "../src/money";
 import type { CreemClientLike } from "../src/providers/creem";
 import { createCreemAdapter } from "../src/providers/creem";
 import paymentExtension from "../src/schema";
+import type { PaymentStore } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
+import applyWebhookAction from "../src/sync";
 import type { Customer, PaymentSession, Subscription } from "../src/types";
 import { USAGE_NEVER_DUE } from "../src/usage-due";
 
@@ -427,6 +429,71 @@ describe("createDatabasePaymentStore", () => {
         expect(reminted?.email).toBeUndefined();
     });
 
+    it("round-trips the time of the stale event that filled a price, and reads an absent column as undefined", async () => {
+        expect.assertions(2);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertSubscription({ ...subscription, priceEventAt: 9000 });
+
+        await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.priceEventAt)).resolves.toBe(9000);
+
+        await store.upsertSubscription({ ...subscription, id: "sub_2" });
+
+        await expect(store.getSubscription("stripe", "sub_2").then((row) => row?.priceEventAt)).resolves.toBeUndefined();
+    });
+
+    it("keeps a price a current event set over a later-arriving stale event, as the memory store does", async () => {
+        expect.assertions(1);
+
+        const store = createDatabasePaymentStore(makeDb());
+        const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+
+        // A checkout-created row with no price, then a stale fill at 5000, a current plan change at 20_000, and a
+        // stale event for the first plan stamped 15_000, which is newer than the fill but older than the change.
+        await applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 10_000, type: "subscription.active" });
+        await applyWebhookAction(store, { ...event, eventId: "e2", occurredAt: 5000, priceId: "price_a", type: "subscription.updated" });
+        await applyWebhookAction(store, { ...event, eventId: "e3", occurredAt: 20_000, priceId: "price_b", type: "subscription.updated" });
+        await applyWebhookAction(store, { ...event, eventId: "e4", occurredAt: 15_000, priceId: "price_a", type: "subscription.updated" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_b" });
+    });
+
+    it("reports a lost race for an event claim as already claimed, not as a database error", async () => {
+        expect.assertions(2);
+
+        const base = makeDb();
+        let raced = false;
+        // A concurrent claim of the same id lands between this claim's read and its insert, and the unique index refuses ours.
+        const racing: PaymentDatabase = {
+            ...base,
+            findFirst: async (table, where) => {
+                const row = await base.findFirst(table, where);
+
+                if (table === PAYMENT_TABLES.events && row === null && !raced) {
+                    raced = true;
+                    await base.insert(table, { processedAt: 1, provider: where["provider"], providerEventId: where["providerEventId"], type: "other" });
+                }
+
+                return row;
+            },
+            insert: async (table, document) => {
+                if (
+                    table === PAYMENT_TABLES.events &&
+                    (await base.findFirst(table, { provider: document["provider"], providerEventId: document["providerEventId"] })) !== null
+                ) {
+                    throw new Error("UNIQUE constraint failed: payment_events.by_provider_event");
+                }
+
+                return base.insert(table, document);
+            },
+        };
+        const store = createDatabasePaymentStore(racing);
+
+        await expect(store.markEventProcessed("polar", "pending-refund:ord_1", "mine")).resolves.toBe(false);
+        await expect(store.getEventClaim("polar", "pending-refund:ord_1")).resolves.toBe("other");
+    });
+
     it("round-trips the multi-item price set, and reads an absent column as undefined (regression)", async () => {
         expect.assertions(3);
 
@@ -834,6 +901,28 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.markEventProcessed("stripe", "evt_1", "payment.captured")).resolves.toBe(true);
         // Releasing an unknown id is a harmless no-op.
         await expect(store.releaseEvent("stripe", "never_claimed")).resolves.toBeUndefined();
+    });
+
+    it.each([
+        ["database", () => createDatabasePaymentStore(makeDb())],
+        ["memory", () => new MemoryPaymentStore()],
+    ] as const)("releases a claim only for its own type when asked, and reads it back (%s)", async (_store, build) => {
+        expect.assertions(4);
+
+        const store: PaymentStore = build();
+
+        await store.markEventProcessed("polar", "hold", "marker.a");
+
+        await expect(store.getEventClaim("polar", "hold")).resolves.toBe("marker.a");
+
+        await store.releaseEvent("polar", "hold", "marker.b");
+
+        await expect(store.getEventClaim("polar", "hold")).resolves.toBe("marker.a");
+
+        await store.releaseEvent("polar", "hold", "marker.a");
+
+        await expect(store.getEventClaim("polar", "hold")).resolves.toBeUndefined();
+        await expect(store.markEventProcessed("polar", "hold", "marker.b")).resolves.toBe(true);
     });
 
     it("stores money as a number column the schema accepts", async () => {

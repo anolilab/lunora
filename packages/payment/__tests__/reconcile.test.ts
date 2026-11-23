@@ -5,6 +5,7 @@ import { money } from "../src/money";
 import type { PaymentObserver } from "../src/observability";
 import { reconcile } from "../src/reconcile";
 import { MemoryPaymentStore } from "../src/store";
+import applyWebhookAction from "../src/sync";
 import type { Subscription } from "../src/types";
 
 const subscription = (state: Subscription["state"]): Subscription => {
@@ -196,6 +197,30 @@ describe("reconcile", () => {
                 subscriptionIds: ["sub_1"],
             }),
         ).resolves.toMatchObject({ updatedSubscriptions: 0 });
+    });
+
+    it("keeps a price it confirmed with the provider over a stale event that arrives later", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+
+        // The row's price came from a stale event; the provider confirms it (no drift), then an older event names another.
+        await applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 10_000, type: "subscription.active" });
+        await applyWebhookAction(store, { ...event, eventId: "e2", occurredAt: 8000, priceId: "price_1", type: "subscription.updated" });
+
+        const stored = (await store.getSubscription("stripe", "sub_1"))!;
+        const confirming = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async () => {
+                return { ...stored, priceEventAt: undefined };
+            },
+        } as PaymentAdapter;
+        const result = await reconcile({ adapter: confirming, singleSubscriptionPerReference: false, store, subscriptionIds: ["sub_1"] });
+        await applyWebhookAction(store, { ...event, eventId: "e3", occurredAt: 9000, priceId: "price_other", type: "subscription.updated" });
+
+        expect(result.updatedSubscriptions).toBe(0);
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ priceId: "price_1" });
     });
 
     it("is a no-op when the store already matches the provider", async () => {

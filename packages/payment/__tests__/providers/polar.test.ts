@@ -132,6 +132,45 @@ const makeClient = (
 };
 
 describe("polar adapter", () => {
+    it("lists an order's refunds tax-inclusive, across pages, folding canceled into failed", async () => {
+        expect.assertions(2);
+
+        const requests: unknown[] = [];
+        const pages = [
+            [
+                { amount: 1000, currency: "usd", id: "ref_ok", status: "succeeded", taxAmount: 190 },
+                { amount: 500, currency: "usd", id: "ref_wait", status: "pending", taxAmount: 0 },
+            ],
+            [
+                { amount: 200, currency: "usd", id: "ref_cancel", status: "canceled", taxAmount: 0 },
+                { amount: 300, currency: "usd", id: "ref_fail", status: "failed", taxAmount: 0 },
+            ],
+        ];
+        const client = {
+            ...makeClient(),
+            refunds: {
+                list: async (request: unknown) => {
+                    requests.push(request);
+
+                    return (async function* listPages() {
+                        for (const items of pages) {
+                            yield { result: { items } };
+                        }
+                    })();
+                },
+            },
+        };
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
+
+        await expect(adapter.listRefunds?.("ord_1")).resolves.toStrictEqual([
+            { amount: money(1190, "USD"), refundId: "ref_ok", status: "succeeded" },
+            { amount: money(500, "USD"), refundId: "ref_wait", status: "pending" },
+            { amount: money(200, "USD"), refundId: "ref_cancel", status: "failed" },
+            { amount: money(300, "USD"), refundId: "ref_fail", status: "failed" },
+        ]);
+        expect(requests).toStrictEqual([{ limit: 100, orderId: "ord_1" }]);
+    });
+
     it("is a merchant-of-record and rejects manual capture", () => {
         expect.assertions(2);
 
@@ -923,6 +962,21 @@ describe("polar adapter", () => {
         const action = await adapter.parseWebhook({ headers: headersFor("evt_pend", timestamp, sign("evt_pend", timestamp, payload)), payload });
 
         expect(action.type).toBe("unhandled");
+    });
+
+    it.each([
+        ["refund.created", "failed"],
+        ["refund.updated", "failed"],
+        ["refund.updated", "canceled"],
+    ] as const)("reports a %s with status %s as a failed refund on its order", async (type, status) => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({ data: { amount: 300, currency: "usd", id: "ref_1", order_id: "ord_1", status }, type });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("evt_fail", timestamp, sign("evt_fail", timestamp, payload)), payload });
+
+        expect(action).toMatchObject({ refundId: "ref_1", sessionId: "ord_1", type: "payment.refund_failed" });
     });
 
     it("books the refund on the refund.updated that settles it (regression)", async () => {

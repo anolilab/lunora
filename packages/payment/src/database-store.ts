@@ -230,6 +230,7 @@ const subscriptionToRow = (subscription: Subscription): Record<string, unknown> 
         // Left absent when the adapter reported no set, so the column stays unwritten for the
         // single-price providers and the round-trip below falls back to `[priceId]`.
         ...(subscription.priceIds === undefined ? {} : { priceIds: [...subscription.priceIds] }),
+        ...(subscription.priceEventAt === undefined ? {} : { priceEventAt: subscription.priceEventAt }),
         provider: subscription.provider,
         providerSubscriptionId: subscription.id,
         quantity: subscription.quantity,
@@ -253,6 +254,7 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
         // carries a single price id). `undefined` is what makes the entitlement read fall back to
         // `[priceId]`, so no backfill is needed — see `Subscription.priceIds`.
         priceIds: readStringArray(row, "priceIds"),
+        priceEventAt: readOptionalNumber(row, "priceEventAt"),
         provider: readString(row, "provider") as ProviderId,
         quantity: readNumber(row, "quantity"),
         referenceId: readString(row, "referenceId"),
@@ -503,21 +505,37 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             }
 
             // The unique `by_provider_event` index is the real race guard in the DO; a concurrent
-            // insert of the same event id fails its OCC commit, so at most one caller wins.
-            await database.insert(PAYMENT_TABLES.events, { processedAt: Date.now(), provider, providerEventId: eventId, type });
+            // insert of the same event id fails its OCC commit, so at most one caller wins. The loser is told
+            // the id is claimed, as the read above would have, rather than handed the index error.
+            try {
+                await database.insert(PAYMENT_TABLES.events, { processedAt: Date.now(), provider, providerEventId: eventId, type });
+            } catch (error) {
+                if ((await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId })) !== null) {
+                    return false;
+                }
+
+                throw error;
+            }
 
             return true;
         },
 
-        releaseEvent: async (provider, eventId) => {
+        releaseEvent: async (provider, eventId, ifType) => {
             // Roll back a claim whose apply threw, so the provider's retry re-processes it. The
             // delete races nothing the insert-claim doesn't already serialize: only the caller that
             // won the claim reaches the failing apply, and only it releases its own row.
             const existing = await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId });
 
-            if (existing) {
+            if (existing && (ifType === undefined || existing["type"] === ifType)) {
                 await database.delete(PAYMENT_TABLES.events, existing._id);
             }
+        },
+
+        getEventClaim: async (provider, eventId) => {
+            const existing = await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId });
+            const type = existing?.["type"];
+
+            return typeof type === "string" ? type : undefined;
         },
 
         deferUsageReport: async (provider, idempotencyKey, retryAt) => {

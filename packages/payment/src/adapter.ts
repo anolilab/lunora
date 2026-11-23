@@ -13,6 +13,7 @@ import type {
     PortalInput,
     ProviderCapabilities,
     ProviderId,
+    ProviderRefund,
     RefundInput,
     RefundResult,
     ReportUsageInput,
@@ -79,6 +80,13 @@ export interface PaymentAdapter {
     getSubscriptionStatus: (subscriptionId: string) => Promise<Subscription>;
     /** Stable provider identifier (Medusa-style). */
     readonly identifier: ProviderId;
+
+    /**
+     * Every refund the provider holds for a payment session. Present only on the providers whose refund call
+     * takes no idempotency key (Polar, Dodo): the facade's `settlePendingRefund` reads it to clear the hold
+     * `refundPayment` keeps while one of their refunds is pending.
+     */
+    listRefunds?: (sessionId: string) => Promise<ProviderRefund[]>;
     /** Verify the signature over the raw body, then normalize the event. Throws on invalid signature. */
     parseWebhook: (input: WebhookInput) => Promise<WebhookAction>;
     /** Issue the refund and report the provider's id for it (see {@link RefundResult.refundId}). */

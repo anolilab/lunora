@@ -57,6 +57,12 @@ const subscriptions = defineTable({
      * path, which carries one price id) reads as absent and falls back to `[priceId]`.
      */
     priceIds: v.optional(v.array(v.string())),
+
+    /**
+     * Provider time of the stale event that filled a price the row was created without — see
+     * `Subscription.priceEventAt`. OPTIONAL, so adding it needs no backfill.
+     */
+    priceEventAt: v.optional(v.number()),
     provider: v.string(),
     providerSubscriptionId: v.string(),
     quantity: v.number(),

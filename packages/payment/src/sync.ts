@@ -7,7 +7,7 @@
  * that reports `"orphaned"`, which the HTTP layer answers with a 500 for ONE bounded redelivery.
  */
 import { LunoraPaymentError } from "./errors";
-import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
+import { heldRefundIdOf, LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundHeldKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
 import { addMoney, compareMoney, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -15,7 +15,7 @@ import type { PaymentAction, SubscriptionAction } from "./state-machine";
 import { nextPaymentState, nextSubscriptionState } from "./state-machine";
 import type { PaymentStore } from "./store";
 import { ownerOf } from "./store";
-import { ENTITLING_STATES, storeSubscription } from "./subscription-policy";
+import { ENTITLING_STATES, storeSubscription, swapPrimaryPrice } from "./subscription-policy";
 import type { ApplyResult, Money, PaymentSession, PaymentState, Subscription, SubscriptionState, WebhookAction, WebhookActionType } from "./types";
 
 const PAYMENT_ACTION_BY_TYPE: Partial<Record<WebhookActionType, PaymentAction>> = {
@@ -125,6 +125,45 @@ const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existi
             await store.releaseEvent(action.provider, key);
         },
     };
+};
+
+/**
+ * Settle the facade's pending-refund marker for the action's session. A hold that names its refund (the
+ * provider answered `pending` with an id) is settled only by an event about that refund; one held without an
+ * id, or a call still waiting on the provider, is settled by any refund event on the session.
+ */
+const releasePendingRefund = async (store: PaymentStore, action: WebhookAction): Promise<void> => {
+    if (action.sessionId && refundNeedsPendingGuard(action.provider)) {
+        const held = await store.getEventClaim(action.provider, pendingRefundHeldKey(action.sessionId));
+        const heldRefundId = held === undefined ? undefined : heldRefundIdOf(held);
+
+        if (heldRefundId !== undefined && action.refundId !== heldRefundId) {
+            return;
+        }
+
+        // Only the claims read here: once the marker is released a newer call can claim and hold it, and the second
+        // release must not take that call's hold with it.
+        const pending = await store.getEventClaim(action.provider, pendingRefundKey(action.sessionId));
+
+        if (pending !== undefined) {
+            await store.releaseEvent(action.provider, pendingRefundKey(action.sessionId), pending);
+        }
+
+        if (held !== undefined) {
+            await store.releaseEvent(action.provider, pendingRefundHeldKey(action.sessionId), held);
+        }
+    }
+};
+
+/** A failed refund moved no money, so the row stays as it is; it only lets a pending refund be retried. */
+const applyRefundFailed = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
+    if (!action.sessionId) {
+        return { applied: false, reason: "unhandled" };
+    }
+
+    await releasePendingRefund(store, action);
+
+    return { applied: true, reason: "ok" };
 };
 
 /**
@@ -387,6 +426,21 @@ const resolveSubscriptionAction = (from: SubscriptionState, targetState: Subscri
     return SUBSCRIPTION_ACTION_BY_TYPE[type];
 };
 
+/**
+ * The price set after an event. A reported set REPLACES the stored one (a plan change can remove an item); `undefined`
+ * means "unknown" (Stripe embeds only the first page of a longer item list), so the stored set stands — but with the
+ * event's new primary price swapped in, or a plan change would keep granting the plan it left.
+ */
+const eventPriceIds = (existing: Subscription, action: WebhookAction): ReadonlyArray<string> | undefined => {
+    if (action.priceIds !== undefined) {
+        return action.priceIds;
+    }
+
+    return action.priceId !== undefined && action.priceId !== existing.priceId && existing.priceIds !== undefined
+        ? swapPrimaryPrice(existing, action.priceId)
+        : existing.priceIds;
+};
+
 /** Overlay an event's fields on the stored row; an absent field leaves the stored value standing. */
 const mergeSubscriptionEvent = (existing: Subscription, action: WebhookAction, now: number): Subscription => {
     return {
@@ -396,9 +450,10 @@ const mergeSubscriptionEvent = (existing: Subscription, action: WebhookAction, n
         currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
         lastEventAt: action.occurredAt ?? existing.lastEventAt,
         priceId: action.priceId ?? existing.priceId,
-        // A reported set REPLACES the stored one (a plan change can remove an item); `undefined`
-        // means "unknown", not "empty", so the stored set stands.
-        priceIds: action.priceIds ?? existing.priceIds,
+        priceIds: eventPriceIds(existing, action),
+        // A current event's price is authoritative: stamped with its time, which every stale event is older than,
+        // so none may replace it. Stamped rather than cleared, because a store that patches leaves an absent field as it was.
+        priceEventAt: action.priceId === undefined ? existing.priceEventAt : (action.occurredAt ?? now),
         quantity: action.quantity ?? existing.quantity,
         referenceId: ownerOf(existing.referenceId, action.referenceId),
         updatedAt: now,
@@ -425,6 +480,41 @@ const isStaleSubscriptionEvent = (existing: Subscription, action: WebhookAction)
     const target = SUBSCRIPTION_STATE_BY_TYPE[action.type];
 
     return target !== undefined && ENTITLING_STATES.has(target) && !ENTITLING_STATES.has(existing.state);
+};
+
+/**
+ * What a stale event may still contribute: the owner and the price a row was created without, never
+ * its state or `lastEventAt`. A Stripe subscription-mode checkout creates the row with no price, and
+ * the `customer.subscription.*` events that carry it are often stamped earlier, so without this the
+ * row matches no plan until the next renewal. A priceless row's quantity and period start are
+ * creation defaults, not provider data, so they come along with the price. A price a stale event
+ * filled can be replaced by a NEWER stale event (`priceEventAt`): a subscription changed plan before
+ * its checkout landed sends both events late, and the row must end on the second plan whatever order
+ * they arrive in. Returns `existing` itself when there is nothing to fill.
+ */
+const fillBlankSubscription = (existing: Subscription, action: WebhookAction): Subscription => {
+    const referenceId = ownerOf(existing.referenceId, action.referenceId);
+    const refill = existing.priceEventAt !== undefined && action.occurredAt !== undefined && action.occurredAt > existing.priceEventAt;
+    const priced = (existing.priceId === "" || refill) && Boolean(action.priceId);
+
+    if (referenceId === existing.referenceId && !priced) {
+        return existing;
+    }
+
+    if (!priced) {
+        return { ...existing, referenceId };
+    }
+
+    return {
+        ...existing,
+        currentPeriodEnd: refill ? (action.currentPeriodEnd ?? existing.currentPeriodEnd) : (existing.currentPeriodEnd ?? action.currentPeriodEnd),
+        currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
+        priceEventAt: action.occurredAt,
+        priceId: action.priceId ?? existing.priceId,
+        priceIds: refill ? eventPriceIds(existing, action) : (existing.priceIds ?? action.priceIds),
+        quantity: action.quantity ?? existing.quantity,
+        referenceId,
+    };
 };
 
 /** Create the row for a subscription the store has not seen: the checkout's owner, if it arrived first, and the opt-in duplicate check. */
@@ -504,13 +594,15 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction, sin
     // `past_due → active` is a legal edge, so a late `active` would re-entitle a customer whose
     // payment has since failed. Drop anything older than the last event applied to this row.
     if (existing && isStaleSubscriptionEvent(existing, action)) {
-        // Its state is stale, but the owner it names still fills a blank row.
-        const referenceId = ownerOf(existing.referenceId, action.referenceId);
+        const filled = fillBlankSubscription(existing, action);
+        // Guarded on the revision read above: a newer event that landed since owns the state, and this whole-row write would
+        // put the old one back. A rejected fill is dropped; the next event on the row can still fill it.
+        const written =
+            filled === existing
+                ? undefined
+                : await storeSubscription(store, singleSubscriptionPerReference, existing, { ...filled, updatedAt: now }, { ifRevision: existing.revision });
 
-        if (
-            referenceId !== existing.referenceId &&
-            (await storeSubscription(store, singleSubscriptionPerReference, existing, { ...existing, referenceId, updatedAt: now })) === "refused"
-        ) {
+        if (written === "refused") {
             return { applied: false, reason: "duplicate_subscription" };
         }
 
@@ -546,6 +638,33 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction, sin
     return transitionSubscription(store, action, existing, targetState, singleSubscriptionPerReference, now);
 };
 
+/** Route a claimed event to the row it changes. A throw here releases the claim, so the provider retries. */
+const applyClaimedAction = async (
+    store: PaymentStore,
+    action: WebhookAction,
+    observer: PaymentObserver | undefined,
+    singleSubscriptionPerReference: boolean,
+): Promise<ApplyResult> => {
+    if (action.type === "payment.refund_failed") {
+        return applyRefundFailed(store, action);
+    }
+
+    const paymentAction = PAYMENT_ACTION_BY_TYPE[action.type];
+
+    if (!paymentAction) {
+        return applySubscription(store, action, singleSubscriptionPerReference);
+    }
+
+    const result = await applyPayment(store, action, paymentAction, observer, singleSubscriptionPerReference);
+
+    // Booked here, or already booked by another writer (`duplicate` from the fold): the refund settled.
+    if (paymentAction === "refund" && (result.applied || result.reason === "duplicate")) {
+        await releasePendingRefund(store, action);
+    }
+
+    return result;
+};
+
 const applyWebhookAction = async (
     store: PaymentStore,
     action: WebhookAction,
@@ -574,14 +693,10 @@ const applyWebhookAction = async (
         return { applied: false, reason: "duplicate" };
     }
 
-    const paymentAction = PAYMENT_ACTION_BY_TYPE[action.type];
-
     let result: ApplyResult;
 
     try {
-        result = paymentAction
-            ? await applyPayment(store, action, paymentAction, observer, singleSubscriptionPerReference)
-            : await applySubscription(store, action, singleSubscriptionPerReference);
+        result = await applyClaimedAction(store, action, observer, singleSubscriptionPerReference);
     } catch (error) {
         // The claim is taken before apply; a genuine store-write failure would otherwise leave the
         // event marked-processed so the provider's retry dedupes to a lost effect. Release the claim

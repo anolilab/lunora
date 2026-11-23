@@ -100,6 +100,15 @@ export interface Subscription {
      * Absent until an event that carries a time lands; `reconcile` and the facade leave it as stored.
      */
     readonly lastEventAt?: number;
+
+    /**
+     * When the stored price was established: the provider time of the stale event that filled in a price the
+     * row was created without (see `lastEventAt`), or the time a current event or a `reconcile` set it. A stale
+     * event newer than this may still replace it, so the row ends on the newest plan whatever order the late
+     * events arrive in; a current event's or a reconcile's stamp is newer than every stale event, so none does.
+     */
+    readonly priceEventAt?: number;
+
     /** The primary (first) price/product id — `priceIds[0]`. Display and single-item plan changes. */
     readonly priceId: string;
 
@@ -112,6 +121,7 @@ export interface Subscription {
      * reads as `[priceId]`, which is exactly right for the single-item case every other provider has.
      */
     readonly priceIds?: ReadonlyArray<string>;
+
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
@@ -338,6 +348,24 @@ export interface RefundInput {
 }
 
 /**
+ * One refund on a payment as the provider reports it now — what `settlePendingRefund` reads to clear a
+ * pending-refund hold whose webhook never arrived.
+ */
+export interface ProviderRefund {
+    /** What this refund moved, tax-inclusive like the capture and the provider's refund webhook. */
+    readonly amount: Money;
+    /** The provider's id for the refund — the same id its refund webhook carries. */
+    readonly refundId: string;
+
+    /**
+     * `pending` is every status that may still move money (Dodo `review`), and a settled refund whose
+     * amount the provider left out: booking nothing for it would release the hold with the money unrecorded.
+     * `failed` includes Polar's `canceled`.
+     */
+    readonly status: "failed" | "pending" | "succeeded";
+}
+
+/**
  * What an adapter's `refundPayment` returns: the provider-shaped session, plus the provider's own id
  * for the refund it just issued.
  */
@@ -405,6 +433,7 @@ export type WebhookActionType =
     | "payment.authorized"
     | "payment.captured"
     | "payment.failed"
+    | "payment.refund_failed"
     | "payment.refunded"
     | "subscription.active"
     | "subscription.canceled"
@@ -467,9 +496,10 @@ export interface WebhookAction {
     readonly referenceId?: string;
 
     /**
-     * Provider id of the refund this event reports (refund actions only). Carries the per-refund
-     * identity the sync layer matches against the marker `refundPayment` left behind, so a second
-     * facade refund of the same amount is not mistaken for the first one's confirmation.
+     * Provider id of the refund this event reports (`payment.refunded`, `payment.refund_failed`).
+     * Carries the per-refund identity the sync layer matches against the marker `refundPayment`
+     * left behind, so a second facade refund of the same amount is not mistaken for the first one's
+     * confirmation.
      */
     readonly refundId?: string;
     readonly sessionId?: string;

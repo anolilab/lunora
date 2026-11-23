@@ -64,6 +64,7 @@ export type {
     PortalInput,
     ProviderCapabilities,
     ProviderId,
+    ProviderRefund,
     RefundAmountKind,
     RefundInput,
     RefundResult,

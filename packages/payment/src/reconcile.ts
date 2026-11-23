@@ -12,6 +12,9 @@
  *
  * The same sweep also retries metered-usage forwards the provider never accepted (see
  * `sweepUnreportedUsage`) — the out-of-band retry `track`'s swallowed forward failure relies on.
+ *
+ * It does not clear a Polar/Dodo pending-refund hold: the store cannot list which sessions hold one, so
+ * that repair is the per-session `settlePendingRefund` on the payment facade.
  */
 import type { PaymentAdapter } from "./adapter";
 import { usageForwardIsIdempotent } from "./idempotency";
@@ -182,15 +185,28 @@ const reconcileSubscription = async (
         return false;
     }
 
+    // The provider confirms the price as of now, so no event older than this read may replace it: stamped as a current
+    // event stamps it. A row whose price a stale event filled (stamped before its `lastEventAt`) is stamped even when
+    // nothing drifted; any other matching row is left unwritten.
+    const confirmedAt = Date.now();
+
     if (!subscriptionDrifted(after, current)) {
+        if (after?.priceEventAt !== undefined && after.priceEventAt < (after.lastEventAt ?? 0)) {
+            await store.upsertSubscription({ ...after, priceEventAt: confirmedAt }, { ifRevision: after.revision });
+        }
+
         return false;
     }
 
     // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
     // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
-    const outcome = await storeSubscription(store, singleSubscriptionPerReference, after, overlayProviderSubscription(after, current), {
-        ifRevision: after?.revision,
-    });
+    const outcome = await storeSubscription(
+        store,
+        singleSubscriptionPerReference,
+        after,
+        { ...overlayProviderSubscription(after, current), priceEventAt: confirmedAt },
+        { ifRevision: after?.revision },
+    );
 
     // A refusal is still a write: the policy records the subscription in a state that grants nothing. It is counted and
     // reported as drift, so a sweep's totals and events show the row it changed.

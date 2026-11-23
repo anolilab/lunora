@@ -21,6 +21,7 @@ const METHODS = {
     listSubscriptions: true,
     refundPayment: true,
     resumeSubscription: true,
+    settlePendingRefund: true,
     track: true,
     updateSubscription: true,
 } satisfies Record<CallableKey, true>;
