@@ -270,6 +270,8 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
     const misplacedIn = file !== undefined && relativePath !== file ? file : undefined;
     const missed = misplacedIn === undefined ? indirection : wrongFile(misplacedIn);
     const suffix = note === undefined ? missed.remediation : `${note} ${missed.remediation}`;
+    // `default` and a string-literal export name are not binding names, so they cannot head a declaration.
+    const declaredName = isBindingName(exportName) ? exportName : "<name>";
 
     return {
         cacheKey: `procedure_not_registered:${relativePath}:${exportName}`,
@@ -281,7 +283,7 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
         level: security === true ? "ERROR" : "WARN",
         metadata: { exportName, filePath: relativePath, line, typeName },
         name: "procedure_not_registered",
-        remediation: misplacedIn === undefined ? `Assign the registration directly: \`export const ${exportName} = ${call};\`. ${suffix}` : suffix,
+        remediation: misplacedIn === undefined ? `Assign the registration directly: \`export const ${declaredName} = ${call};\`. ${suffix}` : suffix,
         title: "Procedure exists at runtime but is missing from the generated API",
     };
 };
@@ -357,10 +359,15 @@ const exportSiteLine = (source: SourceFile, exportName: string): number => {
         }
     }
 
-    const fallback =
-        exportName === "default" ? source.getExportAssignments()[0] : source.getExportDeclarations().find((statement) => statement.isNamespaceExport());
+    if (exportName === "default") {
+        return source.getExportAssignments()[0]?.getStartLineNumber() ?? 1;
+    }
 
-    return fallback?.getStartLineNumber() ?? 1;
+    // The `export *` whose module supplies the name, not merely the first one.
+    const stars = source.getExportDeclarations().filter((statement) => statement.isNamespaceExport());
+    const supplier = stars.find((statement) => statement.getModuleSpecifierSourceFile()?.getExportedDeclarations().has(exportName) === true) ?? stars[0];
+
+    return supplier?.getStartLineNumber() ?? 1;
 };
 
 /**

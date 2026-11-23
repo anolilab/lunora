@@ -519,6 +519,40 @@ export const viaFactory = makeQuery();
         ]);
     });
 
+    it("suggests a compilable fix for an authorizer re-exported as default or under a string name", () => {
+        expect.assertions(4);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        write("as-default.ts", `export { gate as default } from "../src/auth/whisper";\n`);
+        write("as-string.ts", `export { gate as "kebab-gate" } from "../src/auth/whisper";\n`);
+        load("as-default.ts", "as-string.ts");
+
+        const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter((finding) => finding.name === "procedure_not_registered");
+
+        expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["default", "kebab-gate"]);
+        // `export const default = …` and `export const kebab-gate = …` do not compile.
+        expect(findings.map((finding) => finding.remediation)).not.toContainEqual(expect.stringMatching(/export const (?:default|kebab-gate) =/u));
+        expect(findings[0]?.remediation).toContain("export const <name> = onWhisper(handler)");
+        expect(findings[1]?.remediation).toContain("export const <name> = onWhisper(handler)");
+    });
+
+    it("points a name an `export *` supplies at that `export *`, not the first one", () => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/util/helpers.ts", `export const helper = 1;\n`);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        write("reexport.ts", `export * from "../src/util/helpers";\nexport * from "../src/auth/whisper";\n`);
+        load("reexport.ts");
+
+        const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter(
+            (finding) => finding.name === "procedure_not_registered" && finding.metadata["exportName"] === "gate",
+        );
+
+        expect(findings.map((finding) => finding.metadata["line"])).toStrictEqual([2]);
+    });
+
     it("fails the build for a re-exported authorizer that shares its name with a registered queue", () => {
         expect.assertions(1);
 
