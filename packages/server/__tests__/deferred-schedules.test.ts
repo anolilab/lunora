@@ -503,6 +503,22 @@ describe("withDeferredSchedules — replay dedup key", () => {
         expect(recorded?.options?.dedupKey).toBe(live?.["dedupKey"]);
         expect(String(live?.["dedupKey"]).startsWith(`${String(live?.["id"])}-`)).toBe(true);
     });
+
+    it.each([[""], ["-leading-dash"], ["has:colon"]])("refuses a caller dedupKey %j before it takes custody, so the mutation rolls back", async (dedupKey) => {
+        expect.assertions(2);
+
+        const record = async (): Promise<string> => "never";
+        const outbox = budgetOutbox(10, 0);
+        const facade = withDeferredSchedules({ cancel: async () => undefined, runAfter: record, runAt: record } as never, outbox) as unknown as {
+            runAfter: (delayMs: number, target: string, args?: Record<string, unknown>, options?: Record<string, unknown>) => Promise<string>;
+        };
+
+        beginDeferredSchedules({ scheduler: facade });
+
+        // Thrown synchronously, like a refused id or args, so it unwinds the handler.
+        expect(() => facade.runAfter(0, "jobs:send", {}, { dedupKey })).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+        expect(outbox.record).not.toHaveBeenCalled();
+    });
 });
 
 describe("withDeferredSchedules — schedule-rate budget", () => {

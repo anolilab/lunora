@@ -1746,6 +1746,15 @@ interface ScheduleOutboxAttempt {
  * "internal error" at the admin edge; this one is catalogued, so the operator learns the entry was
  * parked rather than dropped and that the drop has to be repeated.
  */
+
+/**
+ * The dedup key a replay carries when its envelope was recorded without one (before the facade
+ * fixed a key with its custody record): derived from the row, so every replay of the entry sends
+ * the same key and a replay after one that landed is answered from that run.
+ */
+const replayDedupKey = (options: Record<string, unknown> | undefined, id: string, createdAt: number | undefined): { dedupKey?: string } =>
+    options?.["dedupKey"] !== undefined || createdAt === undefined || !Number.isSafeInteger(createdAt) ? {} : { dedupKey: `${id}-${String(createdAt)}` };
+
 const scheduleOutboxDropFailure = (id: string, reason: string, cause: unknown): LunoraError =>
     new LunoraError(
         "SERVICE_UNAVAILABLE",
@@ -16587,7 +16596,7 @@ abstract class ShardDO {
                 envelope.when,
                 envelope.target as never,
                 stored.args as never,
-                { ...envelope.options, id: entry.id } as never,
+                { ...envelope.options, ...replayDedupKey(envelope.options, entry.id, state?.createdAt), id: entry.id } as never,
             );
 
             await this.settleScheduleOutboxHandOff(sql, scheduler, entry.id, attempt.version, this.wasScheduleOutboxDropped(entry.id, attempt), true, trace);

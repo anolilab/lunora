@@ -1,4 +1,4 @@
-import { assertScheduleDelay, assertScheduleInstant, resolveScheduleId } from "@lunora/scheduler";
+import { assertDedupKey, assertScheduleDelay, assertScheduleInstant, resolveScheduleId } from "@lunora/scheduler";
 import { encodeArgsOrThrow } from "@lunora/wire";
 
 /**
@@ -314,7 +314,9 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
         const id = resolveScheduleId(options?.id);
         // Fixed with the custody record, so the live call and every replay of it carry one key: a
         // replay of a hand-off that did land (its answer lost) is then answered from the first run.
-        const custodied = { ...options, dedupKey: options?.["dedupKey"] ?? `${id}-${crypto.randomUUID().replaceAll("-", "")}` };
+        // A caller's key is checked here, inside the transaction: refused at hand-off it would park
+        // a job whose mutation already committed.
+        const custodied = { ...options, dedupKey: assertDedupKey(options?.["dedupKey"]) ?? `${id}-${crypto.randomUUID().replaceAll("-", "")}` };
 
         // Durable custody, taken HERE — while the handler is still inside its
         // transaction. That placement is the whole point: the entry commits with

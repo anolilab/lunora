@@ -3,6 +3,7 @@ import { jsonResponse } from "../../../shared/json-response";
 import { SCHEDULER_SIGNATURE_HEADER, SCHEDULER_TIMESTAMP_HEADER, signSchedulerDispatch } from "../../../shared/scheduler-dispatch";
 import resolveScheduleId from "./resolve-schedule-id";
 import type { CronRunInFlight, CronRunRecord, RetryPolicy, ScheduledJobState, ScheduledJobView, ScheduleRecord } from "./types";
+import assertDedupKey from "./validate-dedup-key";
 
 /**
  * Minimal projection of `DurableObjectState` for the SchedulerDO. Declared
@@ -306,9 +307,6 @@ const padTime = (n: number): string => String(n).padStart(TIME_PAD, "0");
  * {@link SchedulerDO.rescheduleAlarm} reads back as `8` — arming the alarm at a
  * permanently past instant that the runtime then re-delivers in a tight loop.
  */
-/** A replay-dedup key the workflow engine accepts as an instance id: its grammar, and its 100-char ceiling. */
-const DEDUP_KEY_PATTERN = /^\w[\w-]{0,99}$/;
-
 const isIndexableTime = (value: number): boolean => Number.isInteger(value) && value > 0 && value <= MAX_SCHEDULED_FOR_MS;
 
 interface ScheduleRequestBody {
@@ -2025,11 +2023,12 @@ class SchedulerDO {
         const instanceName = optionalName(body.instanceName);
         const retry = SchedulerDO.normalizeRetry(body.retry);
 
-        const { dedupKey } = body;
+        let dedupKey: string | undefined;
 
-        // Spent verbatim as a workflow instance id, so it must fit the engine's grammar and ceiling.
-        if (dedupKey !== undefined && (typeof dedupKey !== "string" || !DEDUP_KEY_PATTERN.test(dedupKey))) {
-            return SchedulerDO.error(400, "INVALID_INPUT", "dedupKey must match ^[A-Za-z0-9_][A-Za-z0-9_-]{0,99}$");
+        try {
+            dedupKey = assertDedupKey(body.dedupKey);
+        } catch (error) {
+            return SchedulerDO.error(400, "INVALID_INPUT", error instanceof Error ? error.message : "invalid `dedupKey`");
         }
 
         const resolved = await this.resolveId(body.id);
