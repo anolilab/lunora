@@ -5325,17 +5325,23 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // eslint-disable-next-line unicorn/no-null -- clearing the soft-delete marker writes SQL NULL into the column
             await writer.patch(table, id, { [field]: null });
 
-            // The soft delete REMOVED this row's rank-companion entry; `patch`'s
-            // rank sync skips re-adding it (the sort fields are unchanged, so its
-            // fast path assumes the entry is already present). Force the re-insert
-            // here with `previous=undefined` — a pure INSERT, safe because the
-            // entry was definitively dropped on soft delete. Search was kept
-            // (read-filtered) and the aggregate companion re-added the row on
-            // `patch`'s own `-prev + next` step (the marker going null is what
-            // makes `next` qualify), so neither needs anything extra here; the
-            // vector re-upsert rode `patch`'s `onWrite("update")`.
-            if (wasDeleted) {
-                syncRanks(located.tableName, id, undefined, located.row);
+            // The soft delete removed this row's rank-companion entry, and `patch`
+            // re-inserts it: liveness is part of `syncRankIndexEntry`'s fast-path
+            // key, so the marker going null takes the DELETE+INSERT branch. Search
+            // was kept (read-filtered), the aggregate companion re-added the row on
+            // `patch`'s own `-prev + next` step, and the vector re-upsert rode
+            // `patch`'s `onWrite("update")`.
+            //
+            // The DELETE+INSERT below repeats that on purpose, as a safety net for
+            // an entry a deleted row kept from a write that reached it on a shard
+            // that predates refusing writes to a soft-deleted row. The image
+            // is re-read rather than taken from `located` because an update hook may
+            // have changed a ranked field during `patch`.
+            const restored = wasDeleted ? locateRowById(id, table)?.row : undefined;
+
+            if (restored) {
+                syncRanks(located.tableName, id, restored, undefined);
+                syncRanks(located.tableName, id, undefined, restored);
             }
         },
 

@@ -249,19 +249,29 @@ const ensureRankCompanion = (sql: SqlExec, tableName: string, index: RankIndexDe
 /**
  * Apply one rank index's `-prev + next` companion step for a single row write.
  * DELETE-by-id is unconditional (a missing row is a no-op); INSERT only when the
- * new row qualifies against the index's static `where`.
+ * new row qualifies against the index's static `where` and is live — a soft
+ * delete dropped its entry, and a later write into the still-deleted row must
+ * not resurrect it.
  */
 const syncRankIndexEntry = (
     sql: SqlExec,
     tableName: string,
     index: RankIndexDefinitionLike,
+    softField: string | undefined,
     id: string,
     previous: Record<string, unknown> | undefined,
     next: Record<string, unknown> | undefined,
 ): void => {
-    // Fast path: both sides exist and no field this index reads changed — the
-    // companion entry is already correct, so skip the DELETE+INSERT pair.
-    if (previous && next && rankIndexFieldsUnchanged(index, previous, next)) {
+    // Fast path: both sides exist, neither the soft-delete marker's liveness nor
+    // any field this index reads changed — the companion entry is already
+    // correct, so skip the DELETE+INSERT pair. Liveness is part of the key: a
+    // deleted row holds no entry, so restoring it must insert one.
+    if (
+        previous &&
+        next &&
+        isLiveForCompanion(previous, softField) === isLiveForCompanion(next, softField) &&
+        rankIndexFieldsUnchanged(index, previous, next)
+    ) {
         return;
     }
 
@@ -271,9 +281,10 @@ const syncRankIndexEntry = (
         runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(rankTable)} WHERE ${dsql.identifier("__id__")} = ${id}`);
     }
 
-    if (!next || (index.where && !matchesRankStaticWhere(next, index.where))) {
-        // Nothing to insert: either a pure delete, or `next` doesn't qualify
-        // against the index's static `where` (the prior entry, if any, is gone).
+    if (!next || !isLiveForCompanion(next, softField) || (index.where && !matchesRankStaticWhere(next, index.where))) {
+        // Nothing to insert: a pure delete, a soft-deleted `next`, or one that
+        // doesn't qualify against the index's static `where` (the prior entry,
+        // if any, is gone).
         return;
     }
 
@@ -731,7 +742,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      */
     const syncRanks = (tableName: string, id: string, previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined): void => {
         for (const index of schema.tables[tableName]?.rankIndexes ?? []) {
-            syncRankIndexEntry(sql, tableName, index, id, previous, next);
+            syncRankIndexEntry(sql, tableName, index, softDeleteFieldFor(tableName), id, previous, next);
         }
     };
 

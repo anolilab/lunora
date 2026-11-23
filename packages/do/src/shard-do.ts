@@ -1295,6 +1295,17 @@ interface DispatchBookmark {
 }
 
 /**
+ * The scan / index-hit / statement collectors `beginDispatch` mints for one
+ * dispatch. The tail of the dispatch reads these, not the `current*` fields,
+ * because a concurrent dispatch replaces the fields across an `await`.
+ */
+interface DispatchCollectors {
+    indexHits: Set<string>;
+    scannedTables: Set<string>;
+    stmtSamples: Map<string, StmtSample>;
+}
+
+/**
  * How an RPC dispatch resolved: the handler ran (`"ran"`), or the mutation-replay
  * cache already held this `(identity, mutationId)`'s result (`"cached"`).
  * Tagged rather than inferred from which half is `undefined`, so a `"cached"`
@@ -5510,8 +5521,12 @@ abstract class ShardDO {
      * Rows applied before it are ALREADY COMMITTED — the writer commits per row —
      * so the caller must flush on the failure path too; {@link handleBulkRowOp}
      * owns that, alongside every other admin arm's flush.
+     *
+     * `apply` resolves `false` for a row it skipped (one that vanished between the
+     * scan and its turn); `count` reports written rows only, while the cursor and
+     * `hasMore` still follow the scanned ids.
      */
-    protected async runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>, after?: string): Promise<RunShardBulkRowResult> {
+    protected async runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<boolean>, after?: string): Promise<RunShardBulkRowResult> {
         const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_ROW_CAP), 1), SHARD_BULK_ROW_CAP);
 
         // Collect this batch's ids first (a read; raw SQL is fine), then write
@@ -5529,8 +5544,9 @@ abstract class ShardDO {
 
         for (const id of ids) {
             // eslint-disable-next-line no-await-in-loop -- see the note above: per-row writer calls must serialise to avoid OCC contention on the shard DO
-            await apply(id);
-            count += 1;
+            if (await apply(id)) {
+                count += 1;
+            }
         }
 
         // Only an ordered scan yields a resumable boundary — see the note above.
@@ -6256,12 +6272,17 @@ abstract class ShardDO {
      * or a `"next"` push so `fetch` proceeds to the authoritative handler. Records
      * the function call on the short-circuit paths so metrics stay attributed.
      */
-    protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number): Response | undefined {
+    protected rejectNonNextMutation(
+        functionPath: string,
+        mutatorClass: ClientMutationClass | undefined,
+        dispatchStartedAt: number,
+        dispatchCollectors: { indexHits: Set<string>; scannedTables: Set<string> },
+    ): Response | undefined {
         if (mutatorClass === undefined || mutatorClass.kind === "next") {
             return undefined;
         }
 
-        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, dispatchCollectors.scannedTables, dispatchCollectors.indexHits);
         this.maybeFlushMetrics();
 
         if (mutatorClass.kind === "already") {
@@ -6301,8 +6322,9 @@ abstract class ShardDO {
         dispatchStartedAt: number,
         mutatorClass: ClientMutationClass | undefined,
         cachedValue: unknown,
+        dispatchCollectors: { indexHits: Set<string>; scannedTables: Set<string> },
     ): Response {
-        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, dispatchCollectors.scannedTables, dispatchCollectors.indexHits);
         this.maybeFlushMetrics();
 
         if (mutatorClass?.kind === "next") {
@@ -9294,7 +9316,10 @@ abstract class ShardDO {
         // Stash the inbound D1 bookmark and identity headers for the
         // duration of the handler call so getters return the right
         // values. Cleared on exit so the next request starts fresh.
-        const { dispatchAttribution, dispatchBookmark, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request, payload.functionPath);
+        const { dispatchAttribution, dispatchBookmark, dispatchCollectors, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(
+            request,
+            payload.functionPath,
+        );
 
         this.recordSchedulerLag(request, payload.functionPath, dispatchStartedAt);
 
@@ -9385,7 +9410,7 @@ abstract class ShardDO {
             // the same commit as the writes.
             this.currentMutatorClass = mutatorClass;
 
-            const watermarkShortCircuit = this.rejectNonNextMutation(payload.functionPath, mutatorClass, dispatchStartedAt);
+            const watermarkShortCircuit = this.rejectNonNextMutation(payload.functionPath, mutatorClass, dispatchStartedAt, dispatchCollectors);
 
             if (watermarkShortCircuit !== undefined) {
                 return watermarkShortCircuit;
@@ -9553,7 +9578,13 @@ abstract class ShardDO {
             this.currentResponseBookmark = dispatchBookmark.value;
 
             if (dispatchOutcome.kind === "cached") {
-                return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, dispatchOutcome.cached.value);
+                return this.respondFromIdempotencyCache(
+                    payload.functionPath,
+                    dispatchStartedAt,
+                    mutatorClass,
+                    dispatchOutcome.cached.value,
+                    dispatchCollectors,
+                );
             }
 
             const { result } = dispatchOutcome;
@@ -9582,12 +9613,12 @@ abstract class ShardDO {
             // Record the handler's own latency (before the subscription
             // write-flush below) against the per-function counters, along
             // with any tables it full-scanned (causal attribution).
-            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
+            this.recordFunctionCall(payload.functionPath, durationMs, undefined, dispatchCollectors.scannedTables, dispatchCollectors.indexHits);
 
             // Fold the per-statement SQL samples accumulated during dispatch into
             // the pending delta, then write it if this dispatch is due. Best-effort:
             // a failure (e.g. no sql handle in tests) must never fail the response.
-            this.foldStmtSamples();
+            this.foldStmtSamples(dispatchCollectors.stmtSamples);
             this.maybeFlushMetrics();
 
             // Snapshot the written-table set BEFORE `flushChangedTables`
@@ -9671,12 +9702,19 @@ abstract class ShardDO {
                 // `this.logs` dev buffer, unaffected by this local redaction.
                 const redactedErrorMessage = redactArgs(message, isDevEnvironment(this.env)) as string;
 
-                this.recordFunctionCall(payload.functionPath, durationMs, redactedErrorMessage, this.currentScannedTables, this.currentIndexHits, conflicted);
+                this.recordFunctionCall(
+                    payload.functionPath,
+                    durationMs,
+                    redactedErrorMessage,
+                    dispatchCollectors.scannedTables,
+                    dispatchCollectors.indexHits,
+                    conflicted,
+                );
             }
             // Fold statement samples even on error paths — partial sampling
             // is better than losing the timing signal entirely. An errored dispatch
             // forces the write, so the delta lands with its error counted.
-            this.foldStmtSamples();
+            this.foldStmtSamples(dispatchCollectors.stmtSamples);
             this.maybeFlushMetrics();
             this.recordRequestLog(
                 payload.functionPath,
@@ -9769,7 +9807,7 @@ abstract class ShardDO {
             // fetch a handler left open: the scope keeps the values until that
             // record is written (see `SensitiveScope.hold`).
             sensitive?.clear();
-            this.endDispatch();
+            this.endDispatch(dispatchCollectors);
         }
     }
 
@@ -11049,10 +11087,8 @@ abstract class ShardDO {
      * in-memory; nothing is written until the flush. Clearing `currentStmtSamples`
      * happens in the `finally` block of the dispatch path, not here.
      */
-    private foldStmtSamples(): void {
-        const samples = this.currentStmtSamples;
-
-        if (!samples || samples.size === 0) {
+    private foldStmtSamples(samples: ReadonlyMap<string, StmtSample>): void {
+        if (samples.size === 0) {
             return;
         }
 
@@ -11489,6 +11525,7 @@ abstract class ShardDO {
      */
     private async handleBulkRowOp(functionPath: string, args: Record<string, unknown>): Promise<Response> {
         let applied = 0;
+        let failedRow: string | undefined;
 
         // ONE meter for the whole batch, threaded by value into every per-row
         // `runShardWrite` — the same shape {@link ShardDO.pollTtlSweeps} uses for
@@ -11537,6 +11574,8 @@ abstract class ShardDO {
                 const result = await this.runShardBulkRowOp(parsed, async (id) => {
                     await this.runShardWrite({ hard: true, id, op: "delete", table: parsed.table }, headroom);
                     applied += 1;
+
+                    return true;
                 });
 
                 this.recordAudit(args, isClear ? "clearTable" : "deleteRows", {
@@ -11562,13 +11601,24 @@ abstract class ShardDO {
             const result = await this.runShardBulkRowOp(
                 parsed,
                 async (id) => {
+                    // Probed right before the write, which reaches its own row read without an
+                    // `await` (see `runShardWrite`), so nothing lands between the two: a row that is
+                    // there now is the write's to fail on, and any error after this — a trigger's
+                    // `NOT_FOUND` included, even one that removed this row first — is reported. A
+                    // probe that cannot run is not an absence, so the write goes ahead.
+                    if (this.shardRowExists(parsed.table, id) === false) {
+                        return false;
+                    }
+
                     try {
                         await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table }, headroom);
                         applied += 1;
+
+                        return true;
                     } catch (error) {
-                        if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND") {
-                            throw error;
-                        }
+                        failedRow = id;
+
+                        throw error;
                     }
                 },
                 parsed.after,
@@ -11586,8 +11636,14 @@ abstract class ShardDO {
             // commits per row), so a privileged partial write still gets an audit
             // record — otherwise a batch that wrote 200 rows and then failed leaves
             // no trace at all.
-            if (applied > 0) {
-                this.recordAudit(args, "bulkRowOpFailed", { table: typeof args["table"] === "string" ? args["table"] : undefined, detail: { applied } });
+            //
+            // `failedRow` is the row whose own write raised. No transaction wraps a row's write and its
+            // triggers, so it may already be written though it is not counted: named, so it can be checked.
+            if (applied > 0 || failedRow !== undefined) {
+                this.recordAudit(args, "bulkRowOpFailed", {
+                    table: typeof args["table"] === "string" ? args["table"] : undefined,
+                    detail: { applied, ...(failedRow === undefined ? {} : { failedRow }) },
+                });
             }
 
             throw error;
@@ -17317,6 +17373,19 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether `table` holds a row with `id`: `true`/`false` when the probe runs,
+     * `undefined` when it cannot (a missing table included) — unknown, not absent.
+     */
+    private shardRowExists(table: string, id: string): boolean | undefined {
+        try {
+            return (this.sql as SqlExec).exec(`SELECT 1 FROM ${quoteIdentifier(table)} WHERE "id" = ? LIMIT 1`, id).toArray().length > 0;
+        } catch {
+            // Unknown, not absent: a caller must not read a failed probe as the row being gone.
+            return undefined;
+        }
+    }
+
+    /**
      * The `.global()` tables whose writes by other shards this one learns of from the global
      * changelog on its poll tick. Empty without a changelog (CDC off): there is then nothing a tick
      * could narrow by, and re-running every global-reading live query each tick is not paid for
@@ -17489,6 +17558,7 @@ abstract class ShardDO {
     ): {
         dispatchAttribution: QueryAttribution;
         dispatchBookmark: DispatchBookmark;
+        dispatchCollectors: DispatchCollectors;
         dispatchHeadroom: TransactionHeadroomTracker;
         dispatchStartedAt: number;
         dispatchTrace: TraceAnchor;
@@ -17563,7 +17633,9 @@ abstract class ShardDO {
         // Collect the tables this dispatch full-scans (stamped by the
         // ctx-db read hook) so `recordFunctionCall` can persist the causal
         // attribution. Fresh per request; drained below.
-        this.currentScannedTables = new Set<string>();
+        const scannedTables = new Set<string>();
+
+        this.currentScannedTables = scannedTables;
 
         // A LOCAL, never an instance field: `handleRpc` below receives it BY
         // VALUE (see its docstring), so this dispatch's ctx-build never depends
@@ -17575,14 +17647,18 @@ abstract class ShardDO {
         // the ctx-db index-use hook) so `recordFunctionCall` can persist the
         // per-index hit counter behind the dead-index lint. Fresh per
         // request; drained below.
-        this.currentIndexHits = new Set<string>();
+        const indexHits = new Set<string>();
+
+        this.currentIndexHits = indexHits;
 
         // Collect per-statement SQL samples from the instrumented `sql`
         // getter so `foldStmtSamples` can fold them toward the durable
         // `__lunora_metrics_queries` table after the handler resolves.
         // Allocating a fresh map here activates the instrumentation (the
         // `sql` getter only wraps when this field is defined).
-        this.currentStmtSamples = new Map<string, StmtSample>();
+        const stmtSamples = new Map<string, StmtSample>();
+
+        this.currentStmtSamples = stmtSamples;
         this.currentStmtSamplesTruncated = undefined;
 
         // The per-request read/cache capture `runCachedQuery` fills in for a
@@ -17593,11 +17669,27 @@ abstract class ShardDO {
         //
         // `dispatchBookmark` is the same story on the write side, and for the
         // same reason: see {@link DispatchBookmark}.
-        return { dispatchAttribution: {}, dispatchBookmark: { value: undefined }, dispatchHeadroom, dispatchStartedAt, dispatchTrace };
+        //
+        // `dispatchCollectors` is the same story for the scan / index-hit / statement
+        // collectors: the tail of this dispatch reads its own objects, never the
+        // fields a concurrent dispatch may since have replaced.
+        return {
+            dispatchAttribution: {},
+            dispatchBookmark: { value: undefined },
+            dispatchCollectors: { indexHits, scannedTables, stmtSamples },
+            dispatchHeadroom,
+            dispatchStartedAt,
+            dispatchTrace,
+        };
     }
 
-    /** Clear every per-request field {@link ShardDO.beginDispatch} stamped. */
-    private endDispatch(): void {
+    /**
+     * Clear every per-request field {@link ShardDO.beginDispatch} stamped. The
+     * collector fields are cleared only while they still point at THIS dispatch's
+     * objects: a concurrent dispatch that began meanwhile owns them now, and
+     * clearing would silently stop its collection.
+     */
+    private endDispatch(collectors: DispatchCollectors): void {
         this.currentDeliveryPermit = undefined;
         this.currentRequestTrace = undefined;
         this.currentRequestBookmark = undefined;
@@ -17615,13 +17707,24 @@ abstract class ShardDO {
         this.currentRequestSampleErrors = undefined;
         this.currentRequestSystem = false;
         this.currentRequestTraceparent = undefined;
-        this.currentScannedTables = undefined;
-        this.currentIndexHits = undefined;
-        this.currentStmtSamples = undefined;
-        this.currentStmtSamplesTruncated = undefined;
+        if (this.currentScannedTables === collectors.scannedTables) {
+            this.currentScannedTables = undefined;
+        }
+
+        if (this.currentIndexHits === collectors.indexHits) {
+            this.currentIndexHits = undefined;
+        }
+
+        if (this.currentStmtSamples === collectors.stmtSamples) {
+            this.currentStmtSamples = undefined;
+            this.currentStmtSamplesTruncated = undefined;
+        }
+
         // Drop the cached proxy with the samples map it folds into, so the
         // finished dispatch's map is not held alive by it.
-        this.instrumentedSql = undefined;
+        if (this.instrumentedSql?.samples === collectors.stmtSamples) {
+            this.instrumentedSql = undefined;
+        }
     }
 
     /**

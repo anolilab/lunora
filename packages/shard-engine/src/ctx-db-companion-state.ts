@@ -47,11 +47,14 @@ const COMPANION_STATE_TABLE = "__lunora_companion_state";
 const AGGREGATE_FORMAT_VERSION = 1;
 
 /**
- * Version 1 of the rank rebuild's output: one `(__id__, __partition__,
+ * Version of the rank rebuild's output: one `(__id__, __partition__,
  * __sort_k<i>__…)` row per LIVE source row matching the static `where`. Bump it
- * when that output changes.
+ * when that output changes, or when a companion built under the old version can
+ * hold rows the rebuild would not write. Version 2: a write into a soft-deleted
+ * row used to put its entry back, so a version-1 companion may count rows that
+ * are deleted.
  */
-const RANK_FORMAT_VERSION = 1;
+const RANK_FORMAT_VERSION = 2;
 
 /** A static `where`, in a key order that does not depend on how it was declared. */
 const whereSignature = (where: Record<string, unknown> | undefined): string => (where ? encodeAggregateKey(Object.keys(where), where) : "");

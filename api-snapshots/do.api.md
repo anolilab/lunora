@@ -529,7 +529,7 @@ abstract class ShardDO {
     protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]>;
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult>;
     protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult>;
-    protected runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>, after?: string): Promise<RunShardBulkRowResult>;
+    protected runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<boolean>, after?: string): Promise<RunShardBulkRowResult>;
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{
         before: number;
         total: number;
@@ -564,8 +564,14 @@ abstract class ShardDO {
     protected holdShardWhileLoading(load: () => Promise<unknown>): Promise<void>;
     protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;
-    protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number): Response | undefined;
-    protected respondFromIdempotencyCache(functionPath: string, dispatchStartedAt: number, mutatorClass: ClientMutationClass | undefined, cachedValue: unknown): Response;
+    protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number, dispatchCollectors: {
+        indexHits: Set<string>;
+        scannedTables: Set<string>;
+    }): Response | undefined;
+    protected respondFromIdempotencyCache(functionPath: string, dispatchStartedAt: number, mutatorClass: ClientMutationClass | undefined, cachedValue: unknown, dispatchCollectors: {
+        indexHits: Set<string>;
+        scannedTables: Set<string>;
+    }): Response;
     protected mutationCommitCursor(): number | undefined;
     protected buildDispatchResponse(mutatorClass: ClientMutationClass | undefined, result: unknown): Response;
     protected commitMutationBookkeeping(result: unknown): void;
