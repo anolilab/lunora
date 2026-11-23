@@ -1,3 +1,7 @@
+## @lunora/react [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.303...@lunora/react@1.0.0-alpha.304) (2026-11-23)
+
+- security(agent)!: stop a reused tool-call id skipping approval (#1657)
+
 ## @lunora/react [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.302...@lunora/react@1.0.0-alpha.303) (2026-11-23)
 
 - Updated dependency @lunora/ratelimit@1.0.0-alpha.197

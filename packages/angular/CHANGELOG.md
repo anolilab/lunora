@@ -1,3 +1,7 @@
+## @lunora/angular [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.271...@lunora/angular@1.0.0-alpha.272) (2026-11-23)
+
+- security(agent)!: stop a reused tool-call id skipping approval (#1657)
+
 ## @lunora/angular [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.270...@lunora/angular@1.0.0-alpha.271) (2026-11-23)
 
 - Updated dependency @lunora/ratelimit@1.0.0-alpha.197

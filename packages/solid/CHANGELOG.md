@@ -1,3 +1,7 @@
+## @lunora/solid [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.292...@lunora/solid@1.0.0-alpha.293) (2026-11-23)
+
+- security(agent)!: stop a reused tool-call id skipping approval (#1657)
+
 ## @lunora/solid [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.291...@lunora/solid@1.0.0-alpha.292) (2026-11-23)
 
 - Updated dependency @lunora/ratelimit@1.0.0-alpha.197

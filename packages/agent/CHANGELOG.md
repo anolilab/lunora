@@ -1,3 +1,7 @@
+## @lunora/agent [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.285...@lunora/agent@1.0.0-alpha.286) (2026-11-23)
+
+- security(agent)!: stop a reused tool-call id skipping approval (#1657)
+
 ## @lunora/agent [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.284...@lunora/agent@1.0.0-alpha.285) (2026-11-22)
 
 - Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).

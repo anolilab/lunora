@@ -1,3 +1,7 @@
+## @lunora/d1 [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.240...@lunora/d1@1.0.0-alpha.241) (2026-11-23)
+
+- security(server)!: close two row-level-security gaps on shapes and relations (#1637)
+
 ## @lunora/d1 [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.239...@lunora/d1@1.0.0-alpha.240) (2026-11-23)
 
 - fix(d1): stop an expired replace import wiping its tables (#1663)

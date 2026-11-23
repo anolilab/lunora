@@ -1,3 +1,7 @@
+## @lunora/testing [1.0.0-alpha.340](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.339...@lunora/testing@1.0.0-alpha.340) (2026-11-23)
+
+- security(server)!: close two row-level-security gaps on shapes and relations (#1637)
+
 ## @lunora/testing [1.0.0-alpha.339](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.338...@lunora/testing@1.0.0-alpha.339) (2026-11-22)
 
 - Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).

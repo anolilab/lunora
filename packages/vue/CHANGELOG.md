@@ -1,3 +1,7 @@
+## @lunora/vue [1.0.0-alpha.323](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.322...@lunora/vue@1.0.0-alpha.323) (2026-11-23)
+
+- security(agent)!: stop a reused tool-call id skipping approval (#1657)
+
 ## @lunora/vue [1.0.0-alpha.322](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.321...@lunora/vue@1.0.0-alpha.322) (2026-11-23)
 
 - Updated dependency @lunora/ratelimit@1.0.0-alpha.197
