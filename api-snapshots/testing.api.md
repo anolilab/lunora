@@ -148,6 +148,7 @@ interface FakeQueueControls {
 ```ts
 interface FakeScheduledJob extends ScheduledJob {
     args: Record<string, unknown>;
+    dedupKey?: string;
 }
 ```
 
