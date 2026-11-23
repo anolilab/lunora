@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthAdmin } from "../src/admin";
 import { createAuthAdmin } from "../src/admin";
 import { createAuth } from "../src/create-auth";
-import { admin, deviceAuthorization, jwt, oauthProvider, organization, twoFactor } from "../src/plugins";
+import { admin, deviceAuthorization, jwt, oauthProvider, organization, passkey, twoFactor } from "../src/plugins";
 
 /**
  * Round-trip behaviour for `createAuthAdmin`, exercised against the real
@@ -334,6 +334,12 @@ describe("createAuthAdmin", () => {
 
         expect(page.rows).toHaveLength(1);
         expect(page.rows[0]).not.toHaveProperty("token");
+    });
+
+    it("refuses to revoke a session id that matches no session", async () => {
+        expect.assertions(1);
+
+        await expect(adminApi.revokeUserSession({ sessionId: "missing" })).rejects.toMatchObject({ code: "SESSION_NOT_FOUND" });
     });
 
     it("revokes a single session by id and revokes all sessions for a user", async () => {
@@ -900,8 +906,24 @@ describe("createAuthAdmin", () => {
         );
     });
 
+    it("deletePasskey removes the addressed passkey and refuses an id that matches none", async () => {
+        expect.assertions(2);
+
+        const passkeyDatabase: Record<string, unknown[]> = { ...seedMemoryDatabase(), passkey: [] };
+        const passkeyAdmin = createAuthAdmin(
+            createAuth({ baseURL: "http://localhost", database: memoryAdapter(passkeyDatabase), plugins: [admin(), passkey()], secret: SECRET }),
+        );
+
+        passkeyDatabase["passkey"]?.push({ counter: 0, createdAt: new Date(), credentialID: "c1", id: "pk1", publicKey: "k", userId: "u1" });
+
+        await passkeyAdmin.deletePasskey({ passkeyId: "pk1" });
+
+        expect(passkeyDatabase["passkey"]).toHaveLength(0);
+        await expect(passkeyAdmin.deletePasskey({ passkeyId: "pk1" })).rejects.toMatchObject({ code: "PASSKEY_NOT_FOUND" });
+    });
+
     it("unlinkAccount scopes the delete to the owning user (no cross-user IDOR)", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         // Two users, each with their own credential account row.
         const victim = await adminApi.createUser({ email: "victim@example.com", name: "Victim", password: STRONG_PASSWORD });
@@ -915,8 +937,8 @@ describe("createAuthAdmin", () => {
 
         // Pass the victim's accountId but a *different* (wrong) userId. The
         // ownership scoping in the where-clause must prevent the delete from
-        // landing — the victim's account row stays intact.
-        await adminApi.unlinkAccount({ accountId: victimAccountId, userId: "someone-else" });
+        // landing — the victim's account row stays intact, and the call says so.
+        await expect(adminApi.unlinkAccount({ accountId: victimAccountId, userId: "someone-else" })).rejects.toMatchObject({ code: "ACCOUNT_NOT_FOUND" });
 
         const stillThere = await adminApi.listAccounts({ userId: victim.id });
 

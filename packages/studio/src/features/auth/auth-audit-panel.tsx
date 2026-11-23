@@ -14,6 +14,38 @@ import type { AuthAuditEntry, AuthAuditLogResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
 
+/** The `detail` keys naming an event's subject, most specific first: the first present fills the Target column, and a search matches any. */
+const TARGET_DETAIL_KEYS = [
+    "targetUserId",
+    "memberId",
+    "invitationId",
+    "keyId",
+    "teamMemberId",
+    "teamId",
+    "roleId",
+    "organizationId",
+    "accountId",
+    "passkeyId",
+    "clientId",
+    "consentId",
+    "resourceIdentifier",
+    "scimUserId",
+    "scimGroupId",
+] as const;
+
+/** The id an event acted on, read from its `detail` (the admin plane and the hooks copy ids there, never free text). */
+const targetIdOf = (entry: AuthAuditEntry): string | undefined => {
+    for (const key of TARGET_DETAIL_KEYS) {
+        const value = entry.detail?.[key];
+
+        if (typeof value === "string" && value !== "") {
+            return value;
+        }
+    }
+
+    return undefined;
+};
+
 /**
  * Security / audit — the authentication & security event trail (sign-in, sign-up,
  * password change, MFA toggle, token refresh, session revoke, account link/unlink),
@@ -40,7 +72,7 @@ const AuthAuditPanel = (): ReactElement => {
     const entries: AuthAuditEntry[] = data?.entries ?? [];
 
     // Client-side substring filter (case-insensitive) over the already-fetched
-    // entries — matching event type, actor id/email, IP, and outcome. Never
+    // entries — matching event type, actor id/email, target address/id, IP, and outcome. Never
     // triggers a refetch. (React Compiler memoizes this derivation — no useMemo.)
     const needle = search.trim().toLowerCase();
     const filtered: AuthAuditEntry[] =
@@ -51,6 +83,12 @@ const AuthAuditPanel = (): ReactElement => {
                       entry.event.toLowerCase().includes(needle) ||
                       (entry.actorId ?? "").toLowerCase().includes(needle) ||
                       (entry.actorEmail ?? "").toLowerCase().includes(needle) ||
+                      (entry.targetEmail ?? "").toLowerCase().includes(needle) ||
+                      TARGET_DETAIL_KEYS.some((key) => {
+                          const value = entry.detail?.[key];
+
+                          return typeof value === "string" && value.toLowerCase().includes(needle);
+                      }) ||
                       (entry.ip ?? "").toLowerCase().includes(needle) ||
                       entry.outcome.toLowerCase().includes(needle),
               );
@@ -67,7 +105,7 @@ const AuthAuditPanel = (): ReactElement => {
                     className="h-8 w-56"
                     data-testid="aa-search"
                     onChange={onSearchChange}
-                    placeholder={t("filter event, actor, IP")}
+                    placeholder={t("filter event, actor, target, IP")}
                     value={search}
                 />
                 <Button
@@ -98,6 +136,7 @@ const AuthAuditPanel = (): ReactElement => {
                                     <TableHead>{t("time")}</TableHead>
                                     <TableHead>{t("event")}</TableHead>
                                     <TableHead>{t("actor")}</TableHead>
+                                    <TableHead>{t("target")}</TableHead>
                                     <TableHead>{t("ip / user agent")}</TableHead>
                                     <TableHead>{t("outcome")}</TableHead>
                                 </TableRow>
@@ -111,6 +150,12 @@ const AuthAuditPanel = (): ReactElement => {
                                         </TableCell>
                                         <TableCell className="max-w-[24ch] truncate font-mono text-xs" title={entry.actorId ?? undefined}>
                                             {entry.actorEmail ?? entry.actorId ?? <span className="text-muted-foreground">—</span>}
+                                        </TableCell>
+                                        <TableCell className="max-w-[28ch] truncate font-mono text-xs" title={targetIdOf(entry)}>
+                                            {entry.targetEmail ?? targetIdOf(entry) ?? <span className="text-muted-foreground">—</span>}
+                                            {entry.targetEmail !== undefined && targetIdOf(entry) !== undefined && (
+                                                <span className="ml-1 text-muted-foreground">· {targetIdOf(entry)}</span>
+                                            )}
                                         </TableCell>
                                         <TableCell className="max-w-[28ch] truncate text-xs text-muted-foreground" title={entry.userAgent ?? undefined}>
                                             {entry.ip ?? <span className="text-muted-foreground">—</span>}

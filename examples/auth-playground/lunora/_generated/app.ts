@@ -378,7 +378,7 @@ class AppBuilder<Env extends object> {
         // Captured before the branch so the narrowing survives — reading
         // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
-        const { authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, effectiveCookieCache, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
+        const { authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createAuthAuditWriter, createDoAuthWiring, createSqlAuthDataPort, d1Executor, effectiveCookieCache, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -451,7 +451,13 @@ class AppBuilder<Env extends object> {
             if (authInstance) {
                 options.authAdmin = createAuthAdmin(authInstance);
             }
-            options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
+            // One executor for both: the audit table's provisioning is memoised per executor object.
+            const authAuditExecutor = d1Executor(authD1(env) as never);
+
+            options.authAuditReader = createAuthAuditReader(authAuditExecutor);
+            // `authAdmin` writes the auth tables directly, past the audit hook; its routes record through this,
+            // with the hook's own retention and `onRecord`, found through the instance.
+            options.authAuditWriter = createAuthAuditWriter(authAuditExecutor, authInstance);
             // better-auth's tables for the admin export / import (`$auth`). A table the
             // schema declares (`authTables(...)`) already travels as a `.global()` row.
             options.authData = authInstance

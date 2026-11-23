@@ -329,7 +329,7 @@ interface AuthAuditEntry {
 ### `AuthAuditEvent` (type)
 
 ```ts
-type AuthAuditEvent = "account-link" | "account-unlink" | "admin-impersonate-start" | "admin-impersonate-stop" | "admin-password-set" | "admin-role-change" | "admin-session-revoke" | "admin-user-ban" | "admin-user-create" | "admin-user-remove" | "admin-user-unban" | "admin-user-update" | "api-key-create" | "api-key-delete" | "api-key-update" | "device-approve" | "device-deny" | "email-change" | "email-change-request" | "email-verification" | "mfa-backup-codes-regenerate" | "mfa-disable" | "mfa-enable" | "oauth-client-create" | "oauth-client-delete" | "oauth-client-keys-rotate" | "oauth-client-secret-rotate" | "oauth-client-update" | "oauth-consent" | "oauth-consent-revoke" | "oauth-consent-update" | "oauth-resource-client-link" | "oauth-resource-client-unlink" | "oauth-resource-create" | "oauth-resource-delete" | "oauth-resource-update" | "oauth-token-issue" | "oauth-token-revoke" | "one-time-token-create" | "org-create" | "org-delete" | "org-invitation-accept" | "org-invitation-cancel" | "org-invitation-create" | "org-invitation-reject" | "org-member-leave" | "org-member-remove" | "org-member-role-change" | "org-role-change" | "org-switch" | "org-team-create" | "org-team-member-add" | "org-team-member-remove" | "org-team-remove" | "org-team-switch" | "org-team-update" | "org-update" | "passkey-add" | "passkey-remove" | "passkey-rename" | "password-change" | "password-reset" | "password-reset-request" | "phone-verification" | "scim-group-create" | "scim-group-delete" | "scim-group-update" | "scim-user-create" | "scim-user-delete" | "scim-user-update" | "session-revoke" | "session-switch" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "sso-provider-delete" | "sso-provider-register" | "sso-provider-update" | "token-refresh" | "user-delete" | "user-delete-request" | (string & {});
+type AuthAuditEvent = "account-link" | "account-unlink" | "admin-impersonate-start" | "admin-impersonate-stop" | "admin-password-set" | "admin-role-change" | "admin-session-revoke" | "admin-user-ban" | "admin-user-create" | "admin-user-remove" | "admin-user-unban" | "admin-user-update" | "api-key-create" | "api-key-delete" | "api-key-update" | "device-approve" | "device-deny" | "email-change" | "email-change-request" | "email-verification" | "mfa-backup-codes-regenerate" | "mfa-disable" | "mfa-enable" | "oauth-client-create" | "oauth-client-delete" | "oauth-client-keys-rotate" | "oauth-client-secret-rotate" | "oauth-client-update" | "oauth-consent" | "oauth-consent-revoke" | "oauth-consent-update" | "oauth-resource-client-link" | "oauth-resource-client-unlink" | "oauth-resource-create" | "oauth-resource-delete" | "oauth-resource-update" | "oauth-token-issue" | "oauth-token-revoke" | "one-time-token-create" | "org-create" | "org-delete" | "org-invitation-accept" | "org-invitation-cancel" | "org-invitation-create" | "org-invitation-reject" | "org-member-add" | "org-member-leave" | "org-member-remove" | "org-member-role-change" | "org-role-change" | "org-switch" | "org-team-create" | "org-team-member-add" | "org-team-member-remove" | "org-team-remove" | "org-team-switch" | "org-team-update" | "org-update" | "passkey-add" | "passkey-remove" | "passkey-rename" | "password-change" | "password-reset" | "password-reset-request" | "phone-verification" | "scim-group-create" | "scim-group-delete" | "scim-group-update" | "scim-user-create" | "scim-user-delete" | "scim-user-update" | "session-revoke" | "session-switch" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "sign-up-invitation-create" | "sign-up-invitation-revoke" | "sso-provider-delete" | "sso-provider-register" | "sso-provider-update" | "token-refresh" | "user-delete" | "user-delete-request" | (string & {});
 ```
 
 ### `AuthAuditHookConfig` (interface)
@@ -353,6 +353,14 @@ type AuthAuditOutcome = "failure" | "success";
 ```ts
 interface AuthAuditReader {
     read: (options: ReadAuthAuditOptions) => Promise<AuthAuditEntry[]>;
+}
+```
+
+### `AuthAuditWriter` (interface)
+
+```ts
+interface AuthAuditWriter {
+    write: (entry: AppendAuthAuditEntry) => Promise<void>;
 }
 ```
 
@@ -1114,6 +1122,18 @@ const createAuthAdmin: (auth: LunoraAuth, options?: CreateAuthAdminOptions) => A
 const createAuthAuditReader: (executor: SqlExecutor) => AuthAuditReader;
 ```
 
+### `createAuthAuditWriter` (const)
+
+```ts
+const createAuthAuditWriter: (executor: SqlExecutor, auth?: {
+    options: {
+        hooks?: {
+            after?: unknown;
+        };
+    };
+} | null) => AuthAuditWriter;
+```
+
 ### `createDoAuthWiring` (const)
 
 ```ts
@@ -1374,6 +1394,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
+### `AuthAuditWriter` (interface)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
 ### `ReadAuthAuditOptions` (interface)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
@@ -1383,6 +1407,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `createAuthAuditReader` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createAuthAuditWriter` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
@@ -2020,6 +2048,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `createAuthAuditReader` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createAuthAuditWriter` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 

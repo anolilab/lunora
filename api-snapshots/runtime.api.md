@@ -2518,6 +2518,7 @@ interface WorkerOptions {
     architecture?: () => Promise<unknown>;
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
+    authAuditWriter?: AuthAuditWriter;
     authBasePath?: string;
     authData?: AuthDataPort;
     authDiscoveryHandler?: (request: Request) => Promise<Response | undefined>;
@@ -3079,6 +3080,30 @@ type AuthAuditOutcome = "failure" | "success";
 ```ts
 interface AuthAuditReader {
     read: (options: ReadAuthAuditQuery) => Promise<AuthAuditEntry[]>;
+}
+```
+
+### `AuthAuditWrite` (interface)
+
+```ts
+interface AuthAuditWrite {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: AuthAuditOutcome;
+    targetEmail?: string;
+    ts: number;
+    userAgent?: string;
+}
+```
+
+### `AuthAuditWriter` (interface)
+
+```ts
+interface AuthAuditWriter {
+    write: (entry: AuthAuditWrite) => Promise<void>;
 }
 ```
 

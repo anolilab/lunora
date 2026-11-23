@@ -984,7 +984,7 @@ const MESSAGE_IDS = [
     "Auth audit",
     "Authentication and security events — sign-ins, MFA, and session changes.",
     "Filter security events",
-    "filter event, actor, IP",
+    "filter event, actor, target, IP",
     "Authentication and security events are recorded here.",
     "No security events.",
     "event",

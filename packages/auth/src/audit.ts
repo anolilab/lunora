@@ -27,6 +27,7 @@ import { piiRules, redact, standardRules } from "@visulima/redact";
 
 import { maskCredentials } from "../../../shared/credential-redaction";
 import { importHmacKey } from "../../../shared/hmac-key";
+import { auditHookConfigOf } from "./audit-hook-configs";
 import type { SqlExecutor } from "./sql-store";
 
 /** Reserved append-only table backing the Studio "Security / audit" page. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -85,6 +86,7 @@ type AuthAuditEvent =
     | "org-invitation-cancel"
     | "org-invitation-create"
     | "org-invitation-reject"
+    | "org-member-add"
     | "org-member-leave"
     | "org-member-remove"
     | "org-member-role-change"
@@ -121,6 +123,9 @@ type AuthAuditEvent =
     | "sign-in-initiated"
     | "sign-out"
     | "sign-up"
+    // The worker's admin plane managing an invite-only deployment's sign-up allow-list; the address is `targetEmail`.
+    | "sign-up-invitation-create"
+    | "sign-up-invitation-revoke"
     | "sso-provider-delete"
     | "sso-provider-register"
     | "sso-provider-update"
@@ -225,17 +230,19 @@ interface ReadAuthAuditOptions {
 const AUDIT_REDACT_RULES = [...standardRules, ...piiRules];
 
 /**
- * Detail keys that carry an identifier the hooks copied from a request, allow-listed by name. Value-based redaction
- * would replace a numeric id (a five-digit user id reads as a phone or code), so these keys skip it. Credentials and
- * emails never reach these keys: the hooks copy only the id fields named here.
+ * Detail keys that carry an identifier the hooks or the worker's admin plane copied from a request, allow-listed by
+ * name. Value-based redaction would replace a numeric id (a five-digit user id reads as a phone or code), so these keys
+ * skip it. Credentials and emails never reach these keys: the hooks copy only the id fields named here.
  */
 const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
+    "accountId",
     "clientId",
     "consentId",
     "invitationId",
     "keyId",
     "memberId",
     "organizationId",
+    "passkeyId",
     "providerId",
     "resourceIdentifier",
     "role",
@@ -245,6 +252,7 @@ const IDENTIFIER_DETAIL_KEYS: ReadonlySet<string> = new Set([
     "scimUserId",
     "targetUserId",
     "teamId",
+    "teamMemberId",
 ]);
 
 /**
@@ -561,5 +569,59 @@ const createAuthAuditReader = (executor: SqlExecutor): AuthAuditReader => {
     };
 };
 
-export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable, readAuthAuditLog };
-export type { AppendAuthAuditEntry, AppendAuthAuditOptions, AuthAuditEntry, AuthAuditEvent, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditOptions };
+/**
+ * The audit write plane the runtime's `authAuditWriter` option accepts. The worker's admin plane calls
+ * better-auth's adapter directly, so its operations never pass through {@link appendAuthAuditEntry}'s
+ * better-auth hook; the admin routes record them through this instead. A revoke or delete of one row refuses when
+ * nothing matches and records nothing; revoking all of a user's sessions is recorded even when there were none.
+ */
+interface AuthAuditWriter {
+    write: (entry: AppendAuthAuditEntry) => Promise<void>;
+}
+
+/**
+ * Build the writer the runtime's `authAuditWriter` option accepts, closing over the auth D1 `executor`
+ * so admin-plane rows land in the same `__lunora_auth_audit__` table the hook writes, with the same
+ * `detail` redaction. Pass the auth instance and, when its `hooks.after` is the audit hook (directly or
+ * through `withAuthAudit`), each row also goes through that hook's `retention`, `redactDetail` and
+ * `onRecord`, so a SIEM tap sees the admin plane as well as sign-ins.
+ */
+const createAuthAuditWriter = (executor: SqlExecutor, auth?: { options: { hooks?: { after?: unknown } } } | null): AuthAuditWriter => {
+    const after = auth?.options.hooks?.after;
+    const config = typeof after === "function" ? auditHookConfigOf(after) : undefined;
+
+    // An after hook it cannot read is one the app composed around the audit hook, or a different hook entirely: admin
+    // rows would then miss the hook's retention and onRecord export, and nothing else would say so.
+    if (typeof after === "function" && config === undefined) {
+        // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+        console.warn(
+            "@lunora/auth: the auth instance's hooks.after is not the audit hook withAuthAudit or authAuditHook installed, so admin-plane audit rows skip its retention and onRecord export",
+        );
+    }
+
+    return {
+        write: async (entry) => {
+            const persisted = await appendAuthAuditEntry(executor, entry, { redactDetail: config?.redactDetail, retention: config?.retention });
+
+            try {
+                await config?.onRecord?.(persisted);
+            } catch (error) {
+                // The row is stored; a failing export tap must not report the write as failed, as in the hook.
+                // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+                console.error("@lunora/auth: audit onRecord failed for an admin-plane row", error);
+            }
+        },
+    };
+};
+
+export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, createAuthAuditWriter, ensureAuthAuditTable, readAuthAuditLog };
+export type {
+    AppendAuthAuditEntry,
+    AppendAuthAuditOptions,
+    AuthAuditEntry,
+    AuthAuditEvent,
+    AuthAuditOutcome,
+    AuthAuditReader,
+    AuthAuditWriter,
+    ReadAuthAuditOptions,
+};

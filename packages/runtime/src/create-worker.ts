@@ -58,7 +58,7 @@ import { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat, buildAiOneS
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
-import type { AuthAuditReader } from "./auth-audit-rpc";
+import type { AuthAuditReader, AuthAuditWriter } from "./auth-audit-rpc";
 import { buildGetAuthAuditLog, GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 import type { AuthJurisdictionMove } from "./auth-jurisdiction-move-rpc";
 import { buildAuthJurisdictionMoveRpc } from "./auth-jurisdiction-move-rpc";
@@ -1193,6 +1193,18 @@ interface WorkerOptions {
      * bearer always gets `ADMIN_FORBIDDEN` first (default-closed).
      */
     authAuditReader?: AuthAuditReader;
+
+    /**
+     * Where the `/_lunora/admin/auth/*` mutations are recorded: each successful one writes a row to the same
+     * "Security / audit" trail {@link WorkerOptions.authAuditReader} serves, naming the acting admin token
+     * (`admin:root`, or `admin:token:<tokenName>` for a named token). The admin plane calls better-auth's adapter
+     * directly, so the better-auth audit hook never sees these operations. Wire it with `@lunora/auth`'s
+     * `createAuthAuditWriter(d1Executor(env.DB), auth)`, which also applies the audit hook's `retention` and
+     * `onRecord`. Omit it and the admin plane records nothing; a failed write is logged and does not fail the operation.
+     * A revoke or delete of one row answers 404 when nothing matches and records nothing; revoking all of a user's
+     * sessions is recorded even when there were none.
+     */
+    authAuditWriter?: AuthAuditWriter;
 
     /**
      * Base path the auth routes are mounted under (default `/api/auth`). Used
@@ -6755,8 +6767,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `/_lunora/admin/auth/*` — the whole user-management plane, one route per
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
+            // Root authority (the static bearer or an `adminGate` grant) carries no name to record.
+            adminActor: (request) => {
+                const tokenName = adminGrants.get(request)?.tokenName;
+
+                // Named tokens get their own prefix: a token may be named `root`, and must not read as the root credential.
+                return tokenName === undefined ? "admin:root" : `admin:token:${tokenName}`;
+            },
             assertAdmin: assertAdminAuthorized,
             assertRootAdmin,
+            clientIp: (request) => trustedClientIp(request.headers, options.trustedClientIpHeader),
+            getAuditWriter: () => options.authAuditWriter,
             getAuthAdmin: () => options.authAdmin,
             parsePaging,
             queryParameter,
@@ -7365,7 +7386,7 @@ export type {
 // than with `export … from`, which packem inlines into an unexported interface —
 // leaving a consumer unable to write the type of the value they must pass.
 
-export type { AuthAuditEntry, AuthAuditReader } from "./auth-audit-rpc";
+export type { AuthAuditEntry, AuthAuditReader, AuthAuditWrite, AuthAuditWriter } from "./auth-audit-rpc";
 export { GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 export type { AuthJurisdictionMove } from "./auth-jurisdiction-move-rpc";
 export { COPY_AUTH_TO_JURISDICTION_OP, PURGE_UNPINNED_AUTH_OP } from "./auth-jurisdiction-move-rpc";

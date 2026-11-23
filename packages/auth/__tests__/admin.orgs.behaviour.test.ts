@@ -516,4 +516,17 @@ describe("createAuthAdmin — teams & org roles", () => {
         expect((database["teamMember"] as { teamId: string }[]).some((row) => row.teamId === team.id)).toBe(false);
         expect((database["organizationRole"] as { id: string }[]).some((row) => row.id === role.id)).toBe(false);
     });
+
+    it.each([
+        ["cancelInvitation", "INVITATION_NOT_FOUND", (api: ReturnType<typeof createAuthAdmin>) => api.cancelInvitation({ invitationId: "missing" })],
+        ["deleteOrganization", "ORGANIZATION_NOT_FOUND", (api: ReturnType<typeof createAuthAdmin>) => api.deleteOrganization({ organizationId: "missing" })],
+        ["deleteOrgRole", "ORG_ROLE_NOT_FOUND", (api: ReturnType<typeof createAuthAdmin>) => api.deleteOrgRole({ roleId: "missing" })],
+        ["removeMember", "MEMBER_NOT_FOUND", (api: ReturnType<typeof createAuthAdmin>) => api.removeMember({ memberId: "missing" })],
+        ["removeTeam", "TEAM_NOT_FOUND", (api: ReturnType<typeof createAuthAdmin>) => api.removeTeam({ teamId: "missing" })],
+        ["removeTeamMember", "TEAM_MEMBER_NOT_FOUND", (api: ReturnType<typeof createAuthAdmin>) => api.removeTeamMember({ teamMemberId: "missing" })],
+    ])("%s refuses an id that matches no row, so nothing reports a removal that did not happen", async (_method, code, remove) => {
+        expect.assertions(1);
+
+        await expect(remove(adminApi)).rejects.toMatchObject({ code });
+    });
 });

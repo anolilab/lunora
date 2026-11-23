@@ -1,3 +1,4 @@
+import type { AuthAuditWrite, AuthAuditWriter } from "./auth-audit-rpc";
 import { LunoraError } from "./errors";
 
 /** A timestamp as better-auth stores it: epoch-ms, an ISO string, or absent. */
@@ -178,10 +179,16 @@ interface AuthAdmin {
 
 /** Closure-scoped worker helpers the auth routes borrow (so this module stays out of the worker's god-closure). */
 interface AuthAdminRouteDeps {
+    /** The audit actor for an admin request: `admin:token:<tokenName>` for a named token, else `admin:root`. Never the token's value. */
+    adminActor: (request: Request) => string;
     /** Throw 403 unless the request carries a valid admin bearer. */
     assertAdmin: (request: Request) => void;
     /** Throw 403 unless the caller holds root admin authority (not a named admin token). */
     assertRootAdmin: (request: Request) => void;
+    /** The caller's IP when a trustworthy header names it (`trustedClientIp`), for the audit row. */
+    clientIp: (request: Request) => string | undefined;
+    /** Where mutations are recorded (`authAuditWriter`), or undefined, in which case nothing is recorded. */
+    getAuditWriter: () => AuthAuditWriter | undefined;
     /** The configured auth plane (`authAdmin`), or undefined. */
     getAuthAdmin: () => AuthAdmin | undefined;
     /** Parse the shared `limit`/`offset` paging params off a GET request. */
@@ -201,6 +208,13 @@ interface AuthRouteContext {
 
 /** One auth-admin route: which `AuthAdmin` method it drives, how to build that method's input, and how to shape the reply. */
 interface AuthRouteDescriptor {
+    /**
+     * Set on every mutation: the security-feed event it records once it succeeds. `resultId` names the detail key the
+     * created row's `id` fills, for an op whose input has no id of its target yet. `role` marks an op that grants a
+     * role, whose row records the role saved even when the request left it to the plane's default. `roleKey` names the
+     * detail key for an op whose `role` is a custom role's name rather than a grant, as the better-auth hook keys it.
+     */
+    audit?: { event: string; resultId?: string; role?: true; roleKey?: "roleName" };
     /** Build the method input from query (GET) or body (POST); throw `LunoraError` for invalid input. */
     build: (context: AuthRouteContext) => unknown;
     http: "GET" | "POST";
@@ -210,6 +224,130 @@ interface AuthRouteDescriptor {
 }
 
 const AUTH_BASE = "/_lunora/admin/auth";
+
+/**
+ * Input fields copied into an audit row's `detail`, under the names `@lunora/auth` keeps unredacted. An allow-list, so a
+ * password, a body's free-form `data`/`metadata` or a minted session token can never reach the trail. A session id is
+ * left out: `@lunora/auth` masks it as a credential, so a single-session revoke records only its event.
+ */
+const AUDIT_INPUT_IDS: ReadonlyArray<readonly [input: string, detail: string]> = [
+    ["accountId", "accountId"],
+    ["apiKeyId", "keyId"],
+    ["invitationId", "invitationId"],
+    ["memberId", "memberId"],
+    ["organizationId", "organizationId"],
+    // The user a new organization is created for, who becomes its owner.
+    ["ownerId", "targetUserId"],
+    ["passkeyId", "passkeyId"],
+    ["roleId", "roleId"],
+    ["teamId", "teamId"],
+    ["teamMemberId", "teamMemberId"],
+    ["userId", "targetUserId"],
+];
+
+/** RFC 5321's address cap, matching the hook's bound on `targetEmail`. */
+const MAX_TARGET_EMAIL_LENGTH = 320;
+
+const stringField = (value: unknown, field: string): string | undefined => {
+    if (typeof value !== "object" || value === null) {
+        return undefined;
+    }
+
+    const candidate = (value as Record<string, unknown>)[field];
+
+    return typeof candidate === "string" && candidate !== "" ? candidate : undefined;
+};
+
+/** A `role` as `@lunora/auth` stores it: a multi-role grant arrives as an array and is saved comma-joined. */
+const roleField = (value: unknown): string | undefined => {
+    const role = typeof value === "object" && value !== null ? (value as Record<string, unknown>)["role"] : undefined;
+
+    if (Array.isArray(role)) {
+        const names = role.filter((name): name is string => typeof name === "string" && name !== "");
+
+        return names.length === 0 ? undefined : names.join(",");
+    }
+
+    return stringField(value, "role");
+};
+
+/** The `data` object an input carries (`createUser` / `updateUser`), which the plane spreads over the top-level fields. */
+const dataOf = (input: unknown): unknown => (typeof input === "object" && input !== null ? (input as Record<string, unknown>)["data"] : undefined);
+
+/**
+ * The role a row records: the one the plane saved, and for a role-granting op the plane's default when the request
+ * named none. When the result omits it, `data.role` comes first, since the plane spreads `data` over the top level.
+ */
+const auditedRole = (audit: NonNullable<AuthRouteDescriptor["audit"]>, input: unknown, result: unknown): string | undefined => {
+    const requestedRole = roleField(dataOf(input)) ?? roleField(input);
+
+    return requestedRole !== undefined || audit.role === true ? (roleField(result) ?? requestedRole) : undefined;
+};
+
+/**
+ * An invitation names its target only by address, and a created user's address identifies it to a reader. It goes in
+ * `targetEmail`: inside `detail` the PII rules erase it. The saved address wins over the requested one, and of the
+ * requested ones `data.email` wins, since `createUser` spreads `data` over the top-level field.
+ */
+const auditedTargetEmail = (input: unknown, result: unknown): string | undefined => {
+    const requestedEmail = stringField(dataOf(input), "email") ?? stringField(input, "email");
+
+    return requestedEmail === undefined ? undefined : (stringField(result, "email") ?? requestedEmail);
+};
+
+/** Longest user agent an admin row keeps; the header is client-written and otherwise unbounded. */
+const MAX_USER_AGENT_LENGTH = 512;
+
+/** Where an admin request came from: the trusted client IP (see `trustedClientIp`) and its user agent. */
+interface AuditOrigin {
+    ip: string | undefined;
+    userAgent: string | undefined;
+}
+
+/** The row a successful mutation records: who acted, from where, on which ids, through which route. */
+const buildAuditEntry = (
+    path: string,
+    audit: NonNullable<AuthRouteDescriptor["audit"]>,
+    actor: string,
+    origin: AuditOrigin,
+    input: unknown,
+    result: unknown,
+): AuthAuditWrite => {
+    const detail: Record<string, unknown> = { path };
+
+    for (const [inputField, detailKey] of AUDIT_INPUT_IDS) {
+        const value = stringField(input, inputField);
+
+        if (value !== undefined) {
+            detail[detailKey] = value;
+        }
+    }
+
+    const savedRole = auditedRole(audit, input, result);
+
+    if (savedRole !== undefined) {
+        detail[audit.roleKey ?? "role"] = savedRole;
+    }
+
+    const createdId = audit.resultId === undefined ? undefined : stringField(result, "id");
+
+    if (audit.resultId !== undefined && createdId !== undefined) {
+        detail[audit.resultId] = createdId;
+    }
+
+    const email = auditedTargetEmail(input, result);
+
+    return {
+        actorId: actor,
+        detail,
+        event: audit.event,
+        outcome: "success",
+        ts: Date.now(),
+        ...(origin.ip === undefined ? {} : { ip: origin.ip }),
+        ...(email === undefined ? {} : { targetEmail: email.slice(0, MAX_TARGET_EMAIL_LENGTH) }),
+        ...(origin.userAgent === undefined ? {} : { userAgent: origin.userAgent.slice(0, MAX_USER_AGENT_LENGTH) }),
+    };
+};
 
 /**
  * The auth ops a named admin token may call: reads, and writes that only take
@@ -242,15 +380,25 @@ const NAMED_TOKEN_AUTH_METHODS: ReadonlySet<keyof AuthAdmin> = new Set<keyof Aut
 
 /** HTTP status for a known client-input `authAdmin` error code; an unmapped code is a backend failure and reads 500. */
 const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
+    ACCOUNT_NOT_FOUND: 404,
     API_KEY_NOT_FOUND: 404,
     API_KEY_STORAGE_UNSUPPORTED: 409,
+    INVITATION_NOT_FOUND: 404,
     INVITER_REQUIRED: 400,
     LAST_ORGANIZATION_OWNER: 409,
+    MEMBER_NOT_FOUND: 404,
     MEMBERSHIP_CHANGED: 409,
+    ORG_ROLE_NOT_FOUND: 404,
     ORG_SLUG_INVALID: 400,
     ORG_SLUG_TAKEN: 409,
+    ORGANIZATION_NOT_FOUND: 404,
+    PASSKEY_NOT_FOUND: 404,
     PASSWORD_TOO_LONG: 400,
     PASSWORD_TOO_SHORT: 400,
+    SESSION_NOT_FOUND: 404,
+    SIGN_UP_INVITATION_NOT_FOUND: 404,
+    TEAM_MEMBER_NOT_FOUND: 404,
+    TEAM_NOT_FOUND: 404,
     USER_ALREADY_EXISTS: 409,
     USER_NOT_FOUND: 404,
 };
@@ -397,6 +545,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "listApiKeys",
     },
     [`${AUTH_BASE}/api-keys/delete`]: {
+        audit: { event: "api-key-delete" },
         build: ({ body }) => {
             return { apiKeyId: requireBodyString(body, "apiKeyId") };
         },
@@ -433,6 +582,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "listSignUpInvitations",
     },
     [`${AUTH_BASE}/sign-up-invitations/create`]: {
+        audit: { event: "sign-up-invitation-create", resultId: "invitationId" },
         build: ({ body }) => {
             return {
                 email: requireBodyString(body, "email"),
@@ -444,8 +594,10 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "createSignUpInvitation",
     },
     [`${AUTH_BASE}/sign-up-invitations/revoke`]: {
+        audit: { event: "sign-up-invitation-revoke" },
         build: ({ body }) => {
-            return { email: requireBodyString(body, "email") };
+            // In the stored form, so the row's `targetEmail` names the invitation the plane deleted.
+            return { email: requireBodyString(body, "email").trim().toLowerCase() };
         },
         http: "POST",
         method: "revokeSignUpInvitation",
@@ -482,6 +634,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
 
     // --- mutations (POST) -------------------------------------------------------
     [`${AUTH_BASE}/users/create`]: {
+        audit: { event: "admin-user-create", resultId: "targetUserId", role: true },
         build: ({ body }) => {
             return {
                 data: optionalBodyObject(body, "data"),
@@ -495,6 +648,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "createUser",
     },
     [`${AUTH_BASE}/users/update`]: {
+        audit: { event: "admin-user-update" },
         build: ({ body }) => {
             const { data } = body;
 
@@ -508,6 +662,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "updateUser",
     },
     [`${AUTH_BASE}/users/role`]: {
+        audit: { event: "admin-role-change", role: true },
         build: ({ body }) => {
             return { role: requireRole(body), userId: requireBodyString(body, "userId") };
         },
@@ -515,6 +670,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "setRole",
     },
     [`${AUTH_BASE}/users/ban`]: {
+        audit: { event: "admin-user-ban" },
         build: ({ body }) => {
             return {
                 expiresInSeconds: typeof body["expiresInSeconds"] === "number" ? body["expiresInSeconds"] : undefined,
@@ -526,6 +682,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "banUser",
     },
     [`${AUTH_BASE}/users/unban`]: {
+        audit: { event: "admin-user-unban" },
         build: ({ body }) => {
             return { userId: requireBodyString(body, "userId") };
         },
@@ -533,6 +690,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "unbanUser",
     },
     [`${AUTH_BASE}/users/password`]: {
+        audit: { event: "admin-password-set" },
         build: ({ body }) => {
             return { newPassword: requireBodyString(body, "newPassword"), userId: requireBodyString(body, "userId") };
         },
@@ -541,6 +699,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/users/remove`]: {
+        audit: { event: "admin-user-remove" },
         build: ({ body }) => {
             return { userId: requireBodyString(body, "userId") };
         },
@@ -549,6 +708,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/users/impersonate`]: {
+        audit: { event: "admin-impersonate-start" },
         build: ({ body }) => {
             return { userId: requireBodyString(body, "userId") };
         },
@@ -556,6 +716,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "impersonateUser",
     },
     [`${AUTH_BASE}/sessions/revoke`]: {
+        audit: { event: "admin-session-revoke" },
         build: ({ body }) => {
             return { sessionId: requireBodyString(body, "sessionId") };
         },
@@ -564,6 +725,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/sessions/revoke-all`]: {
+        audit: { event: "admin-session-revoke" },
         build: ({ body }) => {
             return { userId: requireBodyString(body, "userId") };
         },
@@ -572,6 +734,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/accounts/unlink`]: {
+        audit: { event: "account-unlink" },
         build: ({ body }) => {
             return { accountId: requireBodyString(body, "accountId"), userId: requireBodyString(body, "userId") };
         },
@@ -580,6 +743,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/two-factor/disable`]: {
+        audit: { event: "mfa-disable" },
         build: ({ body }) => {
             return { userId: requireBodyString(body, "userId") };
         },
@@ -588,6 +752,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/passkeys/delete`]: {
+        audit: { event: "passkey-remove" },
         build: ({ body }) => {
             return { passkeyId: requireBodyString(body, "passkeyId") };
         },
@@ -596,6 +761,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/organizations/members/remove`]: {
+        audit: { event: "org-member-remove" },
         build: ({ body }) => {
             return { memberId: requireBodyString(body, "memberId") };
         },
@@ -604,6 +770,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/organizations/invitations/cancel`]: {
+        audit: { event: "org-invitation-cancel" },
         build: ({ body }) => {
             return { invitationId: requireBodyString(body, "invitationId") };
         },
@@ -612,6 +779,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/organizations/create`]: {
+        audit: { event: "org-create", resultId: "organizationId" },
         build: ({ body }) => {
             return {
                 logo: optionalBodyString(body, "logo"),
@@ -625,6 +793,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "createOrganization",
     },
     [`${AUTH_BASE}/organizations/update`]: {
+        audit: { event: "org-update" },
         build: ({ body }) => {
             return {
                 logo: optionalBodyString(body, "logo"),
@@ -638,6 +807,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "updateOrganization",
     },
     [`${AUTH_BASE}/organizations/remove`]: {
+        audit: { event: "org-delete" },
         build: ({ body }) => {
             return { organizationId: requireBodyString(body, "organizationId") };
         },
@@ -646,6 +816,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/organizations/members/add`]: {
+        audit: { event: "org-member-add", resultId: "memberId", role: true },
         build: ({ body }) => {
             return {
                 organizationId: requireBodyString(body, "organizationId"),
@@ -657,6 +828,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "addMember",
     },
     [`${AUTH_BASE}/organizations/members/invite`]: {
+        audit: { event: "org-invitation-create", resultId: "invitationId", role: true },
         build: ({ body }) => {
             return {
                 email: requireBodyString(body, "email"),
@@ -669,6 +841,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "inviteMember",
     },
     [`${AUTH_BASE}/organizations/members/role`]: {
+        audit: { event: "org-member-role-change", role: true },
         build: ({ body }) => {
             return { memberId: requireBodyString(body, "memberId"), role: requireRole(body) };
         },
@@ -676,6 +849,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "updateMemberRole",
     },
     [`${AUTH_BASE}/organizations/teams/create`]: {
+        audit: { event: "org-team-create", resultId: "teamId" },
         build: ({ body }) => {
             return { name: requireBodyString(body, "name"), organizationId: requireBodyString(body, "organizationId") };
         },
@@ -683,6 +857,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "createTeam",
     },
     [`${AUTH_BASE}/organizations/teams/update`]: {
+        audit: { event: "org-team-update" },
         build: ({ body }) => {
             return { name: requireBodyString(body, "name"), teamId: requireBodyString(body, "teamId") };
         },
@@ -690,6 +865,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "updateTeam",
     },
     [`${AUTH_BASE}/organizations/teams/remove`]: {
+        audit: { event: "org-team-remove" },
         build: ({ body }) => {
             return { teamId: requireBodyString(body, "teamId") };
         },
@@ -698,6 +874,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/organizations/teams/members/add`]: {
+        audit: { event: "org-team-member-add", resultId: "teamMemberId" },
         build: ({ body }) => {
             return { teamId: requireBodyString(body, "teamId"), userId: requireBodyString(body, "userId") };
         },
@@ -705,6 +882,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "addTeamMember",
     },
     [`${AUTH_BASE}/organizations/teams/members/remove`]: {
+        audit: { event: "org-team-member-remove" },
         build: ({ body }) => {
             return { teamMemberId: requireBodyString(body, "teamMemberId") };
         },
@@ -713,6 +891,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         returns: "void",
     },
     [`${AUTH_BASE}/organizations/roles/create`]: {
+        audit: { event: "org-role-change", resultId: "roleId", roleKey: "roleName" },
         build: ({ body }) => {
             return {
                 organizationId: requireBodyString(body, "organizationId"),
@@ -724,6 +903,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "createOrgRole",
     },
     [`${AUTH_BASE}/organizations/roles/update`]: {
+        audit: { event: "org-role-change" },
         build: ({ body }) => {
             return { permission: requirePermission(body), roleId: requireBodyString(body, "roleId") };
         },
@@ -731,6 +911,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "updateOrgRole",
     },
     [`${AUTH_BASE}/organizations/roles/remove`]: {
+        audit: { event: "org-role-change" },
         build: ({ body }) => {
             return { roleId: requireBodyString(body, "roleId") };
         },
@@ -809,6 +990,27 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
         };
         const input = descriptor.build(context);
         const result = await runAuthOp(() => (method as (argument: unknown) => Promise<unknown>)(input));
+        const writer = deps.getAuditWriter();
+
+        if (descriptor.audit !== undefined && writer !== undefined) {
+            try {
+                await writer.write(
+                    buildAuditEntry(
+                        url.pathname,
+                        descriptor.audit,
+                        deps.adminActor(request),
+                        { ip: deps.clientIp(request), userAgent: request.headers.get("user-agent") ?? undefined },
+                        input,
+                        result,
+                    ),
+                );
+            } catch (error) {
+                // The operation already happened; failing the response would invite a retry that repeats it. Same
+                // policy as the better-auth audit hook.
+                // eslint-disable-next-line no-console -- server-side diagnostic; no injected logger at this layer
+                console.error("[lunora] auth admin audit write failed:", error);
+            }
+        }
 
         // `no-store`, not just `content-type`: `users/impersonate` answers with a live
         // session bearer token for an arbitrary user and `users` with PII. Under an

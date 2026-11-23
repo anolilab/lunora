@@ -17,6 +17,7 @@ import { createAuthMiddleware } from "better-auth/api";
 import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
 import type { AppendAuthAuditEntry, AppendAuthAuditOptions, AuthAuditEvent, AuthAuditOutcome } from "./audit";
 import { appendAuthAuditEntry } from "./audit";
+import { registerAuditHookConfig } from "./audit-hook-configs";
 import type { SqlExecutor } from "./sql-store";
 
 /** Configuration for {@link authAuditHook}. */
@@ -1002,8 +1003,8 @@ const buildAuditEntry = (
  * {@link buildAuditEntry}'s docblock for why that distinction turned out not to
  * be buildable from this hook.
  */
-const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAuthMiddleware> =>
-    createAuthMiddleware(async (context) => {
+const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAuthMiddleware> => {
+    const hook = createAuthMiddleware(async (context) => {
         try {
             const entry = buildAuditEntry(context, { trustProxyHeaders: config.trustProxyHeaders });
 
@@ -1037,6 +1038,11 @@ const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAut
         // `undefined` leaves the response byte-for-byte equivalent to no hook at all.
         return undefined;
     });
+
+    registerAuditHookConfig(hook, config);
+
+    return hook;
+};
 
 /**
  * Create the better-auth `hooks.before` middleware that reads what an audited endpoint
@@ -1101,6 +1107,8 @@ const withAuthAudit = <Options extends { hooks?: { after?: unknown; before?: unk
               return returned;
           }
         : audit;
+
+    registerAuditHookConfig(after, config);
 
     return { ...options, hooks: { ...options.hooks, after, before } };
 };
