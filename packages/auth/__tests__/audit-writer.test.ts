@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAuthAuditReader, createAuthAuditWriter } from "../src/audit";
 import { authAuditHook, withAuthAudit } from "../src/audit-hooks";
@@ -136,6 +136,19 @@ describe(createAuthAuditWriter, () => {
         });
 
         await expect(createAuthAuditReader(executor).read({})).resolves.toHaveLength(1);
+    });
+
+    it("warns when the instance has an after hook it cannot read the audit hook's settings from", () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        // The app composed its own `hooks.after` around the audit hook: its retention and onRecord are out of reach.
+        createAuthAuditWriter(executor, { options: { hooks: { after: async () => undefined } } });
+
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("onRecord"));
+
+        warn.mockRestore();
     });
 
     it("accepts the generated worker's absent auth instance (null) and records with no hook config", async () => {

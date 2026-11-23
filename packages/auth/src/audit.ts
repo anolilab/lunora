@@ -572,9 +572,8 @@ const createAuthAuditReader = (executor: SqlExecutor): AuthAuditReader => {
 /**
  * The audit write plane the runtime's `authAuditWriter` option accepts. The worker's admin plane calls
  * better-auth's adapter directly, so its operations never pass through {@link appendAuthAuditEntry}'s
- * better-auth hook; the admin routes record them through this instead. A row for a revoke or delete records that
- * the operation was requested and accepted, not that a row was removed: those operations succeed when the target is
- * already gone.
+ * better-auth hook; the admin routes record them through this instead. A revoke or delete of one row refuses when
+ * nothing matches and records nothing; revoking all of a user's sessions is recorded even when there were none.
  */
 interface AuthAuditWriter {
     write: (entry: AppendAuthAuditEntry) => Promise<void>;
@@ -590,6 +589,15 @@ interface AuthAuditWriter {
 const createAuthAuditWriter = (executor: SqlExecutor, auth?: { options: { hooks?: { after?: unknown } } } | null): AuthAuditWriter => {
     const after = auth?.options.hooks?.after;
     const config = typeof after === "function" ? auditHookConfigOf(after) : undefined;
+
+    // An after hook it cannot read is one the app composed around the audit hook, or a different hook entirely: admin
+    // rows would then miss the hook's retention and onRecord export, and nothing else would say so.
+    if (typeof after === "function" && config === undefined) {
+        // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+        console.warn(
+            "@lunora/auth: the auth instance's hooks.after is not the audit hook withAuthAudit or authAuditHook installed, so admin-plane audit rows skip its retention and onRecord export",
+        );
+    }
 
     return {
         write: async (entry) => {

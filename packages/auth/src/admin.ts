@@ -6,7 +6,7 @@ import { apiKeyStorage } from "./api-key-storage";
 import type { LunoraAuth } from "./create-auth";
 // Aliased: this module exposes methods of the same names, and a method body
 // calling an identically-named import is a needless double-take.
-import { createSignUpInvitation as issueSignUpInvitation, revokeSignUpInvitation as withdrawSignUpInvitation } from "./invite-only";
+import { createSignUpInvitation as issueSignUpInvitation } from "./invite-only";
 
 /**
  * A timestamp as it leaves the admin API: epoch-ms (better-auth stores `Date`s,
@@ -1422,7 +1422,16 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 }),
             ),
 
-        revokeSignUpInvitation: ({ email }) => withContext(async () => withdrawSignUpInvitation(auth, { email })),
+        // Addresses are stored trimmed and lowercased, so the delete matches on the same form.
+        revokeSignUpInvitation: ({ email }) =>
+            withContext(async (context_) => {
+                await deleteExisting(
+                    context_,
+                    "signUpInvitation",
+                    [{ field: "email", value: email.trim().toLowerCase() }],
+                    ["sign-up invitation not found", "SIGN_UP_INVITATION_NOT_FOUND"],
+                );
+            }),
 
         listMembers: ({ limit, offset, organizationId }) =>
             withContext((context_) =>
@@ -1561,9 +1570,11 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
             withContext(async (context_) => {
                 const session = await context_.adapter.findOne<{ token?: string }>({ model: "session", where: [{ field: "id", value: sessionId }] });
 
-                if (session?.token) {
-                    await context_.internalAdapter.deleteSession(session.token);
+                if (!session?.token) {
+                    throw new LunoraAuthAdminError("session not found", "SESSION_NOT_FOUND");
                 }
+
+                await context_.internalAdapter.deleteSession(session.token);
             }),
 
         revokeUserSessions: ({ userId }) =>

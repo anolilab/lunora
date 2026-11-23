@@ -605,6 +605,14 @@ describe("inviteOnly", () => {
 
             await expect(adminApi.listSignUpInvitations({})).resolves.toMatchObject({ total: 0 });
         });
+
+        it("refuses to revoke an address that has no invitation, so the call does not report a removal", async () => {
+            expect.assertions(1);
+
+            await expect(createAuthAdmin(auth).revokeSignUpInvitation({ email: "nobody@example.com" })).rejects.toMatchObject({
+                code: "SIGN_UP_INVITATION_NOT_FOUND",
+            });
+        });
     });
 
     it("warns when password sign-up runs without email verification", async () => {

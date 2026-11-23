@@ -492,6 +492,23 @@ describe("createWorker — auth admin audit trail", () => {
         expect(writer.rows).toStrictEqual([]);
     });
 
+    it("records a revoked invitation under the address the plane revoked, and a new organization's owner", async () => {
+        expect.assertions(2);
+
+        const plane: AuthAdmin = {
+            ...auditedAuthAdmin(),
+            revokeSignUpInvitation: vi.fn<NonNullable<AuthAdmin["revokeSignUpInvitation"]>>(async () => undefined),
+        };
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        await worker.fetch(post(`${AUTH}/sign-up-invitations/revoke`, { email: " User@Example.COM " }), {}, fakeContext);
+        await worker.fetch(post(`${AUTH}/organizations/create`, { name: "Acme", ownerId: "u7" }), {}, fakeContext);
+
+        expect(writer.rows[0]?.targetEmail).toBe("user@example.com");
+        expect(writer.rows[1]?.detail).toMatchObject({ organizationId: "o9", targetUserId: "u7" });
+    });
+
     it("records the persisted roles of a multi-role grant", async () => {
         expect.assertions(2);
 

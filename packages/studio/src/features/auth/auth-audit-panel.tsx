@@ -14,7 +14,7 @@ import type { AuthAuditEntry, AuthAuditLogResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
 
-/** The `detail` key naming an event's subject, most specific first: the account, else what was created or changed. */
+/** The `detail` keys naming an event's subject, most specific first: the first present fills the Target column, and a search matches any. */
 const TARGET_DETAIL_KEYS = [
     "targetUserId",
     "memberId",
@@ -26,6 +26,11 @@ const TARGET_DETAIL_KEYS = [
     "organizationId",
     "accountId",
     "passkeyId",
+    "clientId",
+    "consentId",
+    "resourceIdentifier",
+    "scimUserId",
+    "scimGroupId",
 ] as const;
 
 /** The id an event acted on, read from its `detail` (the admin plane and the hooks copy ids there, never free text). */
@@ -79,7 +84,11 @@ const AuthAuditPanel = (): ReactElement => {
                       (entry.actorId ?? "").toLowerCase().includes(needle) ||
                       (entry.actorEmail ?? "").toLowerCase().includes(needle) ||
                       (entry.targetEmail ?? "").toLowerCase().includes(needle) ||
-                      (targetIdOf(entry) ?? "").toLowerCase().includes(needle) ||
+                      TARGET_DETAIL_KEYS.some((key) => {
+                          const value = entry.detail?.[key];
+
+                          return typeof value === "string" && value.toLowerCase().includes(needle);
+                      }) ||
                       (entry.ip ?? "").toLowerCase().includes(needle) ||
                       entry.outcome.toLowerCase().includes(needle),
               );

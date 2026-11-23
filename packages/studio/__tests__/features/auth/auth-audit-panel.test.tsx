@@ -100,6 +100,37 @@ describe("authAuditPanel", () => {
         await expect(screen.findAllByTestId("aa-row")).resolves.toHaveLength(1);
     });
 
+    it("finds a row by any id it names, and shows an OAuth or SCIM target", async () => {
+        expect.assertions(2);
+
+        const memberAdd: AuthAuditEntry = {
+            actorId: "admin:root",
+            detail: { memberId: "m9", organizationId: "org_1", path: "/_lunora/admin/auth/organizations/members/add", targetUserId: "u9" },
+            event: "org-member-add",
+            outcome: "success",
+            seq: 4,
+            ts: 1_700_000_004_000,
+        };
+        const consent: AuthAuditEntry = {
+            actorId: "u1",
+            detail: { clientId: "client_42" },
+            event: "oauth-consent",
+            outcome: "success",
+            seq: 5,
+            ts: 1_700_000_005_000,
+        };
+
+        render(renderPanel(createClient([consent, memberAdd, ...ENTRIES])));
+
+        await screen.findByTestId("aa-table");
+
+        expect(within(bodyRows()[0] as HTMLElement).getAllByRole("cell")[3]?.textContent).toContain("client_42");
+
+        fireEvent.change(screen.getByTestId("aa-search"), { target: { value: "org_1" } });
+
+        await expect(screen.findAllByTestId("aa-row")).resolves.toHaveLength(1);
+    });
+
     it("shows the empty state when there are no events", async () => {
         expect.assertions(1);
 

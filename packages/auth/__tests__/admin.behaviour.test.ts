@@ -249,6 +249,12 @@ describe("createAuthAdmin", () => {
         expect(page.rows[0]).not.toHaveProperty("token");
     });
 
+    it("refuses to revoke a session id that matches no session", async () => {
+        expect.assertions(1);
+
+        await expect(adminApi.revokeUserSession({ sessionId: "missing" })).rejects.toMatchObject({ code: "SESSION_NOT_FOUND" });
+    });
+
     it("revokes a single session by id and revokes all sessions for a user", async () => {
         expect.assertions(2);
 

@@ -236,6 +236,8 @@ const AUDIT_INPUT_IDS: ReadonlyArray<readonly [input: string, detail: string]> =
     ["invitationId", "invitationId"],
     ["memberId", "memberId"],
     ["organizationId", "organizationId"],
+    // The user a new organization is created for, who becomes its owner.
+    ["ownerId", "targetUserId"],
     ["passkeyId", "passkeyId"],
     ["roleId", "roleId"],
     ["teamId", "teamId"],
@@ -393,6 +395,8 @@ const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
     PASSKEY_NOT_FOUND: 404,
     PASSWORD_TOO_LONG: 400,
     PASSWORD_TOO_SHORT: 400,
+    SESSION_NOT_FOUND: 404,
+    SIGN_UP_INVITATION_NOT_FOUND: 404,
     TEAM_MEMBER_NOT_FOUND: 404,
     TEAM_NOT_FOUND: 404,
     USER_ALREADY_EXISTS: 409,
@@ -592,7 +596,8 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
     [`${AUTH_BASE}/sign-up-invitations/revoke`]: {
         audit: { event: "sign-up-invitation-revoke" },
         build: ({ body }) => {
-            return { email: requireBodyString(body, "email") };
+            // In the stored form, so the row's `targetEmail` names the invitation the plane deleted.
+            return { email: requireBodyString(body, "email").trim().toLowerCase() };
         },
         http: "POST",
         method: "revokeSignUpInvitation",
