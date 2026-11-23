@@ -218,18 +218,24 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
 
 /**
  * The global-changelog overrides an app with `.global()` tables needs to hear of other shards' writes on its
- * poll tick: `readGlobalChangedTables`, and `polledGlobalTables` naming the tables it may poll for. Empty for
- * an app without global tables.
+ * poll tick: `readGlobalChangedTables`, `polledGlobalTables` naming the tables it may poll for, and
+ * `globalTables` naming them all. Empty for an app without global tables.
  */
 const emitGlobalChangelogOverride = (globalTableNames: ReadonlyArray<string>, globalDatabaseThunk: string): string =>
     globalTableNames.length === 0
         ? ""
         : `
+        private readonly globalTableSet: ReadonlySet<string> = new Set<string>(${JSON.stringify(globalTableNames)});
+
         // Without a changelog a tick cannot say which tables moved, so there is nothing to poll for.
-        private readonly polledGlobalTableSet: ReadonlySet<string> = new Set<string>(config.cdc === true ? ${JSON.stringify(globalTableNames)} : []);
+        private readonly polledGlobalTableSet: ReadonlySet<string> = config.cdc === true ? this.globalTableSet : new Set<string>();
 
         protected override polledGlobalTables(): ReadonlySet<string> {
             return this.polledGlobalTableSet;
+        }
+
+        protected override globalTables(): ReadonlySet<string> {
+            return this.globalTableSet;
         }
 
         protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ bookmark?: string; cursor: number; floor?: number; tables: string[] } | undefined> {

@@ -347,8 +347,11 @@ interface SqlCtxDbOptions {
      * own `.global()` writes broadcast to: a trigger's write to another global table happens inside this
      * writer, where the shard engine's broadcast never sees it, so without this a live query on that
      * table kept the pre-trigger row.
+     *
+     * `settledLate` is true for a statement abandoned at its deadline that settled afterwards: it may
+     * have committed after the caller saw it fail, so its table is announced once it settles either way.
      */
-    onWrite?: (table: string) => void;
+    onWrite?: (table: string, settledLate?: boolean) => void;
 
     /**
      * Object identifying the database this store provisions, so the one-shot
@@ -2867,6 +2870,42 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * Follow a row write abandoned at its deadline to wherever it settles: it may still land.
+     *
+     * Without a transaction the companion memo is dropped now and again once it settles, since the write may
+     * land after a rebuild that ran in the meantime and so did not count it; if it never settles, the first
+     * eviction is the only one. Where the row commits on its own (`rowCommitsAlone`), its table is announced
+     * through `onWrite` once it settles, either way: the caller saw it fail, so nothing else would.
+     */
+    const settleAbandonedWrite = (failure: unknown, tableName: string, rowCommitsAlone: boolean): void => {
+        if (!(failure instanceof SqlQueryTimeoutError)) {
+            return;
+        }
+
+        const late = abandonedWork(failure);
+
+        const evicts = exec.transaction === undefined;
+
+        if (evicts) {
+            evictCompanionBackfills(tableName);
+        }
+
+        const settle = (): undefined => {
+            if (evicts) {
+                evictCompanionBackfills(tableName);
+            }
+
+            if (rowCommitsAlone) {
+                options.onWrite?.(tableName, true);
+            }
+
+            return undefined;
+        };
+
+        late?.then(settle, settle).catch(() => undefined);
+    };
+
+    /**
      * One row write and its aggregate, rank and CDC companion statements, as one unit wherever the exec can make
      * them one. An exec with `transaction` (Postgres, MySQL) runs the row write, the companion reads (a min/max
      * recompute) and the companion writes on one connection in one transaction, so a failure anywhere leaves
@@ -2899,21 +2938,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             try {
                 wrote = await write(on);
             } catch (error) {
-                if (exec.transaction === undefined && error instanceof SqlQueryTimeoutError) {
-                    evictCompanionBackfills(tableName);
-
-                    // The abandoned write may land after a rebuild that ran in the meantime and so did not count it:
-                    // drop the memo again once it settles. If it never settles, the eviction above is the only one.
-                    const evictOnceSettled = (): undefined => {
-                        evictCompanionBackfills(tableName);
-
-                        return undefined;
-                    };
-
-                    abandonedWork(error)
-                        ?.then(evictOnceSettled, evictOnceSettled)
-                        .catch(() => undefined);
-                }
+                settleAbandonedWrite(error, tableName, rowCommitsAlone);
 
                 throw error;
             }

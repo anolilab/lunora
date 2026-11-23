@@ -171,7 +171,9 @@ more. A result that has not changed is not pushed again.
 The changelog exists only with change data capture on, so call `.cdc()` on the
 app. Without it, nothing tells another shard about the write. A live query there
 updates when its own shard next writes that table, or when the client
-resubscribes.
+resubscribes. The first time a shard serves such a live query it logs one
+warning that names the `.global()` tables it reads and points at `.cdc()`; the
+warning appears in the shard's logs in Studio.
 
 ### Migrating a populated table to D1
 

@@ -5460,14 +5460,16 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // The request type declares the Sessions-API bookmark pair the DO actually
             // passes, so a direct `createShardDO({ d1 })` can read them under types.
             expect(output).toContain(
-                "d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;",
+                "d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string, settledLate?: boolean) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;",
             );
             expect(output).toContain("const globalDbStub: DatabaseWriterLike");
             expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;");
             // A refresh re-run reads at the bookmark of the writes that scheduled it, and the writer
             // reports every row it stores (a trigger's included) with the bookmark that write left.
             expect(output).toContain("const bookmark = options.readBookmark ?? this.getInboundBookmark();");
-            expect(output).toContain("onWrite: (table: string) => { this.recordGlobalWrite(table, writeBookmark); },");
+            expect(output).toContain(
+                "onWrite: (table: string, settledLate?: boolean) => { if (settledLate === true) { this.recordLateGlobalWrite(table); } else { this.recordGlobalWrite(table, writeBookmark, globalWriteSession); } },",
+            );
 
             // `globalDb` is passed into the shard ctx-db so the generic
             // `ctx.db.insert("<global>", …)`/`query`/… methods route to D1 (not just

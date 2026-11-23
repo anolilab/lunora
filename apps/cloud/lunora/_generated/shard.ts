@@ -134,7 +134,7 @@ export interface ShardDOConfig {
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;
     ai?: (env: Record<string, unknown>) => AiBindingLike;
     payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;
-    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;
+    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string, settledLate?: boolean) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;
 }
 
 const schedulerStub = {
@@ -700,11 +700,17 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             };
         }
 
+        private readonly globalTableSet: ReadonlySet<string> = new Set<string>(["cells","organizations","members","projects","invitations","auditLog","githubInstallations","deployments","halts","aliasOwnership","deployKeys","githubDeliveries","builds","buildLogs","domains","certificateReleases","secrets","tenantBackups","boxes","boxEnrolments","hostdReleases","cloudflareAccounts","metricPoints","tenantLogs","observations","issues","incidents","alertRules","alertRuleState","alerts","anomalyBaselines","edgeRules","anomalySilences","uptimeChecks","uptimeState","dashboards","notificationChannels","notificationDeliveries","overageDebits","platformUsage","usageCheckpoints","usageSourceStatus","payment_customers","payment_events","payment_sessions","payment_subscriptions","payment_usageEvents","catalogInstalls","catalogIndexState"]);
+
         // Without a changelog a tick cannot say which tables moved, so there is nothing to poll for.
-        private readonly polledGlobalTableSet: ReadonlySet<string> = new Set<string>(config.cdc === true ? ["cells","organizations","members","projects","invitations","auditLog","githubInstallations","deployments","halts","aliasOwnership","deployKeys","githubDeliveries","builds","buildLogs","domains","certificateReleases","secrets","tenantBackups","boxes","boxEnrolments","hostdReleases","cloudflareAccounts","metricPoints","tenantLogs","observations","issues","incidents","alertRules","alertRuleState","alerts","anomalyBaselines","edgeRules","anomalySilences","uptimeChecks","uptimeState","dashboards","notificationChannels","notificationDeliveries","overageDebits","platformUsage","usageCheckpoints","usageSourceStatus","payment_customers","payment_events","payment_sessions","payment_subscriptions","payment_usageEvents","catalogInstalls","catalogIndexState"] : []);
+        private readonly polledGlobalTableSet: ReadonlySet<string> = config.cdc === true ? this.globalTableSet : new Set<string>();
 
         protected override polledGlobalTables(): ReadonlySet<string> {
             return this.polledGlobalTableSet;
+        }
+
+        protected override globalTables(): ReadonlySet<string> {
+            return this.globalTableSet;
         }
 
         protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ bookmark?: string; cursor: number; floor?: number; tables: string[] } | undefined> {
@@ -1330,6 +1336,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const bookmark = options.readBookmark ?? this.getInboundBookmark();
             let writeBookmark: string | undefined;
+            const globalWriteSession = {};
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),
@@ -1337,7 +1344,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     return readIdentity();
                 },
                 onBookmark: (bookmarkValue: string | undefined) => { writeBookmark = bookmarkValue; if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
-                onWrite: (table: string) => { this.recordGlobalWrite(table, writeBookmark); },
+                onWrite: (table: string, settledLate?: boolean) => { if (settledLate === true) { this.recordLateGlobalWrite(table); } else { this.recordGlobalWrite(table, writeBookmark, globalWriteSession); } },
                 get userId(): string | undefined {
                     return readUserId();
                 },
@@ -1363,7 +1370,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 },
                 broadcast: (delta) => {
                     if (writeBookmark !== undefined && (schema as unknown as SchemaLike).tables[delta.table]?.shardMode?.kind === "global") {
-                        this.recordGlobalWrite(delta.table, writeBookmark);
+                        this.recordGlobalWrite(delta.table, writeBookmark, globalWriteSession);
                     } else {
                         this.recordChangedTable(delta.table, delta.indexKeys);
                     }

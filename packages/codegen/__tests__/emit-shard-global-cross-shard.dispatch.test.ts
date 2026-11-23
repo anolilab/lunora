@@ -30,8 +30,10 @@ interface Shard {
 }
 
 interface GlobalRequest {
+    bookmark?: string;
     cdc?: boolean;
-    onWrite?: (table: string) => void;
+    onBookmark?: (bookmark: string | undefined) => void;
+    onWrite?: (table: string, settledLate?: boolean) => void;
 }
 
 const OWNER = "owner-1";
@@ -73,24 +75,57 @@ const createState = (sockets: FakeSocket[], name: string): unknown => {
     };
 };
 
-/** Two shards over one global store, each with the live query `cross:boards` available. */
-const createPair = (): { a: Shard; b: Shard; bSockets: FakeSocket[] } => {
-    const global = new DatabaseSync(":memory:");
-    const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => global.prepare(query).all(...(parameters as never[]));
-    const exec = {
-        all: (query: string, parameters: ReadonlyArray<unknown>) => Promise.resolve(all(query, parameters)),
-        run: (query: string, parameters: ReadonlyArray<unknown>) => {
-            all(query, parameters);
+/** What the shared global store saw: the bookmark each `boards` read was opened with, and each bookmark a statement reported. */
+interface GlobalLog {
+    /** While set, a read of the changelog fails and every other statement still runs. */
+    failChangelog: boolean;
+    reads: { bookmark: string | undefined }[];
+    /** Every bookmark reported, with the request (one per ctx, so per dispatch) and statement that reported it. */
+    reports: { bookmark: string; query: string; request: GlobalRequest }[];
+}
 
-            return Promise.resolve();
-        },
+/**
+ * Two shards over one global store, each with the live query `cross:boards` available. Each statement
+ * reports a fresh session bookmark, as D1 does, so a test can tell which bookmark a read started at.
+ */
+const createPair = (): { a: Shard; aSockets: FakeSocket[]; b: Shard; bSockets: FakeSocket[]; log: GlobalLog } => {
+    const global = new DatabaseSync(":memory:");
+    const log: GlobalLog = { failChangelog: false, reads: [], reports: [] };
+    const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => global.prepare(query).all(...(parameters as never[]));
+    const sessionExec = (request: GlobalRequest) => {
+        const statement = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => {
+            if (log.failChangelog && query.startsWith("SELECT") && query.includes("__cdc_log")) {
+                throw new Error("changelog read failed");
+            }
+
+            if (query.startsWith("SELECT") && query.includes('FROM "boards"')) {
+                log.reads.push({ bookmark: request.bookmark });
+            }
+
+            const rows = all(query, parameters);
+            const reported = `bookmark-${String(log.reports.length + 1)}`;
+
+            log.reports.push({ bookmark: reported, query, request });
+            request.onBookmark?.(reported);
+
+            return rows;
+        };
+
+        return {
+            all: (query: string, parameters: ReadonlyArray<unknown>) => Promise.resolve(statement(query, parameters)),
+            run: (query: string, parameters: ReadonlyArray<unknown>) => {
+                statement(query, parameters);
+
+                return Promise.resolve();
+            },
+        };
     };
     const ShardClass = createShardDO({
         cdc: true,
         d1: ((_env: unknown, request: GlobalRequest) =>
             createD1CtxDb({
                 cdc: request.cdc ?? false,
-                exec,
+                exec: sessionExec(request),
                 ...(request.onWrite === undefined ? {} : { onWrite: request.onWrite }),
                 schema: schema as never,
             })) as never,
@@ -100,8 +135,10 @@ const createPair = (): { a: Shard; b: Shard; bSockets: FakeSocket[] } => {
 
     return {
         a: new ShardClass(createState(aSockets, "shard-a") as never, {} as never),
+        aSockets,
         b: new ShardClass(createState(bSockets, "shard-b") as never, {} as never),
         bSockets,
+        log,
     };
 };
 
@@ -236,5 +273,41 @@ describe("emitted shard — a .global() write refreshes live queries on another 
         await b.alarm();
 
         expect(lastNames(watcher)).toStrictEqual([]);
+    });
+
+    it("refreshes the writing shard's live query at one bookmark, the write's last, with the changelog on", async () => {
+        expect.assertions(2);
+
+        const { a, aSockets, log } = createPair();
+        const watcher = await subscribe(a, aSockets);
+
+        await call(a, "cross:insert", { name: "first" });
+
+        // The row write and the changelog append each reported a bookmark; the refresh opens at the later one.
+        const writer = log.reports.find((report) => report.query.startsWith('INSERT INTO "boards"'))?.request;
+        const lastOfWrite = log.reports.findLast((report) => report.request === writer)?.bookmark;
+
+        expect(lastNames(watcher)).toStrictEqual(["first"]);
+        expect(log.reads.at(-1)?.bookmark).toBe(lastOfWrite);
+    });
+
+    it("refreshes another shard's live query at the primary when its changelog read fails", async () => {
+        expect.assertions(2);
+
+        const { a, b, log, watcher } = await (async () => {
+            const pair = createPair();
+            const seen = await subscribe(pair.b, pair.bSockets);
+
+            await pair.b.alarm();
+
+            return { ...pair, watcher: seen };
+        })();
+
+        await call(a, "cross:insert", { name: "while-blind" });
+        log.failChangelog = true;
+        await b.alarm();
+
+        expect(lastNames(watcher)).toStrictEqual(["while-blind"]);
+        expect(log.reads.at(-1)?.bookmark).toBe("first-primary");
     });
 });

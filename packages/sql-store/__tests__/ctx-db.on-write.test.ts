@@ -1,7 +1,10 @@
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { SqlCtxExec } from "../src/ctx-db";
 import { createSqlCtxDb } from "../src/ctx-db";
+import type { QueryTimer } from "../src/query-timeout";
+import { SqlQueryTimeoutError } from "../src/query-timeout";
 import { createSqliteHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
 const text = { _meta: { column: { notNull: true } }, kind: "string" } as ValidatorLike;
@@ -79,5 +82,85 @@ describe("createSqlCtxDb onWrite", () => {
         await writer.delete("posts", "missing");
 
         expect(written).toStrictEqual([]);
+    });
+});
+
+describe("createSqlCtxDb onWrite for a statement abandoned at its deadline", () => {
+    let stored: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        stored = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        stored.close();
+    });
+
+    it.each([
+        ["an exec without transactions", false],
+        ["a transaction-capable exec writing a table with no companions", true],
+    ])("announces the table once the statement settles, through %s", async (_name, withTransaction) => {
+        expect.assertions(2);
+
+        const deadlines = new Set<() => void>();
+        const timer: QueryTimer = (fire) => {
+            deadlines.add(fire);
+
+            return () => {
+                deadlines.delete(fire);
+            };
+        };
+        let release: () => void = () => undefined;
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        let reachedHang: () => void = () => undefined;
+        const hung = new Promise<void>((resolve) => {
+            reachedHang = resolve;
+        });
+        // The row insert hangs until released: the deadline abandons it first, and it commits after.
+        const answer = async <R>(query: string, run: () => Promise<R>): Promise<R> => {
+            if (query.startsWith('INSERT INTO "posts"')) {
+                reachedHang();
+                await held;
+            }
+
+            return run();
+        };
+        const exec: SqlCtxExec = {
+            all: async (query, parameters) => answer(query, async () => stored.exec.all(query, parameters)),
+            run: async (query, parameters) => answer(query, async () => stored.exec.run(query, parameters)),
+            ...(withTransaction ? { transaction: async <R>(closure: (on: SqlCtxExec) => Promise<R>): Promise<R> => closure(exec) } : {}),
+        };
+        let announce: ((table: string) => void) | undefined;
+        const announcedLate = new Promise<string>((resolve) => {
+            announce = resolve;
+        });
+        const writer = createSqlCtxDb({
+            clock: () => 1_700_000_000_000,
+            dialect: makeSqliteDialect(),
+            exec,
+            onWrite: (table, settledLate) => {
+                if (settledLate === true) {
+                    announce?.(table);
+                }
+            },
+            queryTimeoutMs: 5000,
+            queryTimer: timer,
+            schema,
+        });
+        const insert = writer.insert("posts", { title: "late" });
+
+        await hung;
+
+        for (const fire of deadlines) {
+            fire();
+        }
+
+        await expect(insert).rejects.toBeInstanceOf(SqlQueryTimeoutError);
+
+        release();
+
+        await expect(announcedLate).resolves.toBe("posts");
     });
 });
