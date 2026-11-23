@@ -481,6 +481,29 @@ describe("lunoraClient outbox delegation", () => {
         client.close();
     });
 
+    it("opens the connection a refused durable replay needs, so the outbox's retry can send it", async () => {
+        expect.assertions(2);
+
+        const { sink } = recordingSink();
+        const client = new LunoraClient({
+            offlineQueue: { queueBeforeFirstConnect: true },
+            outbox: sink,
+            url: "https://app.example",
+            WebSocket: seedableWebSocket(),
+        });
+        const before = sockets.length;
+
+        // Nothing in this session subscribed to the shard, so no connection is coming for it otherwise.
+        const refused = await client
+            .mutation(fnRef("messages:send"), { text: "replay" }, { mutationId: "client-x:1", replayBaseline: null })
+            .catch((error: unknown) => error);
+
+        expect(refused).toBeInstanceOf(Error);
+        expect(sockets).toHaveLength(before + 1);
+
+        client.close();
+    });
+
     it("takes a refused durable replay's optimistic value back off the screen", async () => {
         expect.assertions(2);
 

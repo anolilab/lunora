@@ -4650,8 +4650,7 @@ class LunoraClient {
         // place and its rollback handle. The outbox keeps the original and retries.
         if (options.replayBaseline !== undefined && (socketDown || midReconnect)) {
             rollbackOptimistic(optimisticRollbacks);
-
-            throw durableReplayNotSentError();
+            this.refuseDurableReplayNotSent(socketDown, options.shardKey);
         }
 
         if (socketDown || midReconnect || queuedAhead) {
@@ -6652,6 +6651,20 @@ class LunoraClient {
                 this.sendShapeSubscribeIfOpen(state);
             }
         }
+    }
+
+    /**
+     * Refuse a durable replay the connection cannot carry now. The queued path opens a connection
+     * for its shard; this one has to as well when none is up, or a shard nothing in this session
+     * subscribed to is never connected and the outbox retries the same refusal forever. A
+     * reconnect already in progress keeps its own backoff.
+     */
+    private refuseDurableReplayNotSent(socketDown: boolean, shardKey: string | undefined): never {
+        if (socketDown) {
+            this.ensureSocket(shardKey);
+        }
+
+        throw durableReplayNotSentError();
     }
 
     private ensureSocket(shardKey: string | undefined): void {
