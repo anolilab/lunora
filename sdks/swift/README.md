@@ -135,7 +135,17 @@ while !Task.isCancelled {
         client.attachSocket { frame in
             do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }
         }
-        client.resendSubscriptions() // paced: schedule retryDueSubscriptions() at nextSubscriptionRetryAt
+        client.resendSubscriptions() // paced: the pacer below sends the rest of the queue
+        // Frees a re-subscribe slot nobody answered and serves retry hints. Waking at least every
+        // second sees a deadline armed after it went to sleep.
+        let pacer = Task {
+            while !Task.isCancelled {
+                let due = client.nextSubscriptionRetryAt.map { $0 - ProcessInfo.processInfo.systemUptime } ?? 1
+                try? await Task.sleep(nanoseconds: UInt64(min(max(due, 0), 1) * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                client.retryDueSubscriptions()
+            }
+        }
         let report = client.flushOfflineQueue(shardKey: shard)
         if !report.requeued.isEmpty || report.retryAfterMs != nil {
             flushRetry = Task {
@@ -156,6 +166,7 @@ while !Task.isCancelled {
             if client.handleFrame(raw) == "ack" { attempt = 0 }
         }
         flushRetry?.cancel()
+        pacer.cancel()
         // The close frame that ended the socket, if your library reports one; nil when none.
         client.detachSocket(closeCode: socket.closeCode, reason: socket.closeReason)
         socket.close() // your socket library: without this each reconnect leaks a connection

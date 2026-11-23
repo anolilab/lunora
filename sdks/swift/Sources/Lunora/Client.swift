@@ -243,6 +243,9 @@ public final class LunoraClient {
     /// stops holding a slot. See ``resendSubscriptions()``. Guarded by the lock.
     private var resubscribeQueue: [String] = []
     private var resubscribeSlots: [String: TimeInterval] = [:]
+    /// Bumped by every attach and detach. A sender closure has no identity to compare, so a retry
+    /// that wrote with the lock released checks this to learn its socket was replaced meanwhile.
+    private var socketAttachment = 0
     private var shapes: [String: ShapeSubscription] = [:]
     private var pokes: [String: PokeBuffer] = [:]
 
@@ -496,6 +499,7 @@ public final class LunoraClient {
     public func attachSocket(_ sender: @escaping LunoraFrameSender, context: [String: Any]? = nil) {
         withLock {
             socketGeneration = credentialGeneration
+            socketAttachment += 1
             pendingRetries.removeAll()
             clearResubscribesLocked()
             // A run cut off by a dropped or failed socket will be replayed in full.
@@ -527,6 +531,7 @@ public final class LunoraClient {
     public func detachSocket(closeCode: Int? = nil, reason: String? = nil) {
         let expired = withLock { () -> Bool in
             send = nil
+            socketAttachment += 1
             pendingRetries.removeAll()
             clearResubscribesLocked()
             discardRunsLocked()
@@ -1306,8 +1311,8 @@ public final class LunoraClient {
     /// resume cursor.
     @discardableResult
     public func retryDueSubscriptions(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Int {
-        let (sender, frames) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
-            guard let sender = send else { return (nil, []) }
+        let (sender, attachment, frames) = withLock { () -> (LunoraFrameSender?, Int, [[String: Any]]) in
+            guard let sender = send else { return (nil, socketAttachment, []) }
 
             var frames: [[String: Any]] = []
 
@@ -1324,7 +1329,7 @@ public final class LunoraClient {
                 }
             }
 
-            return (sender, frames)
+            return (sender, socketAttachment, frames)
         }
 
         guard let sender else { return 0 }
@@ -1343,6 +1348,10 @@ public final class LunoraClient {
         }
 
         let batch = withLock { () -> [[String: Any]] in
+            // A socket attached while the frames above were written has its own pacing, which this
+            // run must neither expire nor drain onto the socket it captured.
+            guard socketAttachment == attachment else { return [] }
+
             resubscribeSlots = resubscribeSlots.filter { $0.value > now }
 
             return takeResubscribesLocked(now: now)

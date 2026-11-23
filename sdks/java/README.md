@@ -80,12 +80,29 @@ int attempt = 0;
 String shard = null; // this socket's shard key; null is the default shard
 while (!Thread.currentThread().isInterrupted()) {
     Thread retry = null;
+    Thread pacer = null;
     Integer closeCode = null; // the close frame's code; null when the socket failed without one
     String closeReason = null;
     try (Socket socket = connect()) { // your socket library
         // attachSocket sends connect before it attaches the sender, so a subscribe on another thread cannot write ahead of it.
         client.attachSocket(frame -> socket.send(Json.write(frame)), null);
-        client.resendSubscriptions(); // paced: schedule retryDueSubscriptions() at nextSubscriptionRetryAtNanos()
+        client.resendSubscriptions(); // paced: the pacer below sends the rest of the queue
+        // Frees a re-subscribe slot nobody answered and serves retry hints. Waking at least every
+        // second sees a deadline armed after it went to sleep.
+        pacer = new Thread(() -> {
+            try {
+                while (true) {
+                    Long due = client.nextSubscriptionRetryAtNanos();
+                    long waitMs = due == null ? 1_000L : Math.max(0L, (due - System.nanoTime()) / 1_000_000L);
+                    Thread.sleep(Math.min(waitMs, 1_000L));
+                    client.retryDueSubscriptions();
+                }
+            } catch (InterruptedException e) {
+                // the socket run ended
+            }
+        });
+        pacer.setDaemon(true);
+        pacer.start();
         var report = client.flushOfflineQueue(shard);
         if (!report.requeued.isEmpty() || report.retryAfterMs != null) {
             // Requeued writes never stop the read loop: retry on a daemon thread, stopped below.
@@ -120,6 +137,9 @@ while (!Thread.currentThread().isInterrupted()) {
             break;
         }
     } finally {
+        if (pacer != null) {
+            pacer.interrupt();
+        }
         if (retry != null) {
             retry.interrupt();
             // Wait out an in-flight flush: if it requeues a write, the next run's flush must see it.

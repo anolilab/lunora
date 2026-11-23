@@ -178,6 +178,42 @@ final class ResubscribePacingTests: XCTestCase {
         XCTAssertNil(query["sinceSeq"], "the new identity must not resume the old one's position")
     }
 
+    func testARetryAcrossASocketSwapLeavesTheNewQueueAlone() {
+        let client = LunoraClient(url: "https://app.example")
+
+        client.attachSocket { _ in }
+
+        for index in 0..<5 {
+            subscribe(client, index)
+        }
+
+        let old = Recorder()
+        let fresh = Recorder()
+        var swapped = false
+
+        // The socket is replaced while the retry's own frame is being written to the old one.
+        client.attachSocket { frame in
+            old.frames.append(frame)
+
+            if frame["id"] as? String == "sub_5", !swapped {
+                swapped = true
+                client.detachSocket()
+                client.attachSocket { fresh.frames.append($0) }
+                client.resendSubscriptions()
+            }
+        }
+        client.resendSubscriptions()
+        client.handleFrame(
+            "{\"error\":{\"code\":\"OVERLOADED\",\"message\":\"busy\",\"retryAfterMs\":0},\"id\":\"sub_5\",\"type\":\"error\"}"
+        )
+
+        client.retryDueSubscriptions(now: ProcessInfo.processInfo.systemUptime + 2 * LunoraClient.resubscribeAckTimeout)
+
+        XCTAssertTrue(swapped, "the retry must have reached the old socket")
+        XCTAssertFalse(old.subscribes.contains("sub_4"), "the new socket's queue must not drain onto the old one, got \(old.subscribes)")
+        XCTAssertTrue(fresh.subscribes.contains("sub_1"), "the new socket keeps its own window")
+    }
+
     func testShapeSubscriptionsAreNotPaced() {
         let client = LunoraClient(url: "https://app.example")
 
