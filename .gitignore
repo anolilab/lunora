@@ -86,6 +86,13 @@ typings/
 dist
 dist/
 
+# A vis cache hit moves a task's current output aside to `<output>.old-<id>`, stages the cached copy as
+# `<output>.restoring-<id>`, swaps it in and deletes the old one. Ignored here because every package's
+# eslint config takes its global ignores from this file: a lint walking the package while a build restores
+# its dist otherwise lists one of these directories and then fails to read it once it is gone.
+*.old-*/
+*.restoring-*/
+
 # Next.js / TanStack Start
 .next/
 
