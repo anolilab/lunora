@@ -62,7 +62,12 @@ extension ConformanceTests {
 /// queued write belongs to. Every write goes through `submit` — the path that
 /// stamps it — and every flush is the caller's own.
 final class TokenIdentityTests: XCTestCase {
+    // corelibs XCTest (Linux) has no argument-less XCTestCase initialiser.
+    #if canImport(Darwin)
     private let helper = ConformanceTests()
+    #else
+    private let helper = ConformanceTests(name: "helper", testClosure: { _ in })
+    #endif
 
     private func tokenIdentity() throws -> [String: Any] {
         let queue = try XCTUnwrap(helper.fixture("offline-optimistic.json")["offlineQueue"] as? [String: Any])

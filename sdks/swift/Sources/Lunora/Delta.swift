@@ -95,7 +95,7 @@ enum LunoraRowDelta {
     }
 
     private static func number(_ value: Any?) -> Double? {
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        guard let number = value as? NSNumber, NumberKind.of(number) != .boolean else { return nil }
 
         return number.doubleValue
     }

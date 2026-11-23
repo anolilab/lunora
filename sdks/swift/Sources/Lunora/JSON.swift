@@ -8,8 +8,8 @@ import Foundation
 /// number here. Every number goes through `Double(String)` (strtod), which is.
 ///
 /// The tree is the one the port has always used: `[String: Any]`, `[Any]`,
-/// `String`, `NSNull`, and `NSNumber` — a boolean as the CoreFoundation boolean
-/// (so the `CFBooleanGetTypeID` guards keep working), an integer literal that
+/// `String`, `NSNull`, and `NSNumber` — a boolean as the boxed boolean
+/// ``NumberKind/of(_:)`` recognises, an integer literal that
 /// fits `Int64` as an integer, anything else as a double. An integer past the
 /// exact double range is still read as an integer here; ``Wire/decode(_:depth:)``
 /// turns it into the double `JSON.parse` would have produced.
@@ -285,5 +285,32 @@ public enum LunoraJSON {
 
             return NSNumber(value: double)
         }
+    }
+}
+
+/// What an `NSNumber` in the JSON tree holds. `NSNumber` bridges `Bool`, `Int`
+/// and `Double` indistinguishably under `as?` (`true` reads as `1`), so every
+/// reader that must tell them apart asks here.
+enum NumberKind {
+    case boolean, integer, floatingPoint
+
+    static func of(_ number: NSNumber) -> NumberKind {
+        #if canImport(Darwin)
+        if CFGetTypeID(number) == CFBooleanGetTypeID() { return .boolean }
+
+        switch CFNumberGetType(number as CFNumber) {
+        case .float32Type, .float64Type, .floatType, .doubleType, .cgFloatType: return .floatingPoint
+        default: return .integer
+        }
+        #else
+        // swift-corelibs-foundation has no public CoreFoundation, but boxes a
+        // boolean as "c" and widens every Int8 to "i", so "c" is unambiguous
+        // there (unlike on Darwin, where an Int8 is also "c").
+        switch number.objCType.pointee {
+        case CChar(UInt8(ascii: "c")), CChar(UInt8(ascii: "B")): return .boolean
+        case CChar(UInt8(ascii: "f")), CChar(UInt8(ascii: "d")): return .floatingPoint
+        default: return .integer
+        }
+        #endif
     }
 }

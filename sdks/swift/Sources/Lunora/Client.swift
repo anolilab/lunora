@@ -750,7 +750,7 @@ public final class LunoraClient {
     /// a peer sending `"commitCursor": true` would otherwise confirm every
     /// optimistic layer at cursor 1.
     static func intValue(_ value: Any?) -> Int? {
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        guard let number = value as? NSNumber, NumberKind.of(number) != .boolean else { return nil }
 
         return number.intValue
     }
@@ -758,7 +758,7 @@ public final class LunoraClient {
     /// The server's retry hint on a subscription error, in seconds, or nil when it sent none this
     /// client can honour. Booleans are excluded for the same reason as ``intValue(_:)``.
     static func retryAfterSeconds(_ envelope: [String: Any]) -> TimeInterval? {
-        guard let number = envelope["retryAfterMs"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        guard let number = envelope["retryAfterMs"] as? NSNumber, NumberKind.of(number) != .boolean else { return nil }
 
         let delay = number.doubleValue
 
@@ -772,7 +772,7 @@ public final class LunoraClient {
     /// The same guard ``parseCommitCursor(_:)`` uses, reused for a batch slot's
     /// `id` and `commitCursor` so a `true` cannot be read as `1`.
     static func parseSlotID(_ value: Any?) -> Int? {
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        guard let number = value as? NSNumber, NumberKind.of(number) != .boolean else { return nil }
 
         return number.intValue
     }

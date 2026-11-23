@@ -21,7 +21,7 @@ extension Wire {
         }
 
         if let number = value as? NSNumber {
-            if CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue ? "true" : "false" }
+            if NumberKind.of(number) == .boolean { return number.boolValue ? "true" : "false" }
             return formatNumber(number)
         }
 
@@ -60,13 +60,7 @@ extension Wire {
     }
 
     private static func formatNumber(_ number: NSNumber) -> String {
-        let type = CFNumberGetType(number as CFNumber)
-        switch type {
-        case .float32Type, .float64Type, .floatType, .doubleType, .cgFloatType:
-            return formatDouble(number.doubleValue)
-        default:
-            return number.stringValue
-        }
+        NumberKind.of(number) == .floatingPoint ? formatDouble(number.doubleValue) : number.stringValue
     }
 
     /// Renders a double exactly as `String(v)` does in JavaScript, which is what
