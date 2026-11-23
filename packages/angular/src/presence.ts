@@ -174,7 +174,8 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     // 22+ ships a global `WebSocket`, so a field-initializer heartbeat/subscribe
     // would open a real connection during the server render. `present` stays
     // `undefined`; the browser render re-runs this and connects.
-    if (shouldOpenSubscription(fromInjectionContext, options.injector)) {
+    // Only a reactive room runs in `options.injector` (its effect does); a static one uses the ambient context.
+    if (shouldOpenSubscription(fromInjectionContext, typeof roomId === "function" ? options.injector : undefined)) {
         // Everything tied to one room. A room change disposes it and arms the next, so the old
         // room's interval, listener, connection context and subscription never outlive it.
         // `register` receives the room's teardown BEFORE it subscribes: a replayed refusal can

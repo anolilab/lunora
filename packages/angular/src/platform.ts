@@ -25,8 +25,10 @@ import { stableWireKey } from "@lunora/wire";
  * (Angular's `PLATFORM_SERVER_ID`) to keep this free of an `@angular/common`
  * dependency.
  *
- * A caller outside DI that passes an `injector` is asked through it: that injector
- * is what the primitive's effect runs in, so a server one must gate the socket too.
+ * A reactive primitive passes its `injector`: that injector is what its effect runs
+ * in, so a server one must gate the socket too. A static call creates no effect and
+ * passes none, so a differing injector cannot open a socket during server rendering
+ * or suppress one in the browser.
  */
 export const shouldOpenSubscription = (fromInjectionContext: boolean, injector?: Injector): boolean => {
     if (injector !== undefined) {

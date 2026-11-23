@@ -128,8 +128,11 @@ export const liveTopic = <Payload>(
     };
 
     // Skip the socket on the Angular server platform (SSR), as `liveQuery` does.
-    if (shouldOpenSubscription(fromInjectionContext, options.injector)) {
-        if (typeof topic === "function" || typeof sessionKey === "function" || typeof shardKey === "function") {
+    const reactive = typeof topic === "function" || typeof sessionKey === "function" || typeof shardKey === "function";
+
+    // Only a reactive call runs in `options.injector` (its effect does); a static one uses the ambient context.
+    if (shouldOpenSubscription(fromInjectionContext, reactive ? options.injector : undefined)) {
+        if (reactive) {
             attachReactiveArgs(() => connectionOf(subscriptionOf()), { destroyRef, injector: options.injector }, open);
         } else {
             open(connectionOf(subscriptionOf()), (unsubscribe) => destroyRef.onDestroy(unsubscribe));

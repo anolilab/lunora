@@ -57,6 +57,50 @@ describe("ssr platform gating", () => {
         expect(data()).toBeUndefined();
     });
 
+    // A static call creates no effect, so a passed `injector` is unused and the ambient platform decides;
+    // a reactive call's effect runs in that injector, so its platform decides.
+    describe("an explicit injector whose platform differs from the ambient one", () => {
+        const presenceOptions = { heartbeat: heartbeatRef, listPresent: listPresentRef, sessionId: "sess-1" };
+
+        it("a static call in the browser still opens with a server injector", () => {
+            const fake = createFakeClient();
+            const server = makeInjector(fake, "server");
+
+            runInInjectionContext(makeInjector(fake, "browser"), () => {
+                liveQuery(listRef, { channelId: "general" }, { injector: server });
+                subscription(listRef, { roomId: "general" }, { injector: server });
+                presence("room:1", { ...presenceOptions, injector: server });
+            });
+
+            expect(fake.subscriptions).toHaveLength(3);
+        });
+
+        it("a reactive call with a server injector opens nothing, even in the browser", () => {
+            const fake = createFakeClient();
+            const server = makeInjector(fake, "server");
+
+            runInInjectionContext(makeInjector(fake, "browser"), () => {
+                liveQuery(
+                    listRef,
+                    () => {
+                        return { channelId: "general" };
+                    },
+                    { injector: server },
+                );
+                subscription(
+                    listRef,
+                    () => {
+                        return { roomId: "general" };
+                    },
+                    { injector: server },
+                );
+                presence(() => "room:1", { ...presenceOptions, injector: server });
+            });
+
+            expect(fake.subscriptions).toHaveLength(0);
+        });
+    });
+
     it("liveQuery DOES subscribe on the browser platform", () => {
         const fake = createFakeClient();
 
