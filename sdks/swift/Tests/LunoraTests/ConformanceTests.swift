@@ -298,6 +298,20 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
+    /// Both readers a value can come from — this port's own and `JSONSerialization`,
+    /// which a caller may hand in — box booleans, integers and doubles alike, so
+    /// a `true` mistaken for `1` (or `1` for `true`) changes the wire and the key.
+    func testNumberKindTellsBooleansFromNumbers() throws {
+        let text = "[true,false,1,0,1.5,-0.0]"
+        let want: [NumberKind] = [.boolean, .boolean, .integer, .integer, .floatingPoint, .floatingPoint]
+        let foundation = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [NSNumber])
+        let own = try XCTUnwrap(LunoraJSON.parse(text) as? [NSNumber])
+
+        XCTAssertEqual(foundation.map(NumberKind.of), want, "JSONSerialization")
+        XCTAssertEqual(own.map(NumberKind.of), want, "LunoraJSON")
+        XCTAssertEqual(Wire.stableStringify([true, 1, 1.5, 0] as [Any]), "[true,1,1.5,0]")
+    }
+
     /// JavaScript sorts by UTF-16 code unit, so an astral character is its high
     /// surrogate (0xD83D) and sorts after U+2028 but before U+FFFD. Swift's
     /// scalar-wise `<` puts it last — a different dedup key for identical args.
@@ -316,10 +330,17 @@ final class ConformanceTests: XCTestCase {
         // A LONE surrogate is written `\udXXX`, lowercase, as JSON.stringify
         // writes it; a well-formed pair is written raw. The truncated emoji is
         // the realistic source: a bridged NSString keeps the unit even though
-        // Swift's own views repair it to U+FFFD.
+        // Swift's own views repair it to U+FFFD. Darwin only: corelibs Foundation
+        // bridges an NSString to a native String eagerly, repairing the unit,
+        // and traps on a substring that splits a pair.
+        #if canImport(Darwin)
         let truncated = ("\u{1F600} hello" as NSString).substring(to: 1)
         XCTAssertEqual(Wire.jsonString(truncated), #""\ud83d""#)
+        #endif
         XCTAssertEqual(Wire.jsonString("\u{1F600}"), "\"\u{1F600}\"")
+        // Darwin only, for the reason above: on Linux every lone surrogate in a
+        // `String` reads back as U+FFFD.
+        #if canImport(Darwin)
         // Keys and members differing only by a lone surrogate are distinct to
         // JavaScript, and Swift compares them as U+FFFD. Each must survive a
         // decode and re-encode with the reference's bytes and stable key (the
@@ -355,6 +376,7 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(inner?["\u{FFFD}"] as? Int, 3, "a literal names every key a literal can spell")
         // An object whose keys Swift can tell apart stays a `[String: Any]`.
         XCTAssertNotNil(try? LunoraJSON.parse(#"{"\ud800":1,"x":{"\ud801":2}}"#) as? [String: Any])
+        #endif
         XCTAssertEqual(
             (try? LunoraJSON.parse(#"{"a":1,"a":2}"#) as? [String: Any])?["a"] as? Int,
             2,
@@ -362,7 +384,9 @@ final class ConformanceTests: XCTestCase {
         )
 
         // And the reader keeps one it is sent, so a relayed value round-trips.
+        #if canImport(Darwin)
         XCTAssertEqual(Wire.jsonString((try? LunoraJSON.parse(#""a\uD800b""#)) as? String ?? ""), #""a\ud800b""#)
+        #endif
     }
 
     /// A write carrying a lone surrogate reaches the wire the way JSON.stringify
@@ -373,6 +397,9 @@ final class ConformanceTests: XCTestCase {
     /// as transport — so the write, and every write queued behind it, was
     /// re-queued on every flush, forever.
     func testALoneSurrogateReachesTheWire() throws {
+        #if !canImport(Darwin)
+        throw XCTSkip("corelibs Foundation repairs a lone surrogate when it bridges an NSString")
+        #endif
         let truncated = ("\u{1F600} hello" as NSString).substring(to: 1)
         var bodies: [String] = []
         let client = LunoraClient(

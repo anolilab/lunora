@@ -243,11 +243,11 @@ extension Wire {
         if let data = value as? Data { return [tag, "bytes", data.base64EncodedString()] }
 
         // NSNumber bridges Bool, Int and Double indistinguishably under `as?`,
-        // so booleans are identified by their CoreFoundation type first — a
+        // so booleans are identified by their boxed kind first — a
         // plain `as? Bool` would turn 0 and 1 into false and true.
         if let number = value as? NSNumber {
-            if CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue }
-            if isIntegral(number) {
+            if NumberKind.of(number) == .boolean { return number.boolValue }
+            if NumberKind.of(number) == .integer {
                 // `Int64` holds integers a `Double` cannot, so letting one
                 // through meant the SERVER's own JSON.parse rounded it and the
                 // value that arrived was quietly a different integer. Refuse, as
@@ -268,16 +268,6 @@ extension Wire {
         if let object = value as? [WireKey: Any] { return try encodeDictionary(object, depth: depth) }
 
         throw WireFormatError.unsupported(String(describing: type(of: value as Any)))
-    }
-
-    private static func isIntegral(_ number: NSNumber) -> Bool {
-        let type = CFNumberGetType(number as CFNumber)
-        switch type {
-        case .float32Type, .float64Type, .floatType, .doubleType, .cgFloatType:
-            return false
-        default:
-            return true
-        }
     }
 
     private static func encodeDouble(_ value: Double) -> Any {
@@ -340,7 +330,7 @@ extension Wire {
         // keyed. Yield the double `JSON.parse` does (9007199254740993 reads as
         // 9007199254740992). A NATIVE integer that large is still refused by
         // ``encode`` — only the decode side is a float64.
-        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), isIntegral(number),
+        if let number = value as? NSNumber, NumberKind.of(number) == .integer,
             abs(number.doubleValue) > maxExactInteger
         {
             return NSNumber(value: number.doubleValue)
@@ -368,13 +358,13 @@ extension Wire {
         case "bigint": return try decodeBigInt(value)
         case "date":
             // `Bool` bridges to `NSNumber` under `as?` (true -> 1), so the
-            // CoreFoundation type is checked first — the same trap `encode`,
+            // boxed kind is checked first — the same trap `encode`,
             // `mapKeyIdentity` and `parseCommitCursor` already guard. Without
             // it `[TAG,"date",true]` decoded as epoch 1 where the reference,
             // whose check is `typeof epoch !== "number"`, refuses the frame.
             guard value.count >= 3,
                 let epoch = try decode(value[2], depth: depth + 1) as? NSNumber,
-                CFGetTypeID(epoch) != CFBooleanGetTypeID()
+                NumberKind.of(epoch) != .boolean
             else {
                 throw WireFormatError.malformed("date")
             }
@@ -492,10 +482,10 @@ extension Wire {
         if let text = key as? String { return "str:" + utf16Units(text).map { String($0, radix: 16) }.joined(separator: ",") }
 
         // NSNumber bridges Bool, Int and Double indistinguishably under `as?`, so
-        // booleans are identified by their CoreFoundation type first — `as? Bool`
+        // booleans are identified by their boxed kind first — `as? Bool`
         // would collapse 0 and 1 onto false and true.
         if let number = key as? NSNumber {
-            if CFGetTypeID(number) == CFBooleanGetTypeID() { return "bool:\(number.boolValue)" }
+            if NumberKind.of(number) == .boolean { return "bool:\(number.boolValue)" }
             return number.doubleValue.isNaN ? "num:nan" : "num:\(number.doubleValue + 0.0)"
         }
 

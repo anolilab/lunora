@@ -110,6 +110,9 @@ guard watchUnsubscribes.count == 1, (watchUnsubscribes[0]["id"] as? String) == s
 // `JSONSerialization.data(withJSONObject:)` crashed the process on that, past
 // any `catch`. A model cannot hold a lone surrogate and `JSONDecoder` refuses the
 // escape, so the documented outcome is a DecodingError the caller can catch.
+// Apple only: Linux Foundation turns a lone surrogate into U+FFFD on parse, so the
+// two keys never reach the `[WireKey: Any]` path there.
+#if canImport(Darwin)
 reply = #"{"result":{"total":3,"\ud800":1,"\ud801":2}}"#
 
 guard try client.query("stats:summary", args: nil, shardKey: nil) is [WireKey: Any] else {
@@ -117,6 +120,7 @@ guard try client.query("stats:summary", args: nil, shardKey: nil) is [WireKey: A
 }
 
 expectDecodingError("a result with lone-surrogate keys")
+#endif
 
 // A result the model cannot hold is the same thrown DecodingError.
 reply = #"{"result":{"total":"three"}}"#

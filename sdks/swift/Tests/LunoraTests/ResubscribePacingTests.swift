@@ -89,6 +89,20 @@ final class ResubscribePacingTests: XCTestCase {
         XCTAssertEqual(Set(recorder.subscribes).count, Self.subscriptionCount)
     }
 
+    /// Past `sub_9`, so a queue ordered by string alone would send `sub_10` before `sub_2`.
+    func testTheQueueDrainsInSubscribeOrder() {
+        let recorder = Recorder()
+        let client = reconnected(recorder, count: 12)
+        var answered = 0
+
+        while answered < recorder.subscribes.count {
+            client.handleFrame(ack(recorder.subscribes[answered]))
+            answered += 1
+        }
+
+        XCTAssertEqual(recorder.subscribes, (1...12).map { "sub_\($0)" })
+    }
+
     func testAnUnsubscribeSkipsAQueuedOneAndFreesAnOutstandingOne() {
         let client = LunoraClient(url: "https://app.example")
 
