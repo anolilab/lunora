@@ -976,8 +976,8 @@ class SchedulerDO {
             // The receiver's replay-dedup key (shard mutation id, workflow instance id). The record
             // id alone is not enough: it is free again once its job settles, and the shard keeps a
             // dedup row for a day, so a job scheduled under a reused id would be answered from the
-            // previous job's result. `enqueuedAt` is stamped once per scheduling and carried through
-            // every retry, so a re-fire of this record still collapses onto its first attempt.
+            // previous job's result. The key is fixed once per scheduling and carried through every
+            // retry, so a re-fire of this record still collapses onto its first attempt.
             dedupKey: SchedulerDO.dedupKey(record),
             functionPath: record.functionPath,
             id: record.id,

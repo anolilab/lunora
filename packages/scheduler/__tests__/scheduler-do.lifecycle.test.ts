@@ -719,7 +719,7 @@ describe("schedulerDO dispatch dedup key", () => {
     });
 
     it("dispatches under a caller's dedupKey across retries, and refuses one the receivers cannot carry", async () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         const at = 1_700_000_000_000;
         const setNow = pinClock(at);
@@ -742,6 +742,5 @@ describe("schedulerDO dispatch dedup key", () => {
 
         expect(refused.status).toBe(400);
         expect(keys).toStrictEqual(["outbox-entry-7", "outbox-entry-7"]);
-        expect(keys).toHaveLength(2);
     });
 });

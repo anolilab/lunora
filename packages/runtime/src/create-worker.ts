@@ -3902,15 +3902,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * re-fire it too). Without an id Cloudflare mints a fresh random instance for
      * each of those, so one scheduled job runs its whole pipeline up to five times
      * — while two scheduler docblocks justify the retry loop with "idempotent
-     * dispatch keyed by record id". The key is `<record id>-<enqueuedAt>` (the bare
-     * record id from a sender without one): `resolveScheduleId` constrains the id to
-     * `^\w[\w-]{0,63}$` and the suffix is `-` plus digits, so the key stays inside the
+     * dispatch keyed by record id". The SchedulerDO keeps the key inside the
      * engine's own `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$` (and well inside its 100-char
      * ceiling) — so `create({ id })` accepts it. That containment is the whole
      * reason the leading character is constrained at all: base64url mints `-` as
      * often as any other character, and a leading one is a VALIDATION rejection
      * here, which {@link isDuplicateInstanceError} does not match and the
-     * scheduler therefore retries to `dead:` five attempts later. The suffix is
+     * scheduler therefore retries to `dead:` five attempts later. A sender without a
+     * key falls back to the bare record id. The key differs per scheduling, which is
      * what keeps a job scheduled under a reused id from being taken for the
      * previous job's instance.
      *
