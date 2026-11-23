@@ -782,6 +782,27 @@ export const viaFactory = makeQuery();
         expect(findings.filter((finding) => finding.name === "procedure_not_registered").map((finding) => finding.level)).toStrictEqual(["INFO"]);
     });
 
+    it.each([
+        ["a local alias", "type Gate = RegisteredWhisperAuthorizer;"],
+        ["an interface extending it", "interface Gate extends RegisteredWhisperAuthorizer {}"],
+    ])("fails the build for a re-exported authorizer annotated with %s", (_kind, gateType) => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside(
+            "src/auth/aliased.ts",
+            `import { onWhisper } from "@lunora/server";\nimport type { RegisteredWhisperAuthorizer } from "@lunora/server";\n\n${gateType}\n\nexport const gate: Gate = onWhisper(async () => false);\n`,
+        );
+        write("reexport.ts", `export { gate } from "../src/auth/aliased";\n`);
+        load("reexport.ts");
+
+        const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter(
+            (finding) => finding.name === "procedure_not_registered" && finding.metadata["exportName"] === "gate",
+        );
+
+        expect(findings.map((finding) => [finding.metadata["exportName"], finding.level])).toStrictEqual([["gate", "ERROR"]]);
+    });
+
     it("fails the build for an authorizer re-exported from app code that lives in a `_generated` directory", () => {
         expect.assertions(1);
 

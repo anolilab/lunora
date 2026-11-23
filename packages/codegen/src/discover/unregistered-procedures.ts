@@ -134,6 +134,35 @@ type Witness = { declaration: VariableDeclaration; exportName: string; relativeP
 const resolves = (type: Type): boolean => !type.isAny();
 
 /**
+ * The registered type `type` is, or `undefined`. An interface that extends one is one too
+ * (`interface Gate extends RegisteredWhisperAuthorizer {}`): its own name hides the base, and the
+ * value is still the registration at runtime.
+ */
+const registeredTypeName = (type: Type, seen: Set<Type> = new Set()): string | undefined => {
+    if (seen.has(type)) {
+        return undefined;
+    }
+
+    seen.add(type);
+
+    const name = type.getAliasSymbol()?.getName() ?? type.getSymbol()?.getName();
+
+    if (name !== undefined && REGISTRATION_BY_TYPE_NAME.has(name)) {
+        return name;
+    }
+
+    for (const base of type.isInterface() ? type.getBaseTypes() : []) {
+        const found = registeredTypeName(base, seen);
+
+        if (found !== undefined) {
+            return found;
+        }
+    }
+
+    return undefined;
+};
+
+/**
  * The registration of a binding, or `undefined` when it is not one.
  *
  * Resolves through the alias symbol first so a re-exported or locally aliased
@@ -154,7 +183,7 @@ const registrationOf = (node: Node): Registration | undefined => {
         return undefined;
     }
 
-    const typeName = type.getAliasSymbol()?.getName() ?? type.getSymbol()?.getName();
+    const typeName = registeredTypeName(type);
     const registration = typeName === undefined ? undefined : REGISTRATION_BY_TYPE_NAME.get(typeName);
 
     return registration === undefined || typeName === undefined ? undefined : { ...registration, typeName };
