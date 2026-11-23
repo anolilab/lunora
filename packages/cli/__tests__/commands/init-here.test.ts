@@ -381,6 +381,23 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
         expect(readFileSync(functionPath).equals(functionBefore)).toBe(true);
     });
 
+    it("does not follow a link planted at the scaffold's temp file", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const victim = join(workdir, "victim.txt");
+
+        writeFileSync(victim, "keep\n", "utf8");
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        symlinkSync(victim, join(workdir, "lunora", `schema.ts.lunora-${String(process.pid)}.tmp`));
+
+        const result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        expect(result.code).toBe(1);
+        expect(readFileSync(victim, "utf8")).toBe("keep\n");
+    });
+
     it("a write that fails part-way leaves no schema.ts, so a re-run writes the whole sample", async () => {
         expect.assertions(4);
 

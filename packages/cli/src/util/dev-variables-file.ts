@@ -81,8 +81,7 @@ const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
 
 /**
  * The other `.dev.vars`-shaped file in `cwd` that `file` is a symlink or hard link to, or `undefined`.
- * Reading or writing through such a link reaches another environment's values. A name differing only
- * in case is the same file on a case-insensitive filesystem, not a link.
+ * Reading or writing through such a link reaches another environment's values.
  */
 const linkedDevVariablesFile = (cwd: string, file: string): string | undefined => {
     const own = statSync(join(cwd, file), { throwIfNoEntry: false });
@@ -99,8 +98,12 @@ const linkedDevVariablesFile = (cwd: string, file: string): string | undefined =
         return undefined;
     }
 
+    // On a case-insensitive filesystem `file` may be listed under another case; on a case-sensitive one
+    // a case-only sibling is a separate entry and can be a link like any other.
+    const self = names.includes(file) ? file : names.find((name) => name.toLowerCase() === file.toLowerCase());
+
     return names.find((name) => {
-        if (name.toLowerCase() === file.toLowerCase() || (name !== DEV_VARS_FILE && !name.startsWith(`${DEV_VARS_FILE}.`))) {
+        if (name === self || (name !== DEV_VARS_FILE && !name.startsWith(`${DEV_VARS_FILE}.`))) {
             return false;
         }
 

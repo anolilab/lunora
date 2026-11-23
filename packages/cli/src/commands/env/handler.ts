@@ -294,6 +294,13 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
         return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
+    // The rewrite replaces a link with a regular file holding the linked file's values, which a later push would upload.
+    const refused = ignoreNamedEnvironmentFile(context);
+
+    if (refused !== undefined) {
+        return refused;
+    }
+
     const raw = readDevVariablesRaw(devVariablesPath);
 
     if (!parseDevVariables(raw).has(options.key)) {

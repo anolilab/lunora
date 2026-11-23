@@ -1160,7 +1160,8 @@ const scaffoldLunoraDirectory = (cwd: string, logger: Logger): InitCommandResult
                 throw Object.assign(new Error(`EEXIST: file already exists, ${path}`), { code: "EEXIST" });
             }
 
-            writeFileSync(temporaryPath, content, "utf8");
+            // `wx` creates the temp file exclusively: a link planted at its predictable name fails the write instead of being followed.
+            writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx" });
             renameSync(temporaryPath, path);
         } catch (error) {
             rmSync(temporaryPath, { force: true });

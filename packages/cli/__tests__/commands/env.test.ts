@@ -1,6 +1,6 @@
 /* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain secret-like strings */
 import { execFileSync } from "node:child_process";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -608,6 +608,37 @@ describe("lunora env", () => {
             expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe("LOCAL=1\n");
             expect(recorded.errors.join("\n")).toContain("is a link to .dev.vars");
+        });
+
+        it("push --env Production refuses a .dev.vars.Production linked to the case-only sibling .dev.vars.production", async () => {
+            expect.assertions(3);
+
+            // Two distinct entries on a case-sensitive filesystem, one a link to the other.
+            writeFileSync(join(workdir, ".dev.vars.production"), 'RESEND_API_KEY="re_prod"\n', "utf8");
+            symlinkSync(join(workdir, ".dev.vars.production"), join(workdir, ".dev.vars.Production"));
+
+            const { logger, recorded } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, env: "Production", logger, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(calls).toHaveLength(0);
+            expect(recorded.errors.join("\n")).toContain("is a link to .dev.vars.production");
+        });
+
+        it("unset --env staging refuses a .dev.vars.staging linked to .dev.vars, and keeps the link", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), "FOO=1\nLOCAL=2\n", "utf8");
+            symlinkSync(join(workdir, ".dev.vars"), join(workdir, ".dev.vars.staging"));
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", key: "FOO", logger, subcommand: "unset" });
+
+            // Rewriting would replace the link with a regular file of dev values that a staging push uploads.
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(lstatSync(join(workdir, ".dev.vars.staging")).isSymbolicLink()).toBe(true);
+            expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe("FOO=1\nLOCAL=2\n");
         });
 
         it("push --from-dev-vars pushes the bare file to a named environment", async () => {
