@@ -186,8 +186,28 @@ const outboxReplaysStarted = new WeakSet<object>();
  */
 const outboxSettlements = new Map<string, Promise<void>>();
 
-/** Settles once the raw write the sink stored under `idempotencyKey` is sent or dropped; `undefined` when it stored none. */
-const outboxWriteSettled = (idempotencyKey: string): Promise<void> | undefined => outboxSettlements.get(idempotencyKey);
+/**
+ * Keys a one-shot collection write is sending under, and will wait on. A failure to store one is
+ * reported by that wait, which knows the collection and row; and its settlement is kept until the
+ * wait reads it, since a store failure can settle before the send returns.
+ */
+const outboxWaiters = new Set<string>();
+
+/**
+ * Run `send`, then wait until the raw write the sink stored for it under `idempotencyKey`, if any,
+ * is sent or dropped. Rejects with the stored write's failure.
+ */
+const sendAndAwaitOutboxWrite = async (idempotencyKey: string, send: () => Promise<unknown>): Promise<void> => {
+    outboxWaiters.add(idempotencyKey);
+
+    try {
+        await send();
+        await outboxSettlements.get(idempotencyKey);
+    } finally {
+        outboxWaiters.delete(idempotencyKey);
+        outboxSettlements.delete(idempotencyKey);
+    }
+};
 
 /** Failures of stored writes whose rejection has already reached `onWriteRejected`. */
 const reportedOutboxFailures = new WeakSet<Error>();
@@ -374,22 +394,33 @@ const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOut
             const forget = (): void => {
                 outboxSettlements.delete(mutation.idempotencyKey);
             };
-            // Rejects for a write that failed, so an action waiting on it (see `outboxWriteSettled`)
-            // fails too, with an error marked as already reported: either path below reports it.
+            // Rejects for a write that failed, so an action waiting on it (see `sendAndAwaitOutboxWrite`)
+            // fails too. A stored write's failure was reported by the replay handler, so it is marked as
+            // such; an unstored one is reported here, unless its waiter reports it with its collection
+            // and row, and then it is kept for that waiter, which may not have asked for it yet.
             const settled = committed.then(forget, (error: unknown) => {
-                forget();
+                const stored = outboxReplaysStarted.has(metadata);
+                const waited = outboxWaiters.has(mutation.idempotencyKey);
+                const unstored = new Error(`offline write could not be stored: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 
-                if (!outboxReplaysStarted.has(metadata)) {
-                    takeOutboxRejection(mutation.idempotencyKey)?.();
-                    outboxUnstoredReporters.get(executor)?.({
-                        collection: mutation.functionPath,
-                        error: new Error(`offline write could not be stored: ${error instanceof Error ? error.message : String(error)}`, { cause: error }),
-                    });
+                if (!waited) {
+                    forget();
                 }
 
-                const failure = error instanceof Error ? error : new Error(String(error));
+                if (!stored) {
+                    takeOutboxRejection(mutation.idempotencyKey)?.();
 
-                reportedOutboxFailures.add(failure);
+                    if (!waited) {
+                        outboxUnstoredReporters.get(executor)?.({ collection: mutation.functionPath, error: unstored });
+                    }
+                }
+
+                const raw = error instanceof Error ? error : new Error(String(error));
+                const failure = stored ? raw : unstored;
+
+                if (stored || !waited) {
+                    reportedOutboxFailures.add(failure);
+                }
 
                 throw failure;
             });
@@ -622,10 +653,10 @@ export {
     makeDiffEmit,
     noteOutboxReplayStarted,
     OUTBOX_MUTATION_FN_NAME,
-    outboxWriteSettled,
     registerOutboxCarrier,
     registerOutboxUnstoredReporter,
     runOutboxMutation,
+    sendAndAwaitOutboxWrite,
     takeOutboxRejection,
     terminalVerdict,
     toMap,

@@ -1798,6 +1798,53 @@ describe("durable replay while the connection is down", () => {
         expect(transaction.state).toBe("completed");
     });
 
+    // The early action's write can also fail to be stored at all (storage quota). Nothing retries it,
+    // and the report must name the collection and carry the row being rolled back, as the type says.
+    it.each([
+        [
+            "within a microtask",
+            async () => {
+                throw new Error("Storage quota exceeded");
+            },
+        ],
+        [
+            "after a macrotask",
+            async () =>
+                new Promise((_resolve, reject) => {
+                    setTimeout(() => {
+                        reject(new Error("Storage quota exceeded"));
+                    }, 0);
+                }),
+        ],
+    ] as const)("fails an early action, reporting its collection and row, when its write cannot be stored %s", async (_when, commit) => {
+        let sink: ReturnType<typeof createExecutorOutboxSink> | undefined;
+        const { client, sent } = offlineClient({ outbox: () => sink as ReturnType<typeof createExecutorOutboxSink> });
+        const rejected = vi.fn<(event: WriteRejectedEvent) => void>();
+        const database = notesDatabase(client, { onWriteRejected: rejected }) as unknown as {
+            actions: { notes: (input: { text: string }) => { id: string; transaction: { isPersisted: { promise: Promise<unknown> }; state: string } } };
+            executor: OfflineExecutor;
+        };
+
+        sink = createExecutorOutboxSink(database.executor);
+        client.subscribe(ref("messages:list"), {} as never, () => undefined);
+
+        const { id, transaction } = database.actions.notes({ text: "early, unstored" });
+        const verdict = transaction.isPersisted.promise.then(
+            () => "persisted",
+            () => "failed",
+        );
+
+        vi.spyOn(database.executor, "createOfflineTransaction").mockImplementationOnce(() => ({ commit, mutate: () => undefined }) as never);
+
+        await awaitInit(database.executor);
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sent).toStrictEqual([]);
+        await expect(verdict).resolves.toBe("failed");
+        expect(rejected).toHaveBeenCalledTimes(1);
+        expect(rejected.mock.calls[0]?.[0]).toMatchObject({ collection: "notes", row: { _id: id, text: "early, unstored" } });
+    });
+
     // The stored write the early action waits on can then be refused for good. The action must
     // report that failure as its own verdict, once, rather than complete as if it were sent.
     it("fails an early action's transaction when the write the outbox stored for it is refused", async () => {
