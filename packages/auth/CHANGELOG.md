@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.268...@lunora/auth@1.0.0-alpha.269) (2026-11-23)
+
+- fix(auth)!: stop banned users and failed key revokes passing silently (#1634)
+
 ## @lunora/auth [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.267...@lunora/auth@1.0.0-alpha.268) (2026-11-20)
 
 - feat(cloud)!: lunora cloud control plane on workers for platforms (#85)

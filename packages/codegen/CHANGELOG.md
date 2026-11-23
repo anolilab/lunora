@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.431](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.430...@lunora/codegen@1.0.0-alpha.431) (2026-11-23)
+
+- fix(auth)!: stop banned users and failed key revokes passing silently (#1634)
+
 ## @lunora/codegen [1.0.0-alpha.430](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.429...@lunora/codegen@1.0.0-alpha.430) (2026-11-23)
 
 - fix(do): refresh live queries on other shards after global writes (#1673)

@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.294...@lunora/runtime@1.0.0-alpha.295) (2026-11-23)
+
+- fix(auth)!: stop banned users and failed key revokes passing silently (#1634)
+
 ## @lunora/runtime [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.293...@lunora/runtime@1.0.0-alpha.294) (2026-11-22)
 
 - Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).
