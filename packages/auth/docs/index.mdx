@@ -135,8 +135,8 @@ it, and sign-up invitations are stored in the same form.
   the address is up to you. A duplicate you resolve, or an older snapshot you restore, is
   brought into canonical form on the next cold start; a restored pair of duplicate users
   keeps the second one's value empty, as the backfill does. Until a row is filled, the
-  admin plane's duplicate check folds its address in JS, so it still refuses a variant in
-  any case or Unicode form.
+  duplicate checks (the admin plane's, and the one on sign-up and email change) fold its
+  address in JS, so they still refuse a variant in any case or Unicode form.
 - **Rows imported through your own `authTables(...)` are trusted operator input.** The
   admin-token import writes tables declared in `lunora/schema.ts` as given, so a user row
   keeps the `emailCanonical` it carries. An empty value is refilled by the next backfill;

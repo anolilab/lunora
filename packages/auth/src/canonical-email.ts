@@ -61,11 +61,49 @@ const withCanonicalData = (replaced: Record<string, unknown> | undefined, data: 
     return { ...replaced, [CANONICAL_EMAIL_FIELD]: typeof email === "string" ? canonicalEmail(email) : undefined };
 };
 
+type Where = { field: string; operator?: "gt" | "in"; value: string[] | string | null }[];
+
+/**
+ * The subset of better-auth's adapter the adapter-driven backfill and {@link canonicalHolders}
+ * use, declared rather than imported for the reason {@link BackfillExecutor} gives.
+ */
+interface BackfillAdapter {
+    count: (query: { model: string; where: Where }) => Promise<number>;
+    findMany: <T>(query: { limit: number; model: string; sortBy?: { direction: "asc"; field: string }; where: Where }) => Promise<T[]>;
+    findOne: <T>(query: { model: string; where: Where }) => Promise<T | null>;
+    update: <T>(query: { model: string; update: Record<string, unknown>; where: Where }) => Promise<T | null>;
+}
+
+// eslint-disable-next-line unicorn/no-null -- better-auth compiles a `null` value to `IS NULL`
+const UNFILLED: Where = [{ field: CANONICAL_EMAIL_FIELD, value: null }];
+
+/**
+ * Every account that holds `email` once case and Unicode form are ignored: the one whose
+ * canonical value it is, and any whose canonical value is still empty (written before the
+ * column and not yet backfilled, or a duplicate the backfill leaves) and whose address folds
+ * to it. Those cannot be matched in SQL (`LOWER()` folds ASCII only, and nothing in SQLite
+ * normalises Unicode form), so they are read and folded here, through the canonical index's
+ * `IS NULL` range: a set the backfill only shrinks, so once a table is filled this is one
+ * empty count.
+ */
+const canonicalHolders = async (adapter: BackfillAdapter, email: string): Promise<{ email?: unknown; id: string }[]> => {
+    const canonical = canonicalEmail(email);
+    const [held, unfilledCount] = await Promise.all([
+        adapter.findMany<{ email?: unknown; id: string }>({ limit: 1, model: "user", where: [{ field: CANONICAL_EMAIL_FIELD, value: canonical }] }),
+        adapter.count({ model: "user", where: UNFILLED }),
+    ]);
+    // An adapter's `findMany` defaults to a small limit, so the count sets it.
+    const unfilled = unfilledCount > 0 ? await adapter.findMany<{ email?: unknown; id: string }>({ limit: unfilledCount, model: "user", where: UNFILLED }) : [];
+
+    return [...held, ...unfilled.filter((row) => typeof row.email === "string" && canonicalEmail(row.email) === canonical)];
+};
+
 type HookContext = Parameters<UserCreateBefore>[1];
 
 /**
- * Refuse a write whose canonical address another account holds, with the error better-auth gives
- * a plain duplicate. Its own check (`findUserByEmail`) matches the stored address, so a variant in
+ * Refuse a write whose address another account holds once case and Unicode form are ignored
+ * ({@link canonicalHolders}, so a legacy row the backfill has not reached counts too), with the
+ * error better-auth gives a plain duplicate. Its own check (`findUserByEmail`) matches the stored address, so a variant in
  * another case or Unicode form gets past it, and the unique index's refusal reaches the caller as
  * a server error. On a sign-up that answers duplicates generically (email verification required,
  * or no auto sign-in) the error is the `FORBIDDEN` the route turns into that generic answer.
@@ -84,12 +122,9 @@ const assertCanonicalFree = async (email: unknown, context: HookContext, self: R
         return;
     }
 
-    const holder = await context.context.adapter.findOne<{ email: unknown; id: string }>({
-        model: "user",
-        where: [{ field: CANONICAL_EMAIL_FIELD, value: canonicalEmail(email) }],
-    });
+    const holders = await canonicalHolders(context.context.adapter, email);
 
-    if (holder === null || holder.email === email || self.includes(holder.id)) {
+    if (holders.every((holder) => holder.email === email || self.includes(holder.id))) {
         return;
     }
 
@@ -422,29 +457,37 @@ const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => R
 };
 
 /**
- * The subset of better-auth's adapter the adapter-driven backfill below uses, declared
- * rather than imported for the reason {@link BackfillExecutor} gives.
+ * Fill one row unless another holds `value`. A writer that claims it between the page's check
+ * and this write fails it on the unique index: confirmed by reading the holder, that is a
+ * duplicate like any other, not a reason to fail the migration.
+ * @returns Whether the row now holds the value it was given.
  */
-interface BackfillAdapter {
-    findMany: <T>(query: {
-        limit: number;
-        model: string;
-        sortBy: { direction: "asc"; field: string };
-        where: { field: string; operator?: "gt"; value: string | null }[];
-    }) => Promise<T[]>;
-    findOne: <T>(query: { model: string; where: { field: string; value: string | null }[] }) => Promise<T | null>;
-    update: <T>(query: { model: string; update: Record<string, unknown>; where: { field: string; value: string | null }[] }) => Promise<T | null>;
-}
+const fillThroughAdapter = async (adapter: BackfillAdapter, row: { email: string; id: string }, value: string): Promise<boolean> => {
+    try {
+        await adapter.update({
+            model: "user",
+            update: { [CANONICAL_EMAIL_FIELD]: value },
+            where: [{ field: "id", value: row.id }, { field: "email", value: row.email }, ...UNFILLED],
+        });
+
+        return true;
+    } catch (error) {
+        if ((await adapter.findOne({ model: "user", where: [{ field: CANONICAL_EMAIL_FIELD, value }] })) !== null) {
+            return false;
+        }
+
+        throw error;
+    }
+};
 
 /**
  * The same backfill through better-auth's adapter, for a database the SQL above cannot
  * target (Postgres, MySQL, any other Kysely dialect): no `rowid`, no `UPDATE ... FROM
- * json_each`, so a row at a time, keyed on `id`. Runs to the end on every call; those
- * engines have no per-invocation query budget to stop for. The guards match the SQL's: a
- * row is written only while it still holds the address read and no canonical value, and
- * skipped while another row holds its value. A row another writer claims the value for
- * between the check and the write fails on the unique index; the run rejects and the next
- * one counts the row as a duplicate.
+ * json_each`, so keyed on `id`, one write per row. A page costs one read of its rows, one
+ * of the values already held, and its writes side by side. Runs to the end on every call;
+ * filled rows leave the `IS NULL` range, so a run cut short loses only its last page. The
+ * guards match the SQL's: a row is written only while it still holds the address read and
+ * no canonical value, and skipped while another row holds its value.
  * @returns How many rows could not be filled because another row holds their canonical value.
  */
 const backfillCanonicalEmailsThroughAdapter = async (adapter: BackfillAdapter): Promise<number> => {
@@ -457,37 +500,38 @@ const backfillCanonicalEmailsThroughAdapter = async (adapter: BackfillAdapter): 
             limit: BACKFILL_PAGE_ROWS,
             model: "user",
             sortBy: { direction: "asc", field: "id" },
-            where: [
-                // eslint-disable-next-line unicorn/no-null -- better-auth compiles a `null` value to `IS NULL`
-                { field: CANONICAL_EMAIL_FIELD, value: null },
-                ...(after === undefined ? [] : [{ field: "id", operator: "gt" as const, value: after }]),
-            ],
+            where: [...UNFILLED, ...(after === undefined ? [] : [{ field: "id", operator: "gt" as const, value: after }])],
         });
+        // The first row of the page per canonical value: two written side by side would both pass the check.
+        const fills = new Map<string, { email: string; id: string }>();
 
         for (const row of rows) {
-            if (typeof row.email !== "string") {
-                continue;
-            }
-
-            const value = canonicalEmail(row.email);
-
-            // eslint-disable-next-line no-await-in-loop -- the check must see the rows this run has already filled
-            if ((await adapter.findOne({ model: "user", where: [{ field: CANONICAL_EMAIL_FIELD, value }] })) === null) {
-                // eslint-disable-next-line no-await-in-loop -- one guarded write per row; see the doc comment
-                await adapter.update({
-                    model: "user",
-                    update: { [CANONICAL_EMAIL_FIELD]: value },
-                    where: [
-                        { field: "id", value: row.id },
-                        { field: "email", value: row.email },
-                        // eslint-disable-next-line unicorn/no-null -- better-auth compiles a `null` value to `IS NULL`
-                        { field: CANONICAL_EMAIL_FIELD, value: null },
-                    ],
-                });
-            } else {
-                duplicates += 1;
+            if (typeof row.email === "string" && !fills.has(canonicalEmail(row.email))) {
+                fills.set(canonicalEmail(row.email), { email: row.email, id: row.id });
             }
         }
+
+        duplicates += rows.filter((row) => typeof row.email === "string").length - fills.size;
+
+        const held =
+            fills.size > 0
+                ? // eslint-disable-next-line no-await-in-loop -- one read of the page's values
+                  await adapter.findMany<Record<string, unknown>>({
+                      limit: fills.size,
+                      model: "user",
+                      where: [{ field: CANONICAL_EMAIL_FIELD, operator: "in", value: [...fills.keys()] }],
+                  })
+                : [];
+
+        for (const holder of held) {
+            fills.delete(String(holder[CANONICAL_EMAIL_FIELD]));
+            duplicates += 1;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- the page's writes run side by side; pages run in order
+        const filled = await Promise.all([...fills].map(async ([value, row]) => fillThroughAdapter(adapter, row, value)));
+
+        duplicates += filled.filter((written) => !written).length;
 
         const last = rows.at(-1);
 
@@ -509,6 +553,7 @@ export {
     backfillCanonicalEmailsThroughAdapter,
     CANONICAL_EMAIL_FIELD,
     canonicalEmail,
+    canonicalHolders,
     quote,
     readBackfillState,
     runBackfill,

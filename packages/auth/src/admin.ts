@@ -3,7 +3,7 @@ import { getAuthTables } from "better-auth/db";
 
 import { SENSITIVE_FIELDS } from "../../../shared/identity-claims";
 import { apiKeyStorage } from "./api-key-storage";
-import { CANONICAL_EMAIL_FIELD, canonicalEmail } from "./canonical-email";
+import { CANONICAL_EMAIL_FIELD, canonicalEmail, canonicalHolders } from "./canonical-email";
 import type { LunoraAuth } from "./create-auth";
 // Aliased: this module exposes methods of the same names, and a method body
 // calling an identically-named import is a needless double-take.
@@ -780,26 +780,11 @@ const deleteOrganizationTeamMemberships = async (context_: Awaited<LunoraAuth["$
 /**
  * Refuse `email` when an account other than `exceptUserId` holds it in any casing or Unicode form.
  * better-auth's `findUserByEmail` matches the stored address exactly, so an account written before addresses
- * were lowercased, or imported as it was, would slip past it; the canonical column is an exact, indexed match.
- *
- * A row with no canonical value yet has its address folded here instead: one written before the column and
- * not yet backfilled, or a pre-existing duplicate the backfill leaves empty. Matching those in SQL cannot be
- * done safely (`LOWER()` folds ASCII only, and nothing in SQLite normalises Unicode form), so they are read
- * and compared in JS. They are read through the canonical index's `IS NULL` range, a set the backfill only
- * shrinks, so once a table is filled this is one empty count.
+ * were lowercased, or imported as it was, would slip past it; {@link canonicalHolders} matches on the
+ * canonical column, and folds the addresses of rows that do not have a value in it yet.
  */
 const assertEmailFree = async (context_: AuthContext, email: string, exceptUserId: string | undefined): Promise<void> => {
-    const canonical = canonicalEmail(email);
-    // eslint-disable-next-line unicorn/no-null -- better-auth compiles a `null` value to `IS NULL`
-    const unfilled = [{ field: CANONICAL_EMAIL_FIELD, value: null }];
-    const [held, unfilledCount] = await Promise.all([
-        context_.adapter.findMany<{ id: string }>({ limit: 2, model: "user", where: [{ field: CANONICAL_EMAIL_FIELD, value: canonical }] }),
-        context_.adapter.count({ model: "user", where: unfilled }),
-    ]);
-    // An adapter's `findMany` defaults to a small limit, so the count sets it.
-    const unfilledRows =
-        unfilledCount > 0 ? await context_.adapter.findMany<{ email?: unknown; id: string }>({ limit: unfilledCount, model: "user", where: unfilled }) : [];
-    const holders = [...held, ...unfilledRows.filter((row) => typeof row.email === "string" && canonicalEmail(row.email) === canonical)];
+    const holders = await canonicalHolders(context_.adapter, email);
 
     if (holders.some((holder) => holder.id !== exceptUserId)) {
         throw new LunoraAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");

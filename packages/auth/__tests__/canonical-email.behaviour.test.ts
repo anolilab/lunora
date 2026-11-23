@@ -1,12 +1,21 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { getAdapter } from "better-auth/db/adapter";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
 import type { AuthAdmin } from "../src/admin";
 import { createAuthAdmin } from "../src/admin";
 import { INTERNAL_SECRET_HEADER, LunoraAuthDO, RESOLVE_SESSION_PATH } from "../src/auth-do";
-import { authCanonicalEmailColumn, BACKFILL_PAGE_ROWS, backfillCanonicalEmails, canonicalEmail, withCanonicalEmail } from "../src/canonical-email";
+import type { BackfillAdapter } from "../src/canonical-email";
+import {
+    authCanonicalEmailColumn,
+    BACKFILL_PAGE_ROWS,
+    backfillCanonicalEmails,
+    backfillCanonicalEmailsThroughAdapter,
+    canonicalEmail,
+    withCanonicalEmail,
+} from "../src/canonical-email";
 import type { LunoraAuthOptions } from "../src/create-auth";
 import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import type { AuthDataPortLike } from "../src/data-port";
@@ -245,6 +254,23 @@ describe("canonical email", () => {
         expect.assertions(3);
 
         await port.importRows([userRow("imported", STORED)]);
+        await signUp(auth, "bob@example.com");
+
+        const plain = await signUp(auth, "bob@example.com");
+        const twin = await signUp(auth, "alice@example.com");
+
+        expect(twin.status).toBe(plain.status);
+        await expect(twin.json()).resolves.toStrictEqual(await plain.json());
+        expect(userCount()).toBe(2);
+    });
+
+    it("answers a public sign-up for the address of an account the backfill has not filled like a plain duplicate", async () => {
+        expect.assertions(3);
+
+        // A row written before the column existed: its canonical value is still empty.
+        database
+            .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('legacy', 'Legacy', ?, 0, 'x', 'x')`)
+            .run(STORED);
         await signUp(auth, "bob@example.com");
 
         const plain = await signUp(auth, "bob@example.com");
@@ -556,6 +582,63 @@ describe("canonical email on the schema paths", () => {
         await backfillCanonicalEmails(executorFor(database), { canonical: "emailCanonical", email: "email", table: "account_holder" });
 
         expect((database.prepare(`SELECT COUNT(*) AS "n" FROM "account_holder" WHERE "emailCanonical" IS NULL`).get() as { n: number }).n).toBe(0);
+    });
+
+    /** A `user` table as better-auth's Kysely adapter reads it, with `count` legacy rows and `adapter` over it. */
+    const adapterOver = async (count: number): Promise<{ adapter: BackfillAdapter; database: DatabaseSync }> => {
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(
+            `CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "name" text NOT NULL, "email" text NOT NULL UNIQUE, "emailVerified" integer NOT NULL, "image" text, "createdAt" date NOT NULL, "updatedAt" date NOT NULL, "emailCanonical" text UNIQUE)`,
+        );
+
+        const insert = database.prepare(
+            `INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (?, 'x', ?, 0, 'x', 'x')`,
+        );
+
+        for (let index = 0; index < count; index += 1) {
+            insert.run(`u${String(index).padStart(4, "0")}`, `User${String(index)}@Example.com`);
+        }
+
+        return { adapter: await getAdapter(resolveAuthOptions({ database: database as never, secret: SECRET })), database };
+    };
+
+    it("fills through the adapter with a read of each page and of the values it already holds, never one per row", async () => {
+        expect.assertions(3);
+
+        const { adapter, database } = await adapterOver(450);
+        const findMany = vi.spyOn(adapter, "findMany");
+        const findOne = vi.spyOn(adapter, "findOne");
+
+        await expect(backfillCanonicalEmailsThroughAdapter(adapter)).resolves.toBe(0);
+        // Three pages, each read and checked once.
+        expect([findMany.mock.calls.length, findOne.mock.calls.length]).toStrictEqual([6, 0]);
+        expect(database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get()).toEqual({ n: 0 });
+    });
+
+    it("counts a row another writer claims during the adapter backfill as a duplicate, and fills the rest", async () => {
+        expect.assertions(2);
+
+        const { adapter, database } = await adapterOver(3);
+        const { update } = adapter;
+        let claimed = false;
+
+        // A sign-up takes the first row's canonical address between the page's check and its write.
+        adapter.update = async (query) => {
+            if (!claimed) {
+                claimed = true;
+                database
+                    .prepare(
+                        `INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt", "emailCanonical") VALUES ('new', 'x', ?, 0, 'x', 'x', ?)`,
+                    )
+                    .run("user0@example.com", "user0@example.com");
+            }
+
+            return update(query);
+        };
+
+        await expect(backfillCanonicalEmailsThroughAdapter(adapter)).resolves.toBe(1);
+        expect(database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get()).toEqual({ n: 1 });
     });
 
     it("adds and backfills the column on a Durable Object that predates it, leaving a pre-existing duplicate empty", async () => {
