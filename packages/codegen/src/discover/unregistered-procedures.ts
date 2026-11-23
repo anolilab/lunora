@@ -388,7 +388,14 @@ const isTypeOnlyImport = (source: SourceFile, name: string): boolean =>
  * checker resolves `export type { gate }` to the same declaration a value export does, yet no
  * value leaves the module, so there is no registration to drop.
  */
-const isTypeOnlyExport = (source: SourceFile, exportName: string): boolean => {
+const isTypeOnlyExport = (source: SourceFile, exportName: string, visited = new Set<SourceFile>()): boolean => {
+    // An `export *` cycle supplies nothing the first visit did not already account for.
+    if (visited.has(source)) {
+        return true;
+    }
+
+    visited.add(source);
+
     const sites: boolean[] = [];
 
     for (const statement of source.getExportDeclarations()) {
@@ -404,16 +411,16 @@ const isTypeOnlyExport = (source: SourceFile, exportName: string): boolean => {
     }
 
     // An `export *` counts even beside a named site: TypeScript lets `export type { gate }` shadow
-    // it, but the type export is erased and the star still ships the value at runtime.
-    // `export type *` carries no values.
-    sites.push(
-        ...source
-            .getExportDeclarations()
-            .filter(
-                (statement) => statement.isNamespaceExport() && statement.getModuleSpecifierSourceFile()?.getExportedDeclarations().has(exportName) === true,
-            )
-            .map((statement) => statement.isTypeOnly()),
-    );
+    // it, but the type export is erased and the star still ships the value at runtime. It ships a
+    // value only if its module does: `export type *`, or a star over a barrel that itself only
+    // `export type`s the name, carries none.
+    for (const statement of source.getExportDeclarations()) {
+        const target = statement.isNamespaceExport() ? statement.getModuleSpecifierSourceFile() : undefined;
+
+        if (target?.getExportedDeclarations().has(exportName) === true) {
+            sites.push(statement.isTypeOnly() || isTypeOnlyExport(target, exportName, visited));
+        }
+    }
 
     return sites.length > 0 && sites.every(Boolean);
 };

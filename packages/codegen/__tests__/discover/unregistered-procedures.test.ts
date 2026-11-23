@@ -653,6 +653,40 @@ export const viaFactory = makeQuery();
         expect(findings.map((finding) => [finding.metadata["exportName"], finding.level])).toStrictEqual([["gate", "ERROR"]]);
     });
 
+    it("stays silent for an `export *` over a barrel that exports the authorizer as a type only", () => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        writeOutside("src/auth/types.ts", `export type { gate } from "./whisper";\n`);
+        writeOutside("src/auth/barrel.ts", `export * from "./types";\n`);
+        write("star.ts", `export * from "../src/auth/barrel";\n`);
+        load("star.ts");
+
+        // Neither barrel lets the `gate` value out, so the star carries none into lunora/.
+        const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter(
+            (finding) => finding.name === "procedure_not_registered" && finding.metadata["exportName"] === "gate",
+        );
+
+        expect(findings).toStrictEqual([]);
+    });
+
+    it("still fails the build for an `export *` over a barrel that ships the authorizer value", () => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        writeOutside("src/auth/barrel.ts", `export * from "./whisper";\n`);
+        write("star.ts", `export * from "../src/auth/barrel";\n`);
+        load("star.ts");
+
+        const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter(
+            (finding) => finding.name === "procedure_not_registered" && finding.metadata["exportName"] === "gate",
+        );
+
+        expect(findings.map((finding) => [finding.metadata["exportName"], finding.level])).toStrictEqual([["gate", "ERROR"]]);
+    });
+
     it("fails the build for an authorizer re-exported from app code that lives in a `_generated` directory", () => {
         expect.assertions(1);
 
