@@ -1135,6 +1135,7 @@ type RpcResponseBody = {
 interface ScheduleRecord {
     args: Record<string, unknown>;
     attempts?: number;
+    dedupKey?: string;
     enqueuedAt: number;
     error?: string;
     firstDueAt?: number;

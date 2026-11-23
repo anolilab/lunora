@@ -579,6 +579,12 @@ interface WorkpoolOptions extends LunoraSchedulerOptions {
 }
 ```
 
+### `assertDedupKey` (const)
+
+```ts
+const assertDedupKey: (requested: unknown) => string | undefined;
+```
+
 ### `assertScheduleDelay` (const)
 
 ```ts
