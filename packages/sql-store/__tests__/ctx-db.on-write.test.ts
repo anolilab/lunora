@@ -33,6 +33,20 @@ const schema = {
     },
 } as never as SchemaLike;
 
+/** A query timer whose deadlines the test fires by hand. */
+const recordingTimer = (): { deadlines: Set<() => void>; timer: QueryTimer } => {
+    const deadlines = new Set<() => void>();
+    const timer: QueryTimer = (fire) => {
+        deadlines.add(fire);
+
+        return () => {
+            deadlines.delete(fire);
+        };
+    };
+
+    return { deadlines, timer };
+};
+
 let harness: ReturnType<typeof createSqliteHarness>;
 
 describe("createSqlCtxDb onWrite", () => {
@@ -102,14 +116,7 @@ describe("createSqlCtxDb onWrite for a statement abandoned at its deadline", () 
     ])("announces the table once the statement settles, through %s", async (_name, withTransaction) => {
         expect.assertions(2);
 
-        const deadlines = new Set<() => void>();
-        const timer: QueryTimer = (fire) => {
-            deadlines.add(fire);
-
-            return () => {
-                deadlines.delete(fire);
-            };
-        };
+        const { deadlines, timer } = recordingTimer();
         let release: () => void = () => undefined;
         const held = new Promise<void>((resolve) => {
             release = resolve;
@@ -206,5 +213,63 @@ describe("createSqlCtxDb onWrite inside a transaction", () => {
         await writer.insert("audit", { postId: "p1" });
 
         expect(order.slice(-2)).toStrictEqual(["commit", "write:audit"]);
+    });
+
+    it("announces a write whose transaction commits after its deadline", async () => {
+        expect.assertions(2);
+
+        const { deadlines, timer } = recordingTimer();
+        let release: () => void = () => undefined;
+        const commitHeld = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        let reachedCommit: () => void = () => undefined;
+        const committing = new Promise<void>((resolve) => {
+            reachedCommit = resolve;
+        });
+        const exec: SqlCtxExec = {
+            all: async (query, parameters) => stored.exec.all(query, parameters),
+            run: async (query, parameters) => stored.exec.run(query, parameters),
+            // Every statement has run; COMMIT is what hangs past the deadline, and then succeeds.
+            transaction: async <R>(closure: (on: SqlCtxExec) => Promise<R>): Promise<R> => {
+                const result = await closure(exec);
+
+                reachedCommit();
+                await commitHeld;
+
+                return result;
+            },
+        };
+        let announce: ((table: string) => void) | undefined;
+        const announcedLate = new Promise<string>((resolve) => {
+            announce = resolve;
+        });
+        const writer = createSqlCtxDb({
+            cdc: true,
+            clock: () => 1_700_000_000_000,
+            dialect: makeSqliteDialect(),
+            exec,
+            onWrite: (table, settledLate) => {
+                if (settledLate === true) {
+                    announce?.(table);
+                }
+            },
+            queryTimeoutMs: 5000,
+            queryTimer: timer,
+            schema,
+        });
+        const insert = writer.insert("audit", { postId: "p1" });
+
+        await committing;
+
+        for (const fire of deadlines) {
+            fire();
+        }
+
+        await expect(insert).rejects.toBeInstanceOf(SqlQueryTimeoutError);
+
+        release();
+
+        await expect(announcedLate).resolves.toBe("audit");
     });
 });

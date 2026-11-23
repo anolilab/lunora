@@ -8052,6 +8052,8 @@ abstract class ShardDO {
      */
     protected recordLateGlobalWrite(table: string): void {
         this.recordGlobalWrite(table, D1_PRIMARY_CONSTRAINT);
+        // The result is ignored on purpose: the response this would outlive has already ended, so there is
+        // nothing to await it on. A host without `waitUntil` keeps no per-request lifetime to cut it short.
         this.runner.background(
             this.flushChangedTables().catch((error: unknown) => {
                 this.recordShapeError("global:late-write", error);

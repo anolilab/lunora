@@ -2871,13 +2871,35 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         ).catch(() => undefined);
     };
 
-    /** Run `apply` in one transaction and announce its row through `onWrite` once the transaction has committed. */
+    /**
+     * Run `apply` in one transaction and announce its row through `onWrite` once the transaction has committed.
+     *
+     * The deadline can fire while COMMIT is in flight: the caller is told the write failed, yet it may still commit,
+     * and nothing else would announce it. Only the transaction's own late result (`true`) proves that; a statement
+     * abandoned inside it settles to a query result, never `true`, and its transaction rolled back.
+     */
     const commitAnnounced = async (
         tableName: string,
         apply: (on: SqlCtxExec) => Promise<boolean>,
         transaction: NonNullable<SqlCtxExec["transaction"]>,
     ): Promise<boolean> => {
-        const written = await transaction(apply).catch(mapTransactionConflict);
+        let written: boolean;
+
+        try {
+            written = await transaction(apply);
+        } catch (error) {
+            abandonedWork(error)
+                ?.then((committed) => {
+                    if (committed === true) {
+                        options.onWrite?.(tableName, true);
+                    }
+
+                    return undefined;
+                })
+                .catch(() => undefined);
+
+            return mapTransactionConflict(error);
+        }
 
         if (written) {
             options.onWrite?.(tableName);
