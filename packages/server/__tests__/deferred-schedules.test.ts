@@ -11,6 +11,7 @@
 import { createScheduler, SchedulerDO } from "@lunora/scheduler";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import type { ScheduleRunOptions } from "../src/index";
 import { beginDeferredSchedules, withDeferredSchedules } from "../src/index";
 
 interface RecordedCall {
@@ -81,6 +82,14 @@ describe("withDeferredSchedules — types", () => {
         expectTypeOf(beginDeferredSchedules({ scheduler })).toEqualTypeOf<(committed: boolean) => Promise<void>>();
 
         expect(withDeferredSchedules(scheduler)).toHaveProperty("runAfter");
+    });
+
+    it("lets a ctx.scheduler caller name the dedup key the facade honours", () => {
+        expect.assertions(1);
+
+        expectTypeOf<ScheduleRunOptions>().toHaveProperty("dedupKey").toEqualTypeOf<string | undefined>();
+
+        expect(true).toBe(true);
     });
 
     it("accepts a scheduler whose `args` is required — the shape `createScheduler()` actually returns", () => {

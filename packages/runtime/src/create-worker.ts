@@ -244,6 +244,7 @@ interface HttpActionContext {
 
 /** `@lunora/server`'s `ScheduleRunOptions`, restated structurally like {@link SchedulerContext}. */
 interface SchedulerRunOptions {
+    dedupKey?: string;
     retry?: {
         backoff?: "exponential" | "linear";
         baseMs?: number;

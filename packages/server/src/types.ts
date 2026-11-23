@@ -1704,6 +1704,14 @@ type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown>
 
 /** Per-call options for {@link Scheduler.runAfter} / {@link Scheduler.runAt}. */
 interface ScheduleRunOptions {
+    /**
+     * The key the job's receiver dedups a re-delivery on. Defaults to one minted per scheduling;
+     * set it when the same logical job may be scheduled more than once and must run once. Must
+     * match `^[A-Za-z0-9_][A-Za-z0-9_-]{0,99}$`; inside a mutation a key that does not is refused
+     * there and then, rolling the mutation back.
+     */
+    dedupKey?: string;
+
     /** Retry policy for this job; the scheduler's defaults apply when omitted. */
     retry?: RetryPolicy;
 
