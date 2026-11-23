@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.297...@lunora/runtime@1.0.0-alpha.298) (2026-11-23)
+
+- fix: close leftover review findings in the sdks and tests (#1677)
+
 ## @lunora/runtime [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.296...@lunora/runtime@1.0.0-alpha.297) (2026-11-23)
 
 - security(auth): record admin operations in the audit trail (#1660)
