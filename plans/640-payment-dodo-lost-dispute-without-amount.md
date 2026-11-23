@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE (comment, test and docs corrected; no louder signal added because the observer has no warn hook), pushed: `fix/payment-webhook-ordering-and-refund-retries`, PR #1653. Open product question in the PR
 
 ## Status
 

@@ -13,7 +13,8 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE after one revision, pushed: `fix/scheduler-pool-slot-in-progress`, PR #1655 (workerd: scheduler, runtime)
+**As implemented, with two known limits:** a slot a kick went through is tracked in `kickedIds` and never re-entered, and `/cancel` releases a held slot only when no dispatch of the record is in flight on this instance. (1) A cancelled record whose earlier attempt was declined in-progress is released at cancel, though that attempt may still be running: it will not re-fire, and keeping the slot would strand it if the receiver never reports. (2) `/complete` names the job id, not the attempt, so an attempt that outlives the shard's dispatch claim and overlaps a re-fire's attempt frees the slot when it finishes, while the second still runs. Either can put the pool one over `maxConcurrency` for that job.
 
 ## Status
 

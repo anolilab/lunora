@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE (lint layer only: a dropped whisper authorizer is a build error; discovery unchanged), pushed: `security/codegen-reexported-whisper-authorizer`, PR #1664
 
 ## Status
 

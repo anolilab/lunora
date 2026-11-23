@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** PARTIAL: Java and Swift done, pushed: `fix/sdk-resubscribe-pacing-remaining-ports`, PR #1651. Go, Ruby, Kotlin and Dart not done: no usable toolchain on the machine that ran the plan
 
 ## Status
 

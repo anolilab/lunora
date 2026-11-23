@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `093c5e41f` (2026-11-20)
-**Status:** TODO
+**Status:** PARTIAL, pushed: `build/guard-file-level-eslint-disable` (guard script, 1-entry baseline). The export conversions landed on alpha separately (#1539). Rule enforcement in ESLint waits on an owner decision, see the plan file; PR #1648
 
 ## Status
 

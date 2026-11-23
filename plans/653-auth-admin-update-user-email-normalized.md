@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE (only the duplicate-address half was real; better-auth already lower-cases), pushed: `security/auth-admin-plane-gaps`, PR #1658
 
 ## Status
 

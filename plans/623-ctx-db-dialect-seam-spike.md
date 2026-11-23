@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `093c5e41f` (2026-11-20)
-**Status:** TODO
+**Status:** DONE (write-up only), pushed: `docs/sql-store-ctx-db-twin-header`; the `restore` extraction needs a follow-up plan; PR #1649
 
 ## Status
 

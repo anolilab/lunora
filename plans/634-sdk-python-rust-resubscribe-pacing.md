@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE (Python, Rust), pushed: `fix/sdk-python-rust-resubscribe-pacing`. Go, Java, Ruby, Kotlin, Dart and Swift still re-subscribe in one burst (read only, not changed). Unlike the reference, a timed-out slot is freed but its frame is not sent again; PR #1644
 
 ## Status
 

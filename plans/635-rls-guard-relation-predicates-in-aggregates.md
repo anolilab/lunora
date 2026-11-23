@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE, pushed: `security/rls-relation-predicates-aggregates` (stacked on `security/rls-shape-guards-intersect`; workerd: all 23). No test covers a `.global()` child: the test harness cannot seed one; PR #1638
 
 ## Status
 

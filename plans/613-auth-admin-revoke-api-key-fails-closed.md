@@ -13,7 +13,8 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `093c5e41f` (2026-11-20)
-**Status:** TODO
+**Status:** DONE, pushed: `fix/auth-banned-identity-and-key-revoke`; PR #1634
+**As implemented:** superseded by plan 663. `deleteApiKey` decides from each `apiKey()` configuration's storage mode, not from `context_.secondaryStorage`, and a missing row answers `API_KEY_STORAGE_UNSUPPORTED` (409), not `API_KEY_NOT_FOUND`, whenever a configuration keeps keys outside the database. The Design and Step 1 below describe the first version.
 
 ## Status
 

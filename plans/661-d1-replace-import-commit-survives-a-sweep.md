@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `f3a9ccf45` (`origin/alpha`, 2026-11-20)
-**Status:** TODO
+**Status:** DONE, pushed: `fix/d1-replace-import-sweep-guard`, PR #1663 (workerd: d1). Not checked: the shard-engine staging twin
 
 ## Status
 

@@ -13,7 +13,7 @@
 > mismatch, treat it as a STOP condition.
 
 **Baseline:** `093c5e41f` (2026-11-20)
-**Status:** TODO
+**Status:** DONE (batch 1), pushed: `test/wait-on-milestones`; 32 files remain in `scripts/test-real-clock.baseline.json`; PR #1647
 
 ## Status
 
@@ -72,13 +72,13 @@ rg -l -e 'sleep\([0-9]{2,}\)' -e 'setTimeout\((resolve|r), [0-9]{2,}\)' packages
 
 ## Commands you will need
 
-| Purpose                  | Command                                                                                | Expected |
-| ------------------------ | -------------------------------------------------------------------------------------- | -------- |
-| Install (fresh worktree) | `pnpm install --frozen-lockfile`                                                       | exit 0   |
-| Build + deps             | `pnpm --filter "@lunora/<pkg>..." run build` (pkg = platform-node, cli, vite)          | exit 0   |
-| One file                 | `pnpm --filter "@lunora/<pkg>" exec vitest run __tests__/<path>`                       | pass     |
-| One file, 5 times        | `for i in 1 2 3 4 5; do pnpm --filter "@lunora/<pkg>" exec vitest run **tests**/<path> |          | break; done` | 5 passes |
-| Lint                     | `pnpm --filter "@lunora/<pkg>" run lint:eslint`                                        | exit 0   |
+| Purpose                  | Command                                                                                                  | Expected |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- | -------- |
+| Install (fresh worktree) | `pnpm install --frozen-lockfile`                                                                         | exit 0   |
+| Build + deps             | `pnpm --filter "@lunora/<pkg>..." run build` (pkg = platform-node, cli, vite)                            | exit 0   |
+| One file                 | `pnpm --filter "@lunora/<pkg>" exec vitest run __tests__/<path>`                                         | pass     |
+| One file, 5 times        | `for i in 1 2 3 4 5; do pnpm --filter "@lunora/<pkg>" exec vitest run __tests__/<path> \|\| break; done` | 5 passes |
+| Lint                     | `pnpm --filter "@lunora/<pkg>" run lint:eslint`                                                          | exit 0   |
 
 ## How to convert (decision table)
 
