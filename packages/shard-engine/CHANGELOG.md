@@ -1,6 +1,8 @@
 ## @lunora/shard-engine [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.205...@lunora/shard-engine@1.0.0-alpha.206) (2026-11-23)
 
+- security(shard-engine): track policy deps of global reads (#1682)
 - fix: four data-path bugs in rank, sql-store and dispatch metrics (#1636)
+- Release 1.0.0-alpha.206. Commit 8e283e5 set this version and it was never published, so it is released from HEAD.
 
 ## @lunora/shard-engine [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.204...@lunora/shard-engine@1.0.0-alpha.205) (2026-11-23)
 
