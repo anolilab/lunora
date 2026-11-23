@@ -403,18 +403,17 @@ const isTypeOnlyExport = (source: SourceFile, exportName: string): boolean => {
         }
     }
 
-    if (sites.length === 0) {
-        // Only an `export *` can supply it; `export type *` carries no values.
-        sites.push(
-            ...source
-                .getExportDeclarations()
-                .filter(
-                    (statement) =>
-                        statement.isNamespaceExport() && statement.getModuleSpecifierSourceFile()?.getExportedDeclarations().has(exportName) === true,
-                )
-                .map((statement) => statement.isTypeOnly()),
-        );
-    }
+    // An `export *` counts even beside a named site: TypeScript lets `export type { gate }` shadow
+    // it, but the type export is erased and the star still ships the value at runtime.
+    // `export type *` carries no values.
+    sites.push(
+        ...source
+            .getExportDeclarations()
+            .filter(
+                (statement) => statement.isNamespaceExport() && statement.getModuleSpecifierSourceFile()?.getExportedDeclarations().has(exportName) === true,
+            )
+            .map((statement) => statement.isTypeOnly()),
+    );
 
     return sites.length > 0 && sites.every(Boolean);
 };

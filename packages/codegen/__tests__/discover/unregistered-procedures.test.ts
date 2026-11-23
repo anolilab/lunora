@@ -637,6 +637,22 @@ export const viaFactory = makeQuery();
         expect(findings.map((finding) => [finding.metadata["exportName"], finding.level])).toStrictEqual([["gate", "ERROR"]]);
     });
 
+    it("still fails the build when a type-only export of an authorizer sits beside an `export *` that ships its value", () => {
+        expect.assertions(1);
+
+        writeOutside("node_modules/@lunora/server/index.d.ts", SERVER);
+        writeOutside("src/auth/whisper.ts", SHARED_AUTH);
+        write("star.ts", `export * from "../src/auth/whisper";\nexport type { gate } from "../src/auth/whisper";\n`);
+        load("star.ts");
+
+        // The type export is erased; at runtime the star still exports the `gate` value.
+        const findings = run(discoverFunctions(project, join(workdir, "lunora"))).filter(
+            (finding) => finding.name === "procedure_not_registered" && finding.metadata["exportName"] === "gate",
+        );
+
+        expect(findings.map((finding) => [finding.metadata["exportName"], finding.level])).toStrictEqual([["gate", "ERROR"]]);
+    });
+
     it("fails the build for an authorizer re-exported from app code that lives in a `_generated` directory", () => {
         expect.assertions(1);
 
