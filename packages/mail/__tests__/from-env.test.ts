@@ -1,3 +1,4 @@
+import { decodeWire, WIRE_TAG } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
 import { createCaptureSink, createMailerFromEnv, shouldCaptureMail } from "../src/from-env";
@@ -78,6 +79,34 @@ describe("createCaptureSink", () => {
 
         expect(url).toBe("https://shard.internal/rpc");
         expect(init.headers.authorization).toBe("Bearer secret");
+    });
+
+    it("wire-encodes the captured mail, so a tag-shaped recipient list is recorded as the strings it was", async () => {
+        expect.assertions(1);
+
+        const fetch = vi.fn<(input: string, init?: { body?: string }) => Promise<{ json: () => Promise<unknown> }>>(async () => {
+            return {
+                json: async () => {
+                    return { result: { id: "row-1" } };
+                },
+            };
+        });
+        const env = {
+            LUNORA_ADMIN_TOKEN: "secret",
+            SHARD: {
+                get: () => {
+                    return { fetch };
+                },
+                idFromName: (name: string) => `id:${name}`,
+            },
+        };
+        const mail = { subject: "Hi", text: "Hi", to: [WIRE_TAG, "bigint", "1"] };
+
+        await createCaptureSink(env).record(mail);
+
+        const [, init] = fetch.mock.calls[0] as [string, { body: string }];
+
+        expect(decodeWire((JSON.parse(init.body) as { args: unknown }).args)).toStrictEqual(mail);
     });
 
     it("says so, once, when there is nowhere to record — never a silent sentinel", async () => {

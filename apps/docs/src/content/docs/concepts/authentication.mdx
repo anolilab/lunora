@@ -59,7 +59,8 @@ next request, and an open subscription once its socket reconnects.
 
 `orgId` / `teamId` are checked against current membership before they are
 emitted, but resolved identities are cached per credential (60 s at most by
-default, `LUNORA_IDENTITY_CACHE_MS`; per request with the cookie cache off), so
+default, `LUNORA_IDENTITY_CACHE_MS`; per request with the cookie cache off, which is
+the default with the `admin()` plugin), so
 the claim can lag a removal by up to that window, and an open subscription keeps
 it until it reconnects. Code that authorizes tenant access where that lag matters
 should check membership itself.

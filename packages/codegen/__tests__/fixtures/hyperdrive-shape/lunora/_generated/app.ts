@@ -195,7 +195,7 @@ class AppBuilder<Env extends object> {
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.hyperdriveGlobalDeclaration
                 ? {
-                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; userId?: string | null | undefined }) => {
+                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onWrite?: (table: string) => void; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const declaration = this.hyperdriveGlobalDeclaration;
                           const exec = declaration?.exec(env) as SqlExec | undefined;
@@ -235,6 +235,7 @@ class AppBuilder<Env extends object> {
                               cdc: request?.cdc ?? false,
                               engine: declaration.engine as HyperdriveEngine,
                               exec,
+                              ...(request?.onWrite === undefined ? {} : { onWrite: request.onWrite }),
                               // The DECLARATION, not `exec` — `exec(env)` is a user
                               // callback that builds a fresh client per call, so scoping
                               // to its result would key the memo on a new object every

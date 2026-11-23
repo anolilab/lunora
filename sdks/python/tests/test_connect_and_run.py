@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import MAX_WS_FRAME_BYTES, LunoraClient
+from lunora.client import MAX_WS_FRAME_BYTES, RESUBSCRIBE_ACK_TIMEOUT, RESUBSCRIBE_CONCURRENCY, LunoraClient
 from lunora.offline import OfflineQueue
 from lunora.submit import SubmitOptions
 from tests._fixtures import load
@@ -1000,6 +1000,78 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)
 
+    async def test_an_unanswered_resubscribe_frees_its_slot_on_the_loop(self):
+        """The resend is paced, and a server that answers none of the window does not stall the rest past the timeout."""
+
+        socket = _FakeSocket()
+        self._install(socket)
+        clock = _FakeClock()
+        patcher = unittest.mock.patch("lunora.client.time", types.SimpleNamespace(monotonic=clock.monotonic))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client._call_later = clock.call_later
+        for index in range(RESUBSCRIBE_CONCURRENCY + 1):
+            client.subscribe("messages:list", {"channel": f"c{index}"}, lambda _value: None)
+
+        def subscribes() -> int:
+            return len([frame for frame in socket.sent if frame.get("type") == "subscribe"])
+
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: RESUBSCRIBE_ACK_TIMEOUT in clock.delays)
+        self.assertEqual(subscribes(), RESUBSCRIBE_CONCURRENCY)
+
+        clock.advance(RESUBSCRIBE_ACK_TIMEOUT)
+        await _wait_for(lambda: subscribes() == RESUBSCRIBE_CONCURRENCY + 1)
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+    async def test_a_closed_socket_leaves_no_resubscribe_watchdog_behind(self):
+        """A pending watchdog dies with its socket, so it cannot arm timers against the next one's slots."""
+
+        socket = _FakeSocket()
+        self._install(socket)
+        clock = _FakeClock()
+        patcher = unittest.mock.patch("lunora.client.time", types.SimpleNamespace(monotonic=clock.monotonic))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client._call_later = clock.call_later
+        client.subscribe("messages:list", {"channel": "c0"}, lambda _value: None)
+
+        run = asyncio.ensure_future(client.connect_and_run())
+        await _wait_for(lambda: RESUBSCRIBE_ACK_TIMEOUT in clock.delays)
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+        self.assertTrue(all(handle.cancelled for _deadline, _callback, handle in clock.timers))
+
+    async def test_a_closed_socket_leaves_no_retry_hint_timer_behind(self):
+        """A retry-hint timer dies with its socket, so it cannot free the next socket's pacing slots early."""
+
+        socket = _FakeSocket()
+        self._install(socket)
+        clock = _FakeClock()
+        patcher = unittest.mock.patch("lunora.client.time", types.SimpleNamespace(monotonic=clock.monotonic))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client._call_later = clock.call_later
+        client.subscribe("messages:list", {"channel": "general"}, lambda _value: None, lambda _error: None)
+
+        run = asyncio.ensure_future(client.connect_and_run())
+        await asyncio.wait_for(socket.sent_at_least(2).wait(), TIMEOUT)
+        socket.inbound.put_nowait(json.dumps(RETRY["hintFrame"]))
+        # Any delay but the pacing watchdog's is the hint's retry timer.
+        await _wait_for(lambda: any(delay != RESUBSCRIBE_ACK_TIMEOUT for delay in clock.delays))
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
+        self.assertTrue(all(handle.cancelled for _deadline, _callback, handle in clock.timers))
+
     async def test_a_slow_error_callback_does_not_postpone_the_retry(self):
         """The retry fires at the deadline the error frame recorded, not a full hint after its callbacks return."""
 
@@ -1021,7 +1093,8 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         subscribed = len(socket.sent)
 
         socket.inbound.put_nowait(json.dumps(RETRY["hintFrame"]))
-        await _wait_for(lambda: clock.delays)
+        # 3.0, not any delay: the resend's pacing watchdog is armed on this clock too.
+        await _wait_for(lambda: 3.0 in clock.delays)
 
         clock.advance(3.0)
         await _wait_for(lambda: len(socket.sent) == subscribed + 1)

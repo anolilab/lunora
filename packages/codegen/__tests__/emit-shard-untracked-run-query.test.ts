@@ -47,7 +47,7 @@ describe("emitShard — untracked ctx.runQuery", () => {
         // mutation could compose a mutation of its own.
         // The sub-context carries the dispatch's sensitive-value scope, so a value marked
         // sensitive is scrubbed from records the untracked query writes too.
-        expect(emitted).toContain('identity: caller, kind: "query", scope: options.scope, sensitive: options.sensitive })');
+        expect(emitted).toContain('identity: caller, kind: "query", readBookmark: options.readBookmark, scope: options.scope, sensitive: options.sensitive })');
         expect(emitted).toContain("const contextKind = options.kind ?? ");
     });
 

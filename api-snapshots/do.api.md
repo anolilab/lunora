@@ -587,7 +587,7 @@ abstract class ShardDO {
     protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void;
     protected matchesSubscription(query: SubscriptionQuery, delta: MutationDelta): boolean;
     protected broadcastDelta(delta: MutationDelta): void;
-    protected executeSubscription(_functionPath: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): Promise<SubscriptionOutcome | null>;
+    protected executeSubscription(_functionPath: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity, _refreshBookmark?: string): Promise<SubscriptionOutcome | null>;
     protected resolveShape(_name: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): ResolvedShape | undefined;
     protected isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     protected readGlobalShapeRows(_resolved: ResolvedShape, _identity?: SubscriptionIdentity): Promise<ShapeRow[]>;
@@ -642,6 +642,7 @@ abstract class ShardDO {
     protected windowStreamReads(headroom: TransactionHeadroomTracker, frames: AsyncIterable<unknown>): AsyncIterable<unknown>;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
+    protected recordGlobalWrite(table: string, bookmark: string | undefined): void;
     protected flushMigrationProgress(): Promise<void>;
     protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined, pinned?: {
         trace: TraceAnchor | undefined;
@@ -670,10 +671,12 @@ abstract class ShardDO {
         cdcRetentionMs?: number;
     };
     protected readGlobalChangedTables(_sinceSeq: number, _cursorOnly?: boolean): Promise<{
+        bookmark?: string;
         cursor: number;
         floor?: number;
         tables: string[];
     } | undefined>;
+    protected polledGlobalTables(): ReadonlySet<string>;
 }
 ```
 

@@ -285,7 +285,7 @@ const cdcSuffix = (cursor?: number, epoch?: string): string =>
     (cursor === undefined ? "" : `,"cursor":${String(cursor)}`) + (epoch === undefined ? "" : `,"epoch":${JSON.stringify(epoch)}`);
 
 /** True when `a` and `b` share at least one element. */
-const setsIntersect = (a: Set<string>, b: Set<string>): boolean => {
+const setsIntersect = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean => {
     // Iterate the smaller set for fewer lookups.
     const [small, large] = a.size <= b.size ? [a, b] : [b, a];
 

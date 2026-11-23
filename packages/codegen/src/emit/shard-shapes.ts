@@ -210,29 +210,56 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
 
             return rows;
         }
-
-        protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
-            const env = this.env as Record<string, unknown>;
-            // Metadata-only: this asks the global changelog which TABLES moved,
-            // never what changed in them, so it costs one small read per poll tick
-            // for the whole shard — and a tick whose answer omits a shape's table
-            // skips that shape's membership drain entirely.
-            // Named local, not an inline object literal — same reason as the
-            // dispatch path and \`readGlobalShapeRows\`: \`bookmark\` is not declared
-            // on the narrower Hyperdrive thunk's \`request\` type, and an inline
-            // literal trips an excess-property error (TS2353) that makes the
-            // emitted \`shard.ts\` uncompilable for every Hyperdrive-global app with
-            // a \`defineShape\`. The Hyperdrive factory simply never reads it.
-            const bookmark = this.getInboundBookmark();
-            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), ...(bookmark === undefined ? {} : { bookmark }) };
-            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
-
-            return globalDb.cdcChangedTables?.(sinceSeq, cursorOnly === undefined ? {} : { cursorOnly });
-        }
 `
         : "";
 
     return globalShapeReaderOverride;
 };
 
-export { emitGlobalShapeReaderOverride, emitShapeFragments };
+/**
+ * The global-changelog overrides an app with `.global()` tables needs to hear of other shards' writes on its
+ * poll tick: `readGlobalChangedTables`, and `polledGlobalTables` naming the tables it may poll for. Empty for
+ * an app without global tables.
+ */
+const emitGlobalChangelogOverride = (globalTableNames: ReadonlyArray<string>, globalDatabaseThunk: string): string =>
+    globalTableNames.length === 0
+        ? ""
+        : `
+        // Without a changelog a tick cannot say which tables moved, so there is nothing to poll for.
+        private readonly polledGlobalTableSet: ReadonlySet<string> = new Set<string>(config.cdc === true ? ${JSON.stringify(globalTableNames)} : []);
+
+        protected override polledGlobalTables(): ReadonlySet<string> {
+            return this.polledGlobalTableSet;
+        }
+
+        protected override async readGlobalChangedTables(sinceSeq: number, cursorOnly?: boolean): Promise<{ bookmark?: string; cursor: number; floor?: number; tables: string[] } | undefined> {
+            const env = this.env as Record<string, unknown>;
+            // Metadata-only: this asks the global changelog which TABLES moved,
+            // never what changed in them, so it costs one small read per poll tick
+            // for the whole shard — and a tick whose answer omits a table skips
+            // the shapes and live queries that read only it.
+            // Named local, not an inline object literal — same reason as the
+            // dispatch path and \`readGlobalShapeRows\`: \`bookmark\` and \`onBookmark\` are not
+            // declared on the narrower Hyperdrive thunk's \`request\` type, and an inline
+            // literal trips an excess-property error (TS2353). The Hyperdrive factory
+            // simply never reads them.
+            //
+            // The session's bookmark after the read is returned with the answer: a read
+            // at it sees every write the answer reports, so the refresh it drives reads there.
+            const bookmark = this.getInboundBookmark();
+            let changelogBookmark: string | undefined;
+            const globalRequest = {
+                ...this.globalCdcOptions(config.cdc ?? false),
+                ...(bookmark === undefined ? {} : { bookmark }),
+                onBookmark: (value: string | undefined) => {
+                    changelogBookmark = value;
+                },
+            };
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
+            const changed = await globalDb.cdcChangedTables?.(sinceSeq, cursorOnly === undefined ? {} : { cursorOnly });
+
+            return changed === undefined || changelogBookmark === undefined ? changed : { ...changed, bookmark: changelogBookmark };
+        }
+`;
+
+export { emitGlobalChangelogOverride, emitGlobalShapeReaderOverride, emitShapeFragments };

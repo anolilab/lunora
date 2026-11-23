@@ -275,7 +275,7 @@ class AppBuilder<Env extends object> {
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null | undefined }) => {
+                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; onWrite?: (table: string) => void; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const database = this.globalDeclaration?.d1(env);
 
@@ -317,6 +317,9 @@ class AppBuilder<Env extends object> {
                               // poll's changed-tables fast path is unreachable.
                               cdc: request?.cdc ?? false,
                               exec: buildExec(database, request?.bookmark, request?.onBookmark),
+                              // Announces a trigger's write to another global table, which the shard's
+                              // own broadcast cannot see. See `SqlCtxDbOptions.onWrite`.
+                              ...(request?.onWrite === undefined ? {} : { onWrite: request.onWrite }),
                               // The binding outlives this per-request writer, so the
                               // provisioning sweep runs once per isolate rather than
                               // once per request. See `SqlCtxDbOptions.provisionScope`.
@@ -584,7 +587,7 @@ class AppBuilder<Env extends object> {
         // Captured before the branch so the narrowing survives — reading
         // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
-        const { authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
+        const { authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, effectiveCookieCache, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -708,12 +711,14 @@ class AppBuilder<Env extends object> {
                 let defaultMs: number;
 
                 try {
-                    const cookieCache = authDeclaration?.options(env).session?.cookieCache;
-                    // better-auth's `maxAge` is in SECONDS; createAuth fills 60 when it is unset.
+                    const declared = authDeclaration?.options(env);
+                    // The cache createAuth actually runs with, which an unset `cookieCache` alone does not say: with
+                    // `admin()` it is off, and the memo must not hold a banned user's identity in its place.
+                    const cookieCache = declared === undefined ? undefined : effectiveCookieCache(declared);
+                    // better-auth's `maxAge` is in SECONDS; its own default is longer, so an unset one reads as 60.
                     const cookieCacheSeconds = typeof cookieCache?.maxAge === "number" && cookieCache.maxAge >= 0 ? cookieCache.maxAge : 60;
 
-                    // createAuth fills `{ enabled: true, maxAge: 60 }` only when `cookieCache` is absent; a partial
-                    // object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
+                    // A partial object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
                     defaultMs = cookieCache === undefined || cookieCache.enabled === true ? Math.min(60_000, cookieCacheSeconds * 1000) : 0;
                 } catch {
                     // The policy is unreadable. Fall back to PER-REQUEST memoisation, not the 60s

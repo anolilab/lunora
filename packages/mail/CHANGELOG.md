@@ -1,3 +1,7 @@
+## @lunora/mail [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.140...@lunora/mail@1.0.0-alpha.141) (2026-11-23)
+
+- security(mail): stop inbound mail content forging typed arguments (#1640)
+
 ## @lunora/mail [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.139...@lunora/mail@1.0.0-alpha.140) (2026-11-20)
 
 - feat(platform-node): deliver mail on the Node target (#1551) (#1624)

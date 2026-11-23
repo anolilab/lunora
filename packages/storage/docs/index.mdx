@@ -398,6 +398,39 @@ A request carrying a method-override header (`X-HTTP-Method-Override`,
 The handler is also built with `allowMethodOverride: false`. Send each request
 with its real method; the bundled client does.
 
+The handler does not record who created an upload: binding an upload to its
+creator is `authorize`'s job, and it sees the upload id in `url`. On a TUS route,
+decide on `POST` who may upload; on every other request check that the id in the
+URL belongs to the caller, or anyone who learns an id can append to the upload,
+read its offset, or cancel it. The route itself
+refuses TUS concatenation (`Upload-Concat`, `400`) before `authorize` runs,
+and does not advertise the `concatenation` extension: `final;<url> …` names
+the uploads it assembles in a header, not the URL, so a gate that checks the id
+in `url` could not bind them to the caller. The bundled client never sends it.
+On a TUS route, record the owner from the create's `Location`, after the
+handler answers:
+
+```ts
+const handler = createUploadHandler({
+    storage,
+    authorize: async ({ method, url }) => method === "POST" || (await isOwner(uploadIdFrom(url), userId)),
+});
+const response = await handler.fetch(request);
+const location = response.headers.get("location");
+
+if (request.method === "POST" && response.ok && location !== null) {
+    await claim(uploadIdFrom(new URL(location, request.url)), userId);
+}
+```
+
+This example is for TUS only. A chunked-REST `PUT` creates a file under a name
+the client picks, and a multipart create returns its id in a JSON body with no
+`Location`, so this gate and claim would leave either one unowned. Write and
+test your own claim for those protocols before you expose such a route.
+
+[File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
+has the full HTTP action, with `isOwner` and `claim` as internal functions.
+
 A `HEAD`, `PATCH` or TUS `DELETE` answers only for an upload the route
 created: an id without upload state is a `404`, whatever object the bucket
 holds under that key
@@ -541,8 +574,9 @@ not admitted with one of its grants: outside an upload request, or when
   segments: past eight, they are joined into one.
 - **Interrupted chunks.** When the client drops mid-chunk, the bytes that
   arrived are kept and `HEAD` reports them, as TUS expects.
-- **Not supported:** the TUS `concatenation` and `creation-defer-length`
-  extensions (not advertised; a request using one gets a `501`), and
+- **Not supported:** the TUS `creation-defer-length` extension (not
+  advertised; a request using it gets a `501`), TUS `concatenation`, which the
+  route refuses (`400`) over every provider, and
   chunked-REST chunks sent out of order (`409`, see [below](#chunked-rest)).
   `copy`/`move` on the provider are refused.
 - **Checksums.** The provider verifies no checksum itself, so the TUS
