@@ -207,7 +207,12 @@ code.
 The gate has two jobs. On `POST` it decides who may start an upload. On every
 other method it must check that the upload in the URL belongs to the caller,
 because anyone who learns an upload's id could otherwise append to it, or cancel
-it. So record the owner when the upload is created. In an
+it. So record the owner when the upload is created. The route refuses TUS
+concatenation (`Upload-Concat`, `400`) before the gate runs: a
+`final;<url> <url>` create names other uploads in a header, not in the URL,
+so a gate that checks ownership by URL could not stop one caller from building a
+file out of another caller's partial upload. The bundled client never sends it.
+In an
 [HTTP action](/docs/concepts/http-endpoints) the caller is already resolved on
 `ctx.auth`:
 
@@ -266,7 +271,11 @@ export default app;
 `internal.uploads.claim` and `internal.uploads.isOwner` are your own
 [internal functions](/docs/concepts/internal-functions) over an `uploads` table:
 one inserts `{ uploadId, userId }`, the other reports whether that row exists.
-The same table is where you check ownership before you serve the file.
+The same table is where you check ownership before you serve the file. This
+gate and claim are for TUS only. A `"chunked-rest"` `PUT` creates a file under a
+name the client picks, and a `"multipart"` create returns its id in a JSON body
+with no `Location`, so neither gets an owner here. Write and test your own claim
+for those protocols before you expose such a route.
 
 An upload's progress lives in the bucket, not in the Worker: one small state
 object per upload under `_lunora/uploads/`, written with conditional puts, so a
@@ -393,7 +402,7 @@ the binding of that same bucket.
 - **Unsupported TUS extensions.** The binding provider does not offer
   `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`. A
   request that sends `Upload-Checksum` anyway gets a `400` before its body is
-  read.
+  read. The route refuses `Upload-Concat` (`400`) over every provider.
 - **Method overrides.** A request carrying `X-HTTP-Method-Override` (or
   `X-HTTP-Method`, `X-Method-Override`) gets a `405`, so no request can pass the
   write gate as one method and run as another.
