@@ -61,5 +61,4 @@ const createPresenceWrites = (): PresenceWrites => {
     };
 };
 
-export type { PresenceWrites };
 export { createPresenceWrites };

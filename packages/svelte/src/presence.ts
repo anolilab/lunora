@@ -16,9 +16,9 @@ import { subscribeReactiveArgs } from "./subscribe-reactive-args";
  *
  * Drives the heartbeat mutation (on call, interval, and tab re-focus) and
  * subscribes to the live `listPresent` query for the given room. `roomId` may
- * be a `Readable<string>`; a change stops the old room's heartbeats and subscription and joins
- * the new one. Pass `leave` to drop the old room's row at once;
- * without it the server keeps that row until it ages out (`ttlMs`).
+ * be a `Readable<string>`; a change stops the old room's heartbeats and
+ * subscription and joins the new one. Pass `leave` to drop the old room's row
+ * at once; without it the server keeps that row until it ages out (`ttlMs`).
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client from the
  * Svelte context.
@@ -107,7 +107,6 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     let currentRoom = "";
 
     // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
-
     const presenceWrites = createPresenceWrites();
 
     const sendHeartbeat = (): void => {

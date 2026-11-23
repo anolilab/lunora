@@ -15,8 +15,8 @@ import onScopeDisposeOrWarn from "./scope-dispose";
  *
  * Drives the heartbeat mutation (on mount, interval, and tab re-focus) and
  * subscribes to the live `listPresent` query for the given room. `roomId` may
- * be a ref or getter; a change stops the old room's heartbeats and subscription and joins
- * the new one. Pass `leave` to drop the old room's row at once;
+ * be a ref or getter; a change stops the old room's heartbeats and subscription
+ * and joins the new one. Pass `leave` to drop the old room's row at once;
  * without it the server keeps that row until it ages out (`ttlMs`).
  *
  * Call inside `setup()` (or any active effect scope).
@@ -110,7 +110,6 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     let currentRoom = "";
 
     // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
-
     const presenceWrites = createPresenceWrites();
 
     const sendHeartbeat = (): void => {
@@ -171,15 +170,9 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
             const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
 
             let unsubscribe: (() => void) | undefined;
-            let disposed = false;
 
             // Teardown: clear interval, remove listener, clear connection context, unsubscribe.
             const dispose = (): void => {
-                if (disposed) {
-                    return;
-                }
-
-                disposed = true;
                 live = false;
                 mounted = false;
                 clearInterval(intervalHandle);

@@ -14,9 +14,9 @@ import { trackedEffect } from "./solid-compat";
  *
  * Drives the heartbeat mutation (on mount, interval, and tab re-focus) and
  * subscribes to the live `listPresent` query for the given room. `roomId` may
- * be an accessor; a change stops the old room's heartbeats and subscription and joins
- * the new one. Pass `leave` to drop the old room's row at once;
- * without it the server keeps that row until it ages out (`ttlMs`).
+ * be an accessor; a change stops the old room's heartbeats and subscription and
+ * joins the new one. Pass `leave` to drop the old room's row at once; without it
+ * the server keeps that row until it ages out (`ttlMs`).
  *
  * Call inside a reactive context (component / `createRoot`).
  */
@@ -106,7 +106,6 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     let currentRoom = "";
 
     // A room's leave cannot overtake its heartbeat still in flight, nor a rejoin's heartbeat its leave.
-
     const presenceWrites = createPresenceWrites();
 
     const sendHeartbeat = (): void => {
