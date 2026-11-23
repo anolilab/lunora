@@ -3525,6 +3525,7 @@ interface SchedulerContext {
 
 ```ts
 interface SchedulerRunOptions {
+    dedupKey?: string;
     retry?: {
         backoff?: "exponential" | "linear";
         baseMs?: number;
