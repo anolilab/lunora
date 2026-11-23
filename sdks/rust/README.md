@@ -55,7 +55,12 @@ let http = reqwest::blocking::Client::builder().redirect(reqwest::redirect::Poli
 
 `handle_frame(raw)` is what you call with each inbound WebSocket message;
 `resend_subscriptions()` re-subscribes everything after a reconnect — queries
-from their resume cursor and shape views from their checkpoint and epoch. A
+from their resume cursor and shape views from their checkpoint and epoch. Queries go out
+at most three at a time, as the reference client sends them, so a reconnect does not land
+every query on the shard in one burst: each of the rest goes out when `handle_frame` sees a
+frame for one already sent, or once one has gone unanswered for 10 s. That deadline is in
+`next_subscription_retry_at()`, and `retry_due_subscriptions()` at or after it sends the
+next, so arm a timer for it after the resend, as the loop below does. A
 `data`/`delta` payload the wire codec refuses is reported on that subscription's
 own `on_error` as `INVALID_FRAME` rather than returned from `handle_frame`, so
 one bad frame cannot end your read loop and with it every other subscription.
@@ -112,7 +117,7 @@ which ends the reader and so the run.
 enum Event {
     Frame(String),
     Flush, // a flush timer fired
-    Retry(Instant), // a subscription's retry hint elapsed; the deadline it was armed for
+    Retry(Instant), // a subscription's retry hint or paced re-subscribe elapsed; the deadline it was armed for
     // the reader hit end of stream or an error; the close frame's code and reason, if it sent one
     Closed(Option<u16>, Option<String>),
 }
@@ -161,10 +166,12 @@ loop {
             }
         }), None);
         if !failed.load(Ordering::SeqCst) {
-            if let Err(err) = client.resend_subscriptions() {
+            match client.resend_subscriptions() {
+                // The resend is paced; this timer frees a slot the server never answers.
+                Ok(()) => schedule_retry(tx.clone(), client.next_subscription_retry_at()),
                 // A subscription whose arguments the wire cannot encode fails every resend
                 // the same way: remove it with `unsubscribe`, then restart this loop.
-                resend_error = Some(err);
+                Err(err) => resend_error = Some(err),
             }
         }
         if resend_error.is_none() && !failed.load(Ordering::SeqCst) {

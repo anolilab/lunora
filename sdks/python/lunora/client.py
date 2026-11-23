@@ -88,6 +88,17 @@ TOKEN_EXPIRED_CLOSE = 4001
 REFUSED_CLOSE = 4003
 CONNECT_DEADLINE_REASON = "connect deadline"
 
+# How many re-sent `subscribe` frames a reconnect keeps unanswered at once before it
+# waits for a reply. Each one runs its query server-side to build a snapshot, and most
+# land on the one default-shard Durable Object, so an unpaced burst can knock it over
+# (RESUBSCRIBE_CONCURRENCY in packages/client/src/client-tuning.ts, issue #796).
+RESUBSCRIBE_CONCURRENCY = 3
+
+# Seconds an unanswered re-subscribe holds its slot before the next one goes out
+# without it. A slot no reply ever frees would stop every queued re-subscribe until the
+# next reconnect, which is worse than the burst the pacing avoids.
+RESUBSCRIBE_ACK_TIMEOUT = 10.0
+
 # A WS token provider: a value, a callable returning a value, or an async callable.
 WsToken = Union[str, Callable[[], Union[str, Awaitable[Optional[str]], None]], None]
 
@@ -515,6 +526,11 @@ class LunoraClient:
         #: The ``time.monotonic()`` deadline of the one re-subscribe a retry hint asked for,
         #: per query subscription id. See :meth:`retry_due_subscriptions`.
         self._pending_retries: dict[str, float] = {}
+        #: Query subscription ids a reconnect has yet to re-send, in order, and the ones it
+        #: has sent and not yet heard back about, each with the ``time.monotonic()`` deadline
+        #: after which it stops holding a slot. See :meth:`resend_subscriptions`.
+        self._resubscribe_queue: list[str] = []
+        self._resubscribe_slots: dict[str, float] = {}
         self._shapes: dict[str, _ShapeSubscription] = {}
         self._poke_buffers: dict[str, dict] = {}
         self._next_sub_id = 0
@@ -566,6 +582,7 @@ class LunoraClient:
         with self._lock:
             self._socket_generation = generation
             self._pending_retries.clear()
+            self._clear_resubscribes()
             # `connect` goes out before the sender is visible, so no frame another thread
             # produces can reach the server ahead of it.
             self._send = None
@@ -613,6 +630,7 @@ class LunoraClient:
             self._send = None
             self._attach_generation += 1
             self._pending_retries.clear()
+            self._clear_resubscribes()
             # The cursor never moved for a held run, so the next resend replays it whole.
             for sub in self._subs.values():
                 sub.discard_run()
@@ -882,6 +900,7 @@ class LunoraClient:
         close_queue(self)
         with self._lock:
             self._pending_retries.clear()
+            self._clear_resubscribes()
             hooks = list(self._close_hooks)
         _run_callbacks(hooks, "close hook")
 
@@ -1111,8 +1130,14 @@ class LunoraClient:
                 self._subs.pop(sub_id, None)
                 self._pending_retries.pop(sub_id, None)
                 sender = self._send
+                # Its frame will never be answered now, so the slot it holds goes to the next one.
+                batch = self._take_resubscribes(time.monotonic()) if self._resubscribe_slots.pop(sub_id, None) is not None else []
             if sender is not None:
-                sender(build_unsubscribe_frame(sub_id))
+                # The batch holds slots this call claimed: a failed unsubscribe write must not strand it.
+                try:
+                    sender(build_unsubscribe_frame(sub_id))
+                finally:
+                    self._send_resubscribes(sender, batch, raise_errors=False)
 
         return unsubscribe
 
@@ -1216,44 +1241,105 @@ class LunoraClient:
         Without this the cursor/epoch tracked on every ``data`` frame would be
         write-only state and a reconnect would silently re-seed from scratch.
 
-        The frames are BUILT under the lock, not merely collected: each one carries
-        a cursor :meth:`handle_frame` writes, so snapshotting the subscriptions and
-        reading their cursors afterwards resends a torn frame.
+        Query subscriptions go out at most :data:`RESUBSCRIBE_CONCURRENCY` at a time, as the
+        reference client sends them: each of the rest is sent once :meth:`handle_frame` sees a
+        frame for one already sent, or once :meth:`retry_due_subscriptions` finds one has gone
+        unanswered for :data:`RESUBSCRIBE_ACK_TIMEOUT` (the deadline is included in
+        :meth:`next_subscription_retry_at`). Shape subscriptions all go out here.
+
+        Each frame is BUILT under the lock at the moment it goes out: it carries a cursor
+        :meth:`handle_frame` writes, and an identity change can clear that cursor while the
+        subscription waits its turn.
         """
 
         with self._lock:
             sender = self._send
             if sender is None:
                 return
-            # The resubscribe resumes from the last applied cursor, so a dropped change is
-            # replayed; if it is still unmergeable the flag is set again.
-            queries = [
-                (sub, build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch))
-                for sub in self._subs.values()
-            ]
+            self._clear_resubscribes()
+            self._resubscribe_queue = list(self._subs)
+            batch = self._take_resubscribes(time.monotonic())
             shapes = [
                 build_shape_subscribe_frame(shape.id, shape.name, shape.args, since_checkpoint=shape.server_cursor, since_epoch=shape.server_epoch)
                 for shape in self._shapes.values()
             ]
 
-        for sub, frame in queries:
-            # The flag clears per send, not up front: a send that fails means the server never
-            # saw the replay, so the dropped change is still unapplied and a later delta must
-            # not advance the cursor past it.
-            with self._lock:
-                was_poisoned = sub.poisoned
-                sub.poisoned = False
-                sub.discard_run()
-            try:
-                sender(frame)
-            except BaseException:
-                if was_poisoned:
-                    with self._lock:
-                        sub.poisoned = True
-                raise
+        self._send_resubscribes(sender, batch, raise_errors=True)
 
         for frame in shapes:
             sender(frame)
+
+    def _clear_resubscribes(self) -> None:
+        """Forget the paced re-subscribe. Runs with the lock held."""
+
+        self._resubscribe_queue = []
+        self._resubscribe_slots.clear()
+
+    def _take_resubscribes(self, now: float) -> list:
+        """Build the queued re-subscribes that fit in the free slots and claim a slot for each. Runs with the lock held.
+
+        Returns ``(subscription, frame, was_poisoned)`` triples for :meth:`_send_resubscribes`.
+        """
+
+        batch = []
+        while len(self._resubscribe_slots) < RESUBSCRIBE_CONCURRENCY and self._resubscribe_queue:
+            sub = self._subs.get(self._resubscribe_queue.pop(0))
+            # Unsubscribed while it waited its turn: nothing to re-send.
+            if sub is None:
+                continue
+            # Built before any state moves: args the caller mutated into something the wire cannot
+            # carry must not escape into the frame handler and stall the queue behind them.
+            try:
+                frame = build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
+            except (TypeError, ValueError):
+                _log.exception("lunora: subscription %s has args that no longer encode; not re-subscribed", sub.id)
+                continue
+            # The resubscribe resumes from the last applied cursor, so a dropped change is
+            # replayed; if it is still unmergeable the flag is set again.
+            was_poisoned = sub.poisoned
+            sub.poisoned = False
+            sub.discard_run()
+            batch.append((sub, frame, was_poisoned))
+            self._resubscribe_slots[sub.id] = now + RESUBSCRIBE_ACK_TIMEOUT
+        return batch
+
+    def _send_resubscribes(self, sender: Callable[[dict], None], batch: list, raise_errors: bool) -> None:
+        """Send what :meth:`_take_resubscribes` built, with the lock released.
+
+        A send that fails means the server never saw that replay or any after it, so their
+        dropped changes are still unapplied and a later delta must not advance the cursor past
+        them: their freeze comes back. Off the caller's own resend (``raise_errors`` false) the
+        failure is logged rather than raised into a frame handler or an unsubscribe.
+        """
+
+        sent = 0
+        try:
+            for _sub, frame, _was_poisoned in batch:
+                sender(frame)
+                sent += 1
+        except BaseException as error:
+            with self._lock:
+                for unsent, _frame, was_poisoned in batch[sent:]:
+                    if was_poisoned:
+                        unsent.poisoned = True
+                # Still this socket's: the unsent ones go back to the front of the line and give up
+                # their slots, or nothing would ever send them on a socket that stays open.
+                if self._send is sender:
+                    unsent_ids = [unsent.id for unsent, _frame, _was_poisoned in batch[sent:]]
+                    for sub_id in unsent_ids:
+                        self._resubscribe_slots.pop(sub_id, None)
+                    self._resubscribe_queue[:0] = [sub_id for sub_id in unsent_ids if sub_id in self._subs]
+            if raise_errors or not isinstance(error, Exception):
+                raise
+            _log.exception("lunora: resubscribe send failed")
+            return
+        # The frames went out after the lock was released, so an unsubscribe on another thread
+        # may have reached the socket first; follow it with another, or the server keeps a
+        # subscription this client no longer holds.
+        with self._lock:
+            dropped = [frame["id"] for _sub, frame, _was_poisoned in batch if frame["id"] not in self._subs]
+        for sub_id in dropped:
+            sender(build_unsubscribe_frame(sub_id))
 
     def retry_due_subscriptions(self, now: Optional[float] = None) -> int:
         """Re-subscribe every subscription whose retry hint has elapsed; returns the number of frames sent.
@@ -1262,6 +1348,10 @@ class LunoraClient:
         re-subscribe is cold (no resume cursor), since the hint asks for a fresh snapshot.
         With no socket attached it sends nothing and returns 0. Attaching or detaching a
         socket cancels every pending retry: the reconnect's resend re-subscribes everything.
+
+        It also frees each slot of :meth:`resend_subscriptions`' pacing that has gone
+        unanswered past its deadline, and sends (and counts) the queued re-subscribes that
+        then fit. Those keep their resume cursor.
         """
 
         with self._lock:
@@ -1302,13 +1392,22 @@ class LunoraClient:
             dropped = [frame["id"] for frame in frames if frame["id"] not in self._subs]
         for sub_id in dropped:
             sender(build_unsubscribe_frame(sub_id))
-        return len(frames)
+        # Claimed only now: a batch claimed before a send above failed would keep its slots and
+        # lose its freeze without ever going out.
+        with self._lock:
+            for sub_id in [sub_id for sub_id, deadline in self._resubscribe_slots.items() if deadline <= current]:
+                del self._resubscribe_slots[sub_id]
+            # Dated from now, not the deadline a late timer was armed for, or the new slots would
+            # already be (nearly) expired and the window would not pace anything.
+            batch = self._take_resubscribes(max(current, time.monotonic()))
+        self._send_resubscribes(sender, batch, raise_errors=True)
+        return len(frames) + len(batch)
 
     def next_subscription_retry_at(self) -> Optional[float]:
-        """The ``time.monotonic()`` deadline of the earliest pending retry, or ``None`` when none is pending."""
+        """The ``time.monotonic()`` deadline of the earliest pending retry or paced re-subscribe, or ``None`` when none is pending."""
 
         with self._lock:
-            return min(self._pending_retries.values(), default=None)
+            return min([*self._pending_retries.values(), *self._resubscribe_slots.values()], default=None)
 
     # --- Inbound frame dispatch (fixture-tested) ---------------------------
 
@@ -1341,6 +1440,16 @@ class LunoraClient:
 
         if not isinstance(frame, dict):
             return {"kind": "ignored", "type": None}
+
+        # ANY frame bearing a re-sent subscription's id proves the server has taken it off its
+        # plate: an `ack`, but equally the `error` that refuses it or a `data` that overtakes
+        # its ack. Releasing here rather than per type keeps an unanticipated frame from
+        # stalling the drain.
+        frame_id = _frame_key(frame.get("id"))
+        if frame_id is not None and self._resubscribe_slots.pop(frame_id, None) is not None and self._send is not None:
+            batch = self._take_resubscribes(time.monotonic())
+            if batch:
+                deferred.append(partial(self._send_resubscribes, self._send, batch, False))
 
         kind = frame.get("type")
         if kind == "ack":
@@ -1803,6 +1912,38 @@ class LunoraClient:
                 while True:
                     await socket.send(json.dumps(await outbox.get()))
 
+            # One timer per paced re-subscribe deadline, so a frame the server never answers
+            # frees its slot without waiting for another frame to arrive. The handles are kept so
+            # the timers die with this socket: left running, one would arm more for the next
+            # socket's slots.
+            watchdogs: set = set()
+            watchdog_handles: list = []
+            watchdogs_alive = {"value": True}
+
+            def resubscribe_timed_out(deadline: float) -> None:
+                if not watchdogs_alive["value"]:
+                    return
+                self.retry_due_subscriptions(deadline)
+                arm_resubscribe_watchdogs()
+
+            def arm_resubscribe_watchdogs() -> None:
+                with self._lock:
+                    deadlines = [deadline for deadline in self._resubscribe_slots.values() if deadline not in watchdogs]
+                for deadline in deadlines:
+                    watchdogs.add(deadline)
+                    watchdog_handles.append(
+                        (self._call_later or loop.call_later)(max(0.0, deadline - time.monotonic()), partial(resubscribe_timed_out, deadline))
+                    )
+
+            def retry_hint_due(deadline: float) -> None:
+                if watchdogs_alive["value"]:
+                    self.retry_due_subscriptions(deadline)
+
+            def stop_resubscribe_watchdogs() -> None:
+                watchdogs_alive["value"] = False
+                for handle in watchdog_handles:
+                    handle.cancel()
+
             async def read_inbound() -> None:
                 async for raw in socket:
                     if raw == "lunora-pong":
@@ -1825,6 +1966,7 @@ class LunoraClient:
                     except Exception:
                         _log.exception("lunora: frame handler raised")
                         continue
+                    arm_resubscribe_watchdogs()
                     hint = descriptor.get("retryAfterMs")
                     # Arm for the deadline the error recorded before its callbacks ran, so a slow
                     # callback does not add its own duration to the server's hint.
@@ -1835,7 +1977,9 @@ class LunoraClient:
                         # due and lose the retry. A later frame that replaced or cancelled the
                         # deadline still makes this a no-op.
                         delay = max(0.0, armed - time.monotonic())
-                        (self._call_later or loop.call_later)(delay, partial(self.retry_due_subscriptions, armed))
+                        # Kept with the watchdogs so it dies with this socket: left running, it would
+                        # free the next socket's pacing slots early.
+                        watchdog_handles.append((self._call_later or loop.call_later)(delay, partial(retry_hint_due, armed)))
                     # Only a frame the client recognised proves a live server;
                     # `null` or an unknown `type` must not reset the backoff. An
                     # `error` frame does not either: a TOKEN_EXPIRED arrives just before
@@ -1904,8 +2048,10 @@ class LunoraClient:
                 self.resend_subscriptions()
             except BaseException:
                 # The reader and writer tasks do not exist yet, so only the sender needs undoing.
+                stop_resubscribe_watchdogs()
                 self.detach_socket()
                 raise
+            arm_resubscribe_watchdogs()
 
             writer = loop.create_task(write_outbound())
             reader = loop.create_task(read_inbound())
@@ -1951,6 +2097,7 @@ class LunoraClient:
                 retry["alive"] = False
                 if retry["timer"] is not None:
                     retry["timer"].cancel()
+                stop_resubscribe_watchdogs()
                 # A background flush still waiting on its post is ended with the
                 # socket; its drained writes go back on the queue for the
                 # reconnect, or are settled if the client closed.

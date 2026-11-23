@@ -28,6 +28,8 @@ mod socket_cases;
 // The subscription retry hint. Not manifest cases yet, so only the `#[test]` wrappers
 // at the foot of this file run them.
 mod retry_cases;
+// The paced re-subscribe after a reconnect. Same arrangement as the retry hint.
+mod resubscribe_cases;
 
 use offline_cases::{
     batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_envelopeless_413, offline_flush_batch_splits_on_payload_too_large,
@@ -1596,22 +1598,32 @@ fn concurrent_subscribe_and_handle_frame() {
     reader.join().expect("reader");
 
     // Attached only now, so the count below sees resend frames alone.
-    let resent = Arc::new(Mutex::new(0_usize));
-    let counter = Arc::clone(&resent);
+    let resent = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorder = Arc::clone(&resent);
     let mut guard = client.lock().expect("client");
 
     guard.attach_socket(
         Box::new(move |frame| {
             if frame["type"] == json!("subscribe") {
-                *counter.lock().expect("resent") += 1;
+                recorder.lock().expect("resent").push(frame["id"].as_str().expect("id").to_string());
             }
         }),
         None,
     );
     guard.resend_subscriptions().expect("resend");
 
+    // The resend is paced, so each re-sent subscribe is answered to let the next one out.
+    let mut answered = 0;
+
+    while answered < resent.lock().expect("resent").len() {
+        let id = resent.lock().expect("resent")[answered].clone();
+
+        guard.handle_frame(&format!(r#"{{"type":"ack","id":"{id}"}}"#)).expect("ack");
+        answered += 1;
+    }
+
     assert_eq!(
-        *resent.lock().expect("resent"),
+        resent.lock().expect("resent").len(),
         THREADS * PER_THREAD,
         "every concurrent subscribe survived with a distinct id"
     );
@@ -1824,4 +1836,44 @@ fn a_cold_retry_forgets_the_confirmed_cursor() {
 #[test]
 fn a_slow_error_handler_does_not_push_the_retry_later() {
     retry_cases::a_slow_error_handler_does_not_push_the_retry_later();
+}
+
+#[test]
+fn only_the_window_goes_out_until_a_reply_arrives() {
+    resubscribe_cases::only_the_window_goes_out_until_a_reply_arrives();
+}
+
+#[test]
+fn any_frame_bearing_the_id_lets_the_next_one_out() {
+    resubscribe_cases::any_frame_bearing_the_id_lets_the_next_one_out();
+}
+
+#[test]
+fn every_subscription_goes_out_exactly_once() {
+    resubscribe_cases::every_subscription_goes_out_exactly_once();
+}
+
+#[test]
+fn an_unsubscribe_skips_a_queued_one_and_frees_an_outstanding_one() {
+    resubscribe_cases::an_unsubscribe_skips_a_queued_one_and_frees_an_outstanding_one();
+}
+
+#[test]
+fn an_unanswered_one_stops_holding_its_slot_after_the_timeout() {
+    resubscribe_cases::an_unanswered_one_stops_holding_its_slot_after_the_timeout();
+}
+
+#[test]
+fn a_reconnect_mid_drain_starts_a_fresh_window() {
+    resubscribe_cases::a_reconnect_mid_drain_starts_a_fresh_window();
+}
+
+#[test]
+fn a_queued_one_carries_the_cursor_it_has_when_it_goes_out() {
+    resubscribe_cases::a_queued_one_carries_the_cursor_it_has_when_it_goes_out();
+}
+
+#[test]
+fn shape_subscriptions_are_not_paced() {
+    resubscribe_cases::shape_subscriptions_are_not_paced();
 }
