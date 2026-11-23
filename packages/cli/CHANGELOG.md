@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.507](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.506...@lunora/cli@1.0.0-alpha.507) (2026-11-23)
+
+- fix(cli): fail deploy --migrate when migrations cannot be discovered (#1642)
+
 ## @lunora/cli [1.0.0-alpha.506](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.505...@lunora/cli@1.0.0-alpha.506) (2026-11-22)
 
 - Republish with the internal dependency ranges the release commit declares. These tarballs were packed from the manifest read before the version step, so they shipped older floors (an existing lockfile could keep a sibling that lacks what the code imports) and some exact pins such as `@lunora/platform@1.0.0-alpha.80` (installs hold a second copy). The release tool now publishes the versioned manifest (#1666).
