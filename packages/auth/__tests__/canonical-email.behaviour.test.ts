@@ -12,6 +12,8 @@ import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import type { AuthDataPortLike } from "../src/data-port";
 import { authCredentialColumns, authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "../src/data-port";
 import { authDoSchemaStatements } from "../src/do-schema";
+import { backfillInvitationEmailsSync, invitationEmailColumns } from "../src/invitation-email-backfill";
+import { inviteOnly } from "../src/invite-only";
 import { admin } from "../src/plugins";
 import authTables from "../src/schema";
 import type { SqlExecutor } from "../src/sql-store";
@@ -390,5 +392,73 @@ describe("canonical email on the schema paths", () => {
         ).toThrow(/UNIQUE constraint failed/u);
 
         warn.mockRestore();
+    });
+});
+
+describe("invitation addresses stored before canonical form", () => {
+    const inviteOptions: LunoraAuthOptions = { plugins: [inviteOnly()], secret: SECRET };
+    const invitation = (database: DatabaseSync, id: string, email: string, createdAt: number): void => {
+        database
+            .prepare(`INSERT INTO "signUpInvitation" ("id", "email", "createdAt", "expiresAt") VALUES (?, ?, ?, ?)`)
+            .run(id, email, createdAt, Date.now() + 60_000);
+    };
+    const emails = (database: DatabaseSync): Record<string, unknown> =>
+        Object.fromEntries(
+            (database.prepare(`SELECT "id", "email" FROM "signUpInvitation"`).all() as { email: string; id: string }[]).map((row) => [row.id, row.email]),
+        );
+
+    it("rewrites them, keeps the newer of two that fold together, and reports the other unchanged", () => {
+        expect.assertions(3);
+
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(
+            `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "createdAt" integer NOT NULL, "expiresAt" integer NOT NULL)`,
+        );
+        // Stored trimmed and lowercased only, as `inviteOnly` wrote them before NFC.
+        invitation(database, "decomposed", DECOMPOSED, 1);
+        invitation(database, "older", "e\u0301mile@example.com", 2);
+        invitation(database, "newer", "E\u0301mile@example.com", 3);
+        invitation(database, "plain", "plain@example.com", 4);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const unchanged = backfillInvitationEmailsSync(
+            (sql, params) => database.prepare(sql).all(...(params as never[])),
+            invitationEmailColumns(resolveAuthOptions(inviteOptions))!,
+        );
+
+        expect(unchanged).toStrictEqual(["older"]);
+        expect(emails(database)).toStrictEqual({
+            decomposed: canonicalEmail(DECOMPOSED),
+            newer: "\u00E9mile@example.com",
+            older: "e\u0301mile@example.com",
+            plain: "plain@example.com",
+        });
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("older"));
+
+        warn.mockRestore();
+    });
+
+    it("rewrites them on a Durable Object's cold start", async () => {
+        expect.assertions(1);
+
+        const database = new DatabaseSync(":memory:");
+        const coldStart = async (): Promise<void> => {
+            const authDo = new LunoraAuthDO(
+                { storage: createDoStorage(database) },
+                () => {
+                    return { plugins: [inviteOnly()], secret: SECRET };
+                },
+                { internalSecret: INTERNAL_SECRET },
+            );
+
+            await authDo.fetch(new Request(`https://example.test${RESOLVE_SESSION_PATH}`, { headers: { [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET } }));
+        };
+
+        await coldStart();
+        invitation(database, "decomposed", DECOMPOSED, 1);
+        await coldStart();
+
+        expect(emails(database)).toStrictEqual({ decomposed: canonicalEmail(DECOMPOSED) });
     });
 });

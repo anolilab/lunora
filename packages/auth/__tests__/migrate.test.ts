@@ -7,6 +7,7 @@ import { getMigrations } from "better-auth/db/migration";
 import { describe, expect, it, vi } from "vitest";
 
 import { resolveAuthOptions } from "../src/create-auth";
+import { inviteOnly } from "../src/invite-only";
 import { compileMigrationsSql, createMigrationAuth, ensureMigrated } from "../src/migrate";
 
 vi.mock(import("better-auth/db/migration"), () => {
@@ -331,6 +332,28 @@ describe("ensureMigrated", () => {
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"));
 
         warn.mockRestore();
+    });
+
+    it("rewrites sign-up invitation addresses stored before they were NFC-normalised", async () => {
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1((sqlite) => {
+            sqlite.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
+            sqlite.exec(
+                `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "createdAt" integer NOT NULL, "expiresAt" integer NOT NULL)`,
+            );
+            // `é` as `e` + combining acute: trimmed and lowercased, as invitations were stored before.
+            sqlite.exec(`INSERT INTO "signUpInvitation" VALUES ('i', 'e' || char(769) || 'lise@example.com', 1, 2)`);
+        });
+
+        await ensureMigrated({ options: resolveAuthOptions({ database, plugins: [inviteOnly()], secret: "x".repeat(32) }) });
+
+        const rows = await database.prepare(`SELECT "email" FROM "signUpInvitation"`).all();
+
+        expect(rows.results.map((row) => (row as { email: string }).email)).toStrictEqual(["\u00E9lise@example.com"]);
     });
 
     it("invalidates a schema verdict cached for this database, so the migration's fix is seen", async () => {

@@ -117,6 +117,27 @@ Practical notes:
   switch. `lunoraAuthAdapter(store)` over a custom store registers no check either: an
   `AuthStore` is opaque CRUD with nothing to introspect.
 
+## Duplicate addresses and `user.emailCanonical`
+
+`user.email` keeps an address as it was written, and SQLite's `LOWER()` folds ASCII only.
+So `@lunora/auth` adds a `user.emailCanonical` column: the address trimmed,
+NFC-normalised and lowercased, under a unique index. A database hook fills it on every
+better-auth write. The admin plane's duplicate-address check is an exact, indexed match on
+it, and sign-up invitations are stored in the same form.
+
+- **Existing rows are backfilled.** This happens on the auth Durable Object's cold start
+  and in `ensureMigrated` on D1, a bounded number of pages per run. Invitation addresses
+  stored before the change are rewritten the same way. When two rows fold to one address,
+  the backfill leaves the second one alone and logs a warning, because deciding which
+  account or invitation keeps the address is up to you. Other dialects keep an empty value
+  until a row is rewritten; until then, the duplicate check matches those rows on the
+  address with ASCII case folded.
+- **Rows imported through your own `authTables(...)` are trusted operator input.** The
+  admin-token import writes tables declared in `lunora/schema.ts` as given, so a user row
+  keeps the `emailCanonical` it carries. An empty value is refilled by the next backfill;
+  a value that does not match its `email` is kept. The auth data port's own import and
+  restore recompute the value from `email`.
+
 ## Read `ctx.auth` in functions
 
 The runtime resolves the inbound session and populates `ctx.auth` on every

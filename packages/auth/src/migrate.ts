@@ -8,6 +8,7 @@ import { authCanonicalEmailColumn, backfillCanonicalEmails } from "./canonical-e
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { prepareAuthOptions, resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
+import { backfillInvitationEmails, invitationEmailColumns } from "./invitation-email-backfill";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 import { d1Executor } from "./sql-store";
 
@@ -171,6 +172,9 @@ const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void>
  * every `ensureMigrated`, a bounded number of pages each time, and finds nothing to do once
  * a database is backfilled.
  *
+ * Also rewrites `signUpInvitation.email` to the same canonical form, under the same page
+ * budget: invitations issued before it was NFC-normalised would otherwise not be found.
+ *
  * D1 only, like {@link dropLegacyIssuerColumn}: any other dialect's rows keep a `NULL`
  * canonical value until rewritten. The admin plane's duplicate-address check matches such
  * rows on the address with ASCII case folded, as it did before the column.
@@ -179,8 +183,19 @@ const backfillCanonicalEmailColumn = async (options: LunoraAuthOptions): Promise
     const { database } = options as { database?: unknown };
     const column = authCanonicalEmailColumn(options);
 
-    if (column !== undefined && isD1Database(database)) {
+    if (!isD1Database(database)) {
+        return;
+    }
+
+    if (column !== undefined) {
         await backfillCanonicalEmails(d1Executor(database), column);
+    }
+
+    // Invitations issued before their addresses were stored in canonical form, which every lookup now matches on.
+    const invitations = invitationEmailColumns(options);
+
+    if (invitations !== undefined) {
+        await backfillInvitationEmails(d1Executor(database), invitations);
     }
 };
 

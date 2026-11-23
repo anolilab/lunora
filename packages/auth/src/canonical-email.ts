@@ -257,21 +257,17 @@ const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn): void 
     }
 };
 
-/**
- * Fill the canonical column for rows written before it existed, through an async executor
- * (D1), at most {@link BACKFILL_MAX_PAGES} pages per call.
- * @returns How many rows read could not be filled, because another row holds their canonical value.
- */
-const backfillCanonicalEmails = async (executor: BackfillExecutor, column: CanonicalEmailColumn): Promise<number> => {
-    const steps = backfillSteps(column, BACKFILL_MAX_PAGES);
+/** A backfill's statements, each answered with the rows it returns; the generator's result is the run's report. */
+type BackfillSteps<R> = Generator<BackfillStep, R, Record<string, unknown>[]>;
+
+/** Run `steps` through an async executor (D1). */
+const runBackfill = async <R>(steps: BackfillSteps<R>, executor: BackfillExecutor): Promise<R> => {
     let answer: Record<string, unknown>[] = [];
 
     for (;;) {
         const step = steps.next(answer);
 
         if (step.done === true) {
-            warnDuplicates(step.value, column);
-
             return step.value;
         }
 
@@ -280,21 +276,14 @@ const backfillCanonicalEmails = async (executor: BackfillExecutor, column: Canon
     }
 };
 
-/**
- * The same backfill over a synchronous executor (a Durable Object's `storage.sql.exec`),
- * to the end of the table: local SQLite has no per-invocation query budget.
- * @returns How many rows could not be filled because another row holds their canonical value.
- */
-const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], column: CanonicalEmailColumn): number => {
-    const steps = backfillSteps(column, Number.POSITIVE_INFINITY);
+/** Run `steps` through a synchronous executor (a Durable Object's `storage.sql.exec`). */
+const runBackfillSync = <R>(steps: BackfillSteps<R>, exec: (sql: string, params: unknown[]) => Record<string, unknown>[]): R => {
     let answer: Record<string, unknown>[] = [];
 
     for (;;) {
         const step = steps.next(answer);
 
         if (step.done === true) {
-            warnDuplicates(step.value, column);
-
             return step.value;
         }
 
@@ -302,13 +291,44 @@ const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => R
     }
 };
 
-export type { CanonicalEmailColumn };
+/**
+ * Fill the canonical column for rows written before it existed, through an async executor
+ * (D1), at most {@link BACKFILL_MAX_PAGES} pages per call.
+ * @returns How many rows read could not be filled, because another row holds their canonical value.
+ */
+const backfillCanonicalEmails = async (executor: BackfillExecutor, column: CanonicalEmailColumn): Promise<number> => {
+    const duplicates = await runBackfill(backfillSteps(column, BACKFILL_MAX_PAGES), executor);
+
+    warnDuplicates(duplicates, column);
+
+    return duplicates;
+};
+
+/**
+ * The same backfill over a synchronous executor (a Durable Object's `storage.sql.exec`),
+ * to the end of the table: local SQLite has no per-invocation query budget.
+ * @returns How many rows could not be filled because another row holds their canonical value.
+ */
+const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], column: CanonicalEmailColumn): number => {
+    const duplicates = runBackfillSync(backfillSteps(column, Number.POSITIVE_INFINITY), exec);
+
+    warnDuplicates(duplicates, column);
+
+    return duplicates;
+};
+
+export type { BackfillExecutor, BackfillStep, BackfillSteps, CanonicalEmailColumn };
 export {
     authCanonicalEmailColumn,
+    BACKFILL_MAX_PAGES,
+    BACKFILL_PAGE_ROWS,
     backfillCanonicalEmails,
     backfillCanonicalEmailsSync,
     CANONICAL_EMAIL_FIELD,
     canonicalEmail,
+    quote,
+    runBackfill,
+    runBackfillSync,
     withCanonicalEmail,
     withCanonicalEmailValue,
 };

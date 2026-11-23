@@ -44,6 +44,7 @@ import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor } from "./do-store";
 import { handleAuthRequest } from "./handler";
+import { backfillInvitationEmailsSync, invitationEmailColumns } from "./invitation-email-backfill";
 import type { MoveOrder } from "./jurisdiction-move";
 import { handleMoveRequest, MOVE_PATH } from "./jurisdiction-move";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
@@ -258,8 +259,17 @@ class LunoraAuthDO {
             }
 
             // Rows written before `user.emailCanonical` existed get it from their address.
+            const exec = (query: string, parameters: unknown[]): Record<string, unknown>[] => [...this.#storage.sql.exec(query, ...parameters)];
+
             if (this.#canonicalEmail !== undefined) {
-                backfillCanonicalEmailsSync((query, parameters) => [...this.#storage.sql.exec(query, ...parameters)], this.#canonicalEmail);
+                backfillCanonicalEmailsSync(exec, this.#canonicalEmail);
+            }
+
+            // Invitations issued before their addresses were stored in canonical form, which every lookup now matches on.
+            const invitations = invitationEmailColumns(resolved);
+
+            if (invitations !== undefined) {
+                backfillInvitationEmailsSync(exec, invitations);
             }
 
             // The mirror image, and the only column this ever removes. See

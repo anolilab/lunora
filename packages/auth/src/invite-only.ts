@@ -780,4 +780,4 @@ const pruneSignUpInvitations = async (auth: LunoraAuth, options: { limit?: numbe
 };
 
 export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation };
-export { createSignUpInvitation, INVITATION_MODEL, inviteOnly, listSignUpInvitations, normalizeEmail, pruneSignUpInvitations, revokeSignUpInvitation };
+export { createSignUpInvitation, INVITATION_MODEL, inviteOnly, listSignUpInvitations, pruneSignUpInvitations, revokeSignUpInvitation };
