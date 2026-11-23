@@ -56,6 +56,7 @@ const noticesWithSecrets = query.query(async ({ ctx }) => (ctx.db as unknown as 
 interface Analytical {
     aggregate: (table: string, options: Record<string, unknown>) => Promise<unknown>;
     count: (table: string, whereOrArgs?: Record<string, unknown>) => Promise<number>;
+    explain: (table: string, args: Record<string, unknown>) => Promise<unknown>;
     groupBy: (table: string, options: Record<string, unknown>) => Promise<unknown>;
 }
 
@@ -69,6 +70,8 @@ const analyticalReads: ReadonlyArray<[string, AnalyticalRead]> = [
     ["aggregate op count", async (database, table, where) => database.aggregate(table, { op: "count", where })],
     ["aggregate with a caller baseWhere", async (database, table, where) => database.aggregate(table, { baseWhere: where, field: "score", op: "sum" })],
     ["groupBy", async (database, table, where) => database.groupBy(table, { by: ["text"], where })],
+    // The plan's params carry what the relation predicate resolved to, so it reads the child too.
+    ["explain", async (database, table, where) => database.explain(table, { where })],
 ];
 
 const relationPredicates: ReadonlyArray<[string, Record<string, unknown>]> = [

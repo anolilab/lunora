@@ -1,7 +1,6 @@
 import type { NestedWith, RelationDefinitionLike, SchemaLike, WhereInput, WithInput } from "@lunora/shard-engine";
 
-/** The operators of a relation predicate node; any other key under a relation name is not one. */
-const RELATION_PREDICATE_KEYS: ReadonlySet<string> = new Set(["every", "is", "isNot", "none", "some"]);
+import { isRelationPredicate } from "../../../shared/relation-operators";
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object";
 
@@ -15,15 +14,14 @@ const visitRelation = (reached: Set<string>, visit: Visit, relation: RelationDef
     visit(relation.table, nested?.with, nested?.where);
 };
 
+/** A relation node only by the engine's own test: every key an operator, or it is a column filter the engine never follows. */
 const visitRelationPredicate = (reached: Set<string>, visit: Visit, relation: RelationDefinitionLike, node: unknown): void => {
-    if (!isObject(node)) {
+    if (!isRelationPredicate(node)) {
         return;
     }
 
-    for (const [operator, inner] of Object.entries(node)) {
-        if (RELATION_PREDICATE_KEYS.has(operator)) {
-            visitRelation(reached, visit, relation, { where: inner as WhereInput });
-        }
+    for (const inner of Object.values(node)) {
+        visitRelation(reached, visit, relation, { where: inner as WhereInput });
     }
 };
 

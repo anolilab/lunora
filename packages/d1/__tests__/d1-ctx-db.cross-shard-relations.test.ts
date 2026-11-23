@@ -218,6 +218,17 @@ describe("d1 reverse cross-backend relation loading", () => {
             expect(policies?.["secrets"]).toStrictEqual({ body: "visible" });
         });
 
+        it("does not follow a relation name whose filter is a column filter, not a relation node", async () => {
+            expect.assertions(1);
+
+            // `notes` names a relation, but `{ some: 1, label: "x" }` is not all relation operators, so
+            // the engine reads it as a column filter and never loads `secrets`: asking would refuse a read
+            // that does not touch it.
+            await expect(readAcross({ local: { notes: { label: "x", some: 1 } }, secrets: "closed" }, { items: true })).resolves.toStrictEqual({
+                local: { notes: { label: "x", some: 1 } },
+            });
+        });
+
         it("refuses when a policy filters by a protected relation that has no read policy", async () => {
             expect.assertions(1);
 

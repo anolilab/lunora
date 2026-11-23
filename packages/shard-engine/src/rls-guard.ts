@@ -47,10 +47,12 @@ const RLS_RELATION_GATE_SYMBOL: symbol = Symbol.for("lunora.ctxdb.rls-relation-g
 
 /**
  * Reads whose args can load relation children (`with`, `_count`) or filter by
- * them, all through the args' `relationBaseWhere`. `count` is gated separately
- * because its argument may be a bare `where` rather than an options bag.
+ * them, all through the args' `relationBaseWhere`. `explain` is one: it compiles
+ * the same predicate as `findMany`, and its `params` carry what a relation
+ * predicate resolved to. `count` is gated separately because its argument may
+ * be a bare `where` rather than an options bag.
  */
-const RELATION_READ_METHODS: ReadonlySet<string> = new Set(["aggregate", "findFirst", "findFirstOrThrow", "findMany", "groupBy"]);
+const RELATION_READ_METHODS: ReadonlySet<string> = new Set(["aggregate", "explain", "findFirst", "findFirstOrThrow", "findMany", "groupBy"]);
 
 /**
  * Thrown when a raw (non-RLS) handler touches a protected table under a
