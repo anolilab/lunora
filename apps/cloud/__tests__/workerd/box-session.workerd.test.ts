@@ -159,6 +159,7 @@ describe("the box session object in workerd", () => {
         socket.close(1000, "done");
     }, 20_000);
 
+    // Two ECDSA keys, an enrolment and the handshake: the same CI-runner cost as the test above.
     it("refuses a box that signs with the wrong key", async () => {
         const key = await boxKey();
         const intruder = await boxKey();
@@ -173,7 +174,7 @@ describe("the box session object in workerd", () => {
 
         await expect(next("error")).resolves.toMatchObject({ code: "AUTH_FAILED", type: "error" });
         await expect(database.get("boxes", boxId)).resolves.toMatchObject({ status: "pending" });
-    });
+    }, 20_000);
 
     it("fails a dispatch fast when no box is connected", async () => {
         const key = await boxKey();
