@@ -62,6 +62,49 @@ describe("createNodeDispatchRoute", () => {
         expect(request.headers.get("x-lunora-scheduled-for")).toBe("1700000000000");
     });
 
+    it("spends the scheduler's per-record dedupKey as the shard's mutation id, falling back to the id", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const keyed = JSON.stringify({ args: {}, dedupKey: "sync-user-1700000000000", functionPath: "notes:add", id: "sync-user" });
+        const bare = JSON.stringify({ args: {}, functionPath: "notes:add", id: "delivery-1" });
+
+        await route(post(keyed, { authorization: `Bearer ${TOKEN}` }));
+        await route(post(bare, { authorization: `Bearer ${TOKEN}` }));
+
+        const fetch = vi.fn<(request: Request) => Promise<Response>>(async () => Response.json({ result: null }));
+        const shardInvoke = createShardInvoke(
+            {
+                getByName: () => {
+                    return { fetch };
+                },
+            },
+            true,
+        );
+
+        await Promise.all(invoke.mock.calls.map(async ([call]) => shardInvoke(call)));
+
+        // A reused scheduler id's previous job left its dedup row under the bare id; the key is per scheduling.
+        // A sender without a key (a queue delivery) keeps its own id.
+        expect(fetch.mock.calls.map(([request]) => request.headers.get("x-lunora-mutation-id"))).toStrictEqual(["sync-user-1700000000000", "delivery-1"]);
+        expect(invoke).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a dedupKey the SchedulerDO would not have written with 400 INVALID_INPUT and never invokes", async () => {
+        expect.assertions(3);
+
+        const { invoke, route } = build();
+        // A newline is header-illegal: spent as the mutation id it made the shard forward's `new Request` throw a 500.
+        const response = await route(
+            post(JSON.stringify({ args: {}, dedupKey: "bad\nkey", functionPath: "notes:add", id: "job-1" }), { authorization: `Bearer ${TOKEN}` }),
+        );
+        const body = (await response.json()) as { error: { code: string } };
+
+        expect(response.status).toBe(400);
+        expect(body.error.code).toBe("INVALID_INPUT");
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
     it("refuses a wrong bearer with DISPATCH_UNAUTHENTICATED and never invokes", async () => {
         expect.assertions(3);
 

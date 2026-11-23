@@ -437,6 +437,87 @@ describe("createWorker — scheduled dispatch idempotency key", () => {
     });
 });
 
+describe("createWorker — scheduled dispatch per-record dedup key", () => {
+    it("spends the scheduler's dedupKey as the shard mutation id and still releases the slot by record id", async () => {
+        expect.assertions(2);
+
+        const seen: Headers[] = [];
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        seen.push(new Headers(request.headers));
+
+                        return Response.json({ result: null }, { status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO });
+
+        await dispatch(worker, { args: {}, dedupKey: "sync-user-1700000000000", functionPath: "jobs:sync", id: "sync-user", pool: "sync" });
+
+        // A reused id's previous job left its dedup row under the bare id; the key is per scheduling.
+        expect(seen[0]?.get("x-lunora-mutation-id")).toBe("sync-user-1700000000000");
+        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({ id: "sync-user", pool: "sync" });
+    });
+
+    it("refuses a dedupKey the SchedulerDO would not have written with 400 INVALID_INPUT, never reaching the shard", async () => {
+        expect.assertions(3);
+
+        let shardCalls = 0;
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        shardCalls += 1;
+
+                        return Response.json({ result: null }, { status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: schedulerSpy().namespace, shardDO });
+
+        // A newline is header-illegal: spent as the mutation id it made the shard forward's `new Request` throw a 500.
+        const response = await dispatch(worker, { args: {}, dedupKey: "bad\nkey", functionPath: "jobs:sync", id: "sync-user" });
+        const body: { error: { code: string } } = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.error.code).toBe("INVALID_INPUT");
+        expect(shardCalls).toBe(0);
+    });
+
+    it("starts a scheduled workflow under the dedupKey as its instance id", async () => {
+        expect.assertions(2);
+
+        const created: { id?: string; params?: Record<string, unknown> }[] = [];
+        const env = {
+            AGENT_SUPPORT: {
+                create: async (options: { id?: string; params?: Record<string, unknown> }) => {
+                    created.push(options);
+
+                    return { id: options.id ?? "wf-1" };
+                },
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
+
+        await dispatchWithEnv(worker, { args: {}, dedupKey: "digest-1700000000000", id: "digest", pool: "digests", workflow: "AGENT_SUPPORT" }, env);
+
+        expect(created).toStrictEqual([{ id: "digest-1700000000000", params: {} }]);
+        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({ id: "digest", pool: "digests" });
+    });
+});
+
 describe("createWorker — scheduled dispatch due time", () => {
     it("forwards the job's due time to the shard for its lag metric", async () => {
         expect.assertions(1);

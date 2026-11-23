@@ -1,12 +1,17 @@
 import { LunoraError } from "@lunora/errors";
-import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, TERMINAL_RETENTION_MS } from "@lunora/scheduler";
+import { assertDedupKey, assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, TERMINAL_RETENTION_MS } from "@lunora/scheduler";
 import type { RetryPolicy, ScheduledJob, ScheduledJobView, Scheduler } from "@lunora/server";
 import { decodeWire, encodeWire } from "@lunora/wire";
+
+/** How long a shard keeps a dispatch's replay row, and so how long a dedup key answers a repeat. */
+const DEDUP_RETENTION_MS = 86_400_000;
 
 /** A pending job entry in the fake scheduler queue. */
 interface FakeScheduledJob extends ScheduledJob {
     /** The args the job was scheduled with. */
     args: Record<string, unknown>;
+    /** The caller's `RunOptions.dedupKey`, when it fixed one. */
+    dedupKey?: string;
 }
 
 /**
@@ -168,7 +173,18 @@ const createFakeScheduler = (
     /** Every captured TERMINAL job failure (retry budget exhausted), in execution order, across all sweeps. */
     const recordedFailures: ScheduledJobFailure[] = [];
 
-    const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}, requestedId?: string): string => {
+    /**
+     * When each caller-fixed dedup key last ran to completion. The receiver answers a later dispatch
+     * under the same key from its replay row instead of running the handler, and keeps that row for
+     * {@link DEDUP_RETENTION_MS}; this mirrors both.
+     */
+    const completedKeys = new Map<string, number>();
+
+    const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}, requestedId?: string, dedupKey?: string): string => {
+        // Outside a transaction (an action) the deferral facade hands the call straight through
+        // without its key check, so the fake applies the SchedulerDO's own grammar here.
+        assertDedupKey(dedupKey);
+
         // Stand in for the same round trip production makes, so a test double
         // neither accepts what production rejects nor rejects what it accepts.
         //
@@ -202,6 +218,7 @@ const createFakeScheduler = (
 
         pending.set(id, {
             args: wireArgs,
+            ...(dedupKey === undefined ? {} : { dedupKey }),
             enqueuedAt: nowMs,
             functionPath,
             id,
@@ -273,14 +290,14 @@ const createFakeScheduler = (
             delayMs: number,
             target: Parameters<Scheduler["runAfter"]>[1],
             args?: Record<string, unknown>,
-            options?: { id?: string; retry?: RetryPolicy },
+            options?: { dedupKey?: string; id?: string; retry?: RetryPolicy },
         ) => {
             // The same guard `@lunora/scheduler`'s `createScheduler().runAfter`
             // runs before the call reaches the DO — imported, not restated, so a
             // test cannot pass on a delay production refuses.
             assertScheduleDelay(delayMs, "ctx.scheduler.runAfter");
 
-            const id = enqueue(nowMs + delayMs, targetPath(target), args, options?.id);
+            const id = enqueue(nowMs + delayMs, targetPath(target), args, options?.id, options?.dedupKey);
 
             return Promise.resolve(id);
         },
@@ -289,9 +306,9 @@ const createFakeScheduler = (
             timestampMs: number,
             target: Parameters<Scheduler["runAt"]>[1],
             args?: Record<string, unknown>,
-            options?: { id?: string; retry?: RetryPolicy },
+            options?: { dedupKey?: string; id?: string; retry?: RetryPolicy },
         ) => {
-            const id = enqueue(timestampMs, targetPath(target), args, options?.id);
+            const id = enqueue(timestampMs, targetPath(target), args, options?.id, options?.dedupKey);
 
             return Promise.resolve(id);
         },
@@ -329,6 +346,13 @@ const createFakeScheduler = (
             );
         }
 
+        const ranAt = job.dedupKey === undefined ? undefined : completedKeys.get(job.dedupKey);
+
+        // Answered from the receiver's replay row: the handler does not run again.
+        if (ranAt !== undefined && nowMs - ranAt < DEDUP_RETENTION_MS) {
+            return;
+        }
+
         const dispatch = getDispatch();
         const context = entry.kind === "action" ? getActionContext() : getMutationContext();
 
@@ -337,6 +361,10 @@ const createFakeScheduler = (
         // as its own RPC and captures `Date.now()` then, so a TTL handler that woke after
         // `advance(3_600_000)` must see an hour of elapsed time rather than zero.
         await dispatch(entry.kind, entry, context, job.args, nowMs);
+
+        if (job.dedupKey !== undefined) {
+            completedKeys.set(job.dedupKey, nowMs);
+        }
     };
 
     /**

@@ -2319,6 +2319,48 @@ describe("createWorker — HTTP actions", () => {
         expect(bodies[0]?.["retry"]).toStrictEqual({ forever: true, maxMs: 60_000 });
     });
 
+    it("forwards a caller's dedupKey to the SchedulerDO's /schedule for function and workflow targets", async () => {
+        expect.assertions(3);
+
+        const bodies: Record<string, unknown>[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        const body: Record<string, unknown> = await request.json();
+
+                        bodies.push(body);
+
+                        return Response.json({ id: "job-1", scheduledFor: body["scheduledFor"] });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/jobs", async (c) => {
+                    await c.var.lunora.scheduler?.runAfter(0, { __lunoraRef: "jobs:run" }, {}, { dedupKey: "order-7-charge" });
+                    await c.var.lunora.scheduler?.runAt(Date.now(), { binding: "BILLING" }, {}, { dedupKey: "order-7-invoice" });
+
+                    return Response.json(null);
+                }),
+            ),
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/jobs", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        // Dropped here, the SchedulerDO would mint a fresh key per scheduling and both copies could run.
+        expect(bodies[0]?.["dedupKey"]).toBe("order-7-charge");
+        expect(bodies[1]?.["dedupKey"]).toBe("order-7-invoice");
+    });
+
     it("forwards a runAfter shardKey to the SchedulerDO's /schedule so the job runs on that shard", async () => {
         expect.assertions(2);
 

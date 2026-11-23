@@ -27,6 +27,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { DirectShardDirectory } from "@lunora/platform";
 import { resolveShard, toErrorResponse } from "@lunora/runtime";
+import { assertDedupKey } from "@lunora/scheduler";
 
 import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
 import {
@@ -45,7 +46,12 @@ const MAX_DISPATCH_BODY_BYTES = 1_048_576;
 interface NodeDispatchInvocation {
     args: Record<string, unknown>;
     functionPath: string;
-    /** The scheduler record or delivery id, used as the shard's idempotency key. */
+
+    /**
+     * The shard's idempotency key: the scheduler's per-record `dedupKey` when the body carries one,
+     * else the record or delivery id. A scheduler id is free again once its job settles, so the bare
+     * id would answer a reused id's new job from the previous job's dedup row.
+     */
     id: string | undefined;
     /** Identity the trusted caller forwarded, if any. */
     identity: { identity?: string; userId?: string } | undefined;
@@ -76,6 +82,19 @@ const readRawBody = async (request: Request): Promise<string> => {
     }
 
     return text;
+};
+
+// A supplied key is held to the grammar the SchedulerDO enforces when the job is written: only a
+// forged or hand-built body carries another, and a header-illegal one (a newline) would make the
+// shard forward's `new Request` throw a 500 instead of answering 400.
+const dedupKey = (candidate: Record<string, unknown>): string | undefined => {
+    const supplied = assertDedupKey(candidate["dedupKey"]);
+
+    if (supplied !== undefined) {
+        return supplied;
+    }
+
+    return typeof candidate["id"] === "string" && candidate["id"].length > 0 ? candidate["id"] : undefined;
 };
 
 const handle = async (request: Request, options: NodeDispatchRouteOptions): Promise<Response> => {
@@ -133,7 +152,7 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
     return options.invoke({
         args: (candidate["args"] ?? {}) as Record<string, unknown>,
         functionPath: candidate["functionPath"],
-        id: typeof candidate["id"] === "string" && candidate["id"].length > 0 ? candidate["id"] : undefined,
+        id: dedupKey(candidate),
         identity: readForwardedDispatchIdentity(request),
         scheduledFor: typeof candidate["scheduledFor"] === "number" ? candidate["scheduledFor"] : undefined,
         shardKey,

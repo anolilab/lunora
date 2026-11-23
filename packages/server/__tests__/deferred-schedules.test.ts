@@ -11,6 +11,7 @@
 import { createScheduler, SchedulerDO } from "@lunora/scheduler";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import type { ScheduleRunOptions } from "../src/index";
 import { beginDeferredSchedules, withDeferredSchedules } from "../src/index";
 
 interface RecordedCall {
@@ -81,6 +82,14 @@ describe("withDeferredSchedules — types", () => {
         expectTypeOf(beginDeferredSchedules({ scheduler })).toEqualTypeOf<(committed: boolean) => Promise<void>>();
 
         expect(withDeferredSchedules(scheduler)).toHaveProperty("runAfter");
+    });
+
+    it("lets a ctx.scheduler caller name the dedup key the facade honours", () => {
+        expect.assertions(1);
+
+        expectTypeOf<ScheduleRunOptions>().toHaveProperty("dedupKey").toEqualTypeOf<string | undefined>();
+
+        expect(true).toBe(true);
     });
 
     it("accepts a scheduler whose `args` is required — the shape `createScheduler()` actually returns", () => {
@@ -475,6 +484,51 @@ const budgetOutbox = (limit: number, deferTo: number) => {
         wake: vi.fn<() => void>(),
     };
 };
+
+describe("withDeferredSchedules — replay dedup key", () => {
+    it("hands the live call and its custody record the same dedupKey, so a replay is deduped at the receiver", async () => {
+        expect.assertions(3);
+
+        const liveOptions: Record<string, unknown>[] = [];
+        const record = async (_when: number, _target: unknown, _args: unknown, options?: Record<string, unknown>): Promise<string> => {
+            liveOptions.push(options ?? {});
+
+            return String(options?.["id"]);
+        };
+        const outbox = budgetOutbox(10, 0);
+        const facade = withDeferredSchedules({ cancel: async () => undefined, runAfter: record, runAt: record } as never, outbox) as unknown as {
+            runAfter: (delayMs: number, target: string) => Promise<string>;
+        };
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "jobs:send");
+        await settle(true);
+
+        const recorded = outbox.record.mock.calls[0]?.[1] as { options?: { dedupKey?: unknown } } | undefined;
+        const live = liveOptions[0];
+
+        expect(typeof live?.["dedupKey"]).toBe("string");
+        // The replay runs from the recorded options, so it must carry the live call's key.
+        expect(recorded?.options?.dedupKey).toBe(live?.["dedupKey"]);
+        expect(String(live?.["dedupKey"]).startsWith(`${String(live?.["id"])}-`)).toBe(true);
+    });
+
+    it.each([[""], ["-leading-dash"], ["has:colon"]])("refuses a caller dedupKey %j before it takes custody, so the mutation rolls back", async (dedupKey) => {
+        expect.assertions(2);
+
+        const record = async (): Promise<string> => "never";
+        const outbox = budgetOutbox(10, 0);
+        const facade = withDeferredSchedules({ cancel: async () => undefined, runAfter: record, runAt: record } as never, outbox) as unknown as {
+            runAfter: (delayMs: number, target: string, args?: Record<string, unknown>, options?: Record<string, unknown>) => Promise<string>;
+        };
+
+        beginDeferredSchedules({ scheduler: facade });
+
+        // Thrown synchronously, like a refused id or args, so it unwinds the handler.
+        expect(() => facade.runAfter(0, "jobs:send", {}, { dedupKey })).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+        expect(outbox.record).not.toHaveBeenCalled();
+    });
+});
 
 describe("withDeferredSchedules — schedule-rate budget", () => {
     const NOW = 1_700_000_000_000;

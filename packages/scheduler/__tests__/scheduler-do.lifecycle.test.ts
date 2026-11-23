@@ -613,3 +613,134 @@ describe("schedulerDO job lifecycle", () => {
         expect(page.truncated).toBe(false);
     });
 });
+
+describe("schedulerDO dispatch dedup key", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("keeps one key across a record's retries and gives a reused id's new job its own", async () => {
+        expect.assertions(5);
+
+        const at = 1_700_000_000_000;
+        const setNow = pinClock(at);
+        const bodies: { dedupKey?: unknown; functionPath?: unknown; id?: unknown }[] = [];
+        const statuses = [500, 200, 200];
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            bodies.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { dedupKey?: unknown; functionPath?: unknown; id?: unknown });
+
+            return new Response(null, { status: statuses[bodies.length - 1] ?? 200 });
+        });
+
+        const scheduler = new SchedulerDO(createFakeState(), env);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.first", id: "sync-user", retry: { baseMs: 0 }, scheduledFor: at }));
+        // Fails, then its retry succeeds: one record, two attempts.
+        await scheduler.alarm();
+        setNow(at + 1);
+        await scheduler.alarm();
+
+        // The id is free again, so a new job takes it — for a different function.
+        setNow(at + 2);
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.second", id: "sync-user", scheduledFor: at + 2 }));
+        await scheduler.alarm();
+
+        const [first, retry, second] = bodies;
+
+        expect(bodies.map((body) => [body.id, body.functionPath])).toStrictEqual([
+            ["sync-user", "jobs.first"],
+            ["sync-user", "jobs.first"],
+            ["sync-user", "jobs.second"],
+        ]);
+        expect(first?.dedupKey).toStrictEqual(expect.any(String));
+        // A retry must collapse onto its first attempt at the shard…
+        expect(retry?.dedupKey).toBe(first?.dedupKey);
+        // …while the reused id's new job must not be answered from the old job's result.
+        expect(second?.dedupKey).toStrictEqual(expect.any(String));
+        expect(second?.dedupKey).not.toBe(first?.dedupKey);
+    });
+
+    it("gives a reused id's new job its own key when it is scheduled in the same millisecond", async () => {
+        expect.assertions(2);
+
+        const at = 1_700_000_000_000;
+
+        pinClock(at);
+
+        const keys: unknown[] = [];
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            keys.push((JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { dedupKey?: unknown }).dedupKey);
+
+            return new Response(null, { status: 200 });
+        });
+
+        const scheduler = new SchedulerDO(createFakeState(), env);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.first", id: "sync-user", scheduledFor: at }));
+        await scheduler.alarm();
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.second", id: "sync-user", scheduledFor: at }));
+        await scheduler.alarm();
+
+        expect(keys).toHaveLength(2);
+        expect(keys[1]).not.toBe(keys[0]);
+    });
+
+    it("gives a reused id's new job its own key after the scheduler is recreated in the same millisecond", async () => {
+        expect.assertions(2);
+
+        const at = 1_700_000_000_000;
+
+        pinClock(at);
+
+        const keys: unknown[] = [];
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            keys.push((JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { dedupKey?: unknown }).dedupKey);
+
+            return new Response(null, { status: 200 });
+        });
+
+        const state = createFakeState();
+        const first = new SchedulerDO(state, env);
+
+        await first.fetch(post("/schedule", { args: {}, functionPath: "jobs.first", id: "sync-user", scheduledFor: at }));
+        await first.alarm();
+
+        // An eviction: a fresh instance over the same storage, with no memory of the last stamp.
+        const second = new SchedulerDO(state, env);
+
+        await second.fetch(post("/schedule", { args: {}, functionPath: "jobs.second", id: "sync-user", scheduledFor: at }));
+        await second.alarm();
+
+        expect(keys).toHaveLength(2);
+        expect(keys[1]).not.toBe(keys[0]);
+    });
+
+    it("dispatches under a caller's dedupKey across retries, and refuses one the receivers cannot carry", async () => {
+        expect.assertions(2);
+
+        const at = 1_700_000_000_000;
+        const setNow = pinClock(at);
+        const keys: unknown[] = [];
+        const statuses = [500, 200];
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            keys.push((JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { dedupKey?: unknown }).dedupKey);
+
+            return new Response(null, { status: statuses[keys.length - 1] ?? 200 });
+        });
+
+        const scheduler = new SchedulerDO(createFakeState(), env);
+        const refused = await scheduler.fetch(post("/schedule", { args: {}, dedupKey: "-leading-dash", functionPath: "jobs.first", scheduledFor: at }));
+
+        await scheduler.fetch(post("/schedule", { args: {}, dedupKey: "outbox-entry-7", functionPath: "jobs.first", retry: { baseMs: 0 }, scheduledFor: at }));
+        await scheduler.alarm();
+        setNow(at + 1);
+        await scheduler.alarm();
+
+        expect(refused.status).toBe(400);
+        expect(keys).toStrictEqual(["outbox-entry-7", "outbox-entry-7"]);
+    });
+});

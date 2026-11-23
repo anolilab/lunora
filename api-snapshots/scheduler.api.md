@@ -385,6 +385,7 @@ interface RetryPolicy {
 
 ```ts
 interface RunOptions {
+    dedupKey?: string;
     id?: string;
     maxConcurrency?: number;
     pool?: string;
@@ -399,6 +400,7 @@ interface RunOptions {
 interface ScheduleRecord {
     args: Record<string, unknown>;
     attempts?: number;
+    dedupKey?: string;
     enqueuedAt: number;
     error?: string;
     firstDueAt?: number;
@@ -575,6 +577,12 @@ interface WorkpoolOptions extends LunoraSchedulerOptions {
     maxConcurrency: number;
     name?: string;
 }
+```
+
+### `assertDedupKey` (const)
+
+```ts
+const assertDedupKey: (requested: unknown) => string | undefined;
 ```
 
 ### `assertScheduleDelay` (const)

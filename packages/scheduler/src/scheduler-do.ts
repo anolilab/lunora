@@ -3,6 +3,7 @@ import { jsonResponse } from "../../../shared/json-response";
 import { SCHEDULER_SIGNATURE_HEADER, SCHEDULER_TIMESTAMP_HEADER, signSchedulerDispatch } from "../../../shared/scheduler-dispatch";
 import resolveScheduleId from "./resolve-schedule-id";
 import type { CronRunInFlight, CronRunRecord, RetryPolicy, ScheduledJobState, ScheduledJobView, ScheduleRecord } from "./types";
+import assertDedupKey from "./validate-dedup-key";
 
 /**
  * Minimal projection of `DurableObjectState` for the SchedulerDO. Declared
@@ -311,6 +312,9 @@ const isIndexableTime = (value: number): boolean => Number.isInteger(value) && v
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
 
+    /** The receivers' replay-dedup key, when the caller fixed one (see `RunOptions.dedupKey`). */
+    dedupKey?: string;
+
     /**
      * The `ns:fn` path of the function to dispatch on fire. Absent when the job
      * targets a durable workflow/agent instead — see
@@ -575,6 +579,25 @@ class SchedulerDO {
         }
 
         return Object.keys(policy).length === 0 ? undefined : policy;
+    }
+
+    /**
+     * The key the record was scheduled with (`<id>-<32 random hex>` unless the caller fixed one:
+     * `-` keeps it inside the workflow engine's instance-id grammar `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`,
+     * and a 64-char id plus the suffix stays under its 100-char ceiling). A row scheduled before the
+     * key was stored falls back to `<id>-<enqueuedAt>`, or the bare id without a usable stamp.
+     *
+     * Known one-time window, accepted: a record whose attempt ran under the bare id on a build
+     * before this key, and whose response was lost, is retried after the upgrade under the new key,
+     * which the receiver has never seen, so that one job can run twice. Only records in flight
+     * across that deploy are exposed; no key-version field is kept to close it.
+     */
+    private static dedupKey(record: ScheduleRecord): string {
+        if (record.dedupKey !== undefined) {
+            return record.dedupKey;
+        }
+
+        return Number.isSafeInteger(record.enqueuedAt) && record.enqueuedAt > 0 ? `${record.id}-${String(record.enqueuedAt)}` : record.id;
     }
 
     /**
@@ -950,6 +973,12 @@ class SchedulerDO {
 
         const body = JSON.stringify({
             args: record.args,
+            // The receiver's replay-dedup key (shard mutation id, workflow instance id). The record
+            // id alone is not enough: it is free again once its job settles, and the shard keeps a
+            // dedup row for a day, so a job scheduled under a reused id would be answered from the
+            // previous job's result. The key is fixed once per scheduling and carried through every
+            // retry, so a re-fire of this record still collapses onto its first attempt.
+            dedupKey: SchedulerDO.dedupKey(record),
             functionPath: record.functionPath,
             id: record.id,
             // Echoed so the receiver can call back the SAME DO instance.
@@ -1009,8 +1038,8 @@ class SchedulerDO {
             // Success is an explicit 2xx only. A 404 (receiver route missing),
             // any other 4xx, or a 5xx is NOT treated as done — the caller
             // (alarm()) keeps the record and routes it through recordRetry()
-            // rather than deleting it. A re-fire is deduplicated by the record
-            // id: the receiver spends it as the shard's replay-dedup
+            // rather than deleting it. A re-fire is deduplicated by `dedupKey`:
+            // the receiver spends it as the shard's replay-dedup
             // `mutationId` for a function target and as the WORKFLOW INSTANCE id
             // for a `workflow` target. Retry-after-failure is the easy case —
             // this attempt is over before the next begins, so the dedup row (or
@@ -1994,6 +2023,14 @@ class SchedulerDO {
         const instanceName = optionalName(body.instanceName);
         const retry = SchedulerDO.normalizeRetry(body.retry);
 
+        let dedupKey: string | undefined;
+
+        try {
+            dedupKey = assertDedupKey(body.dedupKey);
+        } catch (error) {
+            return SchedulerDO.error(400, "INVALID_INPUT", error instanceof Error ? error.message : "invalid `dedupKey`");
+        }
+
         const resolved = await this.resolveId(body.id);
 
         if (resolved instanceof Response) {
@@ -2020,6 +2057,10 @@ class SchedulerDO {
             // despite the type, so the ?? fallback is a real guard.
             // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- parsed wire data can omit args
             args: body.args ?? {},
+            // Fixed here, once per scheduling, and carried by every retry; random rather than
+            // derived from the clock, so a reused id never meets its previous job's key however
+            // close together the two are scheduled, or whether this instance was recreated between.
+            dedupKey: dedupKey ?? `${id}-${crypto.randomUUID().replaceAll("-", "")}`,
             enqueuedAt: Date.now(),
             id,
             ...(functionPath === undefined ? {} : { functionPath }),
@@ -2778,7 +2819,7 @@ class SchedulerDO {
      * older build — where nothing was dispatched and firing immediately is
      * exactly right.
      *
-     * The dispatch is deduplicated by the record id, which the receiver spends
+     * The dispatch is deduplicated by the record's `dedupKey`, which the receiver spends
      * as `x-lunora-mutation-id` for a function target and as the workflow
      * INSTANCE id for a `workflow` target. A mutation's dedup read runs inside
      * the shard's single-writer gate, so a mutation is exactly-once even under a

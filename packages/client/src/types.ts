@@ -1195,6 +1195,9 @@ export interface ScheduleRecord {
      * was parked.
      */
     attempts?: number;
+
+    /** The key every dispatch of this job is deduped on at its receiver (absent on a record scheduled before it was stored). */
+    dedupKey?: string;
     enqueuedAt: number;
     /** Why the job was dead-lettered. Set on a parked record. */
     error?: string;

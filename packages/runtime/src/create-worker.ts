@@ -13,6 +13,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { collectPages } from "../../../shared/collect-pages";
+import { DEDUP_KEY_GRAMMAR_MESSAGE, isDedupKey } from "../../../shared/dedup-key";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
 import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
@@ -246,6 +247,7 @@ interface HttpActionContext {
 
 /** `@lunora/server`'s `ScheduleRunOptions`, restated structurally like {@link SchedulerContext}. */
 interface SchedulerRunOptions {
+    dedupKey?: string;
     retry?: {
         backoff?: "exponential" | "linear";
         baseMs?: number;
@@ -3871,7 +3873,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * `instanceId` is the idempotency key, and the two callers answer it
      * differently on purpose.
      *
-     * **Scheduler dispatch passes the record id.** That path is at-least-once: a
+     * **Scheduler dispatch passes the record's dedup key.** That path is at-least-once: a
      * DO eviction, an edge 502 or a transport blip after this origin already
      * started the workflow makes `SchedulerDO.dispatch()` report failure, and
      * `recordRetry` re-fires the SAME record up to `MAX_RETRY_ATTEMPTS` times
@@ -3879,14 +3881,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * re-fire it too). Without an id Cloudflare mints a fresh random instance for
      * each of those, so one scheduled job runs its whole pipeline up to five times
      * — while two scheduler docblocks justify the retry loop with "idempotent
-     * dispatch keyed by record id". The record id is already on the wire, and
-     * `resolveScheduleId` constrains it to `^\w[\w-]{0,63}$`, which is inside the
+     * dispatch keyed by record id". The SchedulerDO keeps the key inside the
      * engine's own `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$` (and well inside its 100-char
      * ceiling) — so `create({ id })` accepts it. That containment is the whole
      * reason the leading character is constrained at all: base64url mints `-` as
      * often as any other character, and a leading one is a VALIDATION rejection
      * here, which {@link isDuplicateInstanceError} does not match and the
-     * scheduler therefore retries to `dead:` five attempts later.
+     * scheduler therefore retries to `dead:` five attempts later. A sender without a
+     * key falls back to the bare record id. The key differs per scheduling, which is
+     * what keeps a job scheduled under a reused id from being taken for the
+     * previous job's instance.
      *
      * **The cron path passes nothing.** There is no record id there, every
      * scheduled fire of an expression is a distinct run, and the admin "Run now"
@@ -4256,6 +4260,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const candidate = (body ?? {}) as {
             args?: unknown;
+            dedupKey?: unknown;
             functionPath?: unknown;
             id?: unknown;
             instanceName?: unknown;
@@ -4267,22 +4272,29 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const args = (candidate.args ?? {}) as Record<string, unknown>;
 
-        // Forward the scheduler record id as the idempotency key so an at-least-once
-        // re-fire (a retry after the origin response was lost but the side effect
-        // already committed) is deduped rather than double-applying the job. This
-        // makes the scheduler's "idempotent dispatch keyed by record id" contract
-        // actually hold. Derived BEFORE the workflow branch below, which returns:
-        // that branch is exactly the one the scheduler's retry loop re-fires, and
-        // leaving it without an id let one scheduled workflow run its whole
-        // pipeline once per retry attempt.
+        // The scheduler's per-record `dedupKey` is the idempotency key, so an at-least-once
+        // re-fire (a retry after the origin response was lost but the side effect already
+        // committed) is deduped rather than double-applying the job, while a NEW job scheduled
+        // under a reused caller id is not answered from the previous one's result. The bare
+        // record id is the fallback for a body that carries no key. Derived BEFORE the workflow
+        // branch below, which returns: that branch is exactly the one the scheduler's retry loop
+        // re-fires, and leaving it without an id let one scheduled workflow run its whole
+        // pipeline once per retry attempt. `candidate.id` itself stays the pool-slot identity.
         const recordId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
+        // A supplied key the SchedulerDO would have refused is a forged or hand-built body: refuse
+        // it here, or a header-illegal character makes the shard forward's `new Request` throw.
+        if (candidate.dedupKey !== undefined && !isDedupKey(candidate.dedupKey)) {
+            throw new LunoraError(`Scheduler dispatch: ${DEDUP_KEY_GRAMMAR_MESSAGE}`, { code: "INVALID_INPUT", status: 400 });
+        }
+
+        const dedupKey = candidate.dedupKey ?? recordId;
 
         // A workflow/agent target starts a durable instance (the args become its
         // `params`) rather than dispatching a function to a shard — the
         // workflow/agent is reached off the Worker's `ctx.exports` (or `env`), not the DO.
-        // The record id becomes the INSTANCE id, so a re-fire attaches to the
+        // The dedup key becomes the INSTANCE id, so a re-fire attaches to the
         // running instance instead of starting a second one; the function path
-        // below spends the same id as the shard's replay-dedup `mutationId`.
+        // below spends the same key as the shard's replay-dedup `mutationId`.
         //
         // It still releases its pool slot. `Scheduler.runAt` accepts a
         // `WorkflowReference` alongside `RunOptions.pool`, and `reservePoolSlot`
@@ -4302,7 +4314,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 scheduledWorkflowParams(candidate.workflow, args, candidate.shardKey),
                 { context, env },
                 "scheduled workflow",
-                recordId,
+                dedupKey,
             );
 
             await releasePoolSlot(candidate);
@@ -4333,7 +4345,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             candidate.functionPath,
             args,
             shardKey,
-            recordId,
+            dedupKey,
             identity,
             request.headers.get("traceparent") ?? undefined,
             scheduledFor,
@@ -4939,6 +4951,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             const { id } = await post<{ id: string }>("/schedule", {
                 args: encodeArgsOrThrow("ctx.scheduler", String(fields["functionPath"] ?? fields["workflow"]), args),
+                // Validated by the SchedulerDO, which refuses a key the receivers cannot carry (400).
+                dedupKey: runOptions?.dedupKey,
                 // Whole milliseconds, rounded up: the SchedulerDO refuses a
                 // fractional instant (`runAfter(1500.5)`), as `@lunora/scheduler`'s
                 // `runAt` also rounds.

@@ -1559,7 +1559,48 @@ describe("emitted shard — a retry.forever deferred schedule", () => {
         harness.setReachable(true);
         await drive(harness, 1);
 
-        expect(harness.received.at(-1)).toStrictEqual({ id: expect.any(String), retry: { forever: true } });
+        // …and the dedup key fixed with the custody record, so a replay is deduped at the receiver.
+        expect(harness.received.at(-1)).toStrictEqual({ dedupKey: expect.any(String), id: expect.any(String), retry: { forever: true } });
+    });
+
+    it("derives a replay key from a fractional created_at, which the outbox records to keep rows ordered", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 0, ?, 0)",
+            "job-1",
+            JSON.stringify({ args: {}, options: { retry: { forever: true } }, target: { __lunoraRef: "outbox:charge" }, when: 0 }),
+            1_700_000_000_000.5,
+        );
+        harness.makeDue();
+        await harness.retry();
+
+        // `.` is outside the receivers' key grammar, so it is spelled `_`.
+        expect(harness.received.at(-1)).toStrictEqual({ dedupKey: "job-1-1700000000000_5", id: "job-1", retry: { forever: true } });
+    });
+
+    it("replays an entry recorded without a dedup key under one derived from the row, the same on every replay", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        // Recorded before the facade fixed a key with its custody record.
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 0, ?, 0)",
+            "job-1",
+            JSON.stringify({ args: {}, options: { retry: { forever: true } }, target: { __lunoraRef: "outbox:charge" }, when: 0 }),
+            1_700_000_000_000,
+        );
+        harness.makeDue();
+        await harness.retry();
+
+        expect(harness.received.at(-1)).toStrictEqual({ dedupKey: "job-1-1700000000000", id: "job-1", retry: { forever: true } });
     });
 
     it("parks on a refusal no retry can change", async () => {
