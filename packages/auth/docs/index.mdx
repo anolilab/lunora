@@ -132,8 +132,11 @@ it, and sign-up invitations are stored in the same form.
   adapter. Invitation addresses stored before the change are rewritten the same way (on
   the Durable Object and D1). When two rows fold to one address, the backfill leaves the
   second one alone and logs a warning, because deciding which account or invitation keeps
-  the address is up to you. A duplicate you resolve is filled on the next cold start. Until a row is filled, the admin plane's duplicate check folds its
-  address in JS, so it still refuses a variant in any case or Unicode form.
+  the address is up to you. A duplicate you resolve, or an older snapshot you restore, is
+  brought into canonical form on the next cold start; a restored pair of duplicate users
+  keeps the second one's value empty, as the backfill does. Until a row is filled, the
+  admin plane's duplicate check folds its address in JS, so it still refuses a variant in
+  any case or Unicode form.
 - **Rows imported through your own `authTables(...)` are trusted operator input.** The
   admin-token import writes tables declared in `lunora/schema.ts` as given, so a user row
   keeps the `emailCanonical` it carries. An empty value is refilled by the next backfill;

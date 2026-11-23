@@ -155,7 +155,7 @@ describe("canonical email", () => {
         expect(userCount()).toBe(1);
     });
 
-    it("refuses a replace, dry run included, whose snapshot holds two Unicode-case variants of one address", async () => {
+    it("restores a snapshot holding two Unicode-case variants of one address, leaving the later one's canonical address empty", async () => {
         expect.assertions(3);
 
         const replacePort = createSqlAuthDataPort(
@@ -165,11 +165,12 @@ describe("canonical email", () => {
             {},
             authCanonicalEmailColumn(resolveAuthOptions(options)),
         );
-        const refusal = { errors: [{ index: 1, message: expect.stringContaining("holds the same address"), table: "user" }] };
 
-        await expect(replacePort.replaceRows!([userRow("a", UPPER), userRow("b", LOWER)], { dryRun: true })).resolves.toMatchObject(refusal);
-        await expect(replacePort.replaceRows!([userRow("a", UPPER), userRow("b", LOWER)])).resolves.toMatchObject(refusal);
-        expect(userCount()).toBe(0);
+        // The backfill leaves such a pair in a live database, so its own export carries it.
+        await expect(replacePort.replaceRows!([userRow("a", UPPER), userRow("b", LOWER)], { dryRun: true })).resolves.toMatchObject({ errors: [] });
+        await expect(replacePort.replaceRows!([userRow("a", UPPER), userRow("b", LOWER)])).resolves.toMatchObject({ errors: [], inserted: 2 });
+
+        expect([canonicalOf("a"), canonicalOf("b")]).toStrictEqual([canonicalEmail(UPPER), null]);
     });
 
     it("looks the address up by exact match on the canonical column, and reads no row once the table is filled", async () => {
@@ -304,6 +305,27 @@ describe("canonical email", () => {
 
         expect(moved.status).toBe(200);
         expect(database.prepare(`SELECT "email" FROM "user" WHERE "emailCanonical" = 'moved@example.com'`).get()).toMatchObject({ email: "moved@example.com" });
+    });
+
+    it("lets an update whose route names no account rewrite an address the account holds in another case", async () => {
+        expect.assertions(2);
+
+        await port.importRows([userRow("imported", STORED)]);
+
+        const context = await auth.$context;
+        // An OAuth callback refreshing the profile: no session yet, no `userId` in the body or path.
+        const callback = { body: {}, context, params: {}, path: "/callback/:id" };
+
+        await expect(auth.options.databaseHooks?.user?.update?.before?.({ email: "alice@example.com" }, callback as never)).resolves.toMatchObject({
+            data: { emailCanonical: "alice@example.com" },
+        });
+        // A route that names the session's account still refuses another account's address.
+        await expect(
+            auth.options.databaseHooks?.user?.update?.before?.({ email: "alice@example.com" }, {
+                ...callback,
+                context: { ...context, session: { user: { id: "mover" } } },
+            } as never),
+        ).rejects.toMatchObject({ body: { code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" } });
     });
 
     it("never lets an internal-adapter update set or clear the canonical address without changing the address", async () => {
@@ -633,8 +655,8 @@ describe("invitation addresses stored before canonical form", () => {
         warn.mockRestore();
     });
 
-    it("resumes a run cut short past newer rows already in canonical form, and stops reading once a whole pass is done", async () => {
-        expect.assertions(5);
+    it("resumes a run cut short past newer rows already in canonical form", async () => {
+        expect.assertions(3);
 
         const database = new DatabaseSync(":memory:");
 
@@ -669,15 +691,6 @@ describe("invitation addresses stored before canonical form", () => {
         expect(emails(database)["older"]).toBe(canonicalEmail(DECOMPOSED));
         // The resumed run starts after the 600 rows the cut-short one read.
         expect(all.mock.calls.filter(([sql]) => sql.includes(`WHERE ("email" GLOB`))).toHaveLength(3);
-
-        // A resumed run cannot vouch for the rows before it, so one more whole pass runs; then none.
-        await backfillInvitationEmails({ all }, columns);
-        all.mockClear();
-        await backfillInvitationEmails({ all }, columns);
-
-        // Creating and reading the resume point; no invitation is read again.
-        expect(all).toHaveBeenCalledTimes(2);
-        expect(all.mock.calls.some(([sql]) => sql.includes(`WHERE ("email" GLOB`))).toBe(false);
     });
 
     it("rewrites an invitation left for a collision once its holder is revoked", async () => {
@@ -704,8 +717,37 @@ describe("invitation addresses stored before canonical form", () => {
         warn.mockRestore();
     });
 
-    it("rewrites them on a Durable Object's cold start", async () => {
-        expect.assertions(1);
+    it("reports a collision whose holder was read pages earlier", () => {
+        expect.assertions(2);
+
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(
+            `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "createdAt" integer NOT NULL, "expiresAt" integer NOT NULL)`,
+        );
+        invitation(database, "older", DECOMPOSED, 1);
+
+        for (let index = 0; index < 400; index += 1) {
+            invitation(database, `between${String(index)}`, `\u00E9${String(index)}@example.com`, 2 + index);
+        }
+
+        invitation(database, "newest", LOWER, 1000);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        expect(
+            backfillInvitationEmailsSync(
+                (sql, params) => database.prepare(sql).all(...(params as never[])),
+                invitationEmailColumns(resolveAuthOptions(inviteOptions))!,
+            ),
+        ).toStrictEqual(["older"]);
+        expect(emails(database)["older"]).toBe(DECOMPOSED);
+
+        warn.mockRestore();
+    });
+
+    it("rewrites them on a Durable Object's cold start, including one restored after an earlier pass", async () => {
+        expect.assertions(2);
 
         const database = new DatabaseSync(":memory:");
         const coldStart = async (): Promise<void> => {
@@ -729,5 +771,11 @@ describe("invitation addresses stored before canonical form", () => {
         await coldStart();
 
         expect(emails(database)).toStrictEqual({ decomposed: canonicalEmail(DECOMPOSED) });
+
+        // An import or replace writes a snapshot's invitations as they are.
+        invitation(database, "restored", "e\u0301mile@example.com", 2);
+        await coldStart();
+
+        expect(emails(database)).toStrictEqual({ decomposed: canonicalEmail(DECOMPOSED), restored: "\u00E9mile@example.com" });
     });
 });

@@ -413,8 +413,8 @@ describe("auth data port", () => {
             .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('u1', 'Ada', 'ada@example.test', 1, 1, 1)`)
             .run();
 
-        // The cold start's invitation backfill left its position behind.
-        expect(database.prepare(`SELECT COUNT(*) AS "n" FROM "__lunora_auth_backfill__"`).get()).toEqual({ n: 1 });
+        // A backfill cut short leaves its position behind.
+        database.prepare(`INSERT INTO "__lunora_auth_backfill__" ("name", "cursor") VALUES ('user.emailCanonical', '1')`).run();
 
         const exported = await collect(dataPort!);
 

@@ -74,7 +74,9 @@ type HookContext = Parameters<UserCreateBefore>[1];
  * left to the index. A holder of the exact address is left to `email`'s own unique index too: it
  * is this same account rewriting its address unchanged as often as another one. `self` is the
  * account being written, from whichever of the session, a `userId` body field or path parameter
- * the route names; it may change its own address to another case.
+ * the route names; it may change its own address to another case. An update whose route names
+ * none (an OAuth callback refreshing the profile, a sessionless email-change confirmation) is
+ * not checked: its holder may be the account itself, so only the index can tell.
  */
 const assertCanonicalFree = async (email: unknown, context: HookContext, self: ReadonlyArray<unknown>): Promise<void> => {
     // Absent, not only `null`, on a write made outside an endpoint.
@@ -141,9 +143,13 @@ const withCanonicalEmail = <O extends BetterAuthOptions>(options: O): O => {
             return false;
         }
 
-        const named = [context?.context.session?.user.id, (context?.body as { userId?: unknown } | undefined)?.userId, context?.params?.["userId"]];
+        const named = [context?.context.session?.user.id, (context?.body as { userId?: unknown } | undefined)?.userId, context?.params?.["userId"]].filter(
+            (id) => id !== undefined,
+        );
 
-        await assertCanonicalFree(writtenEmail(replacedData(result), patch), context, named);
+        if (named.length > 0) {
+            await assertCanonicalFree(writtenEmail(replacedData(result), patch), context, named);
+        }
 
         return { data: withCanonicalData(replacedData(result), patch) };
     };

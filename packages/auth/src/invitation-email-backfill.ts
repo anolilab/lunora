@@ -58,11 +58,11 @@ const invitationStatements = (columns: InvitationEmailColumns): { holders: strin
 };
 
 /**
- * A page's rows to rewrite, by folded address: the newest of each, unless a newer one read
- * earlier already holds it. The others go to `unchanged`; an address already in canonical
- * form joins `settled` like a rewritten one.
+ * A page's rows to rewrite, by folded address: the newest of each on the page; the others go
+ * to `unchanged`. A row that holds its address from an earlier page, or already in canonical
+ * form, is found by `rewritePage`'s read of the table, so nothing is kept across pages.
  */
-const pageCandidates = (rows: Record<string, unknown>[], settled: Set<string>, unchanged: string[]): Map<string, Record<string, unknown>> => {
+const pageCandidates = (rows: Record<string, unknown>[], unchanged: string[]): Map<string, Record<string, unknown>> => {
     const candidates = new Map<string, Record<string, unknown>>();
 
     for (const row of rows) {
@@ -75,8 +75,10 @@ const pageCandidates = (rows: Record<string, unknown>[], settled: Set<string>, u
         const folded = canonicalEmail(email);
 
         if (folded === email) {
-            settled.add(folded);
-        } else if (settled.has(folded) || candidates.has(folded)) {
+            continue;
+        }
+
+        if (candidates.has(folded)) {
             unchanged.push(String(row["id"]));
         } else {
             candidates.set(folded, row);
@@ -111,12 +113,6 @@ const rewritePage = function* rewritePage(
 };
 
 /**
- * Recorded once a pass has read every invitation and left none for a collision: new ones are
- * written in canonical form, so none can need it again.
- */
-const DONE = "done";
-
-/**
  * The rewrite as a sequence of statements, run like the user backfill.
  *
  * SQLite cannot tell whether an address is in canonical form, so the read narrows to the rows
@@ -127,44 +123,32 @@ const DONE = "done";
  * other: when it is the older of the two it keeps the address, because freeing it would mean
  * rewriting that row instead; the newer one is reported.
  *
- * That read keeps matching a non-ASCII address once it is canonical, and an invitation left
- * unchanged, so each page records where it stopped and a run cut short resumes there, and a
- * whole pass that reaches the end leaving nothing unchanged records that it is done. Without
- * either, every run would re-read the same newest rows. A resumed run finds a holder on the table, not in the cut-short
- * run's memory, so resuming loses nothing.
+ * Each page records where it stopped, so a run cut short resumes there; a resumed run finds a
+ * holder on the table, not in the cut-short run's memory, so resuming loses nothing. A pass
+ * that reaches the end clears that, so every cold start reads the table again: an invitation
+ * left for a collision is rewritten once its holder is revoked, and one restored from an
+ * older snapshot gets the canonical form. The read covers only rows that can be out of it.
  * @returns The ids of the invitations left unchanged because another holds their folded address.
  */
 const invitationBackfillSteps = function* invitationBackfillSteps(columns: InvitationEmailColumns): BackfillSteps<string[]> {
     const sql = invitationStatements(columns);
-    const settled = new Set<string>();
     const unchanged: string[] = [];
     // Keyed on the physical names, like the user backfill's.
     const state = `${columns.table}.${columns.email}`;
     const resumed = yield* readBackfillState(state);
-
-    if (resumed === DONE) {
-        return unchanged;
-    }
-
     let cursor: unknown[] = Array.isArray(resumed) ? resumed : [];
 
     for (;;) {
         const rows = yield { params: [...cursor, BACKFILL_PAGE_ROWS], sql: sql.read(cursor.length > 0) };
 
-        const candidates = pageCandidates(rows, settled, unchanged);
-
-        yield* rewritePage(sql, candidates, unchanged);
-
-        for (const folded of candidates.keys()) {
-            settled.add(folded);
-        }
+        yield* rewritePage(sql, pageCandidates(rows, unchanged), unchanged);
 
         const last = rows.at(-1);
 
         if (rows.length < BACKFILL_PAGE_ROWS || last === undefined) {
-            // An invitation left for a collision is rewritten once its holder is revoked, so the next pass (a later cold
-            // start) starts over; so does one after a resumed run, which cannot see what the cut-short run left.
-            yield* writeBackfillState(state, unchanged.length === 0 && !Array.isArray(resumed) ? DONE : undefined);
+            if (cursor.length > 0) {
+                yield* writeBackfillState(state, undefined);
+            }
 
             return unchanged;
         }

@@ -398,32 +398,31 @@ const countUnkept = async (sql: AuthSqlReader, table: string, kept: ReadonlyArra
  *
  * A row with no known column is refused here rather than at the commit: `INSERT INTO t () VALUES ()` is a
  * syntax error, and the dry run that vets a staged restore before its shards are swapped has to see it, or the
- * restore fails half-written. A `user` row whose canonical address another row of the snapshot holds is
- * refused for the same reason: the replace empties the table first, so the snapshot's own rows are the only
- * ones its unique index can see collide.
+ * restore fails half-written.
  */
-const replaceRowRefusal = (column: CanonicalEmailColumn | undefined): ((row: Row, table: string) => string | undefined) => {
-    const seen = new Set<string>();
+const replaceRowRefusal = (row: Row, table: string): string | undefined =>
+    Object.keys(row).length === 0 ? `no column of the row exists on "${table}"` : undefined;
 
-    return (row, table) => {
-        if (Object.keys(row).length === 0) {
-            return `no column of the row exists on "${table}"`;
-        }
+/**
+ * `row` without its canonical address when an earlier `user` row of the snapshot holds it. A snapshot of a
+ * database the backfill left duplicates in carries them, and the replace empties the table first, so the
+ * snapshot's own rows are the only ones its unique index sees collide: the later one is restored as the
+ * backfill leaves it, empty, and reported by the next backfill.
+ */
+const withoutHeldCanonical = (row: Row, table: string, column: CanonicalEmailColumn | undefined, held: Set<string>): Row => {
+    const address = column?.table === table ? row[column.canonical] : undefined;
 
-        const address = column?.table === table ? row[column.canonical] : undefined;
+    if (typeof address !== "string") {
+        return row;
+    }
 
-        if (typeof address !== "string") {
-            return undefined;
-        }
+    if (held.has(address)) {
+        return Object.fromEntries(Object.entries(row).filter(([name]) => name !== column?.canonical));
+    }
 
-        if (seen.has(address)) {
-            return `another "${table}" row of the snapshot holds the same address once case and Unicode form are ignored`;
-        }
+    held.add(address);
 
-        seen.add(address);
-
-        return undefined;
-    };
+    return row;
 };
 
 /**
@@ -443,7 +442,7 @@ const planAuthReplace = async (
     const errors: AuthReplaceResult["errors"] = [];
     const columns = new Map<string, string[]>();
     const decoded: { row: Row; table: string }[] = [];
-    const refusalOf = replaceRowRefusal(canonicalEmail);
+    const held = new Set<string>();
 
     for (const table of [...clearTables, ...tables]) {
         // eslint-disable-next-line no-await-in-loop -- once per table
@@ -465,9 +464,14 @@ const planAuthReplace = async (
             continue;
         }
 
-        const row = Object.fromEntries(Object.entries(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail)).filter(([name]) => known.includes(name)));
+        const row = withoutHeldCanonical(
+            Object.fromEntries(Object.entries(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail)).filter(([name]) => known.includes(name))),
+            table,
+            canonicalEmail,
+            held,
+        );
 
-        const refusal = refusalOf(row, table);
+        const refusal = replaceRowRefusal(row, table);
 
         if (refusal !== undefined) {
             errors.push({ index, message: refusal, table });
