@@ -27,7 +27,7 @@ const driver: AdapterDriver = {
 
         return { current: () => run, dispose: () => undefined };
     },
-    presence: (client, { intervalMs }) =>
+    presence: (client, { intervalMs, leave, sessionId = PRESENCE.sessionId }) =>
         mount(
             (destroyRef) =>
                 presence(PRESENCE.roomId, {
@@ -35,8 +35,9 @@ const driver: AdapterDriver = {
                     destroyRef,
                     heartbeat: PRESENCE.heartbeat,
                     intervalMs,
+                    ...(leave === undefined ? {} : { leave }),
                     listPresent: PRESENCE.listPresent,
-                    sessionId: PRESENCE.sessionId,
+                    sessionId,
                 }).present,
         ),
     query: (client, ref, args, options) => mount((destroyRef) => liveQuery(ref, args, { ...options, client: client as LunoraClient, destroyRef })),

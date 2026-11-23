@@ -10,6 +10,9 @@
  * Every write is fire-and-forget: a dropped heartbeat or leave is healed by the next heartbeat or
  * the row's TTL, so a failure only settles the write.
  *
+ * The same file counts the holders of a presence row ({@link holdPresenceRow}) and re-sends a room's
+ * heartbeat when the connection comes back ({@link onReconnected}).
+ *
  * Shared by the framework adapters' presence helpers. Like the sibling `shared/*` helpers this is
  * deliberately **not** a package: consumers import it by relative path and the bundler inlines it.
  * Keep it zero-dependency.
@@ -61,4 +64,71 @@ const createPresenceWrites = (): PresenceWrites => {
     };
 };
 
-export { createPresenceWrites };
+/** The holders of each presence row, per client: `[shardKey, roomId, sessionId]` → how many mounted views hold it. */
+const holders = new WeakMap<object, Map<string, number>>();
+
+/**
+ * Count one holder of the presence row `(client, shard, room, session)`. The server keeps one row per room and
+ * session, so two views mounted with the same explicit `sessionId` share it, and only the last one torn down
+ * may send `leave`. Returns the release: true when it dropped the last holder. Releasing twice (a teardown that
+ * runs again) counts once. Per client instance, never by strings alone: two clients are two connections.
+ */
+const holdPresenceRow = (client: object, row: { roomId: string; sessionId: string; shardKey?: string }): (() => boolean) => {
+    const counts = holders.get(client) ?? new Map<string, number>();
+    // `shardKey ?? ""`: the client routes an absent shard key and `""` to the same (root) shard.
+    const key = JSON.stringify([row.shardKey ?? "", row.roomId, row.sessionId]);
+
+    holders.set(client, counts);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+
+    let held = true;
+
+    return () => {
+        if (!held) {
+            return false;
+        }
+
+        held = false;
+
+        const remaining = (counts.get(key) ?? 1) - 1;
+
+        if (remaining > 0) {
+            counts.set(key, remaining);
+
+            return false;
+        }
+
+        counts.delete(key);
+
+        return true;
+    };
+};
+
+interface ConnectionStatusSource {
+    onConnectionStatus: (listener: (status: string) => void) => () => void;
+}
+
+/**
+ * Call `rejoin` each time the client's connection becomes `"connected"` after it was not. Heartbeats are sent
+ * online-only (a replayed one could mark a room since left), so one due while the socket reconnects is dropped,
+ * and the server's disconnect hook has already removed the row: without this the session stays missing until the
+ * next interval tick. The client sets the socket open before it reports `"connected"`, so a heartbeat sent from
+ * here is accepted. The status is the client's aggregate: a room's shard reconnecting while another shard's socket
+ * stays open reports no change, and that room waits for its next tick. Returns the stop.
+ */
+const onReconnected = (client: ConnectionStatusSource, rejoin: () => void): (() => void) => {
+    let previous: string | undefined;
+
+    // The listener hears the current status at once: that first report is the baseline, not a reconnect.
+    return client.onConnectionStatus((status) => {
+        const wasDown = previous !== undefined && previous !== "connected";
+
+        previous = status;
+
+        if (wasDown && status === "connected") {
+            rejoin();
+        }
+    });
+};
+
+export { createPresenceWrites, holdPresenceRow, onReconnected };

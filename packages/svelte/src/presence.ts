@@ -5,7 +5,7 @@ import { readable, writable } from "svelte/store";
 
 import { isBrowser } from "../../../shared/is-browser";
 import { assertPresenceInterval } from "../../../shared/presence-interval";
-import { createPresenceWrites } from "../../../shared/presence-writes";
+import { createPresenceWrites, holdPresenceRow, onReconnected } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { getLunoraClient } from "./context";
 import { subscribeReactiveArgs } from "./subscribe-reactive-args";
@@ -50,8 +50,9 @@ interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentRef
 
     /**
      * The `api.*` reference for the presence `leave` mutation. When given, leaving a room (a room
-     * change, or teardown) removes this session's row there at once; without it the old room lists
-     * the session until its last heartbeat ages out (`ttlMs`).
+     * change, or teardown) removes this session's row there at once, unless another view on the same
+     * client still shows that session in that room; without it the old room lists the session until
+     * its last heartbeat ages out (`ttlMs`).
      */
     leave?: LeaveReference;
     /** The `api.*` reference for the presence listPresent query. */
@@ -165,6 +166,8 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
             // presence store on the same client/shard doesn't clobber this one's context
             // when either tears down.
             const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
+            const releaseRow = holdPresenceRow(client, { roomId: room, sessionId, shardKey });
+            const stopRejoin = onReconnected(client, sendHeartbeat);
 
             return () => {
                 mounted = false;
@@ -174,10 +177,14 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
                     document.removeEventListener("visibilitychange", onVisible);
                 }
 
+                stopRejoin();
+
                 releaseConnectionContext();
 
-                // The old room stops listing this session now, instead of when its last heartbeat ages out.
-                if (leave !== undefined) {
+                // The old room stops listing this session now, instead of when its last heartbeat ages out — unless
+
+                // another mounted view still shows the same session there.
+                if (releaseRow() && leave !== undefined) {
                     presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
                 }
             };

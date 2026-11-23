@@ -46,6 +46,7 @@ const createPresenceFakeClient = () => {
 
             return Promise.resolve(undefined);
         },
+        onConnectionStatus: () => () => undefined,
         subscribe: (
             function_: FunctionReference,
             args: Record<string, unknown>,

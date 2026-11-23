@@ -3,7 +3,7 @@ import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
-import { createPresenceWrites } from "../../../shared/presence-writes";
+import { createPresenceWrites, holdPresenceRow, onReconnected } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { resolveLunoraClient } from "./client";
 import { attachReactiveArgs, outsideAngularRunner, shouldOpenSubscription } from "./platform";
@@ -58,8 +58,9 @@ export interface PresenceOptions<H extends HeartbeatReference, L extends ListPre
 
     /**
      * The `api.*` reference for the presence `leave` mutation. When given, leaving a room (a room
-     * change, or teardown) removes this session's row there at once; without it the old room lists
-     * the session until its last heartbeat ages out (`ttlMs`).
+     * change, or teardown) removes this session's row there at once, unless another view on the same
+     * client still shows that session in that room; without it the old room lists the session until
+     * its last heartbeat ages out (`ttlMs`).
      */
     leave?: LeaveReference;
 
@@ -191,6 +192,8 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
             // first heartbeat so the server's presence `onDisconnect` hook can delete
             // the row instantly on socket drop.
             const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
+            const releaseRow = holdPresenceRow(client, { roomId: room, sessionId, shardKey });
+            const stopRejoin = onReconnected(client, sendHeartbeat);
 
             // Heartbeat immediately on mount, and at once for a new room.
             sendHeartbeat();
@@ -231,11 +234,15 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
                     document.removeEventListener("visibilitychange", onVisible);
                 }
 
+                stopRejoin();
+
                 releaseConnectionContext();
                 unsubscribe?.();
 
-                // The old room stops listing this session now, instead of when its last heartbeat ages out.
-                if (leave !== undefined) {
+                // The old room stops listing this session now, instead of when its last heartbeat ages out — unless
+
+                // another mounted view still shows the same session there.
+                if (releaseRow() && leave !== undefined) {
                     presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
                 }
             };

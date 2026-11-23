@@ -44,15 +44,16 @@ const createReactDriver = (hooks: ReactHooks): AdapterDriver => {
             });
         },
         mutation: (client, ref) => mount(client, () => hooks.useMutation(ref).mutate),
-        presence: (client, { intervalMs }) =>
+        presence: (client, { intervalMs, leave, sessionId = PRESENCE.sessionId }) =>
             mount(
                 client,
                 () =>
                     hooks.usePresence(PRESENCE.roomId, {
                         heartbeat: PRESENCE.heartbeat,
                         intervalMs,
+                        ...(leave === undefined ? {} : { leave }),
                         listPresent: PRESENCE.listPresent,
-                        sessionId: PRESENCE.sessionId,
+                        sessionId,
                     }).present,
             ),
         query: (client, ref, args, options) => mount(client, () => hooks.useQuery(ref, args, options)),

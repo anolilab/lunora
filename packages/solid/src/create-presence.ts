@@ -3,7 +3,7 @@ import type { Accessor } from "solid-js";
 import { createMemo, createSignal, onCleanup } from "solid-js";
 
 import { assertPresenceInterval } from "../../../shared/presence-interval";
-import { createPresenceWrites } from "../../../shared/presence-writes";
+import { createPresenceWrites, holdPresenceRow, onReconnected } from "../../../shared/presence-writes";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
 import { trackedEffect } from "./solid-compat";
@@ -47,8 +47,9 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
 
     /**
      * The `api.*` reference for the presence `leave` mutation. When given, leaving a room (a room
-     * change, or teardown) removes this session's row there at once; without it the old room lists
-     * the session until its last heartbeat ages out (`ttlMs`).
+     * change, or teardown) removes this session's row there at once, unless another view on the same
+     * client still shows that session in that room; without it the old room lists the session until
+     * its last heartbeat ages out (`ttlMs`).
      */
     leave?: LeaveReference;
     /** The `api.*` reference for the presence listPresent query. */
@@ -187,6 +188,8 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         // clears the other's context. The returned release drops only this hook's
         // holder.
         const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
+        const releaseRow = holdPresenceRow(client, { roomId: room, sessionId, shardKey });
+        const stopRejoin = onReconnected(client, sendHeartbeat);
 
         let unsubscribe: (() => void) | undefined;
         let disposed = false;
@@ -207,11 +210,15 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
                 document.removeEventListener("visibilitychange", onVisible);
             }
 
+            stopRejoin();
+
             releaseConnectionContext();
             unsubscribe?.();
 
-            // The old room stops listing this session now, instead of when its last heartbeat ages out.
-            if (leave !== undefined) {
+            // The old room stops listing this session now, instead of when its last heartbeat ages out — unless
+
+            // another mounted view still shows the same session there.
+            if (releaseRow() && leave !== undefined) {
                 presenceWrites.leave(room, async () => client.mutation(leave, { roomId: room, sessionId }, { onlineOnly: true, shardKey }));
             }
         };

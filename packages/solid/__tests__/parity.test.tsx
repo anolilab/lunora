@@ -35,15 +35,16 @@ const driver: AdapterDriver = {
 
             return () => mutate;
         }),
-    presence: (client, { intervalMs }) =>
+    presence: (client, { intervalMs, leave, sessionId = PRESENCE.sessionId }) =>
         mount(
             client,
             () =>
                 createPresence(PRESENCE.roomId, {
                     heartbeat: PRESENCE.heartbeat,
                     intervalMs,
+                    ...(leave === undefined ? {} : { leave }),
                     listPresent: PRESENCE.listPresent,
-                    sessionId: PRESENCE.sessionId,
+                    sessionId,
                 }).present,
         ),
     query: (client, ref, args, options) => mount(client, () => createQuery(ref, args, options)),

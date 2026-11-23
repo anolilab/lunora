@@ -38,13 +38,14 @@ const driver: AdapterDriver = {
 
             return () => mutate;
         }),
-    presence: (client, { intervalMs }) =>
+    presence: (client, { intervalMs, leave, sessionId = PRESENCE.sessionId }) =>
         mount(client, () => {
             const { present } = usePresence(PRESENCE.roomId, {
                 heartbeat: PRESENCE.heartbeat,
                 intervalMs,
+                ...(leave === undefined ? {} : { leave }),
                 listPresent: PRESENCE.listPresent,
-                sessionId: PRESENCE.sessionId,
+                sessionId,
             });
 
             return () => present.value;

@@ -65,6 +65,7 @@ const createPresenceFakeClient = () => {
     });
 
     (fake.client as unknown as Record<string, unknown>)["acquireConnectionContext"] = acquireConnectionContext;
+    (fake.client as unknown as Record<string, unknown>)["onConnectionStatus"] = () => () => undefined;
 
     /** The effective (last-live-holder-wins) context for a shard, or undefined. */
     const contextFor = (shardKey = ""): Record<string, unknown> | undefined => {

@@ -34,12 +34,13 @@ const driver: AdapterDriver = {
 
         return { current: () => mutate, dispose: () => undefined };
     },
-    presence: (client, { intervalMs }) => {
+    presence: (client, { intervalMs, leave, sessionId = PRESENCE.sessionId }) => {
         const handle = presence(client as LunoraClient, PRESENCE.roomId, {
             heartbeat: PRESENCE.heartbeat,
             intervalMs,
+            ...(leave === undefined ? {} : { leave }),
             listPresent: PRESENCE.listPresent,
-            sessionId: PRESENCE.sessionId,
+            sessionId,
         });
 
         return mountStore(handle.present, handle.teardown);

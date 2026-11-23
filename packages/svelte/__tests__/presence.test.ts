@@ -84,6 +84,7 @@ const createPresenceFakeClient = () => {
         setConnectionContext: (context: Record<string, unknown> | undefined) => {
             setConnectionContextCalls.push(context);
         },
+        onConnectionStatus: () => () => undefined,
         subscribe: (
             function_: FunctionReference,
             args: Record<string, unknown>,
@@ -285,6 +286,7 @@ describe("presence (Svelte)", () => {
                 releaseCalls += 1;
             },
             mutation: () => Promise.resolve(undefined),
+            onConnectionStatus: () => () => undefined,
             subscribe: () => () => undefined,
         } as unknown as LunoraClient;
 
