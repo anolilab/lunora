@@ -1207,8 +1207,10 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
 
                 // A `null` result means the adapter didn't echo the row (some adapters
                 // don't on `update`), NOT that no row matched `memberId` — synthesize the
-                // updated row from the inputs rather than treat it as not-found.
-                return normalizeRow(member ?? { id: memberId, role: nextRole }) as AuthMember;
+                // updated row from the inputs rather than treat it as not-found. The
+                // organization comes from the row read above: the audit entry has no
+                // other source for it.
+                return normalizeRow(member ?? { id: memberId, organizationId: current?.organizationId, role: nextRole }) as AuthMember;
             }),
 
         updateOrganization: ({ logo, metadata, name, organizationId, slug }) =>
@@ -1260,9 +1262,14 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 });
 
                 // A `null` result means the adapter didn't echo the row, NOT that no row
-                // matched `roleId` — synthesize the updated row from the inputs rather
-                // than treat it as not-found.
-                return normalizeRow(updated ?? { id: roleId, permission: JSON.stringify(permission) }) as AuthOrgRole;
+                // matched `roleId`. Read it back, since the inputs do not name the
+                // organization the audit entry records; synthesize from the inputs only
+                // when that read finds nothing either.
+                const row =
+                    updated ??
+                    (await context_.adapter.findOne<Record<string, unknown>>({ model: "organizationRole", where: [{ field: "id", value: roleId }] }));
+
+                return normalizeRow(row ?? { id: roleId, permission: JSON.stringify(permission) }) as AuthOrgRole;
             }),
 
         updateTeam: ({ name, teamId }) =>
@@ -1274,9 +1281,10 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 });
 
                 // A `null` result means the adapter didn't echo the row, NOT that no row
-                // matched `teamId` — synthesize the updated row from the inputs rather
-                // than treat it as not-found.
-                return normalizeRow(team ?? { id: teamId, name }) as AuthTeam;
+                // matched `teamId`. Read it back for the organization, as `updateOrgRole` does.
+                const row = team ?? (await context_.adapter.findOne<Record<string, unknown>>({ model: "team", where: [{ field: "id", value: teamId }] }));
+
+                return normalizeRow(row ?? { id: teamId, name }) as AuthTeam;
             }),
 
         // The one op that genuinely builds a row rather than mutating one. Replicates
