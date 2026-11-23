@@ -1747,7 +1747,10 @@ interface ScheduleOutboxAttempt {
  * the same key and a replay after one that landed is answered from that run.
  */
 const replayDedupKey = (options: Record<string, unknown> | undefined, id: string, createdAt: number | undefined): { dedupKey?: string } =>
-    options?.["dedupKey"] !== undefined || createdAt === undefined || !Number.isSafeInteger(createdAt) ? {} : { dedupKey: `${id}-${String(createdAt)}` };
+    options?.["dedupKey"] !== undefined || createdAt === undefined || !Number.isFinite(createdAt) || createdAt < 0
+        ? {}
+        : // `created_at` can be fractional (the outbox nudges it to keep rows ordered); `.` is outside the key grammar.
+          { dedupKey: `${id}-${String(createdAt).replace(".", "_")}` };
 
 /**
  * What a drop reports when it could not confirm the cancel. A plain error would be redacted to

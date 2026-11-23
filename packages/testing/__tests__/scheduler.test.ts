@@ -33,6 +33,11 @@ const scheduleAppend = mutation
     .input({ delayMs: v.number(), message: v.string() })
     .mutation(({ args, ctx }) => ctx.scheduler.runAfter(args.delayMs, "log:appendLog", { message: args.message }));
 
+/** Mutation that schedules `appendLog` under a fixed dedup key. */
+const scheduleKeyed = mutation
+    .input({ key: v.string(), message: v.string() })
+    .mutation(({ args, ctx }) => ctx.scheduler.runAfter(0, "log:appendLog", { message: args.message }, { dedupKey: args.key }));
+
 /** Mutation that schedules `appendLog` via ctx.scheduler.runAt. */
 const scheduleAppendAt = mutation
     .input({ atMs: v.number(), message: v.string() })
@@ -188,6 +193,27 @@ const startWithFetch = (fetchImpl: typeof globalThis.fetch): ReturnType<typeof l
 describe("fake scheduler", () => {
     afterEach(() => {
         harnesses.closeAll();
+    });
+
+    it("answers a second job under a dedup key that already ran from the first run, as the receiver does", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        await t.mutation(scheduleKeyed, { key: "order-7", message: "first" });
+        await t.mutation(scheduleKeyed, { key: "order-7", message: "second" });
+        await t.mutation(scheduleKeyed, { key: "order-8", message: "other" });
+        await t.scheduler.runPending();
+
+        const log = await t.query(readLog, {});
+
+        expect(log.map((entry) => entry.message)).toStrictEqual(["first", "other"]);
+
+        // The shard keeps the key's replay row for a day; past it the key runs again.
+        await t.mutation(scheduleKeyed, { key: "order-7", message: "a day later" });
+        await t.scheduler.advance(86_400_001);
+
+        await expect(t.query(readLog, {})).resolves.toHaveLength(3);
     });
 
     it("queues a job via runAfter and does not execute it immediately", async () => {

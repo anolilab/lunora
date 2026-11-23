@@ -1708,7 +1708,9 @@ interface ScheduleRunOptions {
      * The key the job's receiver dedups a re-delivery on. Defaults to one minted per scheduling;
      * set it when the same logical job may be scheduled more than once and must run once. Must
      * match `^[A-Za-z0-9_][A-Za-z0-9_-]{0,99}$`; inside a mutation a key that does not is refused
-     * there and then, rolling the mutation back.
+     * there and then, rolling the mutation back. A function target remembers the key for 24 hours,
+     * a workflow target for as long as its instance exists, and the key is shared by every job
+     * reaching the same shard: scope a fixed key yourself when callers could collide.
      */
     dedupKey?: string;
 
