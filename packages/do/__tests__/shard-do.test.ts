@@ -1477,6 +1477,85 @@ describe("shardDO subscription re-execution", () => {
         expect(ws.attachment?.subs).toEqual({});
     });
 
+    describe("a sub id re-subscribed while the refresh sweep loads its old query", () => {
+        /** Holds the sweep's load of `cursors:listCursors` open once `hold` is set; every other load is warm. */
+        class HeldLoadShard extends ReexecShard {
+            public finishLoad: (() => void) | undefined;
+
+            public hold = false;
+
+            public limited = false;
+
+            public readonly loadStarted = Promise.withResolvers<undefined>();
+
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return this.limited && functionPath === "cursors:listCursors";
+            }
+
+            protected override prepareFunction(functionPath: string): Promise<void> | undefined {
+                if (!this.hold || functionPath !== "cursors:listCursors") {
+                    return undefined;
+                }
+
+                return new Promise<void>((resolve) => {
+                    this.finishLoad = resolve;
+                    this.loadStarted.resolve(undefined);
+                });
+            }
+        }
+
+        const replacement = { args: {}, functionPath: "cursors:countCursors", table: "cursors" };
+
+        /**
+         * Subscribes `sub-1` to the old query, then re-subscribes it to `replacement` inside the sweep's
+         * load; `limited` makes the old query per-dispatch from that sweep on. Answers the frames sent
+         * from the re-subscribe on.
+         */
+        const replaceDuringLoad = async (limited: boolean): Promise<{ frames: string[]; ws: FakeWebSocket }> => {
+            const shard = new HeldLoadShard(state, {});
+            const ws = createFakeWebSocket();
+
+            shard.registerSocket(ws);
+            shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "old", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+            shard.outcomes.set("cursors:countCursors", { result: 7, tables: new Set(["cursors"]) });
+            await subscribe(shard, ws);
+
+            shard.hold = true;
+            shard.limited = limited;
+            shard.changedTableOnRpc = "cursors";
+
+            const writing = shard.writeRpc();
+
+            await shard.loadStarted.promise;
+
+            const sentBefore = ws.sent.length;
+
+            await shard.driveMessage(ws, { id: "sub-1", query: replacement, type: "subscribe" });
+            shard.finishLoad?.();
+            await writing;
+
+            return { frames: ws.sent.slice(sentBefore), ws };
+        };
+
+        it("keeps the replacement when the old query turns out not to be live", async () => {
+            expect.assertions(2);
+
+            const { frames, ws } = await replaceDuringLoad(true);
+
+            expect(ws.attachment?.subs["sub-1"]).toEqual(replacement);
+            expect(frames.map((frame) => JSON.parse(frame) as unknown)).not.toContainEqual(perDispatchRefusal);
+        });
+
+        it("never pushes the old query's result under the replacement's id", async () => {
+            expect.assertions(2);
+
+            const { frames, ws } = await replaceDuringLoad(false);
+
+            expect(ws.attachment?.subs["sub-1"]).toEqual(replacement);
+            expect(frames.filter((frame) => frame.includes('"old"'))).toEqual([]);
+        });
+    });
+
     it("shares the per-socket cap between subscriptions and shapes", async () => {
         expect.assertions(1);
 

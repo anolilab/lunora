@@ -2623,7 +2623,15 @@ abstract class ShardDO {
     private readonly deliveryRequestPermits = new WeakMap<Request, DeliveryPermit>();
     private currentDeliveryPermit: DeliveryPermit | undefined;
     private transactionRequestScope: RequestScope | undefined;
-    private readonly deliveryRegistrations = new WeakMap<ShardSocketLike, Map<string, symbol>>();
+
+    /**
+     * Per socket, the identity of each subscription id's current registration: `subscribe` mints a
+     * new one when it (re)registers an id, `unsubscribe` drops it. A path that awaits between reading
+     * a subscription and acting on it compares identities so it never acts on a replacement. Memory
+     * only, so a subscription restored from hibernation gets one lazily — see
+     * {@link ShardDO.subscriptionRegistration}.
+     */
+    private readonly subscriptionRegistrations = new WeakMap<ShardSocketLike, Map<string, symbol>>();
 
     /** ctx-db relation knobs from {@link ShardDOOptions}, handed on by {@link ShardDO.ctxDbTuning}. */
     private readonly ctxDbRelationOptions: Pick<ShardDOOptions, "maxRelationKeys" | "relationExistsPushDown">;
@@ -6592,9 +6600,7 @@ abstract class ShardDO {
             return "serialize_failed";
         }
 
-        if (this.deliveryAuthorization) {
-            socketMap(this.deliveryRegistrations, ws).set(subId, Symbol("delivery registration"));
-        }
+        socketMap(this.subscriptionRegistrations, ws).set(subId, Symbol("subscription registration"));
         // Drop the diff baseline. A (re)subscribe asks for the current value, so
         // the seed must go out as a full snapshot; diffed against the old memo it
         // is answered `settled` (or a delta against a value the client just
@@ -6640,7 +6646,7 @@ abstract class ShardDO {
 
         this.socketIndex.forgetMemo(ws, subId);
         this.subscriptionFailures.clear(ws, subId);
-        this.deliveryRegistrations.get(ws)?.delete(subId);
+        this.subscriptionRegistrations.get(ws)?.delete(subId);
     }
 
     /**
@@ -9900,12 +9906,35 @@ abstract class ShardDO {
         return stillWanted && !this.closingSockets.has(ws);
     }
 
+    /** The identity of `subId`'s current registration on `ws`, minted for one restored from hibernation. */
+    private subscriptionRegistration(ws: ShardSocketLike, subId: string): symbol {
+        const registrations = socketMap(this.subscriptionRegistrations, ws);
+        const registration = registrations.get(subId) ?? Symbol("subscription registration");
+
+        registrations.set(subId, registration);
+
+        return registration;
+    }
+
+    /** Whether `subId` on `ws` is still the registration a caller read before awaiting. */
+    private holdsRegistration(ws: ShardSocketLike, subId: string, registration: symbol): boolean {
+        return this.subscriptionRegistrations.get(ws)?.get(subId) === registration;
+    }
+
     /**
      * The refresh sweep's gate: drop `subId` (and tell the client) when its function may not be held
      * live, once that function is loaded. `undefined` keeps it, decided without a yield; a promise
-     * answers whether it was dropped, and is only pending while a cold function loads.
+     * answers whether the sweep must skip it — dropped, or replaced or unsubscribed during the load,
+     * in which case `functionPath` names a query the id no longer holds — and is only pending while
+     * a cold function loads.
      */
-    private dropIfNotLive(ws: ShardSocketLike, subId: string, functionPath: string, adminAuthorized: boolean): Promise<boolean> | undefined {
+    private dropIfNotLive(
+        ws: ShardSocketLike,
+        subId: string,
+        functionPath: string,
+        adminAuthorized: boolean,
+        registration: symbol,
+    ): Promise<boolean> | undefined {
         // Same drift as the paywall below, on the credential rather than the price: an admin
         // subscription registered under a token since rotated or cleared would otherwise keep being
         // re-run and pushed — arbitrary read-only SQL over the shard — for the life of the socket.
@@ -9918,6 +9947,10 @@ abstract class ShardDO {
         }
 
         const drop = (): boolean => {
+            if (!this.holdsRegistration(ws, subId, registration)) {
+                return true;
+            }
+
             const refusal = this.liveQueryRefusal(functionPath);
 
             if (refusal === undefined) {
@@ -10057,7 +10090,7 @@ abstract class ShardDO {
         }
         this.unsubscribe(ws, subId);
         this.socketIndex.forgetMemo(ws, subId);
-        this.deliveryRegistrations.get(ws)?.delete(subId);
+        this.subscriptionRegistrations.get(ws)?.delete(subId);
         this.sendSubscriptionError(ws, subId, "FORBIDDEN", "AccessDenied");
     }
 
@@ -10067,7 +10100,7 @@ abstract class ShardDO {
                 return false;
             }
             const { permit, subId } = delivery;
-            if (permit === undefined || this.deliveryRegistrations.get(ws)?.get(subId) !== permit.registration) {
+            if (permit === undefined || this.subscriptionRegistrations.get(ws)?.get(subId) !== permit.registration) {
                 return false;
             }
             if (!this.deliveryRoleSupported() || !this.deliveryFence.allows(permit)) {
@@ -10134,9 +10167,8 @@ abstract class ShardDO {
         if (query?.functionPath !== functionPath || stableWireKey(query.args ?? {}) !== stableWireKey(args)) {
             return undefined;
         }
-        const registrations = socketMap(this.deliveryRegistrations, ws);
-        const registration = registrations.get(subId) ?? Symbol("delivery registration");
-        registrations.set(subId, registration);
+        const registrations = socketMap(this.subscriptionRegistrations, ws);
+        const registration = this.subscriptionRegistration(ws, subId);
         let permit: DeliveryPermit | undefined;
         try {
             permit = await this.authorizeDelivery(identity, functionPath, args, "subscription", { admin: false, system: false });
@@ -15073,6 +15105,32 @@ abstract class ShardDO {
         );
     }
 
+    /** The refresh sweep's answer to a subscription run that threw. */
+    private failRefresh(ws: ShardSocketLike, subId: string, functionPath: string, error: unknown, attachment: SocketAttachment): void {
+        // A throwing subscription must not abort the refresh of its
+        // siblings, nor fail the mutation that triggered it. The memo
+        // is left untouched ("unknown deps"), so the subscription is
+        // retried — but not on every flush: a failure that repeats
+        // (a bad handler cast, say) is latched with a growing backoff
+        // and announced to the client once. See `noteFailingSubscription`.
+        // Errors a retry cannot fix end the subscription rather than latch it.
+        if (this.isDeterministicSubscriptionFailure(error)) {
+            if (isDeliveryAccessDenied(error)) {
+                this.revokeSubscription(ws, subId);
+                return;
+            }
+            this.unsubscribe(ws, subId);
+            // `toErrorBody` resolves the catalog hint (and redacts as the other paths do); the client no longer
+            // falls back to one when it rebuilds the error.
+            const { body } = toErrorBody(error);
+
+            this.sendSubscriptionError(ws, subId, body.code, body.message, body);
+            this.recordSubscriptionRefreshError(functionPath, error, { subId });
+            return;
+        }
+        this.noteFailingSubscription(ws, subId, functionPath, error, attachment);
+    }
+
     /**
      * A subscription's refresh threw: count and log it, latch it for backoff, and
      * tell the client the first time of a streak. The subscription stays
@@ -15165,11 +15223,16 @@ abstract class ShardDO {
 
             const refreshQuery = async (
                 subId: string,
+                registration: symbol,
                 functionPath: string,
                 args: Record<string, unknown>,
                 isAdmin: boolean,
                 backingOff: boolean,
             ): Promise<void> => {
+                // Every await below lets a `subscribe` replace `subId` (or an `unsubscribe` end it); from then on
+                // `functionPath`/`args` name the old query, whose result or error must not reach the id.
+                const current = (): boolean => this.holdsRegistration(ws, subId, registration);
+
                 try {
                     // Re-run under the socket's OWN verified identity (stamped on the
                     // attachment at upgrade, unforgeable by the client) — passed BY
@@ -15199,6 +15262,10 @@ abstract class ShardDO {
                     }
                     const outcome = await this.resolveReactiveOutcomeDeduped(functionPath, args, handedArgs, isAdmin, attachment, reactiveRunCache);
 
+                    if (!current()) {
+                        return;
+                    }
+
                     if (!outcome) {
                         // A clean resolve to "nothing to deliver" still ends the failure streak.
                         this.subscriptionFailures.clear(ws, subId);
@@ -15214,33 +15281,18 @@ abstract class ShardDO {
                     // stalls the others. Mirrors the `handleStream` gate.
                     await awaitWsDrain(ws);
 
+                    if (!current()) {
+                        return;
+                    }
+
                     // A result moves a broadcast subscription to re-execution for good; this push is its full snapshot.
                     this.unmarkBroadcastSubscription(ws, subId);
                     this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit);
                     this.subscriptionFailures.clear(ws, subId);
                 } catch (error) {
-                    // A throwing subscription must not abort the refresh of its
-                    // siblings, nor fail the mutation that triggered it. The memo
-                    // is left untouched ("unknown deps"), so the subscription is
-                    // retried — but not on every flush: a failure that repeats
-                    // (a bad handler cast, say) is latched with a growing backoff
-                    // and announced to the client once. See `noteFailingSubscription`.
-                    // Errors a retry cannot fix end the subscription rather than latch it.
-                    if (this.isDeterministicSubscriptionFailure(error)) {
-                        if (isDeliveryAccessDenied(error)) {
-                            this.revokeSubscription(ws, subId);
-                            return;
-                        }
-                        this.unsubscribe(ws, subId);
-                        // `toErrorBody` resolves the catalog hint (and redacts as the other paths do); the client no longer
-                        // falls back to one when it rebuilds the error.
-                        const { body } = toErrorBody(error);
-
-                        this.sendSubscriptionError(ws, subId, body.code, body.message, body);
-                        this.recordSubscriptionRefreshError(functionPath, error, { subId });
-                        return;
+                    if (current()) {
+                        this.failRefresh(ws, subId, functionPath, error, attachment);
                     }
-                    this.noteFailingSubscription(ws, subId, functionPath, error, attachment);
                 }
             };
 
@@ -15263,7 +15315,8 @@ abstract class ShardDO {
                 // Without this it keeps being re-run on every write for the life
                 // of the socket — the paid result served free, or the
                 // subscriber charged for writes it did not make.
-                const dropped = this.dropIfNotLive(ws, subId, functionPath, adminAuthorized);
+                const registration = this.subscriptionRegistration(ws, subId);
+                const dropped = this.dropIfNotLive(ws, subId, functionPath, adminAuthorized, registration);
 
                 // Only a cold function is waited for; a warm one keeps the sweep synchronous.
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket are refreshed in order
@@ -15287,7 +15340,7 @@ abstract class ShardDO {
                 }
 
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
-                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin, backingOff);
+                await refreshQuery(subId, registration, functionPath, query.args ?? {}, isAdmin, backingOff);
             }
 
             finishIndexVisit(subs);
@@ -18184,7 +18237,7 @@ abstract class ShardDO {
     }
 
     private allowsSubscriptionOutcome(ws: ShardSocketLike, subId: string, permit: SubscriptionDeliveryPermit | undefined, generation: number): boolean {
-        if (this.deliveryAuthorization && permit !== undefined && this.deliveryRegistrations.get(ws)?.get(subId) !== permit.registration) {
+        if (this.deliveryAuthorization && permit !== undefined && this.subscriptionRegistrations.get(ws)?.get(subId) !== permit.registration) {
             return false;
         }
         if (this.deliveryAuthorization && !this.deliveryFence.allows(permit)) {
