@@ -763,8 +763,16 @@ describe("withSecret — the consuming step", () => {
     };
 
     /** A consuming tool's context whose dispatches reach the real component. */
-    const consumerContext = (host: SecretHost, step: AgentStepLike, claims: string[], idempotencyKey: string, toolCallId: string): AgentToolContext =>
+    const consumerContext = (
+        host: SecretHost,
+        step: AgentStepLike,
+        claims: string[],
+        idempotencyKey: string,
+        toolCallId: string,
+        callKey?: string,
+    ): AgentToolContext =>
         ({
+            ...(callKey === undefined ? {} : { callKey }),
             idempotencyKey,
             instanceId: INSTANCE,
             run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) => {
@@ -778,6 +786,19 @@ describe("withSecret — the consuming step", () => {
             threadKey: THREAD,
             toolCallId,
         }) as unknown as AgentToolContext;
+
+    it("lets a call whose provider id repeated an earlier turn's take the secret under its turn-scoped key", async () => {
+        expect.assertions(2);
+
+        const host = await secretHost(new WaitJournal());
+        const ref = await suppliedRequest(host, "0:call_1", SECRET);
+        const claims: string[] = [];
+        // The loop keys a repeated id `1:call_2`, so its step, and with it the claimant, carries that key.
+        const context = consumerContext(host, new WaitJournal(), claims, "tool:charge:1:call_2", "call_2", "1:call_2");
+
+        await expect(withSecret(context, ref, (secret) => secret.length)).resolves.toBe(SECRET.length);
+        expect(claims).toStrictEqual(["tool:charge:1:call_2"]);
+    });
 
     it("refuses a callback result that carries the secret only inside an Error", async () => {
         expect.assertions(1);
