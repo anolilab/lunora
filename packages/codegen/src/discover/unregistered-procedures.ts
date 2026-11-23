@@ -1,7 +1,7 @@
 import { dirname, relative, sep } from "node:path";
 
 import type { Finding } from "@lunora/advisor";
-import type { Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
+import type { ExportDeclaration, Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
 import { isBindingName } from "../reserved-words";
@@ -281,7 +281,8 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
         detail: `\`${exportName}\` in \`${relativePath}\` (line ${line.toString()}) has type \`${typeName}\` but was not registered — ${missed.cause}.`,
         facing: "INTERNAL",
         level: security === true ? "ERROR" : "WARN",
-        metadata: { exportName, filePath: relativePath, line, typeName },
+        // `file` is the identity `advisor.accept` matches an ERROR on, in the `lunora/<path>.ts` form every static lint emits.
+        metadata: { exportName, file: `lunora/${relativePath}.ts`, filePath: relativePath, line, typeName },
         name: "procedure_not_registered",
         remediation: misplacedIn === undefined ? `Assign the registration directly: \`export const ${declaredName} = ${call};\`. ${suffix}` : suffix,
         title: "Procedure exists at runtime but is missing from the generated API",
@@ -349,6 +350,9 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registr
 /** The value an export specifier's name node spells: `kebab-name` for `"kebab-name"`. */
 const exportNameText = (node: Node): string => (Node.isStringLiteral(node) ? node.getLiteralValue() : node.getText());
 
+/** `export * from "…"`: `export * as ns from "…"` exports only the namespace binding, not its members. */
+const isPlainStarExport = (statement: ExportDeclaration): boolean => statement.isNamespaceExport() && statement.getNamespaceExport() === undefined;
+
 /** The line of the statement that exports `exportName` from `source`: its specifier, else an `export *` or `export default`. */
 const exportSiteLine = (source: SourceFile, exportName: string): number => {
     for (const statement of source.getExportDeclarations()) {
@@ -364,7 +368,7 @@ const exportSiteLine = (source: SourceFile, exportName: string): number => {
     }
 
     // The `export *` whose module supplies the name, not merely the first one.
-    const stars = source.getExportDeclarations().filter((statement) => statement.isNamespaceExport());
+    const stars = source.getExportDeclarations().filter((statement) => isPlainStarExport(statement));
     const supplier = stars.find((statement) => statement.getModuleSpecifierSourceFile()?.getExportedDeclarations().has(exportName) === true) ?? stars[0];
 
     return supplier?.getStartLineNumber() ?? 1;
@@ -374,53 +378,67 @@ const exportSiteLine = (source: SourceFile, exportName: string): number => {
 const isTypeOnlyImport = (source: SourceFile, name: string): boolean =>
     source
         .getImportDeclarations()
-        .some((statement) =>
-            statement
-                .getNamedImports()
-                .some(
-                    (specifier) =>
-                        (specifier.getAliasNode() ?? specifier.getNameNode()).getText() === name && (statement.isTypeOnly() || specifier.isTypeOnly()),
-                ),
+        .some(
+            (statement) =>
+                (statement.isTypeOnly() && statement.getDefaultImport()?.getText() === name) ||
+                statement
+                    .getNamedImports()
+                    .some(
+                        (specifier) =>
+                            (specifier.getAliasNode() ?? specifier.getNameNode()).getText() === name && (statement.isTypeOnly() || specifier.isTypeOnly()),
+                    ),
         );
+
+/** A declaration in the module itself shadows every `export *`; anything but a type ships a value. */
+const localValueSites = (source: SourceFile, exportName: string): boolean[] =>
+    (source.getExportedDeclarations().get(exportName) ?? [])
+        .filter(
+            (declaration) => declaration.getSourceFile() === source && !Node.isInterfaceDeclaration(declaration) && !Node.isTypeAliasDeclaration(declaration),
+        )
+        .map(() => false);
+
+/** One entry per `export { … }` naming `exportName`: whether that statement exports only the type. */
+const namedExportSites = (source: SourceFile, exportName: string): boolean[] =>
+    source.getExportDeclarations().flatMap((statement) =>
+        statement
+            .getNamedExports()
+            .filter((specifier) => exportNameText(specifier.getAliasNode() ?? specifier.getNameNode()) === exportName)
+            .map(
+                (specifier) =>
+                    statement.isTypeOnly() ||
+                    specifier.isTypeOnly() ||
+                    (!statement.hasModuleSpecifier() && isTypeOnlyImport(source, exportNameText(specifier.getNameNode()))),
+            ),
+    );
 
 /**
  * Whether every statement that exports `exportName` from `source` exports only its type. The
  * checker resolves `export type { gate }` to the same declaration a value export does, yet no
  * value leaves the module, so there is no registration to drop.
+ *
+ * Fails closed: a module with no site that settles the question counts as exporting a value.
  */
-const isTypeOnlyExport = (source: SourceFile, exportName: string, visited = new Set<SourceFile>()): boolean => {
-    // An `export *` cycle supplies nothing the first visit did not already account for.
-    if (visited.has(source)) {
-        return true;
-    }
+const isTypeOnlyExport = (source: SourceFile, exportName: string, visiting: Set<SourceFile> = new Set()): boolean => {
+    visiting.add(source);
 
-    visited.add(source);
-
-    const sites: boolean[] = [];
-
-    for (const statement of source.getExportDeclarations()) {
-        for (const specifier of statement.getNamedExports()) {
-            if (exportNameText(specifier.getAliasNode() ?? specifier.getNameNode()) === exportName) {
-                sites.push(
-                    statement.isTypeOnly() ||
-                        specifier.isTypeOnly() ||
-                        (!statement.hasModuleSpecifier() && isTypeOnlyImport(source, exportNameText(specifier.getNameNode()))),
-                );
-            }
-        }
-    }
+    const sites = [...localValueSites(source, exportName), ...namedExportSites(source, exportName)];
 
     // An `export *` counts even beside a named site: TypeScript lets `export type { gate }` shadow
     // it, but the type export is erased and the star still ships the value at runtime. It ships a
     // value only if its module does: `export type *`, or a star over a barrel that itself only
-    // `export type`s the name, carries none.
-    for (const statement of source.getExportDeclarations()) {
-        const target = statement.isNamespaceExport() ? statement.getModuleSpecifierSourceFile() : undefined;
+    // `export type`s the name, carries none. A star never carries `default`. A module already on
+    // the path is no evidence either way, so it adds no site; one with nothing else left fails closed.
+    if (exportName !== "default") {
+        for (const statement of source.getExportDeclarations()) {
+            const target = isPlainStarExport(statement) ? statement.getModuleSpecifierSourceFile() : undefined;
 
-        if (target?.getExportedDeclarations().has(exportName) === true) {
-            sites.push(statement.isTypeOnly() || isTypeOnlyExport(target, exportName, visited));
+            if (target !== undefined && !visiting.has(target) && target.getExportedDeclarations().has(exportName)) {
+                sites.push(statement.isTypeOnly() || isTypeOnlyExport(target, exportName, visiting));
+            }
         }
     }
+
+    visiting.delete(source);
 
     return sites.length > 0 && sites.every(Boolean);
 };
