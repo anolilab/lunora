@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.206...@lunora/shard-engine@1.0.0-alpha.207) (2026-11-23)
+
+- fix(shard-engine): keep indexes in step when an unsafe batch insert fails (#1639)
+
 ## @lunora/shard-engine [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.205...@lunora/shard-engine@1.0.0-alpha.206) (2026-11-23)
 
 - security(shard-engine): track policy deps of global reads (#1682)
