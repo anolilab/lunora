@@ -4,7 +4,7 @@
  * the same file, so the two must resolve it identically.
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { DEV_VARS_FILE, ensureGitignoreEntries } from "@lunora/config";
@@ -134,8 +134,11 @@ const isDevVariablesFileTracked = (cwd: string, file: string): boolean =>
  */
 const refuseUnsafeSecretFile = (cwd: string, file: string, logger: Logger): string | undefined => {
     const linked = linkedDevVariablesFile(cwd, file);
+    // A named file linked to the bare `.dev.vars` is refused wherever it is read or written; the bare
+    // file is the source others link to, so it is refused only when it is itself the link.
+    const isTheLink = file !== DEV_VARS_FILE || lstatSync(join(cwd, file), { throwIfNoEntry: false })?.isSymbolicLink() === true;
 
-    if (linked !== undefined) {
+    if (linked !== undefined && isTheLink) {
         return `${file} is a link to ${linked}, so a secret written to it would land in ${linked}. Give ${file} its own contents`;
     }
 
@@ -150,4 +153,31 @@ const refuseUnsafeSecretFile = (cwd: string, file: string, logger: Logger): stri
         : `.gitignore could not be updated (${failure}), so ${file} could be committed. Add \`${DEV_VARS_IGNORE_PATTERNS.join("` and `")}\` to it by hand`;
 };
 
-export { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked, linkedDevVariablesFile, refuseUnsafeSecretFile };
+const LINE_BREAK = /\r?\n/u;
+
+/**
+ * Heads the comment deploy writes beside a key's active value when it minted a new one whose push
+ * failed: either value may be the live one until the user keeps exactly one.
+ */
+const UNCONFIRMED_MINT_MARKER = "# Minted by a deploy whose push failed; the live value if that push applied: ";
+
+/** The keys in `raw` still carrying {@link UNCONFIRMED_MINT_MARKER}. */
+const unconfirmedMintKeys = (raw: string): string[] => [
+    ...new Set(
+        raw
+            .split(LINE_BREAK)
+            .filter((line) => line.startsWith(UNCONFIRMED_MINT_MARKER))
+            .map((line) => line.slice(UNCONFIRMED_MINT_MARKER.length).split("=")[0]?.trim() ?? "")
+            .filter((key) => key !== ""),
+    ),
+];
+
+export {
+    devVariablesFileFor,
+    ensureDevVariablesIgnored,
+    isDevVariablesFileTracked,
+    linkedDevVariablesFile,
+    refuseUnsafeSecretFile,
+    UNCONFIRMED_MINT_MARKER,
+    unconfirmedMintKeys,
+};

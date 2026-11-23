@@ -23,7 +23,7 @@ import {
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
-import { devVariablesFileFor, linkedDevVariablesFile, refuseUnsafeSecretFile } from "../../util/dev-variables-file";
+import { devVariablesFileFor, linkedDevVariablesFile, refuseUnsafeSecretFile, unconfirmedMintKeys } from "../../util/dev-variables-file";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
@@ -381,6 +381,26 @@ const refuseAliasedPushSource = (context: EnvContext): EnvCommandResult | undefi
     return { code: EXIT_CODE.USAGE, descriptors: [] };
 };
 
+/**
+ * The refusal for a push whose file still holds a value minted by a deploy whose push failed, or
+ * `undefined` to go on. Either that value or the active one may be live, and pushing the active one
+ * could overwrite the other.
+ */
+const refuseUnconfirmedMints = (context: EnvContext): EnvCommandResult | undefined => {
+    const unconfirmed = unconfirmedMintKeys(readDevVariablesRaw(context.devVariablesPath));
+
+    if (unconfirmed.length === 0) {
+        return undefined;
+    }
+
+    context.logger.error(
+        `env push: ${unconfirmed.join(", ")} in ${context.devVariablesFile} also has a value minted by a deploy whose push failed (the "# Minted by a deploy…" comment), ` +
+            `so it is unknown which one is live. Keep exactly one of the two values — delete the other line and the comment — then re-run.`,
+    );
+
+    return { code: EXIT_CODE.USAGE, descriptors: [] };
+};
+
 const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     const { devVariablesFile, devVariablesPath, environment, logger, options } = context;
 
@@ -390,7 +410,7 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
         return { code: EXIT_CODE.USAGE, descriptors: [] };
     }
 
-    const missingSource = refuseMissingPushSource(context) ?? refuseAliasedPushSource(context);
+    const missingSource = refuseMissingPushSource(context) ?? refuseAliasedPushSource(context) ?? refuseUnconfirmedMints(context);
 
     if (missingSource !== undefined) {
         return missingSource;

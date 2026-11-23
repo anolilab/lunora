@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runEnvCommand } from "../../src/commands/env/handler";
+import { UNCONFIRMED_MINT_MARKER } from "../../src/util/dev-variables-file";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
@@ -17,6 +18,23 @@ interface Recorded {
     successes: string[];
     warnings: string[];
 }
+
+/**
+ * A `.dev.vars.production` plus, where the filesystem allows one, a distinct `.dev.vars.Production`
+ * linked to it, and the outcome `env push --env Production` must have there. On a case-insensitive
+ * filesystem the two names are one file, so no link can exist and the file is the environment's own.
+ */
+const caseOnlySiblingFixture = (dir: string): { calls: string[]; code: number; error: RegExp } => {
+    writeFileSync(join(dir, ".dev.vars.production"), 'RESEND_API_KEY="re_prod"\n', "utf8");
+
+    if (existsSync(join(dir, ".DEV.VARS.PRODUCTION"))) {
+        return { calls: ["exec wrangler secret put RESEND_API_KEY --env Production"], code: 0, error: /^$/u };
+    }
+
+    symlinkSync(join(dir, ".dev.vars.production"), join(dir, ".dev.vars.Production"));
+
+    return { calls: [], code: EXIT_CODE.USAGE, error: /is a link to \.dev\.vars\.production/u };
+};
 
 const recordingLogger = (): { logger: Logger; recorded: Recorded } => {
     const recorded: Recorded = { errors: [], infos: [], successes: [], warnings: [] };
@@ -610,20 +628,32 @@ describe("lunora env", () => {
             expect(recorded.errors.join("\n")).toContain("is a link to .dev.vars");
         });
 
-        it("push --env Production refuses a .dev.vars.Production linked to the case-only sibling .dev.vars.production", async () => {
+        it("push --env Production never reads a case-only sibling's values through a link", async () => {
             expect.assertions(3);
 
-            // Two distinct entries on a case-sensitive filesystem, one a link to the other.
-            writeFileSync(join(workdir, ".dev.vars.production"), 'RESEND_API_KEY="re_prod"\n', "utf8");
-            symlinkSync(join(workdir, ".dev.vars.production"), join(workdir, ".dev.vars.Production"));
-
+            const expected = caseOnlySiblingFixture(workdir);
             const { logger, recorded } = recordingLogger();
             const { calls, spawner } = createRecordingSpawner();
             const result = await runEnvCommand({ cwd: workdir, env: "Production", logger, spawner, subcommand: "push", yes: true });
 
+            expect(result.code).toBe(expected.code);
+            expect(calls.map((call) => call.descriptor.args.join(" "))).toStrictEqual(expected.calls);
+            expect(recorded.errors.join("\n")).toMatch(expected.error);
+        });
+
+        it("push --env staging refuses a key whose minted value a failed deploy push left unconfirmed", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars.staging"), `AUTH_SECRET="old"\n${UNCONFIRMED_MINT_MARKER}AUTH_SECRET="minted"\n`, "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", logger, spawner, subcommand: "push", yes: true });
+
+            // Pushing "old" could overwrite "minted" if the failed push did apply it.
             expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
-            expect(recorded.errors.join("\n")).toContain("is a link to .dev.vars.production");
+            expect(recorded.errors.join("\n")).toMatch(/AUTH_SECRET.*Keep exactly one of the two values/su);
         });
 
         it("unset --env staging refuses a .dev.vars.staging linked to .dev.vars, and keeps the link", async () => {

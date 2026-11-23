@@ -23,7 +23,13 @@ import { join } from "@visulima/path";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
-import { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked, refuseUnsafeSecretFile } from "../../util/dev-variables-file";
+import {
+    devVariablesFileFor,
+    ensureDevVariablesIgnored,
+    isDevVariablesFileTracked,
+    refuseUnsafeSecretFile,
+    UNCONFIRMED_MINT_MARKER,
+} from "../../util/dev-variables-file";
 import type { Logger } from "../../util/logger";
 import { defaultSpawner } from "../../util/spawn";
 import { createTuiConfirm } from "../../util/tui-prompts";
@@ -314,7 +320,7 @@ const persistMintedSecrets = (
     }
 
     for (const entry of kept) {
-        raw = `${raw}${raw.endsWith("\n") || raw === "" ? "" : "\n"}# Minted by a deploy whose push failed; the live value if that push applied: ${upsertDevVariableLine("", entry.key, entry.value).trim()}\n`;
+        raw = `${raw}${raw.endsWith("\n") || raw === "" ? "" : "\n"}${UNCONFIRMED_MINT_MARKER}${upsertDevVariableLine("", entry.key, entry.value).trim()}\n`;
     }
 
     if (kept.length > 0) {

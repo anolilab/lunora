@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -3308,6 +3308,30 @@ export const backfillNames = defineMigration({
                 expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(calls.filter((call) => /secret (?:bulk|put)/u.test(call.descriptor.args.join(" ")))).toHaveLength(0);
                 expect(errors.join("\n")).toContain(".gitignore could not be updated");
+            });
+
+            it("records a default deploy's minted secret in .dev.vars even when a named file links to it", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), "LOCAL=1\n", "utf8");
+                // The named file is the link; it is refused where it is read or written, the bare file is not.
+                symlinkSync(join(workdir, ".dev.vars"), join(workdir, ".dev.vars.production"));
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toMatch(/LUNORA_ADMIN_TOKEN="?[a-f0-9]{64}/u);
             });
 
             it("keeps the .dev.vars.example negation LAST when it appends a wider ignore above it", async () => {
