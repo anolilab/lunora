@@ -4,6 +4,8 @@
  * the same file, so the two must resolve it identically.
  */
 import { spawnSync } from "node:child_process";
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 import { DEV_VARS_FILE, ensureGitignoreEntries } from "@lunora/config";
 
@@ -43,28 +45,69 @@ const devVariablesFileFor = (environment: string | undefined): string | undefine
     return SAFE_ENV_NAME.test(environment) && !RESERVED_ENV_NAMES.has(environment.toLowerCase()) ? `${DEV_VARS_FILE}.${environment}` : undefined;
 };
 
-/**
- * Make sure the project's `.gitignore` covers the `.dev.vars`-shaped file about
- * to receive a secret. Every scaffolded project ships the bare pattern only, so
- * without this the `.dev.vars.<env>` sibling is untracked but NOT ignored and
- * the next `git add -A` commits it.
- *
- * Best-effort: a `.gitignore` that cannot be written (read-only checkout, no
- * git at all) must not cost the user the only recoverable copy of a write-only
- * secret, so it warns and lets the write proceed.
- */
-const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
+/** Add the ignore patterns, returning why that failed, or `undefined` once `.gitignore` covers every `.dev.vars` file. */
+const addDevVariablesIgnorePatterns = (cwd: string, logger: Logger): string | undefined => {
     try {
         const missing = ensureGitignoreEntries(cwd, DEV_VARS_IGNORE_PATTERNS);
 
         if (missing.length > 0) {
             logger.info(`.gitignore: added ${missing.join(", ")} so the recorded secret cannot be committed`);
         }
+
+        return undefined;
     } catch (error) {
-        logger.warn(
-            `could not update .gitignore (${error instanceof Error ? error.message : String(error)}) — add \`${DEV_VARS_IGNORE_PATTERNS.join("` and `")}\` by hand before committing.`,
-        );
+        return error instanceof Error ? error.message : String(error);
     }
+};
+
+/**
+ * Make sure the project's `.gitignore` covers the `.dev.vars`-shaped file about
+ * to receive a secret. Every scaffolded project ships the bare pattern only, so
+ * without this the `.dev.vars.<env>` sibling is untracked but NOT ignored and
+ * the next `git add -A` commits it.
+ *
+ * Best-effort, for a value that is already pushed: a `.gitignore` that cannot be
+ * written must not cost the user the only recoverable copy of a write-only
+ * secret, so it warns and lets the write proceed. Anything that has not pushed
+ * yet checks {@link refuseUnsafeSecretFile} instead.
+ */
+const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
+    const failure = addDevVariablesIgnorePatterns(cwd, logger);
+
+    if (failure !== undefined) {
+        logger.warn(`could not update .gitignore (${failure}) — add \`${DEV_VARS_IGNORE_PATTERNS.join("` and `")}\` by hand before committing.`);
+    }
+};
+
+/**
+ * The other `.dev.vars`-shaped file in `cwd` that `file` is a symlink or hard link to, or `undefined`.
+ * Reading or writing through such a link reaches another environment's values. A name differing only
+ * in case is the same file on a case-insensitive filesystem, not a link.
+ */
+const linkedDevVariablesFile = (cwd: string, file: string): string | undefined => {
+    const own = statSync(join(cwd, file), { throwIfNoEntry: false });
+
+    if (own === undefined) {
+        return undefined;
+    }
+
+    let names: string[];
+
+    try {
+        names = readdirSync(cwd);
+    } catch {
+        return undefined;
+    }
+
+    return names.find((name) => {
+        if (name.toLowerCase() === file.toLowerCase() || (name !== DEV_VARS_FILE && !name.startsWith(`${DEV_VARS_FILE}.`))) {
+            return false;
+        }
+
+        const other = statSync(join(cwd, name), { throwIfNoEntry: false });
+
+        return other?.dev === own.dev && other.ino === own.ino;
+    });
 };
 
 /**
@@ -80,4 +123,28 @@ const isDevVariablesFileTracked = (cwd: string, file: string): boolean =>
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH (install location varies); args are fixed and no shell is involved
     spawnSync("git", ["ls-files", "--error-unmatch", "--", `:(icase)${file}`], { cwd, stdio: "ignore" }).status === 0;
 
-export { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked };
+/**
+ * Why `file` must not receive a secret, or `undefined` once it is safe and git-ignored. Checked before
+ * anything is written, minted or pushed: a file that links to another `.dev.vars` file writes that
+ * environment's values, a tracked one stays committable whatever `.gitignore` says, and one
+ * `.gitignore` cannot cover is one `git add -A` from the repository.
+ */
+const refuseUnsafeSecretFile = (cwd: string, file: string, logger: Logger): string | undefined => {
+    const linked = linkedDevVariablesFile(cwd, file);
+
+    if (linked !== undefined) {
+        return `${file} is a link to ${linked}, so a secret written to it would land in ${linked}. Give ${file} its own contents`;
+    }
+
+    if (isDevVariablesFileTracked(cwd, file)) {
+        return `${file} is tracked by git, so a secret written to it could be committed. Run \`git rm --cached ${file}\``;
+    }
+
+    const failure = addDevVariablesIgnorePatterns(cwd, logger);
+
+    return failure === undefined
+        ? undefined
+        : `.gitignore could not be updated (${failure}), so ${file} could be committed. Add \`${DEV_VARS_IGNORE_PATTERNS.join("` and `")}\` to it by hand`;
+};
+
+export { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked, linkedDevVariablesFile, refuseUnsafeSecretFile };

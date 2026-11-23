@@ -1,6 +1,6 @@
 /* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain secret-like strings */
 import { execFileSync } from "node:child_process";
-import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -581,6 +581,35 @@ describe("lunora env", () => {
             expect(recorded.errors.join("\n")).toContain("is a link to .dev.vars");
         });
 
+        it("push --prod refuses a .dev.vars.production linked to another environment's file, and pushes nothing", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars.development"), 'RESEND_API_KEY="re_dev"\n', "utf8");
+            symlinkSync(join(workdir, ".dev.vars.development"), join(workdir, ".dev.vars.production"));
+
+            const { logger, recorded } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, logger, prod: true, spawner, subcommand: "push", yes: true });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(calls).toHaveLength(0);
+            expect(recorded.errors.join("\n")).toContain("is a link to .dev.vars.development");
+        });
+
+        it("set --env staging refuses a .dev.vars.staging linked to .dev.vars, and leaves both untouched", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), "LOCAL=1\n", "utf8");
+            symlinkSync(join(workdir, ".dev.vars"), join(workdir, ".dev.vars.staging"));
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", key: "FOO", logger, subcommand: "set", value: "bar" });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe("LOCAL=1\n");
+            expect(recorded.errors.join("\n")).toContain("is a link to .dev.vars");
+        });
+
         it("push --from-dev-vars pushes the bare file to a named environment", async () => {
             expect.assertions(3);
 
@@ -737,6 +766,33 @@ describe("lunora env", () => {
             // On a case-insensitive filesystem the write would land in the tracked file.
             expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(recorded.errors.join("\n")).toContain("git rm --cached .dev.vars.Production");
+        });
+
+        it("set --env staging refuses when .gitignore cannot be updated, and writes no secret", async () => {
+            expect.assertions(3);
+
+            // A directory where `.gitignore` should be: the ignore patterns cannot be written.
+            mkdirSync(join(workdir, ".gitignore"));
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", key: "FOO", logger, subcommand: "set", value: "bar" });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(existsSync(join(workdir, ".dev.vars.staging"))).toBe(false);
+            expect(recorded.errors.join("\n")).toContain(".gitignore could not be updated");
+        });
+
+        it("generate --set --env staging mints a mintable key declared only in the bare .dev.vars", async () => {
+            expect.assertions(2);
+
+            // Deploy --env staging requires the bare file's secret keys on staging too.
+            writeFileSync(join(workdir, ".dev.vars"), 'STORAGE_SIGNING_SECRET="local-dev"\n', "utf8");
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", logger, set: true, subcommand: "generate" });
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(workdir, ".dev.vars.staging"), "utf8")).toMatch(/STORAGE_SIGNING_SECRET="?[a-f0-9]{64}/u);
         });
 
         it("generate --set --prod writes .dev.vars.production, the file push --prod reads", async () => {

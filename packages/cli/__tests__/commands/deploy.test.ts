@@ -3285,6 +3285,31 @@ export const backfillNames = defineMigration({
                 expect(errors.join("\n")).toContain("git rm --cached .dev.vars.production");
             });
 
+            it("refuses to mint a secret before pushing it when .gitignore cannot cover its record file", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+                // A directory where `.gitignore` should be: the ignore patterns cannot be written.
+                mkdirSync(join(workdir, ".gitignore"));
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(calls.filter((call) => /secret (?:bulk|put)/u.test(call.descriptor.args.join(" ")))).toHaveLength(0);
+                expect(errors.join("\n")).toContain(".gitignore could not be updated");
+            });
+
             it("keeps the .dev.vars.example negation LAST when it appends a wider ignore above it", async () => {
                 expect.assertions(3);
 

@@ -23,7 +23,7 @@ import { join } from "@visulima/path";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
-import { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked } from "../../util/dev-variables-file";
+import { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked, refuseUnsafeSecretFile } from "../../util/dev-variables-file";
 import type { Logger } from "../../util/logger";
 import { defaultSpawner } from "../../util/spawn";
 import { createTuiConfirm } from "../../util/tui-prompts";
@@ -438,7 +438,7 @@ const failedPushOutcome = (logger: Logger, uncertain: ReadonlyArray<string>, min
  * Why minted values for `mintable` could not be recorded locally, or `undefined` when they can. Cloudflare secrets are
  * write-only, so a value pushed without a local copy is lost: the refusal must come before anything is asked or pushed.
  */
-const unrecordableMintError = (cwd: string, environment: string | undefined, mintable: ReadonlyArray<string>): string | undefined => {
+const unrecordableMintError = (cwd: string, environment: string | undefined, mintable: ReadonlyArray<string>, logger: Logger): string | undefined => {
     const environmentFlag = environment === undefined ? "" : ` --env ${environment}`;
     const targetFile = devVariablesFileFor(environment);
 
@@ -449,15 +449,11 @@ const unrecordableMintError = (cwd: string, environment: string | undefined, min
         );
     }
 
-    // `persistMintedSecrets` will not record into a tracked file, so the same refusal applies here.
-    if (isDevVariablesFileTracked(cwd, targetFile)) {
-        return (
-            `missing required secret(s) on the deploy target: ${mintable.join(", ")}. ${targetFile} is tracked by git, so their values could be committed ` +
-            `and none were generated. Run \`git rm --cached ${targetFile}\`, then re-deploy.`
-        );
-    }
+    const refusal = refuseUnsafeSecretFile(cwd, targetFile, logger);
 
-    return undefined;
+    return refusal === undefined
+        ? undefined
+        : `missing required secret(s) on the deploy target: ${mintable.join(", ")}. None were generated: ${refusal}, then re-deploy.`;
 };
 
 /**
@@ -541,7 +537,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
         return {};
     }
 
-    const unrecordable = unrecordableMintError(cwd, options.env, mintable);
+    const unrecordable = unrecordableMintError(cwd, options.env, mintable, logger);
 
     if (unrecordable !== undefined) {
         return { error: unrecordable };

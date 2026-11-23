@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -23,7 +23,7 @@ import {
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
-import { devVariablesFileFor, ensureDevVariablesIgnored, isDevVariablesFileTracked } from "../../util/dev-variables-file";
+import { devVariablesFileFor, linkedDevVariablesFile, refuseUnsafeSecretFile } from "../../util/dev-variables-file";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
@@ -163,27 +163,21 @@ interface EnvContext {
  */
 const resolveEnvironment = (options: EnvCommandOptions): string | undefined => options.env ?? (options.prod === true ? "production" : undefined);
 
-/**
- * A named environment's file holds deployed secrets; keep it out of git before the first write.
- * A file git already tracks stays committable whatever `.gitignore` says, so that write is refused.
- */
+/** A named environment's file holds deployed secrets: refuse the write unless {@link refuseUnsafeSecretFile} clears it. */
 const ignoreNamedEnvironmentFile = (context: EnvContext): EnvCommandResult | undefined => {
     if (context.devVariablesFile === DEV_VARS_FILE) {
         return undefined;
     }
 
-    if (isDevVariablesFileTracked(context.cwd, context.devVariablesFile)) {
-        context.logger.error(
-            `env: ${context.devVariablesFile} is tracked by git, so a secret written to it could be committed. ` +
-                `Run \`git rm --cached ${context.devVariablesFile}\` and re-run.`,
-        );
+    const refusal = refuseUnsafeSecretFile(context.cwd, context.devVariablesFile, context.logger);
 
-        return { code: EXIT_CODE.USAGE, descriptors: [] };
+    if (refusal === undefined) {
+        return undefined;
     }
 
-    ensureDevVariablesIgnored(context.cwd, context.logger);
+    context.logger.error(`env: ${refusal}, then re-run.`);
 
-    return undefined;
+    return { code: EXIT_CODE.USAGE, descriptors: [] };
 };
 
 const runEnvList = (context: EnvContext): EnvCommandResult => {
@@ -355,26 +349,25 @@ const refuseMissingPushSource = (context: EnvContext): EnvCommandResult | undefi
 };
 
 /**
- * The refusal for a named push whose own file is the bare `.dev.vars` under another name — a
- * symlink or hard link to it — or `undefined` to go on. Following it would upload the local dev
- * values, generated dev credentials included, without --from-dev-vars and its mintable-key check.
+ * The refusal for a named push whose own file is another `.dev.vars` file under another name — a
+ * symlink or hard link to it — or `undefined` to go on. Following it would upload that file's values,
+ * local dev credentials included, without --from-dev-vars and its mintable-key check.
  */
 const refuseAliasedPushSource = (context: EnvContext): EnvCommandResult | undefined => {
-    const { cwd, devVariablesFile, devVariablesPath, environment, logger, options } = context;
+    const { cwd, devVariablesFile, environment, logger, options } = context;
 
     if (environment === undefined || options.fromDevVars === true) {
         return undefined;
     }
 
-    const bare = statSync(join(cwd, DEV_VARS_FILE), { throwIfNoEntry: false });
-    const named = statSync(devVariablesPath);
+    const linked = linkedDevVariablesFile(cwd, devVariablesFile);
 
-    if (bare?.dev !== named.dev || bare.ino !== named.ino) {
+    if (linked === undefined) {
         return undefined;
     }
 
     logger.error(
-        `env push --env ${environment}: ${devVariablesFile} is a link to ${DEV_VARS_FILE}, so it would push the local dev values. ` +
+        `env push --env ${environment}: ${devVariablesFile} is a link to ${linked}, so it would push the values of ${linked}. ` +
             `Give ${devVariablesFile} its own values, or pass --from-dev-vars to push ${DEV_VARS_FILE} on purpose.`,
     );
 
@@ -615,7 +608,9 @@ const resolveMintableKeys = async (context: EnvContext): Promise<string[]> => {
     const fromPackages = requiredSecrets(packages)
         .map((entry) => entry.key)
         .filter((key) => mintable.has(key));
-    const fromLocal = [...loadDevVariables(context.devVariablesPath).keys()].filter((key) => mintable.has(key));
+    // The same files deploy reads its required keys from: a named environment requires the bare file's keys too.
+    const localFiles = context.devVariablesFile === DEV_VARS_FILE ? [context.devVariablesPath] : [join(context.cwd, DEV_VARS_FILE), context.devVariablesPath];
+    const fromLocal = localFiles.flatMap((path) => [...loadDevVariables(path).keys()]).filter((key) => mintable.has(key));
 
     return [...new Set([...fromPackages, ...fromLocal])];
 };
