@@ -519,16 +519,18 @@ describe("shardDO rooms", () => {
     });
 
     it("does not deliver a room broadcast to a socket whose join is still settling", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const member = new FakeSocket({ subs: {}, userId: "member" });
+        // A committed member besides the sender, so the broadcast provably reaches the room.
+        const observer = new FakeSocket({ subs: {}, userId: "observer" });
         const joining = new FakeSocket({ subs: {}, userId: "user-a" });
         let releaseJoin: () => void = () => undefined;
         const gate = new Promise<void>((resolve) => {
             releaseJoin = resolve;
         });
         const joinEntered = Promise.withResolvers<undefined>();
-        const shard = makeShard([member, joining], { "room:chat": "rooms:chat" }, [], {
+        const shard = makeShard([member, observer, joining], { "room:chat": "rooms:chat" }, [], {
             "rooms:chat": async (args) => {
                 if (args["kind"] === "join" && (args["socket"] as { userId: string }).userId === "user-a") {
                     joinEntered.resolve(undefined);
@@ -536,11 +538,17 @@ describe("shardDO rooms", () => {
                     throw new Error("join refused");
                 }
 
+                // A verdict replaces the shard's default echo, so the message is broadcast here.
+                if (args["kind"] === "message") {
+                    (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ echo: args["message"] });
+                }
+
                 return undefined;
             },
         });
 
         await send(shard, member, { topic: "room:chat", type: "whisper_subscribe" });
+        await send(shard, observer, { topic: "room:chat", type: "whisper_subscribe" });
         const pendingJoin = send(shard, joining, { topic: "room:chat", type: "whisper_subscribe" });
         await joinEntered.promise;
 
@@ -550,6 +558,7 @@ describe("shardDO rooms", () => {
         releaseJoin();
         await pendingJoin;
 
+        expect(observer.frames.filter((frame) => frame.type === "whisper").map((frame) => frame.data)).toStrictEqual([{ echo: { hi: 1 } }]);
         expect(joining.frames.filter((frame) => frame.type === "whisper")).toEqual([]);
     });
 
@@ -737,7 +746,7 @@ describe("shardDO rooms", () => {
     });
 
     it("still runs onLeave for a leave that arrives while the queue is full", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const a = new FakeSocket({ subs: {}, userId: "user-a" });
         let releaseJoin: () => void = () => undefined;
@@ -755,7 +764,34 @@ describe("shardDO rooms", () => {
                 return undefined;
             },
         });
-        (shard as unknown as { allowWhisper: () => boolean }).allowWhisper = () => true;
+        const internals = shard as unknown as {
+            allowWhisper: () => boolean;
+            dispatchRoomEvent: (ws: unknown, topic: string, kind: string, ...rest: unknown[]) => Promise<boolean>;
+            logs: { entries: () => { message: string }[] };
+        };
+
+        internals.allowWhisper = () => true;
+
+        // A message reaches the room queue (or its cap) a few awaits later than a leave drops
+        // membership, so a leave sent alongside them overtakes them and the queue never fills.
+        // It is sent only once all seventy messages have been queued or refused.
+        const dispatchRoomEvent = internals.dispatchRoomEvent.bind(shard);
+        const messagesDispatched = Promise.withResolvers<undefined>();
+        let messages = 0;
+
+        internals.dispatchRoomEvent = (ws, topic, kind, ...rest) => {
+            const queued = dispatchRoomEvent(ws, topic, kind, ...rest);
+
+            if (kind === "message") {
+                messages += 1;
+
+                if (messages === 70) {
+                    messagesDispatched.resolve(undefined);
+                }
+            }
+
+            return queued;
+        };
 
         const pending = [send(shard, a, { topic: "room:chat", type: "whisper_subscribe" })];
         await joinEntered.promise;
@@ -764,11 +800,15 @@ describe("shardDO rooms", () => {
         for (let index = 0; index < 70; index += 1) {
             pending.push(send(shard, a, { data: index, topic: "room:chat", type: "whisper" }));
         }
+
+        await messagesDispatched.promise;
         pending.push(send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" }));
 
         releaseJoin();
         await Promise.all(pending);
 
+        // The queue really was full: the messages past the cap were refused.
+        expect(internals.logs.entries().some((entry) => entry.message.startsWith("room event refused"))).toBe(true);
         // The leave is queued even at the cap, so the room's onLeave runs.
         expect(roomCalls(shard).at(-1)?.args["kind"]).toBe("leave");
     });
