@@ -91,7 +91,11 @@ loop do
       until retry_stop
         due = client.next_subscription_retry_at
         sleep(due ? (due - Lunora.monotonic_now).clamp(0.0, 1.0) : 1.0)
-        client.retry_due_subscriptions unless retry_stop
+        begin
+          client.retry_due_subscriptions unless retry_stop
+        rescue StandardError
+          nil # a write to a dying socket: the read loop below sees it end, and the pacer keeps going
+        end
       end
     end
     report = client.flush_offline_queue # HTTP replay; transient failures stay queued
