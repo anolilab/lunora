@@ -4368,7 +4368,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it. Best-effort only in that a failure can't fail this dispatch — a
-        // missed release is NOT reconciled and leaks the slot (see
+        // missed release holds the slot until the scheduler's claim ceiling (see
         // `releasePoolSlot`).
         await releasePoolSlot(candidate);
 

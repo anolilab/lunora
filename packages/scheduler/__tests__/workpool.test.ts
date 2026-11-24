@@ -302,8 +302,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect((state.storageMap.get("pool:p") as { inFlight: number }).inFlight).toBe(1);
 
         // Cancelling the queued (never-dispatched) job must NOT touch the slot
-        // held by the dispatched one — releaseSlot is a no-op for an id that
-        // isn't in flight.
+        // held by the dispatched one.
         await scheduler.fetch(post("/cancel", { id: queuedId }));
 
         expect((state.storageMap.get("pool:p") as { inFlight: number }).inFlight).toBe(1);
@@ -716,7 +715,7 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
 
         await scheduler.alarm();
 
-        // Backpressured by its own slot it could never re-fire, and nothing else would release it.
+        // Backpressured by its own slot it could not re-fire until the claim ceiling reclaimed it.
         expect(scheduler.dispatched.map((record) => record.id)).toStrictEqual([id]);
         expect(poolIds(state, "p")).toStrictEqual([id]);
     });

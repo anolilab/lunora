@@ -657,15 +657,15 @@ describe("schedulerDO dispatch lease — claiming an already-leased record", () 
         expect(state.storageMap.has("id:job-0")).toBe(true);
     });
 
-    it("re-claims an expired lease once through the slot the lost attempt still holds", async () => {
+    it("re-claims an expired lease once, on one slot, after the lost attempt's slot is reclaimed", async () => {
         expect.hasAssertions();
 
         const at = Date.now();
         const advanceTo = pinClock(at);
         const { state, successor } = await leaseThenLoseInstance({ maxConcurrency: 1, pool: "p" });
 
-        // Nothing released the lost instance's reservation. The record re-enters on its own slot
-        // rather than being backpressured by it forever, and takes no second one.
+        // Nothing released the lost instance's reservation, but it is past the claim ceiling now:
+        // the re-claim is not backpressured by it, and the pool ends with one slot, not two.
         advanceTo(at + DISPATCH_LEASE_MS + 1);
 
         const redrain = successor.alarm();

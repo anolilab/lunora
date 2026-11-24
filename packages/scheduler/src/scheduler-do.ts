@@ -389,7 +389,7 @@ interface PoolSlot {
 
 /** Durable per-pool state stored under `pool:<name>`. */
 interface PoolState {
-    /** `slots.length`, kept on the row for `/status`. */
+    /** `slots.length`. */
     inFlight: number;
 
     maxConcurrency: number;
@@ -620,9 +620,9 @@ class SchedulerDO {
     }
 
     /**
-     * A row written before slots had owners (`inFlightIds`, or a bare counter) reads as empty: its
-     * holders' completions name owners it never recorded, so it could only ever be freed by hand.
-     * The cost is one pass where those jobs run beside new ones past the cap.
+     * A row in an older shape (`inFlightIds`, a bare counter, or slots without `at`) reads as empty:
+     * it records neither who owns a slot nor when its attempt started. The cost is one pass where
+     * those jobs run beside new ones past the cap.
      */
     private static poolFromRow(stored: PoolState | undefined, now: number, maxConcurrencyHint?: number): PoolState {
         const maxConcurrency = stored?.maxConcurrency ?? SchedulerDO.normalizeConcurrency(maxConcurrencyHint, 1);
@@ -1478,8 +1478,7 @@ class SchedulerDO {
      * claim ceiling). The lock is what
      * keeps two drain lanes from both reading the same pre-reservation row and
      * both believing a slot was free — without it the pool oversubscribes past
-     * `maxConcurrency` and one holder is dropped from `slots`, so its
-     * slot is never released.
+     * `maxConcurrency` and one holder is dropped from `slots`.
      */
     private async reservePoolSlot(record: ScheduleRecord): Promise<"reserved" | false | { reenteredFrom: number }> {
         const poolName = record.pool;
@@ -1839,7 +1838,7 @@ class SchedulerDO {
     /**
      * Release a pool slot when the runtime reports an action finished. This is
      * the durable-semaphore decrement: dispatch() only KICKS the action and
-     * holds the slot; the runtime calls back here (`POST /complete { id }`) once
+     * holds the slot; the runtime calls back here (`POST /complete { pool, id, dedupKey }`) once
      * the action settles, freeing the slot for the next queued job. Idempotent
      * and safe if the job/pool is already gone.
      */
