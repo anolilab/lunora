@@ -122,6 +122,63 @@ describe("createWorker — workpool slot renewal", () => {
         expect(renewals()).toHaveLength(2);
         expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
     });
+
+    it("logs a renewal the scheduler refuses, and stops renewing on a 4xx", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        let renewals = 0;
+        const scheduler: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        if (new URL(request.url).pathname !== "/pool/renew") {
+                            return Response.json({ released: true }, { status: 200 });
+                        }
+
+                        renewals += 1;
+
+                        return Response.json({ error: { code: "NOT_FOUND", message: "no such route" } }, { status: 404 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        let settle: (response: Response) => void = () => {};
+        const reached = Promise.withResolvers<undefined>();
+        const heldShard: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        reached.resolve(undefined);
+
+                        return new Promise<Response>((resolve) => {
+                            settle = resolve;
+                        });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: scheduler, shardDO: heldShard });
+        const running = dispatch(worker, { args: {}, attempt: "attempt-1", dedupKey: "job-1-first", functionPath: "jobs:sweep", id: "job-1", pool: "stripe" });
+
+        await reached.promise;
+        await vi.advanceTimersByTimeAsync(CRON_LEASE_RENEW_MS * 3);
+
+        expect(renewals).toBe(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("404"));
+
+        settle(Response.json({ result: null }, { status: 200 }));
+        await running;
+        warn.mockRestore();
+    });
 });
 
 describe("createWorker — workpool slot release", () => {

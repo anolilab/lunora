@@ -4196,6 +4196,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             resolveShard(schedulerDO, instanceName)
                 .fetch(new Request("https://scheduler.internal/pool/renew", { body, headers: { "content-type": "application/json" }, method: "POST" }))
                 .then(async (response) => {
+                    if (!response.ok) {
+                        // A 4xx (a body the scheduler refuses, a scheduler without the route) never
+                        // succeeds on a retry; a 5xx may.
+                        if (response.status < 500) {
+                            clearInterval(timer);
+                        }
+
+                        throw new Error(`SchedulerDO /pool/renew answered ${String(response.status)}`);
+                    }
+
                     const answer: { renewed?: unknown } = await response.json();
 
                     if (answer.renewed === false) {
