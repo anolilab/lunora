@@ -510,6 +510,14 @@ const OWN_CLAIMS_RETRY_BASE_MS = 500;
 const DECLARED_SESSION_RETRY_BASE_MS = 1000;
 const DECLARED_SESSION_RETRY_MAX_MS = 30_000;
 
+/**
+ * How long a `/get-session` probe may take, request and body together. Every identity
+ * gate holds while one is outstanding, and `fetch` has no deadline of its own: a stalled
+ * proxy or a dead keep-alive would otherwise hold early writes and cached reads for the
+ * life of the page.
+ */
+const SESSION_PROBE_TIMEOUT_MS = 10_000;
+
 /** Longest a supplementary socket waits on a ticket provider before it mints again: a provider that never settles must not stall the channel. */
 const WS_TICKET_MINT_TIMEOUT_MS = 10_000;
 
@@ -1113,6 +1121,13 @@ class LunoraClient {
      */
     private readonly retiredProvisionalStamps = new Set<string>();
 
+    /**
+     * The `identityQuestions` count when the current provisional stamp was minted. An
+     * answer to a question asked before then — a socket upgraded under the session a
+     * change replaced — describes that session, so it may not bind the stamp.
+     */
+    private provisionalStampQuestion = 0;
+
     /** The identity this client settled on first, which `provisionalStamp` stands for; `undefined` until then. */
     private provisionalBinding: { identity: string | null } | undefined;
 
@@ -1539,14 +1554,9 @@ class LunoraClient {
 
         const newIdentity = this.identityFingerprint();
 
-        // The first identity established binds a provisional stamp, whichever
-        // route names it: an adopted answer, or a bearer the app set itself.
         // Before any verdict below, so the flush this call ends with judges the
-        // stamp by the identity it stands for. `null` names nobody here — an
-        // adopted "no session" answer binds it in `adoptCookieSubject`.
-        if (newIdentity !== null) {
-            this.bindProvisionalStamp(newIdentity);
-        }
+        // stamp by the identity it stands for.
+        this.bindBearerProvisionalStamp(token, newIdentity);
 
         // "The same credential" needs a credential. `!tokenChanged` proves one
         // only when there IS a token: on a cookie app every identity — the
@@ -2012,16 +2022,31 @@ class LunoraClient {
         this.sessionProbeGeneration = this.identityQuestions;
 
         const requestGeneration = this.sessionProbeGeneration;
+        // A probe past its deadline is a probe that got no answer: aborted, and rejected
+        // like an unreachable endpoint. Nothing awaits it afterwards, so a late response
+        // is never adopted.
+        const abort = new AbortController();
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<never>((_resolve, reject) => {
+            deadlineTimer = setTimeout(() => {
+                abort.abort();
+                reject(new Error(`session probe timed out after ${String(SESSION_PROBE_TIMEOUT_MS)}ms`));
+            }, SESSION_PROBE_TIMEOUT_MS);
+        });
 
         try {
             // Deliberately un-caught: a rejection here means the endpoint was
             // unreachable, and nothing about the session is known — including for
             // `adoptResolvedSubject`, which must not run on a non-answer.
-            const response = await this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
-                credentials: "include",
-                headers,
-                method: "GET",
-            });
+            const response = await Promise.race([
+                this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
+                    credentials: "include",
+                    headers,
+                    method: "GET",
+                    signal: abort.signal,
+                }),
+                deadline,
+            ]);
 
             if (!response.ok) {
                 // A response, and therefore an answer — see `identitySettled`.
@@ -2045,7 +2070,7 @@ class LunoraClient {
 
             // better-auth returns `{ user, session }` when authenticated and
             // `null` (or an empty body) when not. Narrow defensively.
-            const body: { user?: User } | null = await response.json();
+            const body = (await Promise.race([response.json(), deadline])) as { user?: User } | null;
             // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
             const user = body?.user ?? null;
 
@@ -2057,6 +2082,7 @@ class LunoraClient {
 
             return user;
         } finally {
+            clearTimeout(deadlineTimer);
             this.releaseSessionProbe();
         }
     }
@@ -8948,6 +8974,18 @@ class LunoraClient {
     }
 
     /**
+     * Bind the provisional stamp to a bearer identity the app set itself. Bearer only:
+     * a cookie answer arrives as `setAuthToken(null, subject)` and binds in
+     * `adoptCookieSubject`, which can tell a stale answer from a current one; and
+     * `null` names nobody, which only an adopted "no session" answer may bind.
+     */
+    private bindBearerProvisionalStamp(token: string | null, identity: string | null): void {
+        if (token !== null && identity !== null) {
+            this.bindProvisionalStamp(identity);
+        }
+    }
+
+    /**
      * A session change reported before anything bound the provisional stamp —
      * a sign-in or sign-out here, or in another tab — means the cookie the
      * pending writes were composed under is gone. Binding them to the identity
@@ -8961,6 +8999,7 @@ class LunoraClient {
 
         this.retiredProvisionalStamps.add(this.provisionalStamp);
         this.provisionalStamp = `${PROVISIONAL_STAMP_PREFIX}${nextId()}`;
+        this.provisionalStampQuestion = this.identityQuestions;
     }
 
     /**
@@ -9157,9 +9196,12 @@ class LunoraClient {
 
         this.identityAnsweredAt = question;
         this.identitySettled = true;
-        // The answer's own fingerprint, bound before `setAuthToken` flushes.
-        // eslint-disable-next-line unicorn/no-null -- `null` is the fingerprint of nobody
-        this.bindProvisionalStamp(subject === null ? null : `subj:${subject}`);
+        // The answer's own fingerprint, bound before `setAuthToken` flushes — unless the
+        // question predates the stamp: then it describes the session a change retired.
+        if (question > this.provisionalStampQuestion) {
+            // eslint-disable-next-line unicorn/no-null -- `null` is the fingerprint of nobody
+            this.bindProvisionalStamp(subject === null ? null : `subj:${subject}`);
+        }
         // eslint-disable-next-line unicorn/no-null -- a cookie session holds no token
         this.setAuthToken(null, subject);
 

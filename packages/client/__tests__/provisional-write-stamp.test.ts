@@ -242,6 +242,37 @@ describe("a write stamped before the first session answer", () => {
         expect(client.writeIdentityStamp()).not.toBe(early);
     });
 
+    it("is not bound by a stale socket answer from the session a change replaced", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+        vi.stubGlobal("document", {});
+
+        const { answerProbe, client } = cookieClient();
+
+        // A socket upgraded under alice's cookie: its identity frame is still on the way.
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        // The session changes to bob before anything answered, and a write is composed.
+        const change = notifySessionChanged();
+        const later = client.writeIdentityStamp();
+
+        // alice's delayed frame lands first, then bob's probe answers.
+        sockets.at(-1)?.receive({ subject: "user-a", type: "identity" });
+        await settle();
+        await answerProbe(bob);
+        await change;
+
+        expect(client.currentIdentity()).toBe("subj:user-b");
+        expect(client.replayIdentityVerdict(later).verdict).toBe("match");
+
+        client.close();
+        vi.unstubAllGlobals();
+    });
+
     it("follows a same-credential relabel, so a token refresh keeps it", async () => {
         expect.hasAssertions();
 
@@ -570,11 +601,13 @@ describe("a page whose session source is declared (`lunoraSessionSync()`)", () =
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
         try {
-            // The first probe and six re-asks fail: past any fixed retry count.
-            for (let attempt = 0; attempt < 7; attempt += 1) {
+            // The first probe and six re-asks fail: past any fixed retry count. Each
+            // step advances exactly to the next re-ask (1s doubling, capped at 30s),
+            // short of that probe's own deadline.
+            for (const delay of [1000, 2000, 4000, 8000, 16_000, 30_000, 30_000]) {
                 pendingAnswers.shift()?.(new TypeError("network down"));
                 // eslint-disable-next-line no-await-in-loop -- each re-ask is scheduled only after the previous one fails
-                await vi.advanceTimersByTimeAsync(30_000);
+                await vi.advanceTimersByTimeAsync(delay);
 
                 expect(pendingAnswers).toHaveLength(1);
             }
@@ -587,6 +620,56 @@ describe("a page whose session source is declared (`lunoraSessionSync()`)", () =
         await settle();
 
         expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
+
+        client.close();
+    });
+
+    it("gives up on a probe that never answers, so the retry can ask again", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+        vi.stubGlobal("document", {});
+        declareSessionSource();
+
+        const { client, fetchMock, pendingAnswers } = cookieClient({ declared: true });
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        const probes = () => fetchMock.mock.calls.filter(([url]) => url.endsWith("/get-session"));
+
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        let stamp: null | string;
+
+        try {
+            // A stalled proxy: the first probe never answers at all.
+            stamp = client.writeIdentityStamp();
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(probes()).toHaveLength(1);
+
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            expect(probes()[0]?.[1].signal?.aborted).toBe(true);
+
+            await vi.advanceTimersByTimeAsync(1000);
+
+            expect(probes()).toHaveLength(2);
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // The re-ask is answered; the stalled one, answered late, changes nothing.
+        pendingAnswers.pop()?.(alice);
+        await settle();
+        pendingAnswers.pop()?.(bob);
+        await settle();
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
+        expect(client.currentIdentity()).toBe("subj:user-a");
 
         client.close();
     });
