@@ -658,8 +658,9 @@ class SchedulerDO {
 
     /**
      * The row with `attempt`'s share of the slot of `owner` under `jobId` given up, and the slot freed
-     * once no share is left (pure — the caller persists it). A completion that names no attempt frees
-     * the whole slot. Unchanged when `owner` holds none, so a re-delivered completion is a no-op.
+     * once no share is left (pure — the caller persists it). Unchanged when `owner` holds none, or no
+     * share named `attempt`, so a re-delivered completion is a no-op, and one that names no attempt
+     * cannot free a share a re-fire still runs under.
      */
     private static releaseOwner(pool: PoolState, owner: string, jobId: string | undefined, attempt: string | undefined): PoolState {
         const slots = pool.slots.flatMap((slot) => {
@@ -667,7 +668,7 @@ class SchedulerDO {
                 return [slot];
             }
 
-            const attempts = attempt === undefined ? [] : slot.attempts.filter((share) => share.token !== attempt);
+            const attempts = slot.attempts.filter((share) => share.token !== attempt);
 
             return attempts.length === 0 ? [] : [{ ...slot, attempts }];
         });

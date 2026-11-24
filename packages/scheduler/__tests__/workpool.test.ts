@@ -22,10 +22,14 @@ const get = (path: string): Request => new Request(`https://scheduler.internal${
 
 /** A scheduler that records dispatches and always succeeds the kick (slot held until /complete). */
 class TestScheduler extends SchedulerDO {
+    /** The pool-slot attempt token each dispatch carried, in dispatch order. */
+    public attempts: (string | undefined)[] = [];
+
     public dispatched: ScheduleRecord[] = [];
 
-    protected override async dispatch(record: ScheduleRecord): Promise<boolean> {
+    protected override async dispatch(record: ScheduleRecord, attempt?: string): Promise<boolean> {
         this.dispatched.push(record);
+        this.attempts.push(attempt);
 
         return true;
     }
@@ -71,7 +75,7 @@ class CompletingScheduler extends SchedulerDO {
 
             await this.fetch(
                 new Request("https://scheduler.internal/complete", {
-                    body: JSON.stringify({ dedupKey: this.completeOwner, pool: this.pool }),
+                    body: JSON.stringify({ attempt: `${this.completeOwner}-attempt`, dedupKey: this.completeOwner, id: "job-A", pool: this.pool }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
                 }),
@@ -246,7 +250,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect(before.inFlight).toBe(2);
 
         const completed = scheduler.dispatched[0];
-        const callback = { dedupKey: completed?.dedupKey, id: completed?.id, pool: "p" };
+        const callback = { attempt: scheduler.attempts[0], dedupKey: completed?.dedupKey, id: completed?.id, pool: "p" };
 
         // The runtime completion callback is at-least-once: the SAME job
         // reports complete twice. Only one slot must be released.
@@ -265,7 +269,11 @@ describe("schedulerDO — workpool concurrency", () => {
 
         const state = createFakeState();
         // Pool "p", cap 3, with one job (job-A) already in flight.
-        state.storageMap.set("pool:p", { inFlight: 1, maxConcurrency: 3, slots: [{ id: "job-A", kicked: true, owner: "job-A-key" }] });
+        state.storageMap.set("pool:p", {
+            inFlight: 1,
+            maxConcurrency: 3,
+            slots: [{ attempts: [{ at: Date.now(), token: "job-A-key-attempt" }], id: "job-A", kicked: true, owner: "job-A-key" }],
+        });
 
         const now = Date.now();
         const scheduler = new CompletingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, "job-A-key", "p");
@@ -922,8 +930,10 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
     };
 
     /** What the runtime sends once the attempt dispatched as `record` settles. */
-    const complete = async (scheduler: SchedulerDO, record: ScheduleRecord | undefined): Promise<void> => {
-        await scheduler.fetch(post("/complete", { dedupKey: record?.dedupKey, id: record?.id, pool: "p" }));
+    const complete = async (scheduler: ScriptedScheduler, record: ScheduleRecord | undefined): Promise<void> => {
+        const attempt = record === undefined ? undefined : scheduler.attempts[scheduler.dispatched.lastIndexOf(record)];
+
+        await scheduler.fetch(post("/complete", { attempt, dedupKey: record?.dedupKey, id: record?.id, pool: "p" }));
     };
 
     /** Past the backpressure delay, so a job re-armed for want of a slot is due again. */
@@ -1063,7 +1073,7 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
         expect(scheduler.dispatched).toHaveLength(2);
     });
 
-    it("keeps a declined job's slot when it is cancelled, for the attempt still running to free", async () => {
+    it("keeps a declined job's slot when it is cancelled, for the attempt still running, until the ceiling", async () => {
         expect.assertions(3);
 
         const scheduler = new ScriptedScheduler(createFakeState(), origin);
@@ -1071,8 +1081,6 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
 
         scheduler.outcomes = ["in-progress"];
         await scheduler.alarm();
-
-        const running = scheduler.dispatched[0];
 
         await scheduler.fetch(post("/cancel", { id: declined }));
         await schedule(scheduler, 1);
@@ -1082,8 +1090,8 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
         // The attempt the shard declined for is still running on the only slot.
         expect(scheduler.dispatched).toHaveLength(1);
 
-        await complete(scheduler, running);
-        afterBackpressure();
+        // Its token is not one this slot ever had, so its share lapses at the ceiling.
+        vi.setSystemTime(Date.now() + DISPATCH_LEASE_MS);
         await scheduler.alarm();
 
         expect(scheduler.dispatched).toHaveLength(2);
@@ -1449,6 +1457,37 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         expect(dispatchedIds(scheduler)).toContain(waiting);
     });
 
+    it("keeps a re-fire's share when a completion names the owner but no attempt", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const refired = await schedule(scheduler);
+        const owner = (state.storageMap.get(`id:${refired}`) as ScheduleRecord).dedupKey;
+
+        heldByEarlierAttempt(state, refired);
+        scheduler.outcomes = ["hold"];
+
+        const kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        const drain = scheduler.alarm();
+
+        await kicked;
+        scheduler.onKick = undefined;
+        await scheduler.fetch(post("/complete", { dedupKey: owner, id: refired, pool: "p" }));
+
+        const waiting = await schedule(scheduler);
+
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        scheduler.settleHeld?.(true);
+        await drain;
+    });
+
     it("keeps a renewal the running attempt made while a re-fire beside it failed", async () => {
         expect.assertions(1);
 
@@ -1533,8 +1572,6 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         scheduler.outcomes = ["in-progress"];
         await scheduler.alarm();
 
-        const running = scheduler.dispatched[0];
-
         await scheduler.fetch(post("/cancel", { id: "reused" }));
         await schedule(scheduler, { id: "reused" });
         afterBackpressure();
@@ -1543,8 +1580,8 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         // The attempt the shard declined for still runs on the only slot.
         expect(scheduler.dispatched).toHaveLength(1);
 
-        await scheduler.fetch(post("/complete", { dedupKey: running?.dedupKey, id: running?.id, pool: "p" }));
-        afterBackpressure();
+        // Its token is not one this slot ever had, so its share lapses at the ceiling.
+        advance(DISPATCH_LEASE_MS);
         await scheduler.alarm();
 
         expect(scheduler.dispatched).toHaveLength(2);
