@@ -14,7 +14,7 @@ import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch
 import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { collectPages } from "../../../shared/collect-pages";
 import { DEDUP_KEY_GRAMMAR_MESSAGE, isDedupKey } from "../../../shared/dedup-key";
-import { DISPATCH_DECLINED_HEADER } from "../../../shared/dispatch-claim";
+import { DISPATCH_CLAIM_CEILING_MS, DISPATCH_DECLINED_HEADER } from "../../../shared/dispatch-claim";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
 import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
@@ -67,7 +67,7 @@ import { buildAuthJurisdictionMoveRpc } from "./auth-jurisdiction-move-rpc";
 import { buildBackupAdminRoutes } from "./backup-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, withBodyLimit } from "./body-readers";
-import { beginCronRun, CRON_LEASE_RENEW_MS, endCronRun } from "./cron-runs";
+import { beginCronRun, endCronRun } from "./cron-runs";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import { createDeploymentPause, PAUSE_PATH, PAUSED_QUEUE_RETRY_SECONDS } from "./deployment-pause";
 import type { FunctionArgumentDescriptor } from "./describe-args";
@@ -4175,9 +4175,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
-     * Renew the pool slot of the attempt `candidate` names while its handler runs, on the cron
-     * lease's cadence (a third of the scheduler's fifteen-minute claim ceiling, so two renewals can
-     * fail before the slot lapses). Without it a job outliving the ceiling loses its slot and another
+     * Renew the pool slot of the attempt `candidate` names while its handler runs, every third of
+     * the scheduler's claim ceiling (`DISPATCH_CLAIM_CEILING_MS`, which its slots lapse at), so two
+     * renewals can fail before the slot does. Without it a job outliving the ceiling loses its slot and another
      * pooled job runs beside it past `maxConcurrency`. Returns the function that stops it.
      *
      * A renewal that fails is only logged: the slot then lapses at the ceiling, as it would have.
@@ -4220,7 +4220,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         `[lunora] pooled job "${id}" could not renew its slot in pool "${pool}": ${error instanceof Error ? error.message : String(error)}`,
                     );
                 });
-        }, CRON_LEASE_RENEW_MS);
+        }, DISPATCH_CLAIM_CEILING_MS / 3);
 
         return () => {
             clearInterval(timer);

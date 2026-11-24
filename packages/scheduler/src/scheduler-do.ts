@@ -1,4 +1,4 @@
-import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
+import { DISPATCH_CLAIM_CEILING_MS, DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import { jsonResponse } from "../../../shared/json-response";
 import { SCHEDULER_SIGNATURE_HEADER, SCHEDULER_TIMESTAMP_HEADER, signSchedulerDispatch } from "../../../shared/scheduler-dispatch";
 import resolveScheduleId from "./resolve-schedule-id";
@@ -257,7 +257,8 @@ const MAX_CONCURRENT_DISPATCHES = 6;
  * governs only how soon a genuinely lost job is retried, not whether an
  * overlapping one runs twice.
  */
-const DISPATCH_LEASE_MS = 900_000; // fifteen minutes
+// Fifteen minutes, read from the value the shard claim and the runtime's slot renewals share.
+const DISPATCH_LEASE_MS: number = DISPATCH_CLAIM_CEILING_MS;
 
 /**
  * How long a terminal (`succeeded` / `canceled` / purged `failed`) record keeps
