@@ -1,21 +1,5 @@
 [
     {
-        "file": "packages/cli/__tests__/commands/data-transfer.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/cli/__tests__/commands/dev.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/cli/__tests__/commands/mcp-serve.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/cli/__tests__/util/tui-tasks-settle.test.ts",
-        "reason": "a real-clock timeout sentinel in a race, pending conversion"
-    },
-    {
         "file": "packages/db/__tests__/scoped-mutators.test.ts",
         "reason": "a real-clock timeout sentinel in a race, pending conversion"
     },

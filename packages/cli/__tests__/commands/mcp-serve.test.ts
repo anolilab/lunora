@@ -464,27 +464,26 @@ describe("lunora mcp serve", () => {
         it("serves until the client disconnects, rather than exiting once connected", async () => {
             expect.assertions(2);
 
-            const server: ClosableServer = {};
+            // Registering `onclose` is how the command parks on the server; the setter marks that moment.
+            const parked = Promise.withResolvers<undefined>();
+            let onclose: (() => void) | undefined;
+            const server: ClosableServer = {
+                get onclose() {
+                    return onclose;
+                },
+                set onclose(callback) {
+                    onclose = callback;
+                    parked.resolve(undefined);
+                },
+            };
             const pending = runMcpServe({ cwd: workdir, version: "1.0.0", writeError: () => undefined }, async () => server);
 
-            let settled = false;
-
-            pending
-                .then(() => {
-                    settled = true;
-
-                    return undefined;
-                })
-                .catch(() => undefined);
-
-            await new Promise((resolve) => {
-                setTimeout(resolve, 10);
-            });
+            const outcome = await Promise.race([parked.promise.then(() => "serving"), pending.then(() => "settled")]);
 
             // Still serving: the command framework exits with whatever this
             // resolves to, so resolving at connect time would kill the server
             // before its first request.
-            expect(settled).toBe(false);
+            expect(outcome).toBe("serving");
 
             server.onclose?.();
 

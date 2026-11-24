@@ -73,17 +73,12 @@ const asTty = async <T>(body: () => Promise<T>): Promise<T> => {
     }
 };
 
-/** Settle `promise` to its message, or `"hung"` if it has not settled within `ms`. */
-const settleOrHang = async (promise: Promise<unknown>, ms: number): Promise<unknown> =>
-    await Promise.race([
-        promise.then(
-            () => "resolved",
-            (error: unknown) => (error instanceof Error ? error.message : "rejected"),
-        ),
-        new Promise((resolve) => {
-            setTimeout(resolve, ms, "hung");
-        }),
-    ]);
+/** Settle `promise` to its message. A hang is left to the test timeout: the run either settles or it is the bug. */
+const settleToMessage = async (promise: Promise<unknown>): Promise<unknown> =>
+    await promise.then(
+        () => "resolved",
+        (error: unknown) => (error instanceof Error ? error.message : "rejected"),
+    );
 
 describe("tuiTasks settlement wait", () => {
     afterEach(() => {
@@ -103,7 +98,7 @@ describe("tuiTasks settlement wait", () => {
         let ran = false;
 
         const outcome = await asTty(async () =>
-            settleOrHang(
+            settleToMessage(
                 tuiTasks(
                     [
                         {
@@ -115,7 +110,6 @@ describe("tuiTasks settlement wait", () => {
                     ],
                     { end: "done", start: "working…" },
                 ),
-                500,
             ),
         );
 
@@ -144,7 +138,7 @@ describe("tuiTasks settlement wait", () => {
         };
 
         const outcome = await asTty(async () =>
-            settleOrHang(
+            settleToMessage(
                 tuiTasks(
                     [
                         {
@@ -159,7 +153,6 @@ describe("tuiTasks settlement wait", () => {
                     ],
                     { end: "done", start: "working…" },
                 ),
-                2000,
             ),
         );
 

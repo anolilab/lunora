@@ -2,13 +2,35 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { exportEndLine } from "../../../../shared/export-end";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runExportCommand, runImportCommand } from "../../src/commands/data-transfer";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+
+/** One promise per write stream the export opens, settled by that stream's `close`. */
+const writeStreamClosed = vi.hoisted((): Promise<void>[] => []);
+
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        createWriteStream: (...args: Parameters<typeof actual.createWriteStream>) => {
+            const stream = actual.createWriteStream(...args);
+
+            writeStreamClosed.push(
+                new Promise((resolve) => {
+                    stream.once("close", resolve);
+                }),
+            );
+
+            return stream;
+        },
+    };
+});
 
 /** Decode a request body for assertions — the fetch shim also carries blob bytes. */
 const bodyText = (body: string | Uint8Array | undefined): string => {
@@ -48,6 +70,7 @@ let workDir: string;
 describe("lunora data-transfer", () => {
     beforeEach(() => {
         workDir = mkdtempSync(join(tmpdir(), "lunora-cli-data-transfer-"));
+        writeStreamClosed.length = 0;
     });
 
     afterEach(() => {
@@ -207,7 +230,7 @@ describe("lunora data-transfer", () => {
         });
 
         it("leaves no staged .partial behind once a mid-stream failure has been reported", async () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const outPath = join(workDir, "dump.ndjson");
             // Errors before the stream's lazy open can finish: the case where an
@@ -225,10 +248,11 @@ describe("lunora data-transfer", () => {
                 "connection reset",
             );
 
-            // Give a still-pending open the chance to land before looking.
-            await new Promise((resolve) => {
-                setTimeout(resolve, 50);
-            });
+            // A write stream destroyed mid-open still finishes the open before it emits `close`, so once
+            // the staged stream has closed, a pending open has landed and created the file if it was going to.
+            expect(writeStreamClosed).toHaveLength(1);
+
+            await writeStreamClosed[0];
 
             expect(readdirSync(workDir).filter((entry) => entry.endsWith(".partial"))).toStrictEqual([]);
         });
