@@ -1,5 +1,7 @@
+import { dirname, relative, sep } from "node:path";
+
 import type { Finding } from "@lunora/advisor";
-import type { Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
+import type { ExportDeclaration, Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
 import { isBindingName } from "../reserved-words";
@@ -35,7 +37,7 @@ import { exportedVariableDeclarationsOf, exportNamesOfDeclaration, isAddressable
  * Assembling `${kind}.input(…).${kind}(…)` printed `query.….query(…)` for every
  * kind, which handed an action author a query to paste.
  */
-const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string; note?: string }>([
+const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string; note?: string; security?: true }>([
     ["AgentDefinition", { call: "defineAgent({ … })", file: "agents" }],
     ["ContainerDefinition", { call: "defineContainer({ … })", file: "containers" }],
     ["QueueDefinition", { call: "defineQueue({ … })", file: "queues", note: "A dropped queue has no caller to fail — its consumer is simply never wired." }],
@@ -80,6 +82,8 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string;
             // than a dead feature: an undiscovered authorizer leaves the manifest
             // empty, and an empty manifest means allow-all.
             note: "A dropped authorizer has no caller to fail — the whisper topics it was meant to gate silently stay open to every socket on the shard.",
+            // Fails open, so its finding is an ERROR that blocks `vite build` and deploy rather than a warning.
+            security: true,
         },
     ],
     [
@@ -114,7 +118,7 @@ const isRegistered = ({ byName, byPath }: Registrations, relativePath: string, e
     byPath.has(`${relativePath}:${exportName}`) || byName.has(exportName);
 
 /** A binding the type checker says is a registered procedure. */
-type Registration = { call: string; file?: string; note?: string; typeName: string };
+type Registration = { call: string; file?: string; note?: string; security?: true; typeName: string };
 
 /** A registered procedure used to probe whether the checker resolves anything at all. */
 type Witness = { declaration: VariableDeclaration; exportName: string; relativePath: string };
@@ -128,6 +132,35 @@ type Witness = { declaration: VariableDeclaration; exportName: string; relativeP
  * see {@link typeCheckUnavailable}.
  */
 const resolves = (type: Type): boolean => !type.isAny();
+
+/**
+ * The registered type `type` is, or `undefined`. An interface that extends one is one too
+ * (`interface Gate extends RegisteredWhisperAuthorizer {}`): its own name hides the base, and the
+ * value is still the registration at runtime.
+ */
+const registeredTypeName = (type: Type, seen: Set<Type> = new Set()): string | undefined => {
+    if (seen.has(type)) {
+        return undefined;
+    }
+
+    seen.add(type);
+
+    const name = type.getAliasSymbol()?.getName() ?? type.getSymbol()?.getName();
+
+    if (name !== undefined && REGISTRATION_BY_TYPE_NAME.has(name)) {
+        return name;
+    }
+
+    for (const base of type.isInterface() ? type.getBaseTypes() : []) {
+        const found = registeredTypeName(base, seen);
+
+        if (found !== undefined) {
+            return found;
+        }
+    }
+
+    return undefined;
+};
 
 /**
  * The registration of a binding, or `undefined` when it is not one.
@@ -150,7 +183,7 @@ const registrationOf = (node: Node): Registration | undefined => {
         return undefined;
     }
 
-    const typeName = type.getAliasSymbol()?.getName() ?? type.getSymbol()?.getName();
+    const typeName = registeredTypeName(type);
     const registration = typeName === undefined ? undefined : REGISTRATION_BY_TYPE_NAME.get(typeName);
 
     return registration === undefined || typeName === undefined ? undefined : { ...registration, typeName };
@@ -230,6 +263,18 @@ const BINDING_EXPORT_NAME: MissedRegistration = {
     remediation: "Export it under a plain identifier: `export const <name> = …` (an extra `export default <name>` is fine).",
 };
 
+/**
+ * `export { gate } from "../src/auth/whisper"` (or an import exported again): discovery reads
+ * only declarations made in a `lunora/` file, so a registration that lives elsewhere is never
+ * seen, however directly it was assigned where it lives.
+ */
+const reExportedFrom = (file: string): MissedRegistration => {
+    return {
+        cause: `it is re-exported from \`${file}\`, and codegen registers only what is declared in a file under \`lunora/\``,
+        remediation: "Define it in a file under `lunora/`, or assign it there as shown — a re-export is never followed.",
+    };
+};
+
 /** Why an exported binding that IS a registration by type was not registered, read off how it is exported. */
 const missedCauseOf = (declaration: VariableDeclaration, names: ReadonlyArray<string>, registration: Registration): MissedRegistration => {
     if (!names.some((name) => isAddressableExportName(name))) {
@@ -246,7 +291,7 @@ const missedCauseOf = (declaration: VariableDeclaration, names: ReadonlyArray<st
 };
 
 const findingFor = (relativePath: string, exportName: string, registration: Registration, line: number, indirection: MissedRegistration): Finding => {
-    const { call, file, note, typeName } = registration;
+    const { call, file, note, security, typeName } = registration;
     // The wrong module beats every other cause: nothing about how the value was
     // produced matters while codegen is not reading this file for this kind —
     // and telling someone to assign a registration they already assigned
@@ -254,6 +299,8 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
     const misplacedIn = file !== undefined && relativePath !== file ? file : undefined;
     const missed = misplacedIn === undefined ? indirection : wrongFile(misplacedIn);
     const suffix = note === undefined ? missed.remediation : `${note} ${missed.remediation}`;
+    // `default` and a string-literal export name are not binding names, so they cannot head a declaration.
+    const declaredName = isBindingName(exportName) ? exportName : "<name>";
 
     return {
         cacheKey: `procedure_not_registered:${relativePath}:${exportName}`,
@@ -262,10 +309,11 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
             "Codegen registers an export only when its initializer is literally the registering call and the module exports it under an identifier name — by the `export` keyword, a local `export { … }`, or `export default`. Written any other way it exists at runtime but never reaches the generated output — `_generated/api.ts` for a procedure, the lifecycle manifest for a hook or reactor — so a caller cannot address it and a hook never fires.",
         detail: `\`${exportName}\` in \`${relativePath}\` (line ${line.toString()}) has type \`${typeName}\` but was not registered — ${missed.cause}.`,
         facing: "INTERNAL",
-        level: "WARN",
-        metadata: { exportName, filePath: relativePath, line, typeName },
+        level: security === true ? "ERROR" : "WARN",
+        // `file` is the identity `advisor.accept` matches an ERROR on, in the `lunora/<path>.ts` form every static lint emits.
+        metadata: { exportName, file: `lunora/${relativePath}.ts`, filePath: relativePath, line, typeName },
         name: "procedure_not_registered",
-        remediation: misplacedIn === undefined ? `Assign the registration directly: \`export const ${exportName} = ${call};\`. ${suffix}` : suffix,
+        remediation: misplacedIn === undefined ? `Assign the registration directly: \`export const ${declaredName} = ${call};\`. ${suffix}` : suffix,
         title: "Procedure exists at runtime but is missing from the generated API",
     };
 };
@@ -328,9 +376,178 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registr
     return findings;
 };
 
-const fileFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => [
+/** The value an export specifier's name node spells: `kebab-name` for `"kebab-name"`. */
+const exportNameText = (node: Node): string => (Node.isStringLiteral(node) ? node.getLiteralValue() : node.getText());
+
+/** `export * from "…"`: `export * as ns from "…"` exports only the namespace binding, not its members. */
+const isPlainStarExport = (statement: ExportDeclaration): boolean => statement.isNamespaceExport() && statement.getNamespaceExport() === undefined;
+
+/** The line of the statement that exports `exportName` from `source`: its specifier, else an `export *` or `export default`. */
+const exportSiteLine = (source: SourceFile, exportName: string): number => {
+    for (const statement of source.getExportDeclarations()) {
+        const named = statement.getNamedExports();
+
+        if (named.some((specifier) => exportNameText(specifier.getAliasNode() ?? specifier.getNameNode()) === exportName)) {
+            return statement.getStartLineNumber();
+        }
+    }
+
+    if (exportName === "default") {
+        return source.getExportAssignments()[0]?.getStartLineNumber() ?? 1;
+    }
+
+    // The `export *` whose module supplies the name, not merely the first one.
+    const stars = source.getExportDeclarations().filter((statement) => isPlainStarExport(statement));
+    const supplier = stars.find((statement) => statement.getModuleSpecifierSourceFile()?.getExportedDeclarations().has(exportName) === true) ?? stars[0];
+
+    return supplier?.getStartLineNumber() ?? 1;
+};
+
+/** Whether the local binding `name` in `source` comes from an `import type` / `import { type … }`. */
+const isTypeOnlyImport = (source: SourceFile, name: string): boolean =>
+    source
+        .getImportDeclarations()
+        .some(
+            (statement) =>
+                (statement.isTypeOnly() && statement.getDefaultImport()?.getText() === name) ||
+                statement
+                    .getNamedImports()
+                    .some(
+                        (specifier) =>
+                            (specifier.getAliasNode() ?? specifier.getNameNode()).getText() === name && (statement.isTypeOnly() || specifier.isTypeOnly()),
+                    ),
+        );
+
+/** A declaration in the module itself shadows every `export *`; anything but a type ships a value. */
+const localValueSites = (source: SourceFile, exportName: string): boolean[] =>
+    (source.getExportedDeclarations().get(exportName) ?? [])
+        .filter(
+            (declaration) => declaration.getSourceFile() === source && !Node.isInterfaceDeclaration(declaration) && !Node.isTypeAliasDeclaration(declaration),
+        )
+        .map(() => false);
+
+/** One entry per `export { … }` naming `exportName`: whether that statement exports only the type. */
+const namedExportSites = (source: SourceFile, exportName: string): boolean[] =>
+    source.getExportDeclarations().flatMap((statement) =>
+        statement
+            .getNamedExports()
+            .filter((specifier) => exportNameText(specifier.getAliasNode() ?? specifier.getNameNode()) === exportName)
+            .map(
+                (specifier) =>
+                    statement.isTypeOnly() ||
+                    specifier.isTypeOnly() ||
+                    (!statement.hasModuleSpecifier() && isTypeOnlyImport(source, exportNameText(specifier.getNameNode()))),
+            ),
+    );
+
+/**
+ * Whether every statement that exports `exportName` from `source` exports only its type. The
+ * checker resolves `export type { gate }` to the same declaration a value export does, yet no
+ * value leaves the module, so there is no registration to drop.
+ *
+ * Fails closed: a module with no site that settles the question counts as exporting a value.
+ */
+const isTypeOnlyExport = (source: SourceFile, exportName: string, visiting: Set<SourceFile> = new Set()): boolean => {
+    visiting.add(source);
+
+    const sites = [...localValueSites(source, exportName), ...namedExportSites(source, exportName)];
+
+    // An `export *` counts even beside a named site: TypeScript lets `export type { gate }` shadow
+    // it, but the type export is erased and the star still ships the value at runtime. It ships a
+    // value only if its module does: `export type *`, or a star over a barrel that itself only
+    // `export type`s the name, carries none. A star never carries `default`. A module already on
+    // the path is no evidence either way, so it adds no site; one with nothing else left fails closed.
+    if (exportName !== "default") {
+        for (const statement of source.getExportDeclarations()) {
+            const target = isPlainStarExport(statement) ? statement.getModuleSpecifierSourceFile() : undefined;
+
+            if (target !== undefined && !visiting.has(target) && target.getExportedDeclarations().has(exportName)) {
+                sites.push(statement.isTypeOnly() || isTypeOnlyExport(target, exportName, visiting));
+            }
+        }
+    }
+
+    visiting.delete(source);
+
+    return sites.length > 0 && sites.every(Boolean);
+};
+
+/**
+ * Codegen's own output under `lunora/_generated/`, judged on the path relative to `lunora/` so a
+ * checkout under some other `_generated` directory, or app code in `src/_generated/`, is still read.
+ */
+const isGeneratedOutput = (lunoraDirectory: string, path: string): boolean => relative(lunoraDirectory, path).split(sep)[0] === "_generated";
+
+/**
+ * Registrations a `lunora/` file exports but does not declare: `export { gate } from "…"`,
+ * `import { gate } from "…"; export { gate }`, `export * from "…"`. Every walk above reads the
+ * file's own declarations, so these were invisible to this check as well as to discovery — and
+ * for a whisper authorizer that silence leaves its topics open.
+ *
+ * A declaration in another discovered `lunora/` file is that file's own pass's business: it is
+ * registered there or reported there, so the aggregating re-export is skipped. Codegen's
+ * `_generated/` output is skipped too: it holds Durable Object classes, not registrations.
+ */
+const reExportFindings = (
+    source: SourceFile,
+    relativePath: string,
+    registrations: Registrations,
+    walked: ReadonlySet<SourceFile>,
+    lunoraDirectory: string,
+): Finding[] => {
+    const findings: Finding[] = [];
+
+    for (const [exportName, declarations] of source.getExportedDeclarations()) {
+        // `export default onWhisper(…)` resolves to the exported expression, not a declaration.
+        const declaration = declarations.find(
+            (candidate) => Node.isVariableDeclaration(candidate) || Node.isBindingElement(candidate) || Node.isExportAssignment(candidate.getParent()),
+        );
+        const home = declaration?.getSourceFile();
+
+        if (
+            declaration === undefined ||
+            home === undefined ||
+            home === source ||
+            walked.has(home) ||
+            isGeneratedOutput(lunoraDirectory, home.getFilePath()) ||
+            isTypeOnlyExport(source, exportName)
+        ) {
+            continue;
+        }
+
+        const registration = registrationOf(declaration);
+
+        // A bare-name registration (a queue, workflow, agent or container elsewhere) says nothing
+        // about this binding; for a check that fails open only an exact path may vouch for it.
+        const registered =
+            registration?.security === true ? registrations.byPath.has(`${relativePath}:${exportName}`) : isRegistered(registrations, relativePath, exportName);
+
+        if (registration !== undefined && !registered) {
+            findings.push(
+                findingFor(
+                    relativePath,
+                    exportName,
+                    registration,
+                    exportSiteLine(source, exportName),
+                    reExportedFrom(relative(dirname(lunoraDirectory), home.getFilePath())),
+                ),
+            );
+        }
+    }
+
+    return findings;
+};
+
+const fileFindings = (
+    source: SourceFile,
+    relativePath: string,
+    registrations: Registrations,
+    walked: ReadonlySet<SourceFile>,
+    lunoraDirectory: string,
+): Finding[] => [
     ...namedExportFindings(source, relativePath, registrations),
     ...defaultExportFindings(source, relativePath, registrations),
+    ...reExportFindings(source, relativePath, registrations, walked, lunoraDirectory),
 ];
 
 /**
@@ -399,20 +616,18 @@ const typeCheckUnavailable = ({ exportName, relativePath }: Witness): Finding =>
 const discoverUnregisteredProcedures = (project: Project, lunoraDirectory: string, registrations: Registrations): Finding[] => {
     const findings: Finding[] = [];
     const witnesses: Witness[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        // Only files the discovery pass already loaded — never add one here, so
-        // this stays a read over work that has been done rather than a second
-        // parse of the tree.
+    // Only files the discovery pass already loaded — never add one here, so
+    // this stays a read over work that has been done rather than a second
+    // parse of the tree.
+    const sources = listLunoraSourceFiles(lunoraDirectory).flatMap((filePath) => {
         const source: SourceFile | undefined = project.getSourceFile(filePath);
 
-        if (source === undefined) {
-            continue;
-        }
+        return source === undefined ? [] : [{ relativePath: lunoraRelativePath(lunoraDirectory, filePath), source }];
+    });
+    const walked = new Set(sources.map(({ source }) => source));
 
-        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
-
-        findings.push(...fileFindings(source, relativePath, registrations));
+    for (const { relativePath, source } of sources) {
+        findings.push(...fileFindings(source, relativePath, registrations, walked, lunoraDirectory));
         witnesses.push(...registeredDeclarations(source, relativePath, registrations));
     }
 
