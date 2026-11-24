@@ -1,3 +1,7 @@
+## @lunora/server [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.279...@lunora/server@1.0.0-alpha.280) (2026-11-24)
+
+- fix(advisor): let reviewed WARN and INFO findings be accepted (#1685)
+
 ## @lunora/server [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.278...@lunora/server@1.0.0-alpha.279) (2026-11-23)
 
 - fix: keep migrate generate from overwriting, make presence follow room changes (#1643)

@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.440](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.439...@lunora/codegen@1.0.0-alpha.440) (2026-11-24)
+
+- fix(advisor): let reviewed WARN and INFO findings be accepted (#1685)
+
 ## @lunora/codegen [1.0.0-alpha.439](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.438...@lunora/codegen@1.0.0-alpha.439) (2026-11-24)
 
 - fix(auth)!: match duplicate emails on a canonical column (#1681)

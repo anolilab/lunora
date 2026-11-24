@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.207...@lunora/shard-engine@1.0.0-alpha.208) (2026-11-24)
+
+- fix(advisor): let reviewed WARN and INFO findings be accepted (#1685)
+
 ## @lunora/shard-engine [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.206...@lunora/shard-engine@1.0.0-alpha.207) (2026-11-23)
 
 - fix(shard-engine): keep indexes in step when an unsafe batch insert fails (#1639)

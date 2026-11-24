@@ -1,3 +1,7 @@
+## @lunora/advisor [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.295...@lunora/advisor@1.0.0-alpha.296) (2026-11-24)
+
+- fix(advisor): let reviewed WARN and INFO findings be accepted (#1685)
+
 ## @lunora/advisor [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.294...@lunora/advisor@1.0.0-alpha.295) (2026-11-14)
 
 - fix(codegen): scope kv, storage and container keys by identity only (#1588)
