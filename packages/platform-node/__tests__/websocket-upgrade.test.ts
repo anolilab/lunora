@@ -536,15 +536,10 @@ describe("node upgrade lifecycle", () => {
 
         await waitFor(() => entered);
 
-        const closed = server.close().then(() => "closed" as const);
-        const hung = new Promise<"hung">((resolve) => {
-            setTimeout(resolve, 2000, "hung" as const);
-        });
-        const outcome = await Promise.race([closed, hung]);
+        // A close that waited on the pending fetch would never settle; the test timeout reports that.
+        await expect(server.close()).resolves.toBeUndefined();
 
         client.destroy();
-
-        expect(outcome).toBe("closed");
     });
 });
 
