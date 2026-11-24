@@ -1,3 +1,7 @@
+## @lunora/scheduler [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.173...@lunora/scheduler@1.0.0-alpha.174) (2026-11-24)
+
+- fix(scheduler): stop a workpool exceeding its concurrency cap (#1655)
+
 ## @lunora/scheduler [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.172...@lunora/scheduler@1.0.0-alpha.173) (2026-11-23)
 
 - fix(scheduler): run a job scheduled under an id that already fired (#1652)

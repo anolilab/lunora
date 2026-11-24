@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.301...@lunora/runtime@1.0.0-alpha.302) (2026-11-24)
+
+- fix(scheduler): stop a workpool exceeding its concurrency cap (#1655)
+
 ## @lunora/runtime [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.300...@lunora/runtime@1.0.0-alpha.301) (2026-11-23)
 
 - fix: four data-path bugs in rank, sql-store and dispatch metrics (#1636)
