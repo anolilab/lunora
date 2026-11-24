@@ -1,6 +1,7 @@
 import type { Telemetry } from "ai";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
+import { vi } from "vitest";
 
 /**
  * Mock models and helpers for driving a telemetry integration through the REAL
@@ -63,45 +64,54 @@ const generatingModel = (extra: Partial<GenerateResult> = {}): MockLanguageModel
     });
 
 /**
- * A streaming mock model that emits `chunks` deltas `gapMs` apart, then either
- * finishes or errors — the shape that separates "the provider call returned" from
- * "the model call is over".
+ * A streaming mock model that emits `chunks` deltas, then either finishes or
+ * errors — the shape that separates "the provider call returned" from "the model
+ * call is over".
  *
  * `failAfter` emits the protocol's in-band `{ type: "error" }` part, which is how
  * a v4 provider reports a stream that dies mid-way.
  *
- * The gaps are real time on purpose and no test waits on them: they are the
- * elapsed time the streamed-duration cases floor the span at, and they keep two
- * concurrent runs interleaved so an abort lands while the sibling's call is open.
+ * Parts are produced on demand, one per read, so the consumer drives the stream
+ * rather than finding it queued whole. `gapMs` advances the faked clock before
+ * each delta — a case that passes it fakes `Date` — so a span measured across
+ * the stream lasts exactly `chunks x gapMs`. `holdFinish` keeps the call open
+ * past its last delta until the test settles it.
  */
-const streamingModel = (options: { chunks: number; failAfter?: number; gapMs: number }): MockLanguageModelV4 =>
+const streamingModel = (options: { chunks: number; failAfter?: number; gapMs?: number; holdFinish?: Promise<unknown> }): MockLanguageModelV4 =>
     new MockLanguageModelV4({
         doStream: async (): Promise<StreamResult> => {
+            let index = 0;
+
             return {
                 stream: new ReadableStream<StreamPart>({
-                    async start(controller) {
-                        controller.enqueue({ type: "stream-start", warnings: [] });
-                        controller.enqueue({ id: "t", type: "text-start" });
+                    async pull(controller) {
+                        if (index === options.chunks) {
+                            await options.holdFinish;
 
-                        for (let index = 0; index < options.chunks; index += 1) {
-                            // eslint-disable-next-line no-await-in-loop -- the point is a stream whose parts arrive over time
-                            await new Promise((resolve) => {
-                                setTimeout(resolve, options.gapMs);
-                            });
+                            controller.enqueue({ id: "t", type: "text-end" });
+                            controller.enqueue({ finishReason: STOP, type: "finish", usage: usageOf(12, 3) });
+                            controller.close();
 
-                            if (options.failAfter !== undefined && index === options.failAfter) {
-                                controller.enqueue({ error: new Error("stream died"), type: "error" });
-                                controller.close();
-
-                                return;
-                            }
-
-                            controller.enqueue({ delta: "x", id: "t", type: "text-delta" });
+                            return;
                         }
 
-                        controller.enqueue({ id: "t", type: "text-end" });
-                        controller.enqueue({ finishReason: STOP, type: "finish", usage: usageOf(12, 3) });
-                        controller.close();
+                        if (options.gapMs !== undefined) {
+                            vi.advanceTimersByTime(options.gapMs);
+                        }
+
+                        if (index === options.failAfter) {
+                            controller.enqueue({ error: new Error("stream died"), type: "error" });
+                            controller.close();
+
+                            return;
+                        }
+
+                        index += 1;
+                        controller.enqueue({ delta: "x", id: "t", type: "text-delta" });
+                    },
+                    start(controller) {
+                        controller.enqueue({ type: "stream-start", warnings: [] });
+                        controller.enqueue({ id: "t", type: "text-start" });
                     },
                 }),
             };

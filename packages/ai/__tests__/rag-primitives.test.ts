@@ -18,6 +18,27 @@ vi.mock(import("ai"), async (importOriginal) => {
     };
 });
 
+/**
+ * Every promise chain already queued has run. The concurrency helpers do no I/O
+ * and set no timers, so one macrotask turn drains all the work they can do
+ * before a held call is released.
+ */
+const drained = async (): Promise<void> => {
+    await new Promise((resolve) => {
+        setImmediate(resolve);
+    });
+};
+
+/** Whether `promise` is still unsettled once {@link drained}. */
+const stateAfterDrain = async (promise: Promise<unknown>): Promise<"pending" | "settled"> =>
+    Promise.race([
+        promise.then(
+            () => "settled" as const,
+            () => "settled" as const,
+        ),
+        drained().then(() => "pending" as const),
+    ]);
+
 const chunk = (id: string, overrides: Partial<RetrievedChunk> = {}): RetrievedChunk => {
     return {
         chunkIndex: 0,
@@ -101,15 +122,20 @@ describe(concurrentMap, () => {
     it("preserves input order even when later items resolve first", async () => {
         expect.assertions(1);
 
-        const delays = [30, 5, 20, 1];
+        const gates = Array.from({ length: 4 }, () => Promise.withResolvers<undefined>());
 
-        const results = await concurrentMap(delays, 4, async (delay, index) => {
-            await new Promise((resolve) => {
-                setTimeout(resolve, delay);
-            });
+        const run = concurrentMap(gates, 4, async (gate, index) => {
+            await gate.promise;
 
             return `item-${String(index)}`;
         });
+
+        // All four calls are in flight (the limit covers them); finish them back to front.
+        for (const index of [3, 1, 2, 0]) {
+            gates[index]?.resolve(undefined);
+        }
+
+        const results = await run;
 
         expect(results).toStrictEqual(["item-0", "item-1", "item-2", "item-3"]);
     });
@@ -119,21 +145,32 @@ describe(concurrentMap, () => {
 
         let inFlight = 0;
         let peak = 0;
+        const atLimit = Promise.withResolvers<undefined>();
+        const release = Promise.withResolvers<undefined>();
 
-        await concurrentMap(
+        const run = concurrentMap(
             Array.from({ length: 12 }, (_, index) => index),
             3,
             async () => {
                 inFlight += 1;
                 peak = Math.max(peak, inFlight);
 
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 5);
-                });
+                if (inFlight === 3) {
+                    atLimit.resolve(undefined);
+                }
+
+                // Every call stays in flight until the limit's worth has started.
+                await release.promise;
 
                 inFlight -= 1;
             },
         );
+
+        await atLimit.promise;
+        // A limit that let more through would have started them by now.
+        await drained();
+        release.resolve(undefined);
+        await run;
 
         expect(peak).toBe(3);
     });
@@ -155,10 +192,11 @@ describe(concurrentMap, () => {
     });
 
     it("stops pulling new items after the first rejection, but lets in-flight calls settle", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const started: number[] = [];
         const processed: number[] = [];
+        const release = Promise.withResolvers<undefined>();
 
         const run = concurrentMap([0, 1, 2, 3, 4, 5], 2, async (item) => {
             started.push(item);
@@ -167,12 +205,16 @@ describe(concurrentMap, () => {
                 throw new Error("boom");
             }
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 5);
-            });
+            // Held in flight until the failure has run its full course.
+            await release.promise;
 
             processed.push(item);
         });
+
+        // The failure is recorded, yet the call waits for item 1 to settle.
+        await expect(stateAfterDrain(run)).resolves.toBe("pending");
+
+        release.resolve(undefined);
 
         await expect(run).rejects.toThrow("boom");
 
@@ -199,21 +241,32 @@ describe(concurrentForEach, () => {
 
         let inFlight = 0;
         let peak = 0;
+        const atLimit = Promise.withResolvers<undefined>();
+        const release = Promise.withResolvers<undefined>();
 
-        await concurrentForEach(
+        const run = concurrentForEach(
             Array.from({ length: 12 }, (_, index) => index),
             3,
             async () => {
                 inFlight += 1;
                 peak = Math.max(peak, inFlight);
 
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 5);
-                });
+                if (inFlight === 3) {
+                    atLimit.resolve(undefined);
+                }
+
+                // Every call stays in flight until the limit's worth has started.
+                await release.promise;
 
                 inFlight -= 1;
             },
         );
+
+        await atLimit.promise;
+        // A limit that let more through would have started them by now.
+        await drained();
+        release.resolve(undefined);
+        await run;
 
         expect(peak).toBe(3);
     });
@@ -264,9 +317,8 @@ describe(concurrentForEach, () => {
                         inNext += 1;
                         overlapped ||= inNext > 1;
 
-                        await new Promise((resolve) => {
-                            setTimeout(resolve, 1);
-                        });
+                        // Still inside `next()` while every other worker is free to pull.
+                        await Promise.resolve();
 
                         inNext -= 1;
                         index += 1;
@@ -285,8 +337,9 @@ describe(concurrentForEach, () => {
     });
 
     it("stops pulling new items after the first rejection, but lets in-flight calls settle", async () => {
-        expect.assertions(4);
+        expect.assertions(6);
 
+        const listed: number[] = [];
         const started: number[] = [];
         const processed: number[] = [];
         let closed = false;
@@ -294,12 +347,16 @@ describe(concurrentForEach, () => {
         const listing = async function* (): AsyncGenerator<number> {
             try {
                 for (let index = 0; index < 6; index += 1) {
+                    listed.push(index);
                     yield index;
                 }
             } finally {
                 closed = true;
             }
         };
+
+        const siblingStarted = Promise.withResolvers<undefined>();
+        const release = Promise.withResolvers<undefined>();
 
         const run = concurrentForEach(listing(), 2, async (item) => {
             started.push(item);
@@ -308,19 +365,22 @@ describe(concurrentForEach, () => {
                 // Fail only once the sibling worker has pulled and started item
                 // 1, so this asserts that in-flight work is quiesced rather
                 // than which pull happened to win the race.
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 1);
-                });
+                await siblingStarted.promise;
 
                 throw new Error("boom");
             }
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 10);
-            });
+            siblingStarted.resolve(undefined);
+            // Held in flight until the failure has run its full course.
+            await release.promise;
 
             processed.push(item);
         });
+
+        // The failure is recorded, yet the call waits for item 1 to settle.
+        await expect(stateAfterDrain(run)).resolves.toBe("pending");
+
+        release.resolve(undefined);
 
         await expect(run).rejects.toThrow("boom");
 
@@ -329,8 +389,63 @@ describe(concurrentForEach, () => {
         // nothing after them starts. `return()` on the way out is what lets a
         // generator source run its `finally` and release what it holds.
         expect(started.toSorted((a, b) => a - b)).toStrictEqual([0, 1]);
+        // Nor is anything after them even pulled: item 1's worker frees up after the failure and
+        // must not take a third item off the source only to discard it.
+        expect(listed).toStrictEqual([0, 1]);
         expect(processed).toStrictEqual([1]);
         expect(closed).toBe(true);
+    });
+
+    it("discards an item a worker was still pulling when another worker failed", async () => {
+        expect.assertions(3);
+
+        const started: number[] = [];
+        let returned = false;
+        const pullingSecond = Promise.withResolvers<undefined>();
+        const releaseSecond = Promise.withResolvers<undefined>();
+
+        // The second `next()` is held, so its worker is mid-pull when item 0 fails.
+        const listing = {
+            [Symbol.asyncIterator]: (): AsyncIterator<number> => {
+                let index = 0;
+
+                return {
+                    next: async (): Promise<IteratorResult<number>> => {
+                        index += 1;
+
+                        if (index === 2) {
+                            pullingSecond.resolve(undefined);
+                            await releaseSecond.promise;
+                        }
+
+                        return { done: false, value: index - 1 };
+                    },
+                    return: async (): Promise<IteratorResult<number>> => {
+                        returned = true;
+
+                        return { done: true, value: undefined };
+                    },
+                };
+            },
+        };
+
+        const run = concurrentForEach(listing, 2, async (item) => {
+            started.push(item);
+
+            await pullingSecond.promise;
+
+            throw new Error("boom");
+        });
+
+        // The failure is recorded while the other worker is still inside its pull.
+        await expect(stateAfterDrain(run)).resolves.toBe("pending");
+
+        releaseSecond.resolve(undefined);
+
+        await expect(run).rejects.toThrow("boom");
+
+        // Item 1 arrived after the failure, so it is work that had not started: never run.
+        expect({ returned, started }).toStrictEqual({ returned: true, started: [0] });
     });
 
     it("rejects an invalid limit", async () => {

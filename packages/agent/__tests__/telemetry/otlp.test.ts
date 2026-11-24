@@ -1,7 +1,7 @@
 import { estimateModelCost } from "@lunora/ai/create";
 import { generateText, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { defineAgent } from "../../src/define-agent";
 import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
@@ -105,8 +105,12 @@ const attribute = (span: CapturedSpan, key: string): unknown => {
     return Object.values(found.value)[0];
 };
 
-/** A span's wall-clock duration in milliseconds, from the OTLP nanosecond stamps. */
-const durationMs = (span: CapturedSpan): number => (Number(span.endTimeUnixNano) - Number(span.startTimeUnixNano)) / 1e6;
+/**
+ * A span's wall-clock duration in milliseconds, from the OTLP nanosecond stamps.
+ * Subtracted as bigints: an epoch in nanoseconds is past 2^53, so `Number` would
+ * round each stamp before the difference is taken.
+ */
+const durationMs = (span: CapturedSpan): number => Number(BigInt(span.endTimeUnixNano) - BigInt(span.startTimeUnixNano)) / 1e6;
 
 // A fixed 32-hex trace id used to assert span grouping. Not a credential — the
 // `no-secrets` heuristic just sees a high-entropy hex run.
@@ -149,6 +153,13 @@ describe(otlpTelemetry, () => {
     });
 
     it("measures a STREAMED call to the end of the stream, with its usage", async () => {
+        // Only `Date` is faked: the model advances it 30 ms per delta, so a span
+        // that runs to the end of the stream lasts exactly 3 x 30 ms.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        onTestFinished(() => {
+            vi.useRealTimers();
+        });
+
         const calls = captureFetch();
 
         const stream = streamText({
@@ -168,18 +179,10 @@ describe(otlpTelemetry, () => {
 
         const span = spanOf(calls[0] as CapturedPost);
 
-        // Floor at half the STREAM's own delay budget (3 chunks x 30 ms), not at a
-        // fraction of wall clock: `wallMs` starts before the span does, so a slow
-        // runner inflates the divisor past the span and the assertion fails on
-        // timing alone (CI hit `expected 94 to be greater than 96`). The defect
-        // this guards is a span that ends at time-to-first-byte — ~1 ms — which
-        // any floor in this range separates decisively.
-        const minStreamedMs = (3 * 30) / 2;
-
         expect(text).toBe("xxx");
         // `execute()` resolves the moment `doStream` returns, so a span closed
         // there measured ~1 ms of a ~100 ms call and reported no tokens at all.
-        expect(durationMs(span)).toBeGreaterThan(minStreamedMs);
+        expect(durationMs(span)).toBe(3 * 30);
         expect(attribute(span, "gen_ai.usage.input_tokens")).toBe("12");
         expect(attribute(span, "gen_ai.usage.output_tokens")).toBe("3");
     });
@@ -190,7 +193,7 @@ describe(otlpTelemetry, () => {
         const calls = captureFetch();
 
         const stream = streamText({
-            model: streamingModel({ chunks: 3, failAfter: 1, gapMs: 5 }),
+            model: streamingModel({ chunks: 3, failAfter: 1 }),
             prompt: "hi",
             telemetry: withTelemetry(otlpTelemetry({ endpoint: "https://collector.test" })),
         });
@@ -640,17 +643,27 @@ describe(otlpTelemetry, () => {
         const abortController = new AbortController();
         const aborted = streamText({
             abortSignal: abortController.signal,
-            model: streamingModel({ chunks: 20, gapMs: 10 }),
+            model: streamingModel({ chunks: 20 }),
             prompt: "A",
             telemetry: withTelemetry(shared),
         });
-        const healthy = streamText({ model: streamingModel({ chunks: 4, gapMs: 10 }), prompt: "B", telemetry: withTelemetry(shared) });
+        // The healthy call stays open until the sibling's abort has been handled,
+        // so the abort always lands while it is in flight.
+        const abortHandled = Promise.withResolvers<undefined>();
+        const healthy = streamText({
+            model: streamingModel({ chunks: 4, holdFinish: abortHandled.promise }),
+            prompt: "B",
+            telemetry: withTelemetry(shared),
+        });
 
         await Promise.all([
             drain(aborted.textStream, (index) => {
                 if (index === 2) {
                     abortController.abort();
                 }
+            }).finally(() => {
+                // The SDK awaits `onAbort` before it closes the aborted stream.
+                abortHandled.resolve(undefined);
             }),
             drain(healthy.textStream),
         ]);

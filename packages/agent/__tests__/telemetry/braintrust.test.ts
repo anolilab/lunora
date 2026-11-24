@@ -1,6 +1,6 @@
 import { generateText, simulateReadableStream, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { defineAgent } from "../../src/define-agent";
 import { createAgentGenerate, createStreamGenerate } from "../../src/generate";
@@ -91,6 +91,13 @@ const merged = (call: TracedCall): Record<string, unknown> => Object.assign({}, 
 
 describe(braintrustTelemetry, () => {
     it("measures a STREAMED call to the end of the stream, with its usage", async () => {
+        // Only `Date` is faked: the model advances it 30 ms per delta, so a span
+        // that runs to the end of the stream lasts exactly 3 x 30 ms.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        onTestFinished(() => {
+            vi.useRealTimers();
+        });
+
         const { calls, logger } = fakeBraintrust();
 
         const stream = streamText({
@@ -106,19 +113,11 @@ describe(braintrustTelemetry, () => {
 
         const call = calls[0] as TracedCall;
 
-        // Floor at half the STREAM's own delay budget (3 chunks x 30 ms), not at a
-        // fraction of wall clock: `wallMs` starts before the span does, so a slow
-        // runner inflates the divisor past the span and the assertion fails on
-        // timing alone (CI hit `expected 94 to be greater than 96`). The defect
-        // this guards is a span that ends at time-to-first-byte — ~1 ms — which
-        // any floor in this range separates decisively.
-        const minStreamedMs = (3 * 30) / 2;
-
         // The old shape simply awaited `execute()`, which resolves the instant
         // `doStream` hands the stream back: the span measured ~1 ms of a ~100 ms
         // call and logged the stream handle instead of the generation.
         expect(call.endedAt).toBeDefined();
-        expect((call.endedAt as number) - call.startedAt).toBeGreaterThan(minStreamedMs);
+        expect((call.endedAt as number) - call.startedAt).toBe(3 * 30);
         expect(merged(call).metrics).toStrictEqual({ completion_tokens: 3, prompt_tokens: 12, tokens: 15 });
     });
 
@@ -235,7 +234,7 @@ describe(braintrustTelemetry, () => {
         const { calls, logger } = fakeBraintrust();
 
         const stream = streamText({
-            model: streamingModel({ chunks: 3, failAfter: 1, gapMs: 5 }),
+            model: streamingModel({ chunks: 3, failAfter: 1 }),
             prompt: "hi",
             telemetry: withTelemetry(braintrustTelemetry({ logger })),
         });
@@ -277,17 +276,27 @@ describe(braintrustTelemetry, () => {
         const abortController = new AbortController();
         const aborted = streamText({
             abortSignal: abortController.signal,
-            model: streamingModel({ chunks: 20, gapMs: 10 }),
+            model: streamingModel({ chunks: 20 }),
             prompt: "A",
             telemetry: withTelemetry(shared),
         });
-        const healthy = streamText({ model: streamingModel({ chunks: 4, gapMs: 10 }), prompt: "B", telemetry: withTelemetry(shared) });
+        // The healthy call stays open until the sibling's abort has been handled,
+        // so the abort always lands while it is in flight.
+        const abortHandled = Promise.withResolvers<undefined>();
+        const healthy = streamText({
+            model: streamingModel({ chunks: 4, holdFinish: abortHandled.promise }),
+            prompt: "B",
+            telemetry: withTelemetry(shared),
+        });
 
         await Promise.all([
             drain(aborted.textStream, (index) => {
                 if (index === 2) {
                     abortController.abort();
                 }
+            }).finally(() => {
+                // The SDK awaits `onAbort` before it closes the aborted stream.
+                abortHandled.resolve(undefined);
             }),
             drain(healthy.textStream),
         ]);
