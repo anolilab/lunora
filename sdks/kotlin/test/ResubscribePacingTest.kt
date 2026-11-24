@@ -297,6 +297,78 @@ private fun shapeSubscriptionsAreNotPaced() {
     check(sent.count { it["type"] == "shape_subscribe" } == 5, "every shape subscription must go out at once")
 }
 
+private fun aQueuedOneStaysFrozenWhileAnEarlierOneIsWritten() {
+    val frozenAtOne = mutableListOf<Boolean>()
+    lateinit var client: Client
+
+    client =
+        pacedClient(PACED_SUBSCRIPTIONS) {
+            if (it["type"] == "subscribe" && it["id"] == "sub_1") frozenAtOne.add(checkNotNull(client.subscriptions["sub_2"]).poisoned)
+        }.first
+    synchronized(client.lock) { checkNotNull(client.subscriptions["sub_2"]).poisoned = true }
+    client.resendSubscriptions()
+
+    check(frozenAtOne == listOf(true), "a subscription must stay frozen until its own frame goes out, got $frozenAtOne")
+    check(!checkNotNull(client.subscriptions["sub_2"]).poisoned, "its own frame must lift the freeze")
+}
+
+private fun aReplyDuringTheFirstWindowDoesNotJumpTheQueue() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    lateinit var client: Client
+
+    client =
+        pacedClient(PACED_SUBSCRIPTIONS) {
+            sent.add(it)
+
+            // The read loop answers sub_1 while the resend is still writing it.
+            if (it["type"] == "subscribe" && it["id"] == "sub_1") client.handleFrame(ackFrame("sub_1"))
+        }.first
+    sent.clear()
+    client.resendSubscriptions()
+
+    check(
+        subscribeIds(sent) == listOf("sub_1", "sub_2", "sub_3", "sub_4"),
+        "the freed slot's query must go out after the window, in subscribe order, got ${subscribeIds(sent)}",
+    )
+}
+
+private fun aSocketReplacedMidWindowGetsNoMoreOfIt() {
+    val onOld = mutableListOf<Map<String, Any?>>()
+    val onNew = mutableListOf<Map<String, Any?>>()
+    lateinit var client: Client
+
+    client =
+        pacedClient(PACED_SUBSCRIPTIONS) {
+            onOld.add(it)
+
+            if (it["type"] == "subscribe" && it["id"] == "sub_1") client.attachSocket { frame -> onNew.add(frame) }
+        }.first
+    onOld.clear()
+    client.resendSubscriptions()
+
+    check(subscribeIds(onOld).size == 1, "nothing more of the window must go to the replaced socket, got ${subscribeIds(onOld)}")
+    check(subscribeIds(onNew).isEmpty(), "the new socket's own resend sends its queries, not the old run, got ${subscribeIds(onNew)}")
+}
+
+private fun aReplacedSocketsLateFrameIsIgnored() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    val (client, _) = pacedClient(PACED_SUBSCRIPTIONS) {}
+    val old = client.attachSocket {}
+
+    client.resendSubscriptions()
+
+    val current = client.attachSocket { sent.add(it) }
+
+    sent.clear()
+    client.resendSubscriptions()
+
+    check(old("""{"cursor":9,"data":[],"id":"sub_1","type":"data"}""") == null, "the replaced socket's frame must be ignored")
+    check(checkNotNull(client.subscriptions["sub_1"]).cursor == null, "the replaced socket's frame must not move the cursor")
+    check(subscribeIds(sent).size == RESUBSCRIBE_CONCURRENCY, "the replaced socket's frame must free no slot, got ${subscribeIds(sent)}")
+    check(current(ackFrame("sub_1")) == "ack", "the current socket's frame must be applied")
+    check(subscribeIds(sent).size == RESUBSCRIBE_CONCURRENCY + 1, "the current socket's reply must free its slot, got ${subscribeIds(sent)}")
+}
+
 internal fun runResubscribePacingCases() {
     onlyTheWindowGoesOutUntilAReplyArrives()
     anyFrameBearingTheIdLetsTheNextOneOut()
@@ -311,4 +383,8 @@ internal fun runResubscribePacingCases() {
     failedUnsubscribeWriteStillSendsTheBatchItFreed()
     retryAcrossASocketSwapLeavesTheNewQueueAlone()
     shapeSubscriptionsAreNotPaced()
+    aQueuedOneStaysFrozenWhileAnEarlierOneIsWritten()
+    aReplyDuringTheFirstWindowDoesNotJumpTheQueue()
+    aSocketReplacedMidWindowGetsNoMoreOfIt()
+    aReplacedSocketsLateFrameIsIgnored()
 }

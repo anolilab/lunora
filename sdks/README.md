@@ -171,9 +171,12 @@ order are the same everywhere, which is what
 
 ³ **One client holds one socket, and this is load-bearing.** Every port has a
 single sender field (`attach_socket`/`AttachSocket`/`attachSocket` replaces it
-rather than adding one), and every inbound frame arrives through a
-`handleFrame(raw)` that carries no connection identity — there is none on the
-wire either, since a poke frame names only its `pokeId`. An app spanning several
+rather than adding one), and no inbound frame carries a connection identity —
+there is none on the wire either, since a poke frame names only its `pokeId`.
+In go, ruby, kotlin and dart, `attachSocket` returns the handler for that
+socket's frames, which ignores them once a later attach or a detach has replaced
+it; that tells the current socket from a superseded one, not one live socket
+from another. An app spanning several
 shards builds one client per shard, which is also what keeps
 `protocol/README.md` §5.3's `(connection, pokeId)` rule satisfied here: each
 client owns its own poke buffers, so two shards' concurrent `poke-1` frames can

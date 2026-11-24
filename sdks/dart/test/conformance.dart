@@ -114,6 +114,10 @@ Future<void> main() async {
   await run(casePacingAQueuedOneWhoseArgsNoLongerEncodeDoesNotStallTheRest);
   await run(casePacingTheCallersResendThrowsForArgsThatNoLongerEncode);
   await run(casePacingShapeSubscriptionsAreNotPaced);
+  await run(casePacingAQueuedOneStaysFrozenWhileAnEarlierOneIsWritten);
+  await run(casePacingAReplyDuringTheFirstWindowDoesNotJumpTheQueue);
+  await run(casePacingASocketReplacedMidWindowGetsNoMoreOfIt);
+  await run(casePacingAReplacedSocketsLateFrameIsIgnored);
 
   // The shared golden scenarios in protocol/fixtures/offline-optimistic.json,
   // which every port asserts the same values from — the manifest names below

@@ -38,9 +38,9 @@ client.wsToken = { currentBearer } // the session credential, sent in the first 
 val messages = client.query("messages:list", args)
 client.mutation("messages:send", args)
 
-// Live subscription: attach your socket, then feed it frames.
+// Live subscription: attach your socket, then feed its frames to handle.
 // attachSocket sends the connect frame itself, carrying the wsToken supplier: do not send another.
-client.attachSocket { frame -> socket.send(Json.write(frame)) }
+val handle = client.attachSocket { frame -> socket.send(Json.write(frame)) }
 val unsubscribe = client.subscribe("messages:list", args, onData = ::render)
 ```
 
@@ -49,17 +49,19 @@ redirect would replay your bearer token to another host. `java.net.http.HttpClie
 refuses them by default (`HttpClient.Redirect.NEVER`); with OkHttp, build the client
 with `OkHttpClient.Builder().followRedirects(false)`.
 
-`client.handleFrame(raw)` is what you call with each inbound WebSocket message;
+The `FrameHandler` that `attachSocket` returns is what you call with each inbound WebSocket
+message; once that socket is detached or replaced it ignores the frames a read loop still drains
+from it. `client.handleFrame(raw)` applies a frame that came from no socket.
 `client.resendSubscriptions()` re-subscribes everything after a reconnect —
 queries and shapes alike — carrying each one's resume cursor or checkpoint. It sends at most
 three query subscriptions at once (`RESUBSCRIBE_CONCURRENCY`), in subscribe order, as the
 reference client does, so a reconnect does not land every query on the shard in one burst. Each
-of the rest goes out when `handleFrame` sees a frame for one already sent, or once one has gone
+of the rest goes out when the handler sees a frame for one already sent, or once one has gone
 unanswered for 10 s (`RESUBSCRIBE_ACK_TIMEOUT_NANOS`): `nextSubscriptionRetryAtNanos()` includes
-that deadline, and `retryDueSubscriptions()` at or after it sends the next. Feed every frame to
-`handleFrame` and pull `retryDueSubscriptions()` on that deadline (a retry hint on a subscription
-error arms the same one). Shape subscriptions all go out at once.
-`handleFrame` never throws for a frame's shape: one that is not JSON, not an
+that deadline, and `retryDueSubscriptions()` at or after it sends the next, one at a time and in
+order. Feed every frame to the handler and pull `retryDueSubscriptions()` on that deadline (a retry
+hint on a subscription error arms the same one). Shape subscriptions all go out at once.
+The handler, like `handleFrame`, never throws for a frame's shape: one that is not JSON, not an
 object, or carries a mistyped `id`/`pokeId`/`cursor` is ignored (a cursor that is
 not an integer never replaces the tracked one). A poke is applied whole or not at
 all per shape: if any row fails to decode, that shape's view, checkpoint and
@@ -72,7 +74,7 @@ its checkpoint and epoch cleared, `onRows` told `[]`, the ops skipped, and a col
 `shape_subscribe` sent at once through the attached socket.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
-(`handleFrame` returns the frame's type):
+(the handler returns the frame's type):
 
 ```kotlin
 var attempt = 0
@@ -88,7 +90,7 @@ while (isActive) {
             try {
                 connect().use { socket -> // your socket library
                     // attachSocket sends connect before it attaches the sender, so a subscribe on another coroutine cannot write ahead of it
-                    client.attachSocket { frame -> socket.send(Json.write(frame)) }
+                    val handle = client.attachSocket { frame -> socket.send(Json.write(frame)) }
                     client.resendSubscriptions()
                     // frees a re-subscribe slot nobody answered and serves retry hints; cancelled with the
                     // socket run, so it never writes to the next socket. Waking at least every second sees a
@@ -119,7 +121,7 @@ while (isActive) {
                     }
                     while (true) {
                         val raw = socket.receive() ?: break
-                        if (client.handleFrame(raw) == "ack") attempt = 0
+                        if (handle(raw) == "ack") attempt = 0
                     }
                     // the close frame, from your socket library; 4001 and 4003 drive token-expiry listeners
                     closeCode = socket.closeCode

@@ -366,3 +366,124 @@ void casePacingShapeSubscriptionsAreNotPaced() {
 
   equals(sent.where((frame) => frame['type'] == 'shape_subscribe').length, 5, 'every shape subscription must go out at once');
 }
+
+void casePacingAQueuedOneStaysFrozenWhileAnEarlierOneIsWritten() {
+  final seen = <Object?>[];
+  final change = <String, Object?>{'key': 'm1', 'op': 'update', 'table': 'messages'};
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+
+  for (var index = 0; index < 4; index++) {
+    client.subscribe('messages:list', args: <String, Object?>{'channel': 'c$index'}, onData: index == 1 ? seen.add : null);
+  }
+
+  pushData(
+    client,
+    'sub_2',
+    <Object?>[
+      <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'one'},
+    ],
+    cursor: 1,
+  );
+  // An update with no `row` cannot be spliced in, so it freezes sub_2.
+  client.handleFrame(jsonEncode(<String, Object?>{'cursor': 2, 'delta': change, 'id': 'sub_2', 'type': 'delta'}));
+  seen.clear();
+
+  final mergeable = jsonEncode(<String, Object?>{
+    'cursor': 3,
+    'delta': <String, Object?>{
+      ...change,
+      'row': <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+    },
+    'id': 'sub_2',
+    'type': 'delta',
+  });
+  final sent = <Map<String, Object?>>[];
+
+  client.attachSocket((frame) {
+    sent.add(frame);
+
+    // The old stream reaches sub_2 while sub_1, ahead of it in the window, is being written.
+    if (frame['type'] == 'subscribe' && frame['id'] == 'sub_1') {
+      client.handleFrame(mergeable);
+    }
+  });
+  client.resendSubscriptions();
+
+  check(seen.isEmpty, 'a subscription stays frozen until its own frame goes out, got $seen');
+
+  final resent = sent.where((frame) => frame['type'] == 'subscribe' && frame['id'] == 'sub_2').toList();
+
+  check(
+    resent.isNotEmpty && (resent.last['query']! as Map<String, Object?>)['sinceSeq'] == 1,
+    'it replays from before the dropped change, got $resent',
+  );
+
+  client.handleFrame(mergeable);
+  equals(seen.length, 1, 'its own frame lifts the freeze');
+}
+
+void casePacingAReplyDuringTheFirstWindowDoesNotJumpTheQueue() {
+  final sent = <Map<String, Object?>>[];
+  late final LunoraClient client;
+
+  (client, _) = _pacedClient(_subscriptions, (frame) {
+    sent.add(frame);
+
+    // The read loop answers sub_1 while the resend is still writing it.
+    if (frame['type'] == 'subscribe' && frame['id'] == 'sub_1') {
+      client.handleFrame(_ack('sub_1'));
+    }
+  });
+  sent.clear();
+  client.resendSubscriptions();
+
+  equals(_subscribes(sent).join(','), 'sub_1,sub_2,sub_3,sub_4', "the freed slot's query goes out after the window, in subscribe order");
+}
+
+void casePacingASocketReplacedMidWindowGetsNoMoreOfIt() {
+  final onOld = <Map<String, Object?>>[];
+  final onNew = <Map<String, Object?>>[];
+  late final LunoraClient client;
+
+  (client, _) = _pacedClient(_subscriptions, (frame) {
+    onOld.add(frame);
+
+    if (frame['type'] == 'subscribe' && frame['id'] == 'sub_1') {
+      client.attachSocket(onNew.add);
+    }
+  });
+  onOld.clear();
+  client.resendSubscriptions();
+
+  equals(_subscribes(onOld).length, 1, 'nothing more of the window goes to the replaced socket, got ${_subscribes(onOld)}');
+  equals(_subscribes(onNew).length, 0, "the new socket's own resend sends its queries, not the old run");
+}
+
+void casePacingAReplacedSocketsLateFrameIsIgnored() {
+  final seen = <Object?>[];
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+
+  for (var index = 0; index < _subscriptions; index++) {
+    client.subscribe('messages:list', args: <String, Object?>{'channel': 'c$index'}, onData: index == 0 ? seen.add : null);
+  }
+
+  final old = client.attachSocket((_) {});
+
+  client.resendSubscriptions();
+
+  final sent = <Map<String, Object?>>[];
+  final current = client.attachSocket(sent.add);
+
+  sent.clear();
+  client.resendSubscriptions();
+
+  equals(
+    old(jsonEncode(<String, Object?>{'cursor': 9, 'data': <Object?>[], 'id': 'sub_1', 'type': 'data'})),
+    null,
+    "the replaced socket's frame is ignored",
+  );
+  check(seen.isEmpty, "the replaced socket's frame is not applied");
+  equals(_subscribes(sent).length, resubscribeConcurrency, "the replaced socket's frame frees no slot");
+  equals(current(_ack('sub_1')), 'ack', "the current socket's frame is applied");
+  equals(_subscribes(sent).length, resubscribeConcurrency + 1, "the current socket's reply frees its slot");
+}

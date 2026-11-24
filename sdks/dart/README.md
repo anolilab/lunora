@@ -38,9 +38,10 @@ retries and socket library:
 
 ```dart
 final client = LunoraClient(url: 'https://my-app.example.com', post: myPoster, authToken: '…')
-  ..sessionToken = session // the WebSocket credential: sent as `connect.token`, never in the URL
-  ..attachSocket((frame) => socket.add(jsonEncode(frame))) // writes `connect` first
-  ..setConnected(true);
+  ..sessionToken = session; // the WebSocket credential: sent as `connect.token`, never in the URL
+// Writes `connect` first, and returns the handler for this socket's frames.
+final handle = client.attachSocket((frame) => socket.add(jsonEncode(frame)));
+client.setConnected(true);
 
 final messages = await client.query('messages:list', args: {'channel': 'general'});
 await client.mutation('messages:send', args: {'channel': 'general', 'text': 'hi'});
@@ -50,15 +51,17 @@ An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or 
 redirect would replay your bearer token to another host. With `dart:io`, set
 `request.followRedirects = false` on the `HttpClientRequest`.
 
-`client.handleFrame(raw)` is what you call with each inbound WebSocket message;
+The `LunoraFrameHandler` that `attachSocket` returns is what you call with each inbound
+WebSocket message; once that socket is detached or replaced it ignores the frames a read loop
+still drains from it. `client.handleFrame(raw)` applies a frame that came from no socket.
 `client.resendSubscriptions()` re-subscribes everything after a reconnect,
 carrying each subscription's resume cursor. It sends at most three query subscriptions at
 once (`resubscribeConcurrency`), in subscribe order, as the reference client does, so a
 reconnect does not land every query on the shard in one burst. Each of the rest goes out
-when `handleFrame` sees a frame for one already sent, or once one has gone unanswered for
+when the handler sees a frame for one already sent, or once one has gone unanswered for
 10 s (`resubscribeAckTimeoutMs`): `nextSubscriptionRetryAt` includes that deadline on the
-`retryClockMs` clock, and `retryDueSubscriptions()` at or after it sends the next. Feed every
-frame to `handleFrame` and pull `retryDueSubscriptions()` on that deadline (a retry hint on a
+`retryClockMs` clock, and `retryDueSubscriptions()` at or after it sends the next, one at a
+time and in order. Feed every frame to the handler and pull `retryDueSubscriptions()` on that deadline (a retry hint on a
 subscription error arms the same one). Shape subscriptions all go out at once. Args that no
 longer encode make `resendSubscriptions` throw before anything is sent; a query whose args
 stop encoding while it waits its turn is skipped.
@@ -81,7 +84,7 @@ queueing, when no socket is attached. `connectRoom(name, listener)` joins the
 topic `room:<name>` and returns a handle with `send` and `close`.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
-(`handleFrame` returns the frame's type). Each socket open sends the `connect` frame
+(the handler returns the frame's type). Each socket open sends the `connect` frame
 first, then resubscribes; `setConnected(true)` starts the flush of this shard's queued
 writes, which never throws:
 
@@ -98,7 +101,7 @@ while (!client.closed) {
       break;
     }
     // attachSocket writes `connect` first, so the server's onConnect hook fires before any subscription.
-    client.attachSocket((frame) => socket.add(jsonEncode(frame)));
+    final handle = client.attachSocket((frame) => socket.add(jsonEncode(frame)));
     client.resendSubscriptions();
     // Frees a re-subscribe slot nobody answered and serves retry hints; cancelled with this socket
     // run, so it never writes to the next socket. Waking at least every second sees a deadline
@@ -123,7 +126,7 @@ while (!client.closed) {
       // Dispatch runs application callbacks. A throw there is a bug in the app,
       // not a dead socket, so report it and keep reading.
       try {
-        if (client.handleFrame(raw as String) == 'ack') attempt = 0;
+        if (handle(raw as String) == 'ack') attempt = 0;
       } catch (error, stack) {
         stderr.writeln('lunora: subscription callback threw: $error\n$stack');
       }

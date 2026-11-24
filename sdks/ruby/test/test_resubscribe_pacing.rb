@@ -283,4 +283,67 @@ class TestResubscribePacing < Minitest::Test
 
     assert_equal(5, sent.count { |frame| frame["type"] == "shape_subscribe" })
   end
+
+  def test_a_queued_one_stays_frozen_while_an_earlier_one_is_written
+    frozen_at_one = []
+    client = nil
+    client, = paced_client(SUBSCRIPTIONS, lambda { |frame|
+      frozen_at_one << client.instance_variable_get(:@subscriptions)["sub_2"][:poisoned] if frame["type"] == "subscribe" && frame["id"] == "sub_1"
+    })
+    client.instance_variable_get(:@subscriptions)["sub_2"][:poisoned] = true
+
+    client.resend_subscriptions
+
+    assert_equal [true], frozen_at_one, "a subscription stays frozen until its own frame goes out"
+    refute client.instance_variable_get(:@subscriptions)["sub_2"][:poisoned], "its own frame lifts the freeze"
+  end
+
+  def test_a_reply_during_the_first_window_does_not_jump_the_queue
+    sent = []
+    client = nil
+    client, = paced_client(SUBSCRIPTIONS, lambda { |frame|
+      sent << frame
+      # The read loop answers sub_1 while the resend is still writing it.
+      client.handle_frame(ack("sub_1")) if frame["type"] == "subscribe" && frame["id"] == "sub_1"
+    })
+    sent.clear
+
+    client.resend_subscriptions
+
+    assert_equal %w[sub_1 sub_2 sub_3 sub_4], subscribes(sent), "the freed slot's query goes out after the window, in subscribe order"
+  end
+
+  def test_a_socket_replaced_mid_window_gets_no_more_of_it
+    on_old = []
+    on_new = []
+    client = nil
+    client, = paced_client(SUBSCRIPTIONS, lambda { |frame|
+      on_old << frame
+      client.attach_socket(->(each) { on_new << each }) if frame["type"] == "subscribe" && frame["id"] == "sub_1"
+    })
+    on_old.clear
+
+    client.resend_subscriptions
+
+    assert_equal ["sub_1"], subscribes(on_old), "nothing more of the window goes to the replaced socket"
+    assert_empty subscribes(on_new), "the new socket's own resend sends its queries, not the old run"
+  end
+
+  def test_a_replaced_sockets_late_frame_is_ignored
+    sent = []
+    client, = paced_client(SUBSCRIPTIONS, ->(_frame) {})
+    old = client.attach_socket(->(_frame) {})
+    client.resend_subscriptions
+    current = client.attach_socket(->(frame) { sent << frame })
+    sent.clear
+    client.resend_subscriptions
+
+    assert_nil old.call(JSON.generate({ "cursor" => 9, "data" => [], "id" => "sub_1", "type" => "data" })),
+               "the replaced socket's frame is ignored"
+    assert_nil client.instance_variable_get(:@subscriptions)["sub_1"][:cursor], "the replaced socket's frame does not move the cursor"
+    assert_equal Lunora::RESUBSCRIBE_CONCURRENCY, subscribes(sent).size, "the replaced socket's frame frees no slot"
+
+    assert_equal "ack", current.call(ack("sub_1")), "the current socket's frame is applied"
+    assert_equal Lunora::RESUBSCRIBE_CONCURRENCY + 1, subscribes(sent).size, "the current socket's reply frees its slot"
+  end
 end

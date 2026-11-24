@@ -51,6 +51,10 @@ enum LunoraVerb { query, mutation, action }
 /// Receives a subscription's value on every push.
 typedef LunoraDataCallback = void Function(Object? value);
 
+/// Applies one frame read from the socket [LunoraClient.attachSocket] returned it for, as
+/// [LunoraClient.handleFrame] does, and ignores it once that socket is detached or replaced.
+typedef LunoraFrameHandler = String? Function(String raw);
+
 /// How many re-sent `subscribe` frames a reconnect keeps unanswered at once before it waits for a
 /// reply. Each one runs its query server-side to build a snapshot, and most land on the one
 /// default-shard Durable Object, so an unpaced burst can knock it over (`RESUBSCRIBE_CONCURRENCY` in
@@ -264,6 +268,11 @@ class LunoraClient {
   final List<String> _resubscribeQueue = <String>[];
   final Map<String, int> _resubscribeSlots = <String, int>{};
 
+  /// Marks a [_pumpResubscribes] call draining the queue onto the socket of attach generation
+  /// [_resubscribePumpGeneration].
+  bool _resubscribePumping = false;
+  int _resubscribePumpGeneration = 0;
+
   /// Started with the client, so a deadline is measured on a clock a wall-clock change cannot move.
   final Stopwatch _retryClock = Stopwatch()..start();
 
@@ -284,7 +293,11 @@ class LunoraClient {
   /// The frame carries the [sessionToken] when one is set, and [context] when
   /// given. Whisper topics joined so far are rejoined right after it. Subscriptions
   /// are not replayed here: call [resendSubscriptions] after this.
-  void attachSocket(LunoraFrameSender sender, {Map<String, Object?>? context}) {
+  ///
+  /// It returns the handler for the frames this socket reads. Feed it every one: once the socket is
+  /// detached or replaced it ignores them, so a read loop still draining the old socket cannot apply
+  /// a stale frame to a subscription the next socket has re-sent.
+  LunoraFrameHandler attachSocket(LunoraFrameSender sender, {Map<String, Object?>? context}) {
     // Offline until every write below has returned: a write that throws leaves the client offline, and a
     // detach the sender makes during the writes supersedes this attach.
     _send = null;
@@ -292,9 +305,10 @@ class LunoraClient {
     _clearResubscribes();
     _discardHeldRuns();
     final attachGeneration = ++_attachGeneration;
+    String? handle(String raw) => _handleFrame(raw, attachGeneration);
 
     if (_closed) {
-      return;
+      return handle;
     }
 
     // The credential generation is read with the frames, before any sender callback can change it, so the
@@ -308,7 +322,7 @@ class LunoraClient {
     // A sender that detaches or re-attaches during a write supersedes this attach: nothing more is written to
     // a socket that is no longer attached.
     if (attachGeneration != _attachGeneration) {
-      return;
+      return handle;
     }
 
     sender(connect);
@@ -336,11 +350,13 @@ class LunoraClient {
     }
 
     if (attachGeneration != _attachGeneration) {
-      return;
+      return handle;
     }
 
     _send = sender;
     _socketGeneration = credential;
+
+    return handle;
   }
 
   /// Forgets the sender, so a subscription made while the socket is down is
@@ -432,7 +448,7 @@ class LunoraClient {
   /// to be in place before anything is written to it:
   ///
   /// ```dart
-  /// client.attachSocket(send);
+  /// final handle = client.attachSocket(send); // feed it the socket's frames
   /// client.resendSubscriptions();
   /// client.setConnected(true);
   /// ```
@@ -783,13 +799,15 @@ class LunoraClient {
 
       final generation = _attachGeneration;
       // Its frame will never be answered now, so the slot it holds goes to the next one.
-      final batch = _releaseResubscribeSlot(id);
+      final released = _releaseResubscribeSlot(id);
 
       try {
         sender(buildUnsubscribeFrame(id));
       } finally {
-        // The batch holds slots this call claimed: a failed unsubscribe write must not strand it.
-        _sendResubscribes(sender, generation, batch, raiseErrors: false);
+        // Pumped even after a failed unsubscribe write: the freed slot must not strand the queue.
+        if (released) {
+          _pumpResubscribes(sender, generation, raiseErrors: false);
+        }
       }
     };
   }
@@ -853,7 +871,7 @@ class LunoraClient {
   ///
   /// Query subscriptions go out at most [resubscribeConcurrency] at a time, in
   /// subscribe order, as the reference client sends them: each of the rest is
-  /// sent once [handleFrame] sees a frame for one already sent, or once
+  /// sent once the frame handler sees a frame for one already sent, or once
   /// [retryDueSubscriptions] finds one has gone unanswered for
   /// [resubscribeAckTimeoutMs] (the deadline is included in
   /// [nextSubscriptionRetryAt]). Shape subscriptions all go out here.
@@ -887,7 +905,7 @@ class LunoraClient {
 
     final generation = _attachGeneration;
 
-    _sendResubscribes(sender, generation, _takeResubscribes(_retryClock.elapsedMilliseconds), raiseErrors: true);
+    _pumpResubscribes(sender, generation, raiseErrors: true);
 
     for (final frame in shapeFrames) {
       sender(frame);
@@ -899,19 +917,16 @@ class LunoraClient {
     _resubscribeSlots.clear();
   }
 
-  /// Frees the slot [id]'s re-subscribe holds and claims the queued re-subscribes that now fit,
-  /// while a socket is attached to send them on.
-  List<_Resubscribe> _releaseResubscribeSlot(String id) =>
-      _resubscribeSlots.remove(id) != null && _send != null ? _takeResubscribes(_retryClock.elapsedMilliseconds) : const <_Resubscribe>[];
+  /// Frees the slot [id]'s re-subscribe holds, and reports whether it held one.
+  bool _releaseResubscribeSlot(String id) => _resubscribeSlots.remove(id) != null;
 
-  /// Builds the queued re-subscribes that fit in the free slots and claims a slot for each.
+  /// Takes the next queued re-subscribe that fits in a free slot, builds its frame and claims the
+  /// slot, or returns null when none fits.
   ///
-  /// Each frame is BUILT here, at the moment it goes out, not when it was queued: it reads the
+  /// The frame is BUILT here, at the moment it goes out, not when it was queued: it reads the
   /// cursor and epoch the frame handler writes, and an identity change can clear them while the
   /// subscription waits its turn.
-  List<_Resubscribe> _takeResubscribes(int nowMs) {
-    final batch = <_Resubscribe>[];
-
+  _Resubscribe? _claimResubscribe(int nowMs) {
     while (_resubscribeSlots.length < resubscribeConcurrency && _resubscribeQueue.isNotEmpty) {
       final id = _resubscribeQueue.removeAt(0);
       final entry = _subscriptions[id];
@@ -932,66 +947,96 @@ class LunoraClient {
       }
 
       // The replay from the old cursor re-applies the dropped change, and poisons again if it is
-      // still unmergeable. Lifted only now: a queued subscription is not replaying yet, so a delta
-      // reaching it must not move the cursor past the dropped change.
+      // still unmergeable. Lifted only as its own frame goes out: a subscription still queued is not
+      // replaying yet, so a delta reaching it must not move the cursor past the dropped change.
       final wasPoisoned = entry.poisoned;
 
       entry
         ..poisoned = false
         ..pendingRun = null;
-      batch.add((id: id, entry: entry, frame: frame, wasPoisoned: wasPoisoned));
       _resubscribeSlots[id] = nowMs + resubscribeAckTimeoutMs;
+
+      return (id: id, entry: entry, frame: frame, wasPoisoned: wasPoisoned);
     }
 
-    return batch;
+    return null;
   }
 
-  /// Sends what [_takeResubscribes] built on the socket of attach generation [generation].
+  /// Sends the queued re-subscribes that fit in the free slots on the socket of attach generation
+  /// [generation], one at a time, and returns how many it sent. Its slots are dated from the later
+  /// of [notBeforeMs] and [retryClockMs] when it starts: a late timer passes the deadline it was
+  /// armed for, and slots dated from that would already be (nearly) expired and pace nothing.
   ///
-  /// A send that throws means the server never saw that replay or any after it, so their dropped
-  /// changes are still unapplied and a later delta must not advance the cursor past them: their
-  /// freeze comes back, their slots are freed and they go back to the front of the queue. A
-  /// replaced socket's resend owns the queue by then, so none of that happens once the generation
-  /// has moved on. Off the caller's own resend ([raiseErrors] false) the error is not rethrown: out
-  /// of [handleFrame] it would end the socket read loop, and the dead socket's detach starts the
-  /// next resend anyway.
-  void _sendResubscribes(LunoraFrameSender sender, int generation, List<_Resubscribe> batch, {required bool raiseErrors}) {
+  /// One pump drains a socket's queue at a time. A sender is the caller's code and may re-enter
+  /// [handleFrame] or an unsubscribe while a frame is written; the slot that frees is filled by this
+  /// pump once the write returns, so the queue goes out in subscribe order, and the re-entrant call
+  /// that finds a pump running returns at once. The generation is checked before every claim, so a
+  /// pump whose socket was replaced mid-drain writes nothing more to it.
+  ///
+  /// A send that throws means the server never saw that replay, so its dropped change is still
+  /// unapplied and a later delta must not advance the cursor past it: its freeze comes back, its
+  /// slot is freed and it goes back to the front of the queue. A replaced socket's resend owns the
+  /// queue by then, so none of that happens once the generation has moved on. Off the caller's own
+  /// resend ([raiseErrors] false) the error is not rethrown: out of [handleFrame] it would end the
+  /// socket read loop, and the dead socket's detach starts the next resend anyway.
+  int _pumpResubscribes(LunoraFrameSender sender, int generation, {int notBeforeMs = 0, required bool raiseErrors}) {
+    if (_closed || generation != _attachGeneration || (_resubscribePumping && _resubscribePumpGeneration == generation)) {
+      return 0;
+    }
+
+    _resubscribePumping = true;
+    _resubscribePumpGeneration = generation;
+
+    final clock = _retryClock.elapsedMilliseconds;
+    final nowMs = notBeforeMs > clock ? notBeforeMs : clock;
     var sent = 0;
 
     try {
-      for (; sent < batch.length; sent++) {
-        sender(batch[sent].frame);
-      }
+      while (!_closed && generation == _attachGeneration) {
+        final item = _claimResubscribe(nowMs);
 
-      // A sender that unsubscribes synchronously can do so before its own subscribe frame went
-      // out; follow it with another, or the server keeps a subscription this client no longer holds.
-      for (final item in batch) {
+        if (item == null) {
+          break;
+        }
+
+        try {
+          sender(item.frame);
+        } on Object {
+          if (!_closed && generation == _attachGeneration) {
+            if (item.wasPoisoned) {
+              item.entry.poisoned = true;
+            }
+
+            _resubscribeSlots.remove(item.id);
+
+            if (identical(_subscriptions[item.id], item.entry)) {
+              _resubscribeQueue.insert(0, item.id);
+            }
+          }
+
+          rethrow;
+        }
+
+        sent++;
+
+        // A sender that unsubscribes synchronously can do so before its own subscribe frame went
+        // out; follow it with another, or the server keeps a subscription this client no longer holds.
         if (!identical(_subscriptions[item.id], item.entry)) {
           sender(buildUnsubscribeFrame(item.id));
         }
       }
     } on Object {
-      if (sent < batch.length && !_closed && generation == _attachGeneration) {
-        final unsent = batch.sublist(sent);
-
-        for (final item in unsent) {
-          if (item.wasPoisoned) {
-            item.entry.poisoned = true;
-          }
-
-          _resubscribeSlots.remove(item.id);
-        }
-
-        _resubscribeQueue.insertAll(0, <String>[
-          for (final item in unsent)
-            if (identical(_subscriptions[item.id], item.entry)) item.id,
-        ]);
-      }
-
       if (raiseErrors) {
         rethrow;
       }
+    } finally {
+      // A newer socket's pump owns the flag once the generation has moved on.
+      if (generation == _attachGeneration) {
+        _resubscribePumping = false;
+      }
     }
+
+    return sent;
   }
 
   /// Re-subscribes every query whose retry hint has come due by [nowMs], and returns how many it
@@ -1069,23 +1114,16 @@ class LunoraClient {
       sent++;
     }
 
-    // Claimed only now: a batch claimed before a write above threw would keep its slots and lose
-    // its freeze without ever going out. A socket attached while the frames above were written has
-    // its own pacing, which this run must neither expire nor drain onto the socket it captured.
+    // Pumped only now: a slot claimed before a write above threw would keep its slot and lose its
+    // freeze without ever going out. A socket attached while the frames above were written has its
+    // own pacing, which this run must neither expire nor drain onto the socket it captured.
     if (_closed || generation != _attachGeneration) {
       return sent;
     }
 
     _resubscribeSlots.removeWhere((_, deadline) => deadline <= now);
 
-    // Dated from now, not the deadline a late timer was armed for, or the new slots would already be
-    // (nearly) expired and the window would not pace anything.
-    final current = _retryClock.elapsedMilliseconds;
-    final paced = _takeResubscribes(now > current ? now : current);
-
-    _sendResubscribes(sender, generation, paced, raiseErrors: true);
-
-    return sent + paced.length;
+    return sent + _pumpResubscribes(sender, generation, notBeforeMs: now, raiseErrors: true);
   }
 
   /// The current reading of the clock [nextSubscriptionRetryAt] and [retryDueSubscriptions] use, in
@@ -1181,7 +1219,22 @@ class LunoraClient {
 
   /// Applies one server frame and returns its type. Unknown types are ignored,
   /// per the protocol's forward-compatibility rule.
-  String? handleFrame(String raw) {
+  ///
+  /// It applies a frame whatever socket it came from. Frames read from a socket go through the
+  /// [LunoraFrameHandler] [attachSocket] returned for it instead, which ignores them once that
+  /// socket is detached or replaced.
+  String? handleFrame(String raw) => _handleFrame(raw, null);
+
+  /// [handleFrame], ignoring the frame when [generation] is set and the socket of that attach
+  /// generation is no longer the attached one.
+  String? _handleFrame(String raw, int? generation) {
+    // A superseded socket's late frame belongs to subscriptions the next socket has re-sent:
+    // applying it would move their cursor, and it would free a slot the new socket's re-subscribe
+    // still holds.
+    if (generation != null && (_closed || generation != _attachGeneration)) {
+      return null;
+    }
+
     if (raw == 'lunora-ping' || raw == 'lunora-pong') {
       return null;
     }
@@ -1216,8 +1269,8 @@ class LunoraClient {
     // stalling the drain.
     final pacedSender = _send;
 
-    if (id != null && pacedSender != null) {
-      _sendResubscribes(pacedSender, _attachGeneration, _releaseResubscribeSlot(id), raiseErrors: false);
+    if (id != null && _releaseResubscribeSlot(id) && pacedSender != null) {
+      _pumpResubscribes(pacedSender, _attachGeneration, raiseErrors: false);
     }
 
     switch (kind) {

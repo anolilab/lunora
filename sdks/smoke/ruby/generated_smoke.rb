@@ -49,7 +49,7 @@ end
 
 frames = []
 watch_client = Lunora::Client.new("https://app.example")
-watch_client.attach_socket(->(frame) { frames << frame })
+handle = watch_client.attach_socket(->(frame) { frames << frame })
 
 values, stop = LunoraApi::Api.new(watch_client).messages.watch_list(MessagesListArgs.from_dynamic!({ "channelId" => "chan_1" }))
 
@@ -62,7 +62,7 @@ raise "watch subscribed to #{watched_path}, want messages:list" unless watched_p
 sent_args = Lunora.stable_stringify(query["args"])
 raise "watch sent args #{sent_args}" unless sent_args == '{"channelId":"chan_1"}'
 
-watch_client.handle_frame(JSON.generate({ "cursor" => 1, "data" => { "ok" => true }, "id" => subscribe["id"], "type" => "data" }))
+handle.call(JSON.generate({ "cursor" => 1, "data" => { "ok" => true }, "id" => subscribe["id"], "type" => "data" }))
 
 value = values.next
 raise "watch yielded #{value.inspect}, want {ok: true}" unless value == { "ok" => true }

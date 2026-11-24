@@ -87,6 +87,12 @@ data class SubscriptionError(val code: String?, val message: String)
 data class HttpResponse(val status: Int, val body: String)
 
 /**
+ * Applies one frame read from the socket [Client.attachSocket] returned it for, as
+ * [Client.handleFrame] does, and ignores it once that socket is detached or replaced.
+ */
+typealias FrameHandler = (String) -> String?
+
+/**
  * A Lunora deployment client.
  *
  * The HTTP poster and the socket frame sender are injected rather than assumed,
@@ -255,6 +261,13 @@ class Client(
      */
     private val resubscribeQueue = ArrayDeque<String>()
     private val resubscribeSlots = LinkedHashMap<String, Long>()
+
+    /**
+     * Marks a [pumpResubscribes] call draining the queue onto the socket of attach generation
+     * [resubscribePumpGeneration]. Guarded by [lock].
+     */
+    private var resubscribePumping = false
+    private var resubscribePumpGeneration = 0L
     private val shapes = LinkedHashMap<String, Shape>()
     private val pokes = LinkedHashMap<String, PokeBuffer>()
 
@@ -612,8 +625,12 @@ class Client(
      *
      * After `connect`, every registered whisper topic is joined again. Subscriptions
      * are not: [resendSubscriptions] sends those, and the app calls it after attaching.
+     *
+     * It returns the handler for the frames this socket reads. Feed it every one: once the socket
+     * is detached or replaced it ignores them, so a read loop still draining the old socket cannot
+     * apply a stale frame to a subscription the next socket has re-sent.
      */
-    fun attachSocket(context: Map<String, Any?>? = null, sender: (Map<String, Any?>) -> Unit) {
+    fun attachSocket(context: Map<String, Any?>? = null, sender: (Map<String, Any?>) -> Unit): FrameHandler {
         // Writes queue while the connect frame goes out, so none can reach the socket this one replaces.
         // The credential generation is read with the attach generation: a rotation racing this attach
         // must not tag the socket with a generation newer than the credential it presents.
@@ -626,20 +643,22 @@ class Client(
             discardHeldRuns()
             Triple(++attachGeneration, credentialGeneration, wsToken)
         }
+        val handle: FrameHandler = { raw -> handleFrame(raw, generation) }
+
         sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke(), caps = CAPABILITIES))
         // A detach or a newer attach during the send supersedes this one: installing this sender would undo it,
         // so it is not installed and its whisper joins are not sent. The joins are written under the lock, so a
         // last-listener leave cannot unsubscribe between this snapshot and its join. A join that throws leaves
         // the client offline, and the error propagates.
         synchronized(lock) {
-            if (generation != attachGeneration) return
+            if (generation != attachGeneration) return handle
             send = sender
             socketGeneration = credential
             wasEverConnected = true
             try {
                 for (topic in whisperTopics.keys.toList()) {
                     // A sender that detaches or re-attaches during a write supersedes this attach.
-                    if (generation != attachGeneration) return
+                    if (generation != attachGeneration) return handle
                     sender(buildWhisperSubscribeFrame(topic))
                 }
                 unjoinedTopics.clear()
@@ -648,6 +667,8 @@ class Client(
                 throw failure
             }
         }
+
+        return handle
     }
 
     /**
@@ -993,7 +1014,7 @@ class Client(
         socket?.invoke(buildSubscribeFrame(id, functionPath, args))
 
         return {
-            val (current, generation, batch) = synchronized(lock) {
+            val (current, generation, released) = synchronized(lock) {
                 subscriptions.remove(id)
                 pendingRetries.remove(id)
 
@@ -1005,8 +1026,8 @@ class Client(
                 try {
                     current(buildUnsubscribeFrame(id))
                 } finally {
-                    // The batch holds slots this call claimed: a failed unsubscribe write must not strand it.
-                    sendResubscribes(current, generation, batch, raiseErrors = false)
+                    // Pumped even after a failed unsubscribe write: the freed slot must not strand the queue.
+                    if (released) pumpResubscribes(current, generation, null, raiseErrors = false)
                 }
             }
         }
@@ -1137,18 +1158,17 @@ class Client(
      * Re-subscribes everything after a reconnect, carrying each resume cursor.
      *
      * Query subscriptions go out at most [RESUBSCRIBE_CONCURRENCY] at a time, in subscribe order, as
-     * the reference client sends them: each of the rest is sent once [handleFrame] sees a frame for
-     * one already sent, or once [retryDueSubscriptions] finds one has gone unanswered for
-     * [RESUBSCRIBE_ACK_TIMEOUT_NANOS] (the deadline is included in [nextSubscriptionRetryAtNanos]).
-     * Shape subscriptions all go out here.
+     * the reference client sends them: each of the rest is sent once the socket's [FrameHandler]
+     * sees a frame for one already sent, or once [retryDueSubscriptions] finds one has gone
+     * unanswered for [RESUBSCRIBE_ACK_TIMEOUT_NANOS] (the deadline is included in
+     * [nextSubscriptionRetryAtNanos]). Shape subscriptions all go out here.
      *
-     * A write that throws propagates, and the queries it left unsent go back to the front of the
-     * queue, so the next reply or due deadline on a socket that stays open sends them.
+     * A write that throws propagates, and the query it failed to write goes back to the front of the
+     * queue, so the next reply or due deadline on a socket that stays open sends it.
      */
     fun resendSubscriptions() {
         val sender: (Map<String, Any?>) -> Unit
         val generation: Long
-        val batch: List<Resubscribe>
         val shapeFrames: List<Map<String, Any?>>
 
         // The frames are BUILT under the lock, not just the iteration: each one reads
@@ -1163,10 +1183,9 @@ class Client(
             clearResubscribes()
             resubscribeQueue.addAll(subscriptions.keys)
             generation = attachGeneration
-            batch = takeResubscribes(System.nanoTime())
         }
 
-        sendResubscribes(sender, generation, batch, raiseErrors = true)
+        pumpResubscribes(sender, generation, null, raiseErrors = true)
 
         for (frame in shapeFrames) sender(frame)
     }
@@ -1180,92 +1199,118 @@ class Client(
         resubscribeSlots.clear()
     }
 
-    /**
-     * Frees the slot [id]'s re-subscribe holds and claims the queued re-subscribes that now fit,
-     * while a socket is attached to send them on. Runs with the lock held.
-     */
-    private fun releaseResubscribeSlot(id: String): List<Resubscribe> {
-        if (resubscribeSlots.remove(id) == null || send == null) return emptyList()
-
-        return takeResubscribes(System.nanoTime())
-    }
+    /** Frees the slot [id]'s re-subscribe holds, and reports whether it held one. Runs with the lock held. */
+    private fun releaseResubscribeSlot(id: String): Boolean = resubscribeSlots.remove(id) != null
 
     /**
-     * Builds the queued re-subscribes that fit in the free slots and claims a slot for each. Runs
-     * with the lock held.
+     * Takes the next queued re-subscribe that fits in a free slot, builds its frame and claims the
+     * slot, or returns null when none fits. Runs with the lock held.
      *
-     * Each frame is BUILT here, at the moment it goes out, not when it was queued: it reads the
+     * The frame is BUILT here, at the moment it goes out, not when it was queued: it reads the
      * cursor and epoch the frame handler writes, and an identity change can clear them while the
      * subscription waits its turn.
      */
-    private fun takeResubscribes(nowNanos: Long): List<Resubscribe> {
-        val batch = mutableListOf<Resubscribe>()
-
+    private fun claimResubscribe(nowNanos: Long): Resubscribe? {
         while (resubscribeSlots.size < RESUBSCRIBE_CONCURRENCY && resubscribeQueue.isNotEmpty()) {
             val id = resubscribeQueue.removeFirst()
             // Unsubscribed while it waited its turn: nothing to re-send.
             val subscription = subscriptions[id] ?: continue
             val frame = buildSubscribeFrame(id, subscription.functionPath, subscription.args, null, subscription.cursor, subscription.epoch)
             // The replay from the old cursor re-applies the dropped change, and poisons again if it is
-            // still unmergeable. Lifted only now: a queued subscription is not replaying yet, so a delta
-            // reaching it must not move the cursor past the dropped change.
+            // still unmergeable. Lifted only as its own frame goes out: a subscription still queued is
+            // not replaying yet, so a delta reaching it must not move the cursor past the dropped change.
             val wasPoisoned = subscription.poisoned
 
             subscription.poisoned = false
             subscription.heldRun = null
-            batch.add(Resubscribe(id, subscription, frame, wasPoisoned))
             resubscribeSlots[id] = nowNanos + RESUBSCRIBE_ACK_TIMEOUT_NANOS
+
+            return Resubscribe(id, subscription, frame, wasPoisoned)
         }
 
-        return batch
+        return null
     }
 
     /**
-     * Sends what [takeResubscribes] built, with the lock released, on the socket of attach
-     * generation [generation].
+     * Sends the queued re-subscribes that fit in the free slots on the socket of attach generation
+     * [generation], one at a time and with the lock released, and returns how many it sent. Its
+     * slots are dated from the later of [notBeforeNanos] and the clock when it starts: a late timer
+     * passes the deadline it was armed for, and slots dated from that would already be (nearly)
+     * expired and pace nothing.
      *
-     * A send that fails means the server never saw that replay or any after it, so their dropped
-     * changes are still unapplied and a later delta must not advance the cursor past them: their
-     * freeze comes back, their slots are freed and they go back to the front of the queue. A replaced
-     * socket's resend owns the queue by then, so none of that happens once the generation has moved
-     * on. Off the caller's own resend ([raiseErrors] false) the failure is not thrown: an exception
-     * out of [handleFrame] ends the socket read loop, and the dead socket's detach starts the next
-     * resend anyway.
+     * One pump drains a socket's queue at a time. A slot freed while it writes is filled by that
+     * pump once the write returns, so the queue goes out in subscribe order however frames and
+     * unsubscribes interleave with it, and a caller that finds a pump running returns at once. The
+     * generation is checked before every claim, so a pump whose socket was replaced mid-drain writes
+     * nothing more to it.
+     *
+     * A send that fails means the server never saw that replay, so its dropped change is still
+     * unapplied and a later delta must not advance the cursor past it: its freeze comes back, its
+     * slot is freed and it goes back to the front of the queue. A replaced socket's resend owns the
+     * queue by then, so none of that happens once the generation has moved on. Off the caller's own
+     * resend ([raiseErrors] false) the failure is not thrown: an exception out of the frame handler
+     * ends the socket read loop, and the dead socket's detach starts the next resend anyway.
      */
-    private fun sendResubscribes(socket: (Map<String, Any?>) -> Unit, generation: Long, batch: List<Resubscribe>, raiseErrors: Boolean) {
-        if (batch.isEmpty()) return
+    private fun pumpResubscribes(socket: (Map<String, Any?>) -> Unit, generation: Long, notBeforeNanos: Long?, raiseErrors: Boolean): Int {
+        synchronized(lock) {
+            if (attachGeneration != generation || closed || (resubscribePumping && resubscribePumpGeneration == generation)) return 0
 
+            resubscribePumping = true
+            resubscribePumpGeneration = generation
+        }
+
+        val clock = System.nanoTime()
+        val nowNanos = if (notBeforeNanos != null && notBeforeNanos - clock > 0) notBeforeNanos else clock
         var sent = 0
 
-        try {
-            while (sent < batch.size) {
-                socket(batch[sent].frame)
-                sent++
+        // Runs with the lock held, and only while this socket is current: a newer generation's pump
+        // owns the flag otherwise.
+        fun stop() {
+            if (attachGeneration == generation) resubscribePumping = false
+        }
+
+        while (true) {
+            val item = synchronized(lock) {
+                val next = if (attachGeneration == generation && !closed) claimResubscribe(nowNanos) else null
+
+                if (next == null) stop()
+                next
+            } ?: return sent
+
+            try {
+                socket(item.frame)
+            } catch (failure: Exception) {
+                synchronized(lock) {
+                    if (attachGeneration == generation && !closed) {
+                        if (item.wasPoisoned) item.subscription.poisoned = true
+                        resubscribeSlots.remove(item.id)
+                        if (subscriptions[item.id] === item.subscription) resubscribeQueue.addFirst(item.id)
+                    }
+
+                    stop()
+                }
+
+                if (raiseErrors) throw failure
+
+                return sent
             }
 
-            // The frames went out after the lock was released, so an unsubscribe on another thread may
+            sent++
+
+            // The frame went out after the lock was released, so an unsubscribe on another thread may
             // have reached the socket first; follow it with another, or the server keeps a subscription
             // this client no longer holds.
-            val dropped = synchronized(lock) { batch.filter { subscriptions[it.id] !== it.subscription }.map { it.id } }
+            if (synchronized(lock) { subscriptions[item.id] !== item.subscription }) {
+                try {
+                    socket(buildUnsubscribeFrame(item.id))
+                } catch (failure: Exception) {
+                    synchronized(lock) { stop() }
 
-            for (id in dropped) socket(buildUnsubscribeFrame(id))
-        } catch (failure: Exception) {
-            synchronized(lock) {
-                if (sent < batch.size && attachGeneration == generation && !closed) {
-                    val unsent = batch.subList(sent, batch.size)
+                    if (raiseErrors) throw failure
 
-                    for (entry in unsent) {
-                        if (entry.wasPoisoned) entry.subscription.poisoned = true
-                        resubscribeSlots.remove(entry.id)
-                    }
-
-                    for (entry in unsent.asReversed()) {
-                        if (subscriptions[entry.id] === entry.subscription) resubscribeQueue.addFirst(entry.id)
-                    }
+                    return sent
                 }
             }
-
-            if (raiseErrors) throw failure
         }
     }
 
@@ -1333,25 +1378,20 @@ class Client(
             sent++
         }
 
-        // Claimed only now: a batch claimed before a write above failed would keep its slots and
-        // lose its freeze without ever going out. A socket attached while the frames above were
-        // written has its own pacing, which this run must neither expire nor drain onto the socket
-        // it captured.
-        val paced = synchronized(lock) {
-            if (attachGeneration == generation && !closed) {
-                resubscribeSlots.values.removeIf { it - nowNanos <= 0 }
-                // Dated from now, not the deadline a late timer was armed for, or the new slots
-                // would already be (nearly) expired and the window would not pace anything.
-                val current = System.nanoTime()
-                takeResubscribes(if (current - nowNanos > 0) current else nowNanos)
-            } else {
-                emptyList()
-            }
+        // Pumped only now: a slot claimed before a write above failed would keep its slot and lose
+        // its freeze without ever going out. A socket attached while the frames above were written
+        // has its own pacing, which this run must neither expire nor drain onto the socket it
+        // captured.
+        val current = synchronized(lock) {
+            val live = attachGeneration == generation && !closed
+
+            if (live) resubscribeSlots.values.removeIf { it - nowNanos <= 0 }
+            live
         }
 
-        sendResubscribes(sender, generation, paced, raiseErrors = true)
+        if (!current) return sent
 
-        return sent + paced.size
+        return sent + pumpResubscribes(sender, generation, nowNanos, raiseErrors = true)
     }
 
     /**
@@ -1388,8 +1428,15 @@ class Client(
     /**
      * Applies one server frame and returns its type. Unknown types are ignored,
      * per the protocol's forward-compatibility rule.
+     *
+     * It applies a frame whatever socket it came from. Frames read from a socket go through the
+     * [FrameHandler] [attachSocket] returned for it instead, which ignores them once that socket is
+     * detached or replaced.
      */
-    fun handleFrame(raw: String): String? {
+    fun handleFrame(raw: String): String? = handleFrame(raw, null)
+
+    /** [handleFrame], ignoring the frame when [generation] is given and that socket is no longer the attached one. */
+    private fun handleFrame(raw: String, generation: Long?): String? {
         if (raw == "lunora-ping" || raw == "lunora-pong") return null
 
         val frame = try {
@@ -1406,11 +1453,16 @@ class Client(
         // an `ack`, but equally the `error` that refuses it or a `data` that overtakes its ack.
         // Releasing here rather than per type keeps an unanticipated frame, or a case that returns
         // early, from stalling the drain.
-        val (pacedSocket, pacedGeneration, paced) = synchronized(lock) {
+        val (pacedSocket, pacedGeneration, released) = synchronized(lock) {
+            // A superseded socket's late frame belongs to subscriptions the next socket has re-sent:
+            // applying it would move their cursor, and it would free a slot the new socket's
+            // re-subscribe still holds.
+            if (generation != null && (attachGeneration != generation || closed)) return null
+
             Triple(send, attachGeneration, releaseResubscribeSlot(id))
         }
 
-        if (pacedSocket != null) sendResubscribes(pacedSocket, pacedGeneration, paced, raiseErrors = false)
+        if (released && pacedSocket != null) pumpResubscribes(pacedSocket, pacedGeneration, null, raiseErrors = false)
 
         // The server answered this subscription, so a retry it was waiting on is moot. A `data`,
         // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
