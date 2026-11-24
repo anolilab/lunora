@@ -1,5 +1,5 @@
 import { stableWireKey } from "@lunora/wire";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TabCoordinator } from "../src/cross-tab";
 import { LunoraClient } from "../src/lunora-client";
@@ -91,17 +91,61 @@ const clientChannel = (client: LunoraClient): string => `lunora-bridge::${TEST_U
 const SMALLER_ID = "aaa-earlier-tab";
 const LARGER_ID = "zzz-later-tab";
 
-// Real (non-fake) timers, deliberately small: `BroadcastChannel` cross-instance
-// delivery in Node is a real macrotask (confirmed — it does not flush on
-// microtasks alone), so these tests use real waits rather than fake timers,
-// which would freeze the event loop turn the delivery depends on.
 const HEARTBEAT_INTERVAL_MS = 15;
 const LEADER_TIMEOUT_MS = 60;
 
-const delay = (ms: number): Promise<void> =>
+/**
+ * Election timers frozen. `BroadcastChannel` delivery is a real macrotask Node runs whatever the
+ * fake clock says, and `advanceTimersByTimeAsync` yields to the real event loop between timers,
+ * so frames still arrive while virtual time moves. `Date` is faked too, so a heartbeat's `ts` and
+ * the health check that reads it agree.
+ */
+const freezeElectionClock = (): void => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+};
+
+/** The channel a coordinator listens on. White-box: `bc` is private, which TypeScript does not enforce at runtime. */
+const channelOf = (coordinator: TabCoordinator): BroadcastChannel => (coordinator as unknown as { bc: BroadcastChannel }).bc;
+
+/** The channel a `crossTabSync` client's current coordinator listens on — it moves when the identity does. */
+const clientBus = (client: LunoraClient): BroadcastChannel => channelOf((client as unknown as { tabCoordinator: TabCoordinator }).tabCoordinator);
+
+/**
+ * Resolves once `channel` has dispatched a message matching `match`. A channel runs its listeners
+ * in registration order, so the owner's own listener — added when it opened the channel — has
+ * handled the message by then. Delivery is never synchronous, so a call made right after the
+ * `postMessage` is still listening before the message arrives.
+ */
+const heard = (channel: BroadcastChannel, match: (data: { tabId?: string; type?: string }) => boolean): Promise<void> =>
     new Promise((resolve) => {
-        setTimeout(resolve, ms);
+        const onMessage = (event: MessageEvent<{ tabId?: string; type?: string } | null>): void => {
+            if (event.data !== null && match(event.data)) {
+                channel.removeEventListener("message", onMessage);
+                resolve();
+            }
+        };
+
+        channel.addEventListener("message", onMessage);
     });
+
+const ofType =
+    (type: string) =>
+    (data: { type?: string }): boolean =>
+        data.type === type;
+
+/**
+ * Resolves once `channel` has dispatched everything already posted to it. One channel receives
+ * its messages in the order they were posted, from whichever sender, so a marker posted now
+ * arrives last.
+ */
+const drained = async (channel: BroadcastChannel): Promise<void> => {
+    const sender = new BroadcastChannel(channel.name);
+    const marker = heard(channel, ofType("test:marker"));
+
+    sender.postMessage({ type: "test:marker" });
+    await marker;
+    sender.close();
+};
 
 // --- Socket that records each frame the client sends, so a test can read the resume frame. ---
 const createFrameWebSocket = (sent: string[]): typeof WebSocket => {
@@ -142,6 +186,14 @@ const createFrameWebSocket = (sent: string[]): typeof WebSocket => {
 };
 
 describe("tabCoordinator — leader demotion / health (CLIENT-02)", () => {
+    beforeEach(() => {
+        freezeElectionClock();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("a leader steps down when it receives a heartbeat from a lexicographically-smaller tabId", async () => {
         expect.assertions(3);
 
@@ -163,7 +215,7 @@ describe("tabCoordinator — leader demotion / health (CLIENT-02)", () => {
 
             // Solo boot: no competing claim arrives, so it self-promotes once the
             // leader-timeout window elapses.
-            await delay(LEADER_TIMEOUT_MS + 20);
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS);
 
             expect(coordinator.isLeader()).toBe(true);
 
@@ -174,9 +226,10 @@ describe("tabCoordinator — leader demotion / health (CLIENT-02)", () => {
             // own heartbeat. Before the fix an already-leading tab never
             // re-evaluated on a competing heartbeat, causing a permanent
             // two-leader split-brain.
-            rogue.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            const handled = heard(channelOf(coordinator), ofType("heartbeat"));
 
-            await delay(20);
+            rogue.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            await handled;
 
             expect(coordinator.isLeader()).toBe(false);
             expect(events).toStrictEqual(["become-leader", "stop-leader"]);
@@ -209,13 +262,16 @@ describe("tabCoordinator — leader demotion / health (CLIENT-02)", () => {
 
         try {
             coordinator.start();
-            await delay(LEADER_TIMEOUT_MS + 20);
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS);
 
             expect(coordinator.isLeader()).toBe(true);
 
-            rogue.postMessage({ tabId: LARGER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            const handled = heard(channelOf(coordinator), ofType("heartbeat"));
 
-            await delay(20);
+            rogue.postMessage({ tabId: LARGER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
+            await handled;
+            // Whatever the coordinator posted while handling it has reached `rogue` by the marker.
+            await drained(rogue);
 
             // Tie-break favors the lexicographically-smaller id — our real tab's
             // id always starts with "tab_", which sorts before LARGER_ID
@@ -244,9 +300,10 @@ describe("tabCoordinator — leader demotion / health (CLIENT-02)", () => {
             // — our coordinator defers to it (tie-break) instead of self-promoting.
             const claimTs = Date.now();
 
-            rogue.postMessage({ tabId: SMALLER_ID, ts: claimTs, type: "claim-leadership" } satisfies RawMessage);
+            const handled = heard(channelOf(coordinator), ofType("claim-leadership"));
 
-            await delay(20);
+            rogue.postMessage({ tabId: SMALLER_ID, ts: claimTs, type: "claim-leadership" } satisfies RawMessage);
+            await handled;
 
             expect(coordinator.isLeader()).toBe(false);
 
@@ -271,6 +328,14 @@ describe("tabCoordinator — leader demotion / health (CLIENT-02)", () => {
 });
 
 describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", () => {
+    beforeEach(() => {
+        freezeElectionClock();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("a follower promotes once the leader stops and yields", async () => {
         expect.assertions(3);
 
@@ -297,7 +362,7 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
 
             // Let the pair converge on a single leader (the smaller tabId, per
             // the existing claim tie-break).
-            await delay(LEADER_TIMEOUT_MS + 60);
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS + HEARTBEAT_INTERVAL_MS);
 
             const aIsLeader = coordinatorA.isLeader();
 
@@ -312,9 +377,12 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
             // `stop()` broadcasts `yield-leadership`. Before the fix nothing
             // ever promoted a new leader after this, so every remaining tab's
             // live queries would freeze forever.
-            leader.stop();
+            const yielded = heard(channelOf(follower), ofType("yield-leadership"));
 
-            await delay(LEADER_TIMEOUT_MS + 60);
+            leader.stop();
+            await yielded;
+            // The claim window the yield opened closes with no competing claim.
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS);
 
             expect(follower.isLeader()).toBe(true);
             expect(followerEvents).toContain("become-leader");
@@ -340,17 +408,19 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
             // Three-tab election converges via the same claim tie-break +
             // heartbeat-override mechanism CLIENT-02 already covers for two
             // tabs (see `resolveLeaderVsLeaderTieBreak`'s doc comment).
-            await delay(LEADER_TIMEOUT_MS + 100);
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS + HEARTBEAT_INTERVAL_MS);
 
             const leader = coordinators.find((coordinator) => coordinator.isLeader());
 
             expect(leader).toBeDefined();
 
             const followers = coordinators.filter((coordinator) => coordinator !== leader);
+            const yielded = Promise.all(followers.map(async (follower) => heard(channelOf(follower), ofType("yield-leadership"))));
 
             leader?.stop();
-
-            await delay(LEADER_TIMEOUT_MS + 100);
+            await yielded;
+            // The followers' claim windows close, and the claims they traded settle on one of them.
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS + HEARTBEAT_INTERVAL_MS);
 
             const nowLeaders = followers.filter((coordinator) => coordinator.isLeader());
 
@@ -382,9 +452,10 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
             // `knownLeader` is set to something this coordinator will later be
             // told is yielding.
             const rogue = new BroadcastChannel(channelName);
+            const handled = heard(channelOf(coordinator), ofType("heartbeat"));
 
             rogue.postMessage({ tabId: LARGER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
-            await delay(20);
+            await handled;
             rogue.close();
 
             coordinator.stop();
@@ -400,7 +471,8 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
 
             internals.handleMessage({ tabId: LARGER_ID, type: "yield-leadership" });
 
-            await delay(LEADER_TIMEOUT_MS + 40);
+            // Past any claim window the frame could have opened.
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS * 2);
 
             expect(events).not.toContain("become-leader");
         } finally {
@@ -410,6 +482,14 @@ describe("tabCoordinator — promotion after yield-leadership (plan 266 S1)", ()
 });
 
 describe("tabCoordinator — subscription-data/subscription-settled wire frames (CLIENT-01)", () => {
+    beforeEach(() => {
+        freezeElectionClock();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("re-announces the leader's connection status when a new tab claims leadership", async () => {
         expect.hasAssertions();
 
@@ -432,16 +512,14 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
 
         try {
             leader.start();
-            await delay(LEADER_TIMEOUT_MS + 20);
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS);
 
             expect(leader.isLeader()).toBe(true);
 
+            const handled = heard(channelOf(leader), ofType("claim-leadership"));
+
             newcomer.postMessage({ tabId: "zzz-newcomer", ts: Date.now(), type: "claim-leadership" });
-            await vi.waitFor(() => {
-                if (answered === 0) {
-                    throw new Error("leader has not answered the claim yet");
-                }
-            });
+            await handled;
 
             expect(answered).toBe(1);
         } finally {
@@ -468,13 +546,10 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
             },
         });
         const leader = new BroadcastChannel(channelName);
+        const handled = heard(channelOf(follower), ofType("subscription-error"));
 
         leader.postMessage({ error: { code: "FORBIDDEN", message: "rls denied" }, key: "posts:list|{}", type: "subscription-error" });
-        await vi.waitFor(() => {
-            if (received.length === 0) {
-                throw new Error("no subscription-error delivered yet");
-            }
-        });
+        await handled;
 
         expect(received).toHaveLength(1);
         expect(received[0]?.error.code).toBe("FORBIDDEN");
@@ -556,7 +631,7 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
 
             // Solo boot: self-promotes to leader once the leader-timeout window
             // elapses (mirrors the other tests in this file).
-            await delay(LEADER_TIMEOUT_MS + 20);
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS);
 
             coordinator.broadcastSubscriptionData("q:1::{}::", { hello: "world" }, 10, "epoch-1");
             coordinator.broadcastSubscriptionSettled("q:1::{}::", 12, "epoch-2");
@@ -564,7 +639,9 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
             // frame it never got a cursor for.
             coordinator.broadcastSubscriptionData("q:2::{}::", 1);
 
-            await delay(20);
+            // Snapshots post at the end of the tick; let it end, then let every post reach `rogue`.
+            await Promise.resolve();
+            await drained(rogue);
 
             const dataFrame = received.find((m) => m.type === "subscription-data" && m.key === "q:1::{}::");
             const settledFrame = received.find((m) => m.type === "subscription-settled");
@@ -597,7 +674,7 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
 
         try {
             coordinator.start();
-            await delay(LEADER_TIMEOUT_MS + 20);
+            await vi.advanceTimersByTimeAsync(LEADER_TIMEOUT_MS);
 
             // A custom-mutator watermark rides along so a follower's `@lunora/db`
             // `onCheckpoint` gate can advance too, not just cursor/epoch.
@@ -606,7 +683,7 @@ describe("tabCoordinator — subscription-data/subscription-settled wire frames 
             // no custom-mutator watermark to forward.
             coordinator.broadcastSubscriptionSettled("q:2::{}::", 1);
 
-            await delay(20);
+            await drained(rogue);
 
             const withId = received.find((m) => m.type === "subscription-settled" && m.key === "q:1::{}::");
             const withoutId = received.find((m) => m.type === "subscription-settled" && m.key === "q:2::{}::");
@@ -688,9 +765,9 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
 
             // The overlay is dropped; the leader's authoritative value shows —
             // not 12 (which a still-applied +1 layer would fold on top of 11).
-            await vi.waitFor(() => {
-                expect(received.at(-1)).toBe(11);
-            });
+            await heard(clientBus(client), ofType("subscription-data"));
+
+            expect(received.at(-1)).toBe(11);
         } finally {
             rogue.close();
             client.close();
@@ -727,9 +804,9 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
             rogue.postMessage({ cursor: 10, data: 99, key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
 
             // The overlay is released; the leader's authoritative value shows.
-            await vi.waitFor(() => {
-                expect(received.at(-1)).toBe(99);
-            });
+            await heard(clientBus(client), ofType("subscription-data"));
+
+            expect(received.at(-1)).toBe(99);
         } finally {
             rogue.close();
             client.close();
@@ -761,9 +838,9 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
             // 5 (new base) folded through the still-active +1 layer = 6, not the
             // raw leader value — the historical no-cursor behavior, preserved for
             // backward compat with a mixed-version deploy.
-            await vi.waitFor(() => {
-                expect(received.at(-1)).toBe(6);
-            });
+            await heard(clientBus(client), ofType("subscription-data"));
+
+            expect(received.at(-1)).toBe(6);
         } finally {
             rogue.close();
             client.close();
@@ -804,7 +881,7 @@ describe("lunoraClient — cross-tab follower drops confirmed optimistic layers 
                 type: "subscription-settled",
             } satisfies RawLeaderMessage);
 
-            await delay(30);
+            await heard(clientBus(client), ofType("subscription-settled"));
 
             expect(checkpoints).toStrictEqual([{ checkpoint: 10, mutationId: 7 }]);
         } finally {
@@ -831,9 +908,9 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
             // The leader reports connected once (establishing the follower's
             // sticky `leader.wasEverConnected`), then offline.
             rogue.postMessage({ status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("connection-status"));
             rogue.postMessage({ status: "offline", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("connection-status"));
 
             expect(client.connectionStatus()).toBe("offline");
 
@@ -849,7 +926,10 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
             // write falls through to the rejecting `fetchMock`.)
             expect(client.pendingCount()).toBe(1);
 
-            await delay(30);
+            // One I/O turn: a write sent instead of queued has hit the rejecting fetch and settled by now.
+            await new Promise((resolve) => {
+                setImmediate(resolve);
+            });
 
             expect(rejected).toBe(false);
         } finally {
@@ -875,14 +955,14 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
             expect(client.connectionStatus()).toBe("idle");
 
             rogue.postMessage({ status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("connection-status"));
 
             // Fails pre-fix: `computeStatus()` reads the follower's own (always
             // empty) `connections` map and reports `"idle"` forever.
             expect(client.connectionStatus()).toBe("connected");
 
             rogue.postMessage({ status: "offline", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("connection-status"));
 
             expect(client.connectionStatus()).toBe("offline");
             expect(statuses).toStrictEqual(["idle", "connected", "offline"]);
@@ -1008,7 +1088,7 @@ describe("lunoraClient — cross-tab settled watermark scoped to the owning clie
                 type: "subscription-settled",
             } satisfies RawLeaderMessage);
 
-            await delay(30);
+            await heard(clientBus(client), ofType("subscription-settled"));
 
             // The checkpoint (cursor) half still fires unconditionally — only
             // `mutationId` stays at its prior (never-advanced) value.
@@ -1041,9 +1121,9 @@ describe("lunoraClient — cross-tab settled watermark scoped to the owning clie
                 tabId: "leader-tab",
                 type: "subscription-settled",
             } satisfies RawLeaderMessage);
-            await vi.waitFor(() => {
-                expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 10, mutationId: 6 });
-            });
+            await heard(clientBus(client), ofType("subscription-settled"));
+
+            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 10, mutationId: 6 });
 
             // A later, LOWER watermark from the same (matching) clientId must
             // never move `lastMutationId` backwards.
@@ -1055,9 +1135,9 @@ describe("lunoraClient — cross-tab settled watermark scoped to the owning clie
                 tabId: "leader-tab",
                 type: "subscription-settled",
             } satisfies RawLeaderMessage);
-            await vi.waitFor(() => {
-                expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 6 });
-            });
+            await heard(clientBus(client), ofType("subscription-settled"));
+
+            expect(checkpoints.at(-1)).toStrictEqual({ checkpoint: 11, mutationId: 6 });
         } finally {
             rogue.close();
             client.close();
@@ -1080,7 +1160,7 @@ describe("lunoraClient — cross-tab settled watermark scoped to the owning clie
 
             // No `clientId` field at all — an old (pre-S3) leader.
             rogue.postMessage({ cursor: 10, key, lastMutationId: 6, tabId: "leader-tab", type: "subscription-settled" } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("subscription-settled"));
 
             expect(checkpoints).toStrictEqual([{ checkpoint: 10, mutationId: undefined }]);
         } finally {
@@ -1112,16 +1192,21 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
             expect(channelA).not.toBe(channelB);
 
             const receivedB: unknown[] = [];
+            // A signed-in follower shows rows only once it knows its own claims, a fetch away.
+            const shownOnB = Promise.withResolvers<undefined>();
 
-            clientB.subscribe(fnRef("q:list"), {}, (value) => receivedB.push(value));
+            clientB.subscribe(fnRef("q:list"), {}, (value) => {
+                receivedB.push(value);
+                shownOnB.resolve(undefined);
+            });
 
             const key = SubscriptionRegistry.key("q:list", {});
             const probeOnA = new BroadcastChannel(channelA);
 
             // A frame posted on A's (different) channel must never reach B —
-            // B isn't listening there.
+            // B isn't listening there. A has handled it once its own channel dispatched it.
             probeOnA.postMessage({ data: "leaked-from-A", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(clientA), ofType("subscription-data"));
 
             expect(receivedB).toStrictEqual([]);
 
@@ -1131,9 +1216,10 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
             const probeOnB = new BroadcastChannel(channelB);
 
             probeOnB.postMessage({ data: "own-channel-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await vi.waitFor(() => {
-                expect(receivedB).toStrictEqual(["own-channel-row"]);
-            });
+            await shownOnB.promise;
+
+            // A channel receives in posting order, so a leaked frame would have been shown first.
+            expect(receivedB).toStrictEqual(["own-channel-row"]);
 
             probeOnA.close();
             probeOnB.close();
@@ -1193,29 +1279,38 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
             const anonChannel = `lunora-bridge::${url}::${client.currentIdentity() ?? "anon"}`;
 
             const received: unknown[] = [];
+            let shown = Promise.withResolvers<undefined>();
 
-            client.subscribe(fnRef("q:list"), {}, (value) => received.push(value));
+            client.subscribe(fnRef("q:list"), {}, (value) => {
+                received.push(value);
+                shown.resolve(undefined);
+            });
 
             const key = SubscriptionRegistry.key("q:list", {});
             const probeOnAnon = new BroadcastChannel(anonChannel);
 
             probeOnAnon.postMessage({ data: "anon-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("subscription-data"));
 
             expect(received).toStrictEqual(["anon-row"]);
 
+            const anonBus = clientBus(client);
+
             // A genuine credential change — the coordinator must restart onto
-            // the re-derived (signed-in) channel.
+            // the re-derived (signed-in) channel, synchronously.
             client.setAuthToken("token-X", "user-1");
-            await delay(30);
 
             const signedInChannel = `lunora-bridge::${url}::${client.currentIdentity() ?? "anon"}`;
 
             expect(signedInChannel).not.toBe(anonChannel);
 
-            // The OLD (anon) channel is dead — nothing is listening there anymore.
+            // The OLD (anon) channel is dead — nothing is listening there anymore: the client closed it,
+            // and a closed channel is delivered nothing (posting on one throws).
+            expect(() => {
+                anonBus.postMessage({ type: "test:probe" });
+            }).toThrow("BroadcastChannel is closed");
+
             probeOnAnon.postMessage({ data: "stale-anon-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await delay(30);
 
             // A browser socket cannot carry the bearer, so the sign-in does not
             // blank the view; nothing from the old channel followed it.
@@ -1224,10 +1319,12 @@ describe("lunoraClient — cross-tab channel scoped to deployment + identity (pl
             // The NEW channel is live.
             const probeOnSignedIn = new BroadcastChannel(signedInChannel);
 
+            // Signed in, the follower shows rows only once it knows its own claims, a fetch away.
+            shown = Promise.withResolvers<undefined>();
             probeOnSignedIn.postMessage({ data: "signed-in-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await vi.waitFor(() => {
-                expect(received).toStrictEqual(["anon-row", "signed-in-row"]);
-            });
+            await shown.promise;
+
+            expect(received).toStrictEqual(["anon-row", "signed-in-row"]);
 
             probeOnAnon.close();
             probeOnSignedIn.close();
@@ -1248,8 +1345,13 @@ describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)",
 
         try {
             const received: unknown[] = [];
+            // A signed-in follower shows rows only once it knows its own claims, a fetch away.
+            const shown = Promise.withResolvers<undefined>();
 
-            client.subscribe(fnRef("q:list"), {}, (value) => received.push(value));
+            client.subscribe(fnRef("q:list"), {}, (value) => {
+                received.push(value);
+                shown.resolve(undefined);
+            });
 
             const rogue = new BroadcastChannel(clientChannel(client));
             const key = SubscriptionRegistry.key("q:list", {});
@@ -1265,16 +1367,17 @@ describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)",
                 tabId: "leader-tab",
                 type: "subscription-data",
             } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("subscription-data"));
 
             expect(received).toStrictEqual([]);
 
             // An absent stamp (mixed-version / old leader) is still accepted
             // — today's behavior, unchanged.
             rogue.postMessage({ data: "old-leader-row", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await vi.waitFor(() => {
-                expect(received).toStrictEqual(["old-leader-row"]);
-            });
+            await shown.promise;
+
+            // In posting order, so a "not-mine" frame let through would have been shown first.
+            expect(received).toStrictEqual(["old-leader-row"]);
 
             rogue.close();
         } finally {
@@ -1306,7 +1409,7 @@ describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)",
                 tabId: "leader-tab",
                 type: "subscription-settled",
             } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("subscription-settled"));
 
             expect(checkpoints).toStrictEqual([]);
 
@@ -1316,7 +1419,7 @@ describe("lunoraClient — identity stamp on data-bearing frames (plan 263 S2)",
                 tabId: "leader-tab",
                 type: "connection-status",
             } satisfies RawLeaderMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("connection-status"));
 
             // The mismatched connection-status frame must not have been
             // mirrored either — the client stays "idle" (its default), not
@@ -1391,7 +1494,7 @@ describe("lunoraClient — a follower throws only on the surfaces an app calls d
             const leader = new BroadcastChannel(clientChannel(client));
 
             leader.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("heartbeat"));
 
             // Now another tab demonstrably owns the sockets. The cross-tab channel
             // is leader→follower only (see `WsFollowerMessage`), so none of these
@@ -1436,7 +1539,7 @@ describe("lunoraClient — a follower throws only on the surfaces an app calls d
             // time it subscribes — the ordering the other follower tests skip, and
             // the one under which a guard on `subscribe` silently kills the relay.
             leader.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("heartbeat"));
 
             const seen: unknown[] = [];
 
@@ -1447,10 +1550,10 @@ describe("lunoraClient — a follower throws only on the surfaces an app calls d
             leader.postMessage({ data: { rows: [1, 2] }, key, tabId: SMALLER_ID, type: "subscription-data" } satisfies RawLeaderMessage);
             // Registration is the whole mechanism: without it `onSubscriptionData`
             // cannot find a `SubscriptionState` for `key` and drops the broadcast.
-            await vi.waitFor(() => {
-                expect(seen).toHaveLength(1);
-                expect(seen[0]).toStrictEqual({ rows: [1, 2] });
-            });
+            await heard(clientBus(client), ofType("subscription-data"));
+
+            expect(seen).toHaveLength(1);
+            expect(seen[0]).toStrictEqual({ rows: [1, 2] });
 
             leader.close();
         } finally {
@@ -1473,13 +1576,14 @@ describe("lunoraClient — a follower throws only on the surfaces an app calls d
             const leader = new BroadcastChannel(clientChannel(client));
 
             leader.postMessage({ tabId: SMALLER_ID, ts: Date.now(), type: "heartbeat" } satisfies RawMessage);
-            await delay(30);
+            await heard(clientBus(client), ofType("heartbeat"));
 
             const errors: SubscriptionError[] = [];
 
             client.subscribeShape({ name: "todos" }, () => undefined, { onError: (error) => errors.push(error) });
 
-            await delay(10);
+            // Reported on a microtask, queued ahead of this await.
+            await Promise.resolve();
 
             expect(errors).toHaveLength(1);
             expect(errors[0]?.code).toBe("NOT_IMPLEMENTED");
@@ -1495,6 +1599,8 @@ describe("follower epoch rule (cross-tab)", () => {
     it("a follower promoted after a cursor-less epoch frame resumes without that epoch", async () => {
         expect.assertions(2);
 
+        freezeElectionClock();
+
         const sent: string[] = [];
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: null }));
         const client = new LunoraClient({ crossTabSync: true, fetch: fetchMock, url: TEST_URL, WebSocket: createFrameWebSocket(sent) });
@@ -1508,13 +1614,15 @@ describe("follower epoch rule (cross-tab)", () => {
             // A mixed-version leader's cursor-less frame carries an epoch. The epoch
             // must not be adopted without the cursor it belongs to.
             rogue.postMessage({ data: 5, epoch: "e9", key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
-            await delay(10);
+            await heard(clientBus(client), ofType("subscription-data"));
 
             // A later frame carries a cursor and no epoch.
             rogue.postMessage({ cursor: 5, data: 6, key, tabId: "leader-tab", type: "subscription-data" } satisfies RawLeaderMessage);
+            await heard(clientBus(client), ofType("subscription-data"));
 
-            // The leader stops. This client promotes after the leader timeout and resubscribes.
-            await delay(3500);
+            // The leader stops. This client promotes after the (default 3 s) leader timeout, opens its
+            // socket and resubscribes.
+            await vi.advanceTimersByTimeAsync(3100);
 
             const subscribe = sent
                 .map((frame) => JSON.parse(frame) as { query?: Record<string, unknown>; type?: string })
@@ -1525,8 +1633,9 @@ describe("follower epoch rule (cross-tab)", () => {
         } finally {
             rogue.close();
             client.close();
+            vi.useRealTimers();
         }
-    }, 10_000);
+    });
 });
 
 describe("lunoraClient.isCrossTabFollower", () => {

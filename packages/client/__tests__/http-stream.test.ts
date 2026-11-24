@@ -562,21 +562,24 @@ describe("httpStream", () => {
         expect.assertions(1);
 
         const ac = new AbortController();
+        const removeEventListener = ac.signal.removeEventListener.bind(ac.signal);
         const addSpy = vi.spyOn(ac.signal, "addEventListener");
         const removeSpy = vi.spyOn(ac.signal, "removeEventListener");
+        const detached = Promise.withResolvers<undefined>();
+
+        // `collect()` resolves as soon as the iterator reports `done` — that
+        // happens on `handle.complete()`, a separate microtask chain from the
+        // stream's own `.catch().finally()` that detaches the listener — so the
+        // detach itself is the milestone. A stream that never detaches times out.
+        removeSpy.mockImplementation((...args: Parameters<AbortSignal["removeEventListener"]>) => {
+            removeEventListener(...args);
+            detached.resolve(undefined);
+        });
 
         const { fetchImpl } = fetchReturning(["event: complete\ndata: {}\n\n"]);
 
         await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, signal: ac.signal }));
-
-        // `collect()` resolves as soon as the iterator reports `done` — that
-        // happens on `handle.complete()`, a separate microtask chain from the
-        // stream's own `.catch().finally()` that detaches the listener. Cross a
-        // macrotask boundary so every queued microtask (however many `.then`s
-        // deep) has run before asserting.
-        await new Promise((resolve) => {
-            setTimeout(resolve, 0);
-        });
+        await detached.promise;
 
         // The listener attached to the (potentially long-lived) external signal
         // must be detached once the stream finishes normally — otherwise it stays
@@ -726,19 +729,25 @@ describe("httpStream", () => {
     it("stops reconnecting once the stream has failed on buffer overflow", async () => {
         expect.assertions(2);
 
-        // Each attempt delivers frames then EOF — the reconnect bait. The overflow must end it.
-        const { calls, fetchImpl } = fetchReturning(['retry: 1\ndata: {"text":"a"}\n\ndata: {"text":"b"}\n\ndata: {"text":"c"}\n\n']);
+        // The reconnect delay is a timer; the test moves past it rather than waiting it out.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
-        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, maxBuffer: 1, reconnect: true })).catch(
-            (error_: unknown) => error_ as { code?: string },
-        );
+        try {
+            // Each attempt delivers frames then EOF — the reconnect bait. The overflow must end it.
+            const { calls, fetchImpl } = fetchReturning(['retry: 1\ndata: {"text":"a"}\n\ndata: {"text":"b"}\n\ndata: {"text":"c"}\n\n']);
 
-        await new Promise((resolve) => {
-            setTimeout(resolve, 25);
-        });
+            const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, maxBuffer: 1, reconnect: true })).catch(
+                (error_: unknown) => error_ as { code?: string },
+            );
 
-        expect((error as { code?: string }).code).toBe("STREAM_BACKPRESSURE");
-        expect(calls).toHaveLength(1);
+            // Far past the server's 1 ms `retry:`: a reconnect still pending would have fired.
+            await vi.advanceTimersByTimeAsync(1000);
+
+            expect((error as { code?: string }).code).toBe("STREAM_BACKPRESSURE");
+            expect(calls).toHaveLength(1);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("does not reconnect by default — a bare EOF still fails once with HTTP_STREAM_INTERRUPTED", async () => {
@@ -796,27 +805,32 @@ describe("httpStream", () => {
     it("never reconnects on a consumer cancel, even with reconnect: true", async () => {
         expect.assertions(1);
 
-        let calls = 0;
-        const fetchImpl = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (): Promise<Response> => {
-            calls += 1;
+        // The reconnect delay is a timer; the test moves past it rather than waiting it out.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
-            // A tiny server retry, so a (buggy) reconnect would fire fast
-            // enough to be caught by the wait below.
-            return sseResponse(['retry: 1\ndata: {"text":"a"}\n\n']);
-        }) as unknown as typeof fetch;
+        try {
+            let calls = 0;
+            const fetchImpl = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (): Promise<Response> => {
+                calls += 1;
 
-        const stream = httpStream(tokensRef, {}, { fetch: fetchImpl, reconnect: true });
-        const iterator = stream[Symbol.asyncIterator]();
+                // A tiny server retry, so a (buggy) reconnect is due almost at once.
+                return sseResponse(['retry: 1\ndata: {"text":"a"}\n\n']);
+            }) as unknown as typeof fetch;
 
-        await iterator.next();
+            const stream = httpStream(tokensRef, {}, { fetch: fetchImpl, reconnect: true });
+            const iterator = stream[Symbol.asyncIterator]();
 
-        stream.cancel();
+            await iterator.next();
 
-        await new Promise((resolve) => {
-            setTimeout(resolve, 25);
-        });
+            stream.cancel();
 
-        expect(calls).toBe(1);
+            // Far past the server's 1 ms `retry:`: a reconnect still pending would have fired.
+            await vi.advanceTimersByTimeAsync(1000);
+
+            expect(calls).toBe(1);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("surfaces an idle timeout at once even when the body's cancel() never settles", async () => {

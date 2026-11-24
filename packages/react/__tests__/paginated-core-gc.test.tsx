@@ -1,8 +1,8 @@
 import type { FunctionReference } from "@lunora/client";
 import { QueryClient } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import { usePaginatedQuery } from "../src/use-paginated-query";
@@ -35,10 +35,18 @@ const Harness = (): ReactElement => {
     );
 };
 
-const delay = (ms: number): Promise<void> =>
-    new Promise((resolve) => {
-        setTimeout(resolve, ms);
+const GC_TIME_MS = 30;
+
+/**
+ * Move the fake clock by `ms` inside `act`, so the timers query-core runs on — its gc timeout and
+ * the `setTimeout(0)` its notifyManager delivers cache updates on — fire and React commits what
+ * they caused.
+ */
+const advance = async (ms: number): Promise<void> => {
+    await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
     });
+};
 
 /**
  * `usePaginatedQuery` / `useInfiniteQuery` are the only hooks that write and
@@ -52,14 +60,24 @@ const delay = (ms: number): Promise<void> =>
  * `event.type !== "updated"`, and eviction emits `"removed"`.
  *
  * `gcTime` here is 30ms rather than the provider's 5 minutes so the eviction
- * window is reachable in a test; nothing else about the path differs.
+ * window is reachable in a test; nothing else about the path differs. The gc
+ * timer is a real `setTimeout` in query-core, so the clock is faked and moved
+ * past it rather than waited out.
  */
 describe("usePaginatedQuery — cache gc", () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("keeps a mounted page's rows past gcTime", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d"]));
-        const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: 30, retry: 0 } } });
+        const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: GC_TIME_MS, retry: 0 } } });
         const tree = (
             <LunoraProvider client={mock.asClient} queryClient={queryClient}>
                 <Harness />
@@ -67,13 +85,14 @@ describe("usePaginatedQuery — cache gc", () => {
         );
         const view = render(tree);
 
-        await waitFor(() => {
-            expect(screen.getByTestId("results").textContent).toBe("a,b");
-        });
+        // The first page lands; nothing else is due yet.
+        await advance(0);
+
+        expect(screen.getByTestId("results").textContent).toBe("a,b");
 
         // Well past gcTime, with no server frame to refresh the entry — exactly
         // the "open a feed and stay on the screen" case.
-        await delay(120);
+        await advance(GC_TIME_MS * 4);
 
         expect(queryClient.getQueryCache().getAll().length).toBeGreaterThan(0);
 
@@ -92,7 +111,7 @@ describe("usePaginatedQuery — cache gc", () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d"]));
-        const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: 30, retry: 0 } } });
+        const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: GC_TIME_MS, retry: 0 } } });
 
         const view = render(
             <LunoraProvider client={mock.asClient} queryClient={queryClient}>
@@ -100,18 +119,16 @@ describe("usePaginatedQuery — cache gc", () => {
             </LunoraProvider>,
         );
 
-        await waitFor(() => {
-            expect(screen.getByTestId("results").textContent).toBe("a,b");
-        });
+        await advance(0);
 
+        expect(screen.getByTestId("results").textContent).toBe("a,b");
         expect(queryClient.getQueryCache().getAll().length).toBeGreaterThan(0);
 
         // Pinning a page against gc must not turn into a permanent leak: the
         // hook owns the entry's whole lifecycle, so detach releases it.
+        // The release is the detach itself, not a gc that runs later.
         view.unmount();
 
-        await waitFor(() => {
-            expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
-        });
+        expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
     });
 });

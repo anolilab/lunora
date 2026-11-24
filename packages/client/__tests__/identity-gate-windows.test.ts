@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AuthStatus, IdentityStore } from "../src/auth";
 import { getIdentityStore } from "../src/auth";
+import { QUERY_CACHE_DEBOUNCE_MS } from "../src/client-tuning";
 import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryQueryCache } from "../src/query-cache";
 import type { FunctionReference, QueryCacheAdapter } from "../src/types";
@@ -25,14 +28,23 @@ const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
 };
 
-/** Long enough to clear the read cache's 250ms write debounce. */
-const settle = async (): Promise<void> => {
-    for (let index = 0; index < 8; index += 1) {
-        // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of promise ticks
-        await new Promise((resolve) => {
-            setTimeout(resolve, 60);
-        });
-    }
+/** Resolves once the identity store reports `status` — the milestone of a session probe's outcome. */
+const storeReaches = (store: IdentityStore, status: AuthStatus): Promise<void> =>
+    new Promise((resolve) => {
+        const check = (): void => {
+            if (store.getStatus() === status) {
+                resolve();
+            }
+        };
+
+        store.subscribe(check);
+        check();
+    });
+
+/** Run the read cache's write debounce and wait for whatever it writes to land. Needs fake timers. */
+const flushReadCache = async (put: MockInstance<QueryCacheAdapter["put"]>): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(QUERY_CACHE_DEBOUNCE_MS);
+    await Promise.all(put.mock.results.map(async (result) => result.value));
 };
 
 interface MockSocket {
@@ -140,6 +152,7 @@ const isProbe = (call: unknown[]): boolean => String(call[0]).includes("get-sess
 const seedNullStampedCache = async (queryCache: QueryCacheAdapter): Promise<void> => {
     sockets.length = 0;
 
+    const put = vi.spyOn(queryCache, "put");
     const writer = new LunoraClient({
         fetch: cookieSessionFetch({ email: "a@b.co", id: "user-a" }),
         heartbeatIntervalMs: 0,
@@ -161,7 +174,7 @@ const seedNullStampedCache = async (queryCache: QueryCacheAdapter): Promise<void
     const subscribeId = socket?.sent.find((message) => message.type === "subscribe")?.id;
 
     socket?.receive({ cursor: 5, data: [{ _id: "t1", text: "A's private message" }], id: subscribeId, type: "data" });
-    await settle();
+    await flushReadCache(put);
     writer.close();
 
     const stored = await queryCache.load();
@@ -207,7 +220,7 @@ describe("f1 — a first probe that never answered", () => {
         const store = getIdentityStore(client);
 
         store.subscribe(() => undefined);
-        await settle();
+        await storeReaches(store, "unreachable");
 
         // The endpoint could not be reached — nothing was learned about the
         // session, so the credential (a cookie this code cannot see) stands.
@@ -216,7 +229,7 @@ describe("f1 — a first probe that never answered", () => {
         // The connection comes back, which is the store's one recovery hook.
         client.subscribe(fnRef("todos.list"), {}, () => {});
         sockets.at(-1)?.open();
-        await settle();
+        await storeReaches(store, "authenticated");
 
         // A failed round trip is not an answer: the recovery must ASK again, not
         // read the absent bearer token as a sign-out.
@@ -266,17 +279,15 @@ describe("f2 — two concurrent session probes", () => {
             WebSocket: createMockWebSocket(),
         });
 
+        // Each probe reaches its gate synchronously: `fetch` is called before the first await.
         const older = client.getCurrentUser();
         const newer = client.getCurrentUser();
 
-        await settle();
-
         expect(gates).toHaveLength(2);
 
-        // The NEWER probe answers first and names user-b.
+        // The NEWER probe answers first and names user-b; it is adopted before `newer` settles.
         gates[1]?.();
         await newer;
-        await settle();
 
         expect(client.currentIdentity()).toBe("subj:user-b");
 
@@ -284,7 +295,6 @@ describe("f2 — two concurrent session probes", () => {
         // already superseded — adopting it hands the session back to user-a.
         gates[0]?.();
         await older;
-        await settle();
 
         expect(client.currentIdentity()).toBe("subj:user-b");
 
@@ -293,6 +303,16 @@ describe("f2 — two concurrent session probes", () => {
 });
 
 describe("f3 — the fingerprint is provisional outside the probe too", () => {
+    // The read cache writes, and a hydrated entry could seed, on timers; these move past them
+    // rather than waiting them out.
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("refuses a null-stamped cache entry BEFORE the first probe starts", async () => {
         expect.hasAssertions();
 
@@ -328,7 +348,8 @@ describe("f3 — the fingerprint is provisional outside the probe too", () => {
 
         expect(seeded).toBeUndefined();
 
-        await settle();
+        // Past the read path's debounce: nothing later may seed the entry either.
+        await vi.advanceTimersByTimeAsync(QUERY_CACHE_DEBOUNCE_MS);
 
         expect(seeded).toBeUndefined();
 
@@ -361,8 +382,11 @@ describe("f3 — the fingerprint is provisional outside the probe too", () => {
         });
 
         await client.whenReady();
-        getIdentityStore(client).subscribe(() => undefined);
-        await settle();
+
+        const store = getIdentityStore(client);
+
+        store.subscribe(() => undefined);
+        await storeReaches(store, "unreachable");
 
         // The probe is over and named nobody. That is not the same as being
         // told there is no session — the next probe may still say `subj:<id>`.
@@ -376,7 +400,8 @@ describe("f3 — the fingerprint is provisional outside the probe too", () => {
 
         expect(seeded).toBeUndefined();
 
-        await settle();
+        // Past the read path's debounce: nothing later may seed the entry either.
+        await vi.advanceTimersByTimeAsync(QUERY_CACHE_DEBOUNCE_MS);
 
         expect(seeded).toBeUndefined();
 
@@ -432,8 +457,10 @@ describe("f3 — the fingerprint is provisional outside the probe too", () => {
             WebSocket: createMockWebSocket(),
         });
 
-        getIdentityStore(client).subscribe(() => undefined);
-        await settle();
+        const store = getIdentityStore(client);
+
+        store.subscribe(() => undefined);
+        await storeReaches(store, "unauthenticated");
 
         expect(client.currentIdentity()).toBeNull();
         expect(client.replayIdentityVerdict(null).verdict).toBe("match");
@@ -452,6 +479,7 @@ describe("f4 — an identity eviction and shape subscriptions", () => {
             fetch: cookieSessionFetch({ email: "a@b.co", id: "user-a" }),
             heartbeatIntervalMs: 0,
             persistence: false,
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
             url: "http://app.test",
             WebSocket: createMockWebSocket(),
         });
@@ -479,6 +507,10 @@ describe("f4 — an identity eviction and shape subscriptions", () => {
 
         expect(seen.at(-1)).toStrictEqual([{ _id: "m1", text: "A's private message" }]);
 
+        const replaced = new Promise<void>((resolve) => {
+            onSocketCreated = resolve;
+        });
+
         // B signs in on the same client.
         client.setAuthToken("tok-b", "user-b");
 
@@ -488,9 +520,10 @@ describe("f4 — an identity eviction and shape subscriptions", () => {
         // And the reconnect must NOT resume from A's checkpoint: a
         // `sinceCheckpoint` resume under B's credential asks the server for the
         // diff since a cursor B's view was never at, so B's first frame is a
-        // patch onto A's rowset. Wait out the 250ms reconnect backoff first —
+        // patch onto A's rowset. Wait for the replacement socket first —
         // reading the retired socket's own cold subscribe would pass vacuously.
-        await settle();
+        await replaced;
+        onSocketCreated = undefined;
 
         const reconnected = sockets.at(-1);
 
