@@ -1,8 +1,9 @@
 # Plan 557 — Design the split of `shard-do.ts`
 
 **Baseline:** `94de493ad` (`origin/alpha`, 2026-11-24). First written against `4a7c48bfd` (2026-11-11).
-**Status:** workstream 0 DONE (design below), workstream 1 step 1 (shard registration) on
-`refactor/shard-do-split-design`; steps 2-10 TODO, one per PR.
+**Status:** workstream 0 DONE (design below). Workstream 1 on `refactor/shard-do-split-design`
+(PR #1691), one commit per step: steps 1, 2, 3 and 5 DONE; steps 4 and 6-10 STOPPED by R6 (§6).
+`shard-do.ts`: 21,278 → 19,573 lines.
 **Priority / effort / risk:** P3 / L / MED. **Category:** tech-debt.
 
 ## 0. Headline finding
@@ -127,25 +128,24 @@ cluster is `this`-free. None is re-exported from `src/index.ts`.
 | File                                                            | Collaborator                           | Cluster                                                          |
 | --------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------- |
 | `shard-registration.ts`                                         | `ShardRegistration` (**done**, step 1) | shard registration                                               |
-| `function-metrics.ts`                                           | `FunctionMetrics`                      | function metrics                                                 |
-| `cdc-meta.ts`                                                   | `CdcMeta`                              | CDC presence/epoch memos and fork seal (the private half of CDC) |
-| `alarm-rearm-breaker.ts`, `schedule-rate-breaker.ts` (existing) | grow a per-instance class each         | alarm admission                                                  |
-| `schedule-outbox.ts`                                            | `ScheduleOutboxRunner`                 | schedule outbox                                                  |
-| `query-streams.ts`                                              | `QueryStreams`                         | query streams                                                    |
-| `change-accumulator.ts`                                         | `ChangeAccumulator`                    | pending changed tables/keys/bookmarks (prerequisite for 8-10)    |
-| `live-topics.ts`                                                | `LiveTopics`                           | live streams                                                     |
-| `rooms.ts`                                                      | `Rooms`                                | rooms, whisper, socket routes                                    |
-| `global-poll.ts`                                                | `GlobalPoll`                           | global poll and refresh                                          |
-| `shape-pokes.ts`                                                | `ShapePokes`                           | shapes and pokes                                                 |
-| `subscription-refresh.ts`                                       | `SubscriptionRefresh`                  | subscriptions and refresh                                        |
+| `function-metrics.ts`                                           | `FunctionMetrics` (**done**, step 2)   | function metrics                                                 |
+| `cdc-meta.ts`                                                   | `CdcMeta` (**done**, step 3)           | CDC presence/epoch memos and fork seal (the private half of CDC) |
+| `alarm-rearm-breaker.ts`, `schedule-rate-breaker.ts` (existing) | stopped (step 4)                       | alarm admission                                                  |
+| `schedule-outbox.ts`                                            | `ScheduleOutboxRunner` (**done**, 5)   | schedule outbox                                                  |
+| `query-streams.ts`                                              | stopped (step 6)                       | query streams                                                    |
+| `change-accumulator.ts`                                         | stopped (step 7)                       | pending changed tables/keys/bookmarks (prerequisite for 8-10)    |
+| `live-topics.ts`                                                | stopped (step 8)                       | live streams                                                     |
+| `rooms.ts`                                                      | stopped (step 8)                       | rooms, whisper, socket routes                                    |
+| `global-poll.ts`                                                | stopped (step 9)                       | global poll and refresh                                          |
+| `shape-pokes.ts`                                                | stopped (step 10)                      | shapes and pokes                                                 |
+| `subscription-refresh.ts`                                       | stopped (step 10)                      | subscriptions and refresh                                        |
 
 These stay in `shard-do.ts` for good: the entry points (Cloudflare calls them on the class), the
 subclass hooks, the request scope, the transaction, mutation-bookkeeping and dispatch core,
-`ctx.db`, telemetry, and the admin dispatch table. Sockets and delivery authorization have no step
-yet; look at them again after step 10. Module-level helpers move with the cluster that uses them
-(the schedule-outbox helpers at the top of the file go with step 5). After step 10 the file is
-roughly 10-12k lines, about half of today, and the clusters that change for their own reasons are
-no longer in it.
+`ctx.db`, telemetry, and the admin dispatch table. Module-level helpers move with the cluster that
+uses them (the schedule-outbox helpers at the top of the file went with step 5). The original
+estimate, 10-12k lines after step 10, assumed the reactive engine could move. It cannot under R6
+(§6), so the file stays around 19.5k until the redesign in §6 is planned.
 
 ## 4. How a moved cluster gets its state (D2)
 
@@ -169,10 +169,12 @@ no longer in it.
   (the AGENTS.md "thin transport" rule). The behaviour moves to the owning cluster's module. The
   admin cluster is not extracted as a unit, because it calls into 16 other clusters. It shrinks as
   each owner leaves.
-- **R6 — STOP rule, measured.** Count the class members (methods + fields) a step removes and the
-  members it adds (collaborator fields + forwarding methods). A protected member whose body moves
-  stays as a one-line forward to keep `api:check` at zero; each such forward counts as added. STOP
-  the step if added ≥ removed, or if the host needs more entries than the cluster had fields.
+- **R6 — STOP rule, measured.** Count the class members (methods + fields) a step removes, the
+  members it adds (collaborator fields, forwarding methods, wrappers that stay), and the host
+  entries. A protected member whose body moves stays as a one-line forward to keep `api:check` at
+  zero; each such forward counts as added. STOP the step if added + host entries ≥ removed. (The
+  first version compared host entries with the cluster's fields. That stopped the outbox, which
+  removes 27 members for 5 added and a 6-entry host, so it measured the wrong thing.)
 - **R7 — tests.** No assertion, fixture or expected value changes. A test that reads a moved
   private member by name through `as unknown as { … }` gets its access path retargeted in the same
   PR (for example `shard.functionMetrics.pending` instead of `shard.pendingFunctionMetrics`), and
@@ -203,9 +205,9 @@ Telemetry (13 protected `make*`/`record*` members called by codegen and subclass
 log are left out of the order. Moving them would be mostly protected forwards, and R6 would stop
 them.
 
-**Every step** is one PR against `alpha`, a pure move, and reviewable with
-`git diff --color-moved=zebra`: the moved bodies differ only in `this.` → `this.host.` and in their
-field names. Gates per PR:
+**Every step** is one commit (the maintainer chose a single branch for all of them), a pure move,
+and reviewable with `git diff --color-moved=zebra`: the moved bodies differ only in `this.` →
+`this.host.` and in their field names. Gates per step:
 
 1. `pnpm run api:check`: zero diff.
 2. `pnpm --filter "@lunora/do" run test`: green, with test edits limited to R7.
@@ -218,22 +220,59 @@ field names. Gates per PR:
 Keep each branch short-lived: the file's churn means a refactor branch older than a few days
 conflicts. Rebase onto `alpha` right before merge and redo the R6 count if the cluster changed.
 
-## 6. Step 1 — shard registration (done in this PR)
+## 6. Results
 
-- New `packages/do/src/shard-registration.ts`: `ShardRegistration` with the host `{ env,
-jurisdiction, registry, shardKey, sql }`. It owns `registeredTables`, `registryRetryAt`
-  and `registryTail`, which moved off `ShardDO`, plus `register(changed)`, `release(tables, dryRun)`,
-  `serializeRegistry`, `registryStub`, `registryWriter`, `tableHasRows`, the `RegistryWriter`
-  interface and `SHARD_REGISTRY_RETRY_MS`.
-- `ShardDO` keeps `handleReleaseShardRegistration` as the admin wrapper (decode args → `release` →
-  audit → `adminResponse`). `flushChangedTables` calls `this.shardRegistration.register(changed)`.
-  `shardRegistry()` stays the codegen hook, read through the `registry` thunk.
-- R6: removed 5 methods and 3 fields from the class, plus 1 module interface and 1 constant; added
-  1 field; no forwards. `shard-do.ts`: 21,278 → 21,092.
-- Proof: `shard-do.shard-registry.test.ts` and `shard-registry-do.test.ts` unchanged and green.
-  Breaking `release`'s emptiness check fails "releases a table the shard holds no rows of and keeps
-  one it does". Dropping the retry window fails "logs a failed registration without failing the
-  write, and retries once the backoff passes".
+Measured with R6 as revised in §4. "Host" counts host entries, and protected statics count as
+entries. Every done step: `api:check` unchanged, the `do` suite green (1,623 tests), a deliberate
+break caught by named tests, and lint and types clean.
+
+| Step | Cluster              | Result      | Removed → added + host | Deliberate break caught by                                                        |
+| ---: | -------------------- | ----------- | ---------------------- | --------------------------------------------------------------------------------- |
+|    1 | shard registration   | done        | 8 → 1 + 5              | `shard-do.shard-registry.test.ts`: the release emptiness check, the retry window  |
+|    2 | function metrics     | done        | 16 → 1 + 2             | `function-metrics.test.ts`: four tests, the error force-flush                     |
+|    3 | CDC memos, fork seal | done        | 7 → 2 + 1              | `shard-do.cdc-meta-cache.test.ts`: "seals at most once per wake…"                 |
+|    4 | alarm admission      | **stopped** | 6 → 1 + 5              | —                                                                                 |
+|    5 | schedule outbox      | done        | 27 → 5 + 6             | codegen `emit-shard-schedule-outbox.dispatch.test.ts`: six tests, the drop marker |
+|    6 | query streams        | **stopped** | 9 → 2 + 11             | —                                                                                 |
+|    7 | change accumulator   | **stopped** | 7 → 5 + 9              | —                                                                                 |
+|    8 | live streams         | **stopped** | 21 → 9 + 20            | —                                                                                 |
+|    8 | rooms                | **stopped** | 42 → 19 + 29           | —                                                                                 |
+|    9 | global poll          | **stopped** | 31 → 11 + 37           | —                                                                                 |
+|   10 | shapes               | **stopped** | 26 → 13 + 31           | —                                                                                 |
+|   10 | subscriptions        | **stopped** | 56 → 16 + 52           | —                                                                                 |
+|    — | sockets (checked)    | **stopped** | 28 → 15 + 21           | —                                                                                 |
+
+Notes on the done steps:
+
+- **1:** the `releaseShardRegistration` admin wrapper (decode → release → audit → respond) stays on
+  the class. `shardRegistry()` stays the codegen hook, read through a thunk.
+- **2:** `collectMetrics` and the public static `resetRootSizeWarning` stay on the class. Under R7,
+  three cast-reach lines were retargeted (`function-metrics.test.ts` ×2,
+  `shard-do.bounded-state.test.ts` ×1); no assertion changed.
+- **3:** `sealForkedTimeline` is protected, so it stays as a forward. `currentCdcCursor` and
+  `currentCdcEpoch` keep their bodies.
+- **5:** `scheduleOutbox` and `pollScheduleOutbox` stay as protected forwards (codegen calls
+  them). `handleDropOutboxEntry` stays as a decode-and-forward wrapper. `handleRetryOutboxEntry`
+  keeps the poll re-arm and the audit, so `globalPollArmedAt` never crosses into the module.
+- **Benches** (`rpc-dispatch`, `refresh-fanout`, branch vs baseline `94de493ad`, alternated, under
+  a load average of 6-12): within noise. Minimums match, and the order the runs went in moved the
+  means more than the branch did. In the last three alternations the branch was faster on direct
+  insert every time.
+
+**Why steps 6-10 stop.** They are the reactive engine. Its clusters share the socket attachment
+layer (`readAttachment` has 43 call sites, `writeAttachment` 13, `dropIfLapsed` 15, `sendFrame` 11),
+`deliveryAuthorization`, the socket index and the request scope, and each one calls the others. A
+collaborator would need a host as large as the code it removes. That is the callback bag #522
+measured, now measured cluster by cluster. Moving the attachment cache alone would pass R6 (6 → 1 +
+0), but it rewrites 64 call sites across the file for about 100 lines and shrinks the other hosts by
+only 2 entries. That is more conflict surface, the opposite of the goal.
+
+**What it would take.** The reactive engine needs a new seam, not a move: a per-socket object that
+owns the attachment, its delivery permit and its frame sending, which the subscription, shape, live
+and room paths would take as a parameter instead of reaching back into `ShardDO`. That changes how
+those paths are structured, so it is a redesign with its own plan and benches, not a pure move. Step
+4 (alarm admission) is also not worth revisiting on its own: the breaker logic already lives in its
+modules, and what is left on the class is mostly the telemetry calls.
 
 ## 7. Platform parity
 
@@ -246,7 +285,7 @@ the platform only through what `ShardDO` already holds (`ShardHost`, `SocketHost
 - **Hidden ordering:** a collaborator's thunk reads its value at call time, as the method did
   through `this`. A step that would need a value captured at construction is a STOP.
 - **Public or protected API, a new host contract, or a wire change** needed to move a cluster: STOP
-  and re-plan. None of steps 1-7 needs one.
+  and re-plan. None of the done steps needed one.
 - **Perf:** one extra property hop and thunk call per host access. Negligible off the hot path
   (registration runs past the response). For steps 2 and 7-10, the benches are a gate.
 
@@ -254,5 +293,6 @@ the platform only through what `ShardDO` already holds (`ShardHost`, `SocketHost
 
 1. `create-worker.ts` is handled separately by plan 622 (spike done, PR #1646), so it is out of scope here.
 2. R7 relaxes the earlier "tests unchanged" gate to "assertions unchanged; cast-reach access paths
-   may be retargeted". Steps 2, 6 and 8-10 depend on it. The maintainer should confirm it before
-   step 2.
+   may be retargeted". The maintainer asked for every step on one branch; step 2 applied R7 to three
+   lines, listed in its commit. Confirm it in review.
+3. Whether the per-socket seam for the reactive engine (§6) is worth a plan of its own.
