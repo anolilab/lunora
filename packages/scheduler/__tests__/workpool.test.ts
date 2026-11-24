@@ -727,7 +727,7 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
 
         await scheduler.alarm();
 
-        // Backpressured by its own slot it could not re-fire until the claim ceiling reclaimed it.
+        // It re-fires on the full pool and keeps its one slot; it takes no second one.
         expect(scheduler.dispatched.map((record) => record.id)).toStrictEqual([id]);
         expect(poolIds(state, "p")).toStrictEqual([id]);
     });
