@@ -8101,7 +8101,7 @@ abstract class ShardDO {
     }
 
     /** The decode + route body of {@link webSocketMessage}, split out so the trace wrapper stays a one-liner. */
-    // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- the ordered admission gate every frame passes (lapse, size cap, route socket, parse, pending credential, server-only types, delivery mode) before the per-type handler; each gate can end the frame
     protected async handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer, deliveredAfterClose = false): Promise<void> {
         // Token-expiry: a socket whose credential lapsed is dropped before its
         // frame is processed, so the client reconnects and re-resolves identity.
@@ -8219,538 +8219,49 @@ abstract class ShardDO {
         }
 
         if (envelope.type === "connect") {
-            // One-shot control frame the client sends right after the socket
-            // opens: record its connection `context` on the attachment (so it
-            // survives hibernation and can be replayed at close) and fire the
-            // `onConnect` lifecycle hooks under the socket's verified identity.
-            const attachment = this.readAttachmentCopy(ws);
-
-            // Verified before `identity` is sent, so a refused socket learns nothing
-            // about who it is. Only an unauthenticated socket reaches this check.
-            if (attachment.authenticated === false) {
-                // A connect past the deadline closes with the deadline reason, not the refusal: the sweep
-                // would have closed this socket, and the client reads only the reason to tell them apart.
-                if (attachment.pendingSince !== undefined && attachment.pendingSince + PENDING_CONNECT_DEADLINE_MS <= Date.now()) {
-                    this.dropLiveSocket(attachment.connectionId);
-
-                    // A half-closed peer can make close throw; that must not escape as a socket error.
-                    try {
-                        ws.close?.(4003, "connect deadline");
-                    } catch {
-                        /* socket already gone */
-                    }
-
-                    return;
-                }
-
-                const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
-
-                if (expectedBearer === undefined || typeof envelope.token !== "string" || !constantTimeEqual(envelope.token, expectedBearer)) {
-                    this.refusePendingSocket(ws);
-
-                    return;
-                }
-
-                this.rejectRetainedRooms(ws);
-                attachment.authenticated = true;
-                delete attachment.pendingSince;
-
-                // Persisted before the relay announce and the identity frame below: a subscribe
-                // handled during the announce await reads the stored flag, not this local copy.
-                try {
-                    (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
-                } catch {
-                    this.refusePendingSocket(ws);
-
-                    return;
-                }
-            }
-
-            // Tell the client which user this socket was authenticated as, and
-            // "nobody" as an explicit `null`. A cookie-session client holds no
-            // token, so this answer is the only way it can tell a sign-out or a
-            // different user's sign-in from the session it already shows. Sent
-            // on every `connect`, including a re-sent one: the answer is the
-            // socket's, and repeating it costs one small frame.
-
-            // Relay tier: a relay announces itself before the identity frame. The client names this
-            // socket in a live subscribe as soon as it has the connection id, and the owner can only
-            // forward that grant to a relay it already knows. A no-op on an owner.
-            //
-            // A failed attach leaves the relay unannounced, so the socket is still served; the next shape subscribe or whisper join retries it.
-            await this.relay?.announce();
-
-            // The connection id rides here so the client can name this socket in a live
-            // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
-            // `whisperAck` advertises that every live join is answered with `whisper_subscribed`, so a
-            // client can hold a live grant until its join is acknowledged. An older shard omits it.
-            // `revalidateMs` is the window a client re-auths the socket within to keep it open; a relative
-            // duration, so the client's clock never has to agree with this one.
-            this.sendFrame(
-                ws,
-                JSON.stringify({
-                    claims: claimsFingerprint(attachment.userId, attachment.identity),
-                    connectionId: attachment.connectionId,
-                    ...(attachment.revalidateAt === undefined ? {} : { revalidateMs: SOCKET_REVALIDATE_MS }),
-                    // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
-                    subject: attachment.userId ?? null,
-                    type: "identity",
-                    whisperAck: true,
-                }),
-                "control",
-            );
-
-            // Idempotent: a socket announces `connect` exactly once. A re-sent
-            // (or duplicate) frame must not re-fire `onConnect`, or it would
-            // out-number the single `onDisconnect` at close.
-            if (attachment.connected === true) {
-                return;
-            }
-
-            if (envelope.context !== undefined) {
-                attachment.context = envelope.context;
-            }
-
-            // Record the client's stable id so shape pokes to this socket can
-            // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
-            if (envelope.clientId !== undefined) {
-                attachment.clientId = envelope.clientId;
-            }
-
-            // Resolve the announced capabilities to the decisions they gate,
-            // rather than persisting the raw tokens. `caps` is client-supplied
-            // and otherwise unbounded — the sibling attachment arrays (`subs`,
-            // `whispers`) are both explicitly capped for exactly that reason,
-            // and an over-large one here would either starve `subs` or make
-            // `serializeAttachment` throw, dropping the whole attachment. A
-            // fixed set of booleans is bounded by construction, and nothing
-            // reads an unrecognised token back: the server can only act on ones
-            // it understands, so keeping them would store input with no reader.
-            if (Array.isArray(envelope.caps)) {
-                attachment.pageDeltas = envelope.caps.includes(PAGE_DELTA_CAPABILITY);
-                attachment.refreshBatch = envelope.caps.includes(REFRESH_BATCH_CAPABILITY);
-            }
-
-            attachment.connected = true;
-
-            // `connected` lives on the SAME object the `try` below persists —
-            // if `context` is what made it too large and the whole attachment
-            // fails to serialize, `connected` doesn't survive either, even
-            // though only `context` was ever documented as at-risk. A resent
-            // `connect` (the `identity` reply above is no ack — an older server
-            // sends none — so a client may legitimately retry after a
-            // timeout) would then re-enter this
-            // branch and re-fire `onConnect` — `webSocketClose` still only fires
-            // `onDisconnect` once, breaking the symmetry the `connected === true`
-            // check above exists to guarantee.
-            //
-            // Retry once with `context` omitted so `connected`/`clientId`/
-            // `pageDeltas` still persist even when `context` alone is what
-            // doesn't fit. Only if THAT also fails is nothing here persistable;
-            // in that case, don't fire `onConnect` at all — an unpersisted
-            // `connected` flag means the next `deserializeAttachment` read sees
-            // `connected: false`, so a resent `connect` frame correctly re-enters
-            // this branch and retries, rather than silently never firing again.
-            let persisted = true;
-
-            try {
-                this.writeAttachment(ws, attachment);
-            } catch {
-                const withoutContext: SocketAttachment = { ...attachment };
-
-                delete withoutContext.context;
-
-                try {
-                    this.writeAttachment(ws, withoutContext);
-                } catch {
-                    // Neither attempt persisted. Roll back the in-memory flip so
-                    // this local `attachment` object agrees with what's actually
-                    // in storage — the same defensive move `subscribe`/
-                    // `unsubscribe` above make on their own serialize failure.
-                    attachment.connected = false;
-                    persisted = false;
-                }
-            }
-
-            // The in-memory `attachment` still carries `context` regardless of
-            // which serialize attempt (if any) succeeded, so a persisted-retry
-            // still fires the hook with the caller's supplied context THIS turn
-            // — it just won't survive to `onDisconnect` at close.
-            if (persisted) {
-                await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
-            }
+            await this.handleConnectFrame(ws, envelope);
 
             return;
         }
 
         if (envelope.type === "subscribe" && envelope.query) {
-            const { functionPath } = envelope.query;
-            const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
-
-            // A table-only subscribe (no function path) is fed raw table deltas that no claim scopes, and nothing can
-            // seed or reset its rows when the socket's claims change. Refused as soon as the socket's claims are
-            // known, before anything is stored or sent; a socket with none (anonymous) has nothing to leak.
-            if (!functionPath && socketHasClaims(this.readAttachment(ws))) {
-                this.sendSubscriptionError(
-                    ws,
-                    envelope.id,
-                    "SUBSCRIPTION_FUNCTION_REQUIRED",
-                    "a subscription on an authenticated socket must name a function (functionPath)",
-                );
-
-                return;
-            }
-
-            // Admin introspection subscriptions read shard internals (raw rows,
-            // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
-            // as the HTTP admin RPCs — recorded on the socket at upgrade and
-            // re-derived from `env` here, so a rotation revokes the socket rather
-            // than only the HTTP plane. A socket that only cleared the
-            // user-subscription gate must never be able to read admin data by
-            // naming a reserved functionPath.
-            if (isAdmin && !(await this.attachmentAdminAuthorized(this.readAttachment(ws)))) {
-                this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }), "control");
-
-                return;
-            }
-
-            // Decode the wire-encoded subscription args ONCE, at the entry point —
-            // BEFORE the attachment store and the seed — so every downstream
-            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
-            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
-            // structured-clone attachment carries them through hibernation.
-            // `decodeWire` is identity for pure-JSON args (legacy frames included).
-            let query: SubscriptionQuery;
-
-            try {
-                query =
-                    envelope.query.args === undefined
-                        ? envelope.query
-                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
-            } catch {
-                // A malformed tagged payload (over-long bigint, over-deep nesting)
-                // must not throw out of `webSocketMessage` — surface a structured
-                // error frame instead, mirroring the persist-failure path.
-                this.sendFrame(
-                    ws,
-                    JSON.stringify({
-                        code: "BAD_SUBSCRIPTION_ARGS",
-                        error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
-                        id: envelope.id,
-                        type: "error",
-                    }),
-                    "control",
-                );
-
-                return;
-            }
-
-            // A cursor is honoured only under the claims it was read under; otherwise this is a first subscribe.
-            {
-                const { sinceClaims, ...held } = query;
-
-                query = held;
-
-                if (held.sinceSeq !== undefined && !this.resumesUnderCurrentClaims(ws, sinceClaims, held.functionPath)) {
-                    query = { ...held, sinceEpoch: undefined, sinceSeq: undefined };
-                }
-            }
-
-            const preparation = functionPath === undefined || isAdmin ? undefined : this.prepareForLiveQueryGate(functionPath);
-
-            if (preparation === undefined) {
-                // This subscribe is the newest for its id, so one still waiting on a load must not register over it.
-                this.loadingSubscribes.get(ws)?.delete(envelope.id);
-            } else if (!(await this.subscribeOutlivedLoad(ws, envelope.id, preparation))) {
-                return;
-            }
-
-            const registered = this.readAttachment(ws).subs;
-            const isRetry = Object.hasOwn(registered, envelope.id) && isSameSubscription(registered[envelope.id], query);
-            const status = this.subscribe(ws, envelope.id, query);
-
-            if (status !== "ok") {
-                // The `paid` refusal mirrors the origin's batch gate (`BAD_REQUEST`):
-                // a paid query is one payment for one call, which a live
-                // subscription (seed + every poke) cannot be.
-                const { code, message: errorMessage } = {
-                    paid: { code: "BAD_REQUEST", message: paidSocketRefusal(String(functionPath), "subscribed") },
-                    per_dispatch: { code: "BAD_REQUEST", message: perDispatchSubscriptionRefusal(String(functionPath)) },
-                    serialize_failed: {
-                        code: "SUBSCRIPTION_PERSIST_FAILED",
-                        message: subscriptionRefusal("size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
-                    },
-                    too_many: {
-                        code: "TOO_MANY_SUBSCRIPTIONS",
-                        message: subscriptionRefusal("count", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
-                    },
-                }[status];
-
-                this.sendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }), "control");
-
-                return;
-            }
-
-            this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
-
-            // Seed the subscriber with the query's current result so the first
-            // value arrives over the same channel as later updates. When the
-            // subclass doesn't support re-execution (base default), this is a
-            // no-op and the subscriber relies on its initial HTTP query.
-            if (functionPath) {
-                await this.seedSubscriptionGuarded(ws, envelope.id, query, functionPath, isAdmin, isRetry);
-            }
+            await this.handleSubscribeFrame(ws, envelope, envelope.query);
 
             return;
         }
 
         if (envelope.type === "shape_subscribe" && envelope.shape) {
-            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
-            // descriptor and every `resolveShape` see real values.
-            let shapeArgs: Record<string, unknown> | undefined;
-
-            try {
-                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
-            } catch {
-                this.sendSubscriptionError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
-
-                return;
-            }
-
-            await this.handleShapeSubscribe(ws, envelope.id, {
-                args: shapeArgs,
-                name: envelope.shape.name,
-                // As for a query: a checkpoint is honoured only under the claims it was read under.
-                ...(envelope.sinceCheckpoint === undefined || this.resumesUnderCurrentClaims(ws, envelope.sinceClaims, envelope.shape.name)
-                    ? { sinceEpoch: envelope.sinceEpoch, sinceSeq: envelope.sinceCheckpoint }
-                    : {}),
-            });
+            await this.handleShapeSubscribeFrame(ws, envelope, envelope.shape);
 
             return;
         }
 
         if (envelope.type === "shape_unsubscribe") {
-            this.shapeUnsubscribe(ws, envelope.id);
-            this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
+            this.handleShapeUnsubscribeFrame(ws, envelope);
 
             return;
         }
 
         if (envelope.type === "stream" && envelope.query?.functionPath) {
-            // Streams are public-only: there is no admin-streaming surface, so
-            // anything matching the admin prefix is rejected up front rather
-            // than allowed to slip through executeStream().
-            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }), "control");
-
-                return;
-            }
-
-            // `.x402({ price }).stream(...)` carries the price tag into
-            // `LUNORA_FUNCTIONS` like any other paid procedure, but this frame
-            // never crosses the origin's paywall — so a paid stream served here
-            // is served free. Refuse it the same way `subscribe` refuses a paid
-            // live query.
-            if (this.isPaidFunction(envelope.query.functionPath)) {
-                this.sendSubscriptionError(ws, envelope.id, "BAD_REQUEST", paidSocketRefusal(envelope.query.functionPath, "streamed"));
-
-                return;
-            }
-
-            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
-            // before handing them to the stream handler — mirrors the `/rpc` path,
-            // and the `subscribe` / `shape_subscribe` branches above.
-            //
-            // Decoded into a local FIRST, not inline in the call below. `decodeWire`
-            // throws a `RangeError` on an over-long bigint or past its 64-level
-            // nesting cap, and inline it threw during ARGUMENT EVALUATION — before
-            // `handleStream` had returned a promise, so the trailing `.catch()`
-            // could not see it. Neither `handleWebSocketMessage` nor
-            // `webSocketMessage` wraps this, so under the hibernation API one
-            // malformed frame killed the whole socket instead of failing one stream.
-            let streamArgs: Record<string, unknown>;
-
-            try {
-                streamArgs = decodeWire(envelope.query.args ?? {}) as Record<string, unknown>;
-            } catch {
-                this.sendFrame(
-                    ws,
-                    JSON.stringify({
-                        error: { code: "BAD_SUBSCRIPTION_ARGS", message: "stream args failed wire decoding" },
-                        id: envelope.id,
-                        type: "error",
-                    }),
-                    "control",
-                );
-
-                return;
-            }
-
-            // Fire-and-forget: handleStream owns its own error reporting (it
-            // sends `type:"error"` frames to the socket). The trailing no-op
-            // catch only guards the rare pre-try throw path (e.g. ws.send on a
-            // socket the runtime already tore down) so a dead socket can't
-            // surface as an unhandled rejection.
-            this.handleStream(
-                ws,
-                envelope.id,
-                envelope.query.functionPath,
-                streamArgs,
-                // Client input: a non-integer or negative watermark would seed
-                // `delivered` past real chunks and silently truncate the stream,
-                // so it is normalised here rather than trusted.
-                Number.isInteger(envelope.sinceChunk) && (envelope.sinceChunk as number) > 0 ? (envelope.sinceChunk as number) : 0,
-                // Same trust boundary for the resume generation: only a positive
-                // integer counts; anything else behaves like an older client
-                // that never sent one.
-                Number.isInteger(envelope.generation) && (envelope.generation as number) > 0 ? (envelope.generation as number) : undefined,
-            ).catch(() => {
-                /* socket already gone; nothing to report */
-            });
+            this.handleStreamFrame(ws, envelope, envelope.query, envelope.query.functionPath);
 
             return;
         }
 
         if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
-            const { topic } = envelope;
-
-            // A `defineWebSocket` route's reserved topic is never joinable by a
-            // client: route membership is established only at upgrade, so a
-            // foreign socket can neither read nor inject on a route channel.
-            if (typeof topic === "string" && topic.startsWith(SOCKET_TOPIC_PREFIX)) {
-                return;
-            }
-
-            if (typeof topic === "string" && topic.length > 0) {
-                const join = envelope.type === "whisper_subscribe";
-
-                // Only a JOIN is authorized. Leaving a topic is always permitted —
-                // an app that revokes access mid-session must not also strand the
-                // client subscribed to something it can no longer leave.
-                if (join && !(await this.authorizeWhisper(ws, topic, "subscribe"))) {
-                    this.acknowledgeLiveJoin(ws, topic);
-
-                    return;
-                }
-
-                // A room join runs the room's mutation, so it takes the same admission as
-                // a room message; otherwise a join loop is an unbounded write stream. A
-                // leave is not throttled: it only runs `onLeave` for a membership a
-                // (throttled) join created, so it cannot be used to flood, and a throttled
-                // socket must still be able to leave.
-                // A socket whose close is in flight changes no membership: the close tears it down.
-                if (this.closingSockets.has(ws)) {
-                    return;
-                }
-
-                if (join && this.roomHandlerPath(topic) !== undefined && !this.allowRoomJoin(ws)) {
-                    return;
-                }
-
-                // Only a real membership change fires the room handler: a duplicate
-                // join, a join refused at the topic cap, or a leave of a topic the
-                // socket never held must not run `onJoin` / `onLeave`.
-                if (!this.setWhisperMembership(ws, topic, join)) {
-                    if (join) {
-                        this.acknowledgeLiveJoin(ws, topic);
-                    }
-
-                    return;
-                }
-
-                const joinEpoch = join ? this.membershipEpoch(ws, topic) : undefined;
-
-                // The ack follows the membership decision and precedes the room dispatch and the relay
-                // announce. It is not sent from a `finally`: an error from unrelated work must not be
-                // answered as a processed join.
-                if (join) {
-                    this.acknowledgeLiveJoin(ws, topic);
-                }
-
-                // A `defineRoom` topic ALSO dispatches the room's server handler:
-                // `onJoin` after the authorized join is recorded, `onLeave` on
-                // every unsubscribe (never authorization-gated). An ordinary
-                // whisper topic resolves to no room and dispatches nothing. The
-                // dispatch is queued on this socket before any await, so a later
-                // leave cannot run its `onLeave` ahead of this `onJoin`.
-                const admitted = await this.dispatchSettlingJoin(ws, topic, join, joinEpoch);
-
-                // A join whose `onJoin` rejected was already undone in the queued handler,
-                // so the socket holds no membership and gets no relayed frames for it.
-                if (join && !admitted) {
-                    return;
-                }
-
-                // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
-                // announces itself so the owner forwards whisper frames to it. The connect-time
-                // announce already covers grant routing; this one retries a failed attach.
-                if (join) {
-                    await this.relay?.announce();
-                }
-            }
+            await this.handleWhisperMembershipFrame(ws, envelope);
 
             return;
         }
 
         if (envelope.type === "whisper") {
-            // A route channel is not reachable through a whisper frame: a route's
-            // messages arrive only on its dedicated socket. Dropping the raw relay
-            // keeps a foreign socket from injecting into a route.
-            if (typeof envelope.topic === "string" && envelope.topic.startsWith(SOCKET_TOPIC_PREFIX)) {
-                return;
-            }
-
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
-                // The authorizer's await can outlast the sender's credential or window; the frame carries its user id.
-                if (this.dropIfLapsed(ws)) {
-                    return;
-                }
-
-                // A room topic is handled server-side rather than blindly relayed:
-                // the shard decodes the client's typed message, dispatches the
-                // room's `onMessage` (which decides what, if anything, members
-                // see via `socket.broadcast`), and does NOT relay the raw frame.
-                // An ordinary whisper topic keeps the direct peer relay.
-                // Reuse the whisper rate bucket: a room's fan-out is the same
-                // O(members) cost a whisper is, so it gets the same admission. The
-                // client wire-encoded `data`; decode it back to real values
-                // (`bigint`/`Date`/bytes) before it reaches the handler, mirroring
-                // the `subscribe`/`stream` branches.
-                if (this.roomHandlerPath(envelope.topic) === undefined) {
-                    await this.broadcastWhisper(ws, envelope.topic, envelope.data);
-                } else if (
-                    !this.closingSockets.has(ws) &&
-                    this.isWhisperMember(ws, envelope.topic) &&
-                    this.allowWhisper(ws) &&
-                    this.fitsWhisperCap(envelope.data)
-                ) {
-                    // The same 4 KiB cap an ordinary whisper carries: a room message is
-                    // decoded, validated and run as a write, so it must not be unbounded.
-                    // The membership epoch at receive travels with the message: if the socket
-                    // leaves and rejoins before this runs, the message was sent under the old membership.
-                    await this.dispatchRoomEvent(ws, envelope.topic, "message", envelope.data, this.membershipEpoch(ws, envelope.topic));
-                }
-            }
+            await this.handleWhisperFrame(ws, envelope);
 
             return;
         }
 
         if (envelope.type === "unsubscribe") {
-            // Stream cancel: abort the in-flight iterator (if any) before
-            // touching the subscription registry. unsubscribe() on a non-sub
-            // id is a no-op, so this stays safe even when id namespaces overlap.
-            const cancellers = this.streamCancellers.get(ws);
-            const controller = cancellers?.get(envelope.id);
-
-            if (controller) {
-                controller.abort();
-                cancellers?.delete(envelope.id);
-            }
-
-            // A subscribe still waiting on its function's load must not register after this.
-            this.loadingSubscribes.get(ws)?.delete(envelope.id);
-            this.unsubscribe(ws, envelope.id);
-            this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
+            this.handleUnsubscribeFrame(ws, envelope);
         }
     }
 
@@ -9480,6 +8991,538 @@ abstract class ShardDO {
         this.currentRequestTrace = scope.trace;
         this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
+    }
+
+    /** The `connect` control frame: verify a pending socket, send its identity, and fire `onConnect` once. */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- the `connect` handshake: pending-credential check, identity frame, then the persisted-once `onConnect`; the steps share one attachment copy and must stay in order
+    private async handleConnectFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): Promise<void> {
+        // One-shot control frame the client sends right after the socket
+        // opens: record its connection `context` on the attachment (so it
+        // survives hibernation and can be replayed at close) and fire the
+        // `onConnect` lifecycle hooks under the socket's verified identity.
+        const attachment = this.readAttachmentCopy(ws);
+
+        // Verified before `identity` is sent, so a refused socket learns nothing
+        // about who it is. Only an unauthenticated socket reaches this check.
+        if (attachment.authenticated === false) {
+            // A connect past the deadline closes with the deadline reason, not the refusal: the sweep
+            // would have closed this socket, and the client reads only the reason to tell them apart.
+            if (attachment.pendingSince !== undefined && attachment.pendingSince + PENDING_CONNECT_DEADLINE_MS <= Date.now()) {
+                this.dropLiveSocket(attachment.connectionId);
+
+                // A half-closed peer can make close throw; that must not escape as a socket error.
+                try {
+                    ws.close?.(4003, "connect deadline");
+                } catch {
+                    /* socket already gone */
+                }
+
+                return;
+            }
+
+            const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
+
+            if (expectedBearer === undefined || typeof envelope.token !== "string" || !constantTimeEqual(envelope.token, expectedBearer)) {
+                this.refusePendingSocket(ws);
+
+                return;
+            }
+
+            this.rejectRetainedRooms(ws);
+            attachment.authenticated = true;
+            delete attachment.pendingSince;
+
+            // Persisted before the relay announce and the identity frame below: a subscribe
+            // handled during the announce await reads the stored flag, not this local copy.
+            try {
+                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            } catch {
+                this.refusePendingSocket(ws);
+
+                return;
+            }
+        }
+
+        // Tell the client which user this socket was authenticated as, and
+        // "nobody" as an explicit `null`. A cookie-session client holds no
+        // token, so this answer is the only way it can tell a sign-out or a
+        // different user's sign-in from the session it already shows. Sent
+        // on every `connect`, including a re-sent one: the answer is the
+        // socket's, and repeating it costs one small frame.
+
+        // Relay tier: a relay announces itself before the identity frame. The client names this
+        // socket in a live subscribe as soon as it has the connection id, and the owner can only
+        // forward that grant to a relay it already knows. A no-op on an owner.
+        //
+        // A failed attach leaves the relay unannounced, so the socket is still served; the next shape subscribe or whisper join retries it.
+        await this.relay?.announce();
+
+        // The connection id rides here so the client can name this socket in a live
+        // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
+        // `whisperAck` advertises that every live join is answered with `whisper_subscribed`, so a
+        // client can hold a live grant until its join is acknowledged. An older shard omits it.
+        // `revalidateMs` is the window a client re-auths the socket within to keep it open; a relative
+        // duration, so the client's clock never has to agree with this one.
+        this.sendFrame(
+            ws,
+            JSON.stringify({
+                claims: claimsFingerprint(attachment.userId, attachment.identity),
+                connectionId: attachment.connectionId,
+                ...(attachment.revalidateAt === undefined ? {} : { revalidateMs: SOCKET_REVALIDATE_MS }),
+                // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
+                subject: attachment.userId ?? null,
+                type: "identity",
+                whisperAck: true,
+            }),
+            "control",
+        );
+
+        // Idempotent: a socket announces `connect` exactly once. A re-sent
+        // (or duplicate) frame must not re-fire `onConnect`, or it would
+        // out-number the single `onDisconnect` at close.
+        if (attachment.connected === true) {
+            return;
+        }
+
+        if (envelope.context !== undefined) {
+            attachment.context = envelope.context;
+        }
+
+        // Record the client's stable id so shape pokes to this socket can
+        // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
+        if (envelope.clientId !== undefined) {
+            attachment.clientId = envelope.clientId;
+        }
+
+        // Resolve the announced capabilities to the decisions they gate,
+        // rather than persisting the raw tokens. `caps` is client-supplied
+        // and otherwise unbounded — the sibling attachment arrays (`subs`,
+        // `whispers`) are both explicitly capped for exactly that reason,
+        // and an over-large one here would either starve `subs` or make
+        // `serializeAttachment` throw, dropping the whole attachment. A
+        // fixed set of booleans is bounded by construction, and nothing
+        // reads an unrecognised token back: the server can only act on ones
+        // it understands, so keeping them would store input with no reader.
+        if (Array.isArray(envelope.caps)) {
+            attachment.pageDeltas = envelope.caps.includes(PAGE_DELTA_CAPABILITY);
+            attachment.refreshBatch = envelope.caps.includes(REFRESH_BATCH_CAPABILITY);
+        }
+
+        attachment.connected = true;
+
+        // `connected` lives on the SAME object the `try` below persists —
+        // if `context` is what made it too large and the whole attachment
+        // fails to serialize, `connected` doesn't survive either, even
+        // though only `context` was ever documented as at-risk. A resent
+        // `connect` (the `identity` reply above is no ack — an older server
+        // sends none — so a client may legitimately retry after a
+        // timeout) would then re-enter this
+        // branch and re-fire `onConnect` — `webSocketClose` still only fires
+        // `onDisconnect` once, breaking the symmetry the `connected === true`
+        // check above exists to guarantee.
+        //
+        // Retry once with `context` omitted so `connected`/`clientId`/
+        // `pageDeltas` still persist even when `context` alone is what
+        // doesn't fit. Only if THAT also fails is nothing here persistable;
+        // in that case, don't fire `onConnect` at all — an unpersisted
+        // `connected` flag means the next `deserializeAttachment` read sees
+        // `connected: false`, so a resent `connect` frame correctly re-enters
+        // this branch and retries, rather than silently never firing again.
+        let persisted = true;
+
+        try {
+            this.writeAttachment(ws, attachment);
+        } catch {
+            const withoutContext: SocketAttachment = { ...attachment };
+
+            delete withoutContext.context;
+
+            try {
+                this.writeAttachment(ws, withoutContext);
+            } catch {
+                // Neither attempt persisted. Roll back the in-memory flip so
+                // this local `attachment` object agrees with what's actually
+                // in storage — the same defensive move `subscribe`/
+                // `unsubscribe` above make on their own serialize failure.
+                attachment.connected = false;
+                persisted = false;
+            }
+        }
+
+        // The in-memory `attachment` still carries `context` regardless of
+        // which serialize attempt (if any) succeeded, so a persisted-retry
+        // still fires the hook with the caller's supplied context THIS turn
+        // — it just won't survive to `onDisconnect` at close.
+        if (persisted) {
+            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
+        }
+    }
+
+    /** A live-query `subscribe` frame: gate it, register it on the socket, and seed it. */
+    private async handleSubscribeFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope, requested: SubscriptionQuery): Promise<void> {
+        const { functionPath } = requested;
+        const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
+
+        // A table-only subscribe (no function path) is fed raw table deltas that no claim scopes, and nothing can
+        // seed or reset its rows when the socket's claims change. Refused as soon as the socket's claims are
+        // known, before anything is stored or sent; a socket with none (anonymous) has nothing to leak.
+        if (!functionPath && socketHasClaims(this.readAttachment(ws))) {
+            this.sendSubscriptionError(
+                ws,
+                envelope.id,
+                "SUBSCRIPTION_FUNCTION_REQUIRED",
+                "a subscription on an authenticated socket must name a function (functionPath)",
+            );
+
+            return;
+        }
+
+        // Admin introspection subscriptions read shard internals (raw rows,
+        // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
+        // as the HTTP admin RPCs — recorded on the socket at upgrade and
+        // re-derived from `env` here, so a rotation revokes the socket rather
+        // than only the HTTP plane. A socket that only cleared the
+        // user-subscription gate must never be able to read admin data by
+        // naming a reserved functionPath.
+        if (isAdmin && !(await this.attachmentAdminAuthorized(this.readAttachment(ws)))) {
+            this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }), "control");
+
+            return;
+        }
+
+        // Decode the wire-encoded subscription args ONCE, at the entry point —
+        // BEFORE the attachment store and the seed — so every downstream
+        // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
+        // eval) sees REAL values (`bigint`/`Date`/bytes), and the
+        // structured-clone attachment carries them through hibernation.
+        // `decodeWire` is identity for pure-JSON args (legacy frames included).
+        let query: SubscriptionQuery;
+
+        try {
+            query = requested.args === undefined ? requested : { ...requested, args: decodeWire(requested.args) as Record<string, unknown> };
+        } catch {
+            // A malformed tagged payload (over-long bigint, over-deep nesting)
+            // must not throw out of `webSocketMessage` — surface a structured
+            // error frame instead, mirroring the persist-failure path.
+            this.sendFrame(
+                ws,
+                JSON.stringify({
+                    code: "BAD_SUBSCRIPTION_ARGS",
+                    error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+                    id: envelope.id,
+                    type: "error",
+                }),
+                "control",
+            );
+
+            return;
+        }
+
+        // A cursor is honoured only under the claims it was read under; otherwise this is a first subscribe.
+        {
+            const { sinceClaims, ...held } = query;
+
+            query = held;
+
+            if (held.sinceSeq !== undefined && !this.resumesUnderCurrentClaims(ws, sinceClaims, held.functionPath)) {
+                query = { ...held, sinceEpoch: undefined, sinceSeq: undefined };
+            }
+        }
+
+        const preparation = functionPath === undefined || isAdmin ? undefined : this.prepareForLiveQueryGate(functionPath);
+
+        if (preparation === undefined) {
+            // This subscribe is the newest for its id, so one still waiting on a load must not register over it.
+            this.loadingSubscribes.get(ws)?.delete(envelope.id);
+        } else if (!(await this.subscribeOutlivedLoad(ws, envelope.id, preparation))) {
+            return;
+        }
+
+        const registered = this.readAttachment(ws).subs;
+        const isRetry = Object.hasOwn(registered, envelope.id) && isSameSubscription(registered[envelope.id], query);
+        const status = this.subscribe(ws, envelope.id, query);
+
+        if (status !== "ok") {
+            // The `paid` refusal mirrors the origin's batch gate (`BAD_REQUEST`):
+            // a paid query is one payment for one call, which a live
+            // subscription (seed + every poke) cannot be.
+            const { code, message: errorMessage } = {
+                paid: { code: "BAD_REQUEST", message: paidSocketRefusal(String(functionPath), "subscribed") },
+                per_dispatch: { code: "BAD_REQUEST", message: perDispatchSubscriptionRefusal(String(functionPath)) },
+                serialize_failed: {
+                    code: "SUBSCRIPTION_PERSIST_FAILED",
+                    message: subscriptionRefusal("size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
+                },
+                too_many: {
+                    code: "TOO_MANY_SUBSCRIPTIONS",
+                    message: subscriptionRefusal("count", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
+                },
+            }[status];
+
+            this.sendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }), "control");
+
+            return;
+        }
+
+        this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
+
+        // Seed the subscriber with the query's current result so the first
+        // value arrives over the same channel as later updates. When the
+        // subclass doesn't support re-execution (base default), this is a
+        // no-op and the subscriber relies on its initial HTTP query.
+        if (functionPath) {
+            await this.seedSubscriptionGuarded(ws, envelope.id, query, functionPath, isAdmin, isRetry);
+        }
+    }
+
+    /** A `shape_subscribe` frame: decode its args and hand it to {@link ShardDO.handleShapeSubscribe}. */
+    private async handleShapeSubscribeFrame(
+        ws: ShardSocketLike,
+        envelope: SubscriptionEnvelope,
+        shape: NonNullable<SubscriptionEnvelope["shape"]>,
+    ): Promise<void> {
+        // Decode-at-entry, mirroring the `subscribe` branch above: the stored
+        // descriptor and every `resolveShape` see real values.
+        let shapeArgs: Record<string, unknown> | undefined;
+
+        try {
+            shapeArgs = shape.args === undefined ? undefined : (decodeWire(shape.args) as Record<string, unknown>);
+        } catch {
+            this.sendSubscriptionError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
+
+            return;
+        }
+
+        await this.handleShapeSubscribe(ws, envelope.id, {
+            args: shapeArgs,
+            name: shape.name,
+            // As for a query: a checkpoint is honoured only under the claims it was read under.
+            ...(envelope.sinceCheckpoint === undefined || this.resumesUnderCurrentClaims(ws, envelope.sinceClaims, shape.name)
+                ? { sinceEpoch: envelope.sinceEpoch, sinceSeq: envelope.sinceCheckpoint }
+                : {}),
+        });
+    }
+
+    /** A `shape_unsubscribe` frame. */
+    private handleShapeUnsubscribeFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): void {
+        this.shapeUnsubscribe(ws, envelope.id);
+        this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
+    }
+
+    /** A `stream` frame: refuse admin and paid functions, decode the args, and start the stream without awaiting it. */
+    private handleStreamFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope, query: SubscriptionQuery, functionPath: string): void {
+        // Streams are public-only: there is no admin-streaming surface, so
+        // anything matching the admin prefix is rejected up front rather
+        // than allowed to slip through executeStream().
+        if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }), "control");
+
+            return;
+        }
+
+        // `.x402({ price }).stream(...)` carries the price tag into
+        // `LUNORA_FUNCTIONS` like any other paid procedure, but this frame
+        // never crosses the origin's paywall — so a paid stream served here
+        // is served free. Refuse it the same way `subscribe` refuses a paid
+        // live query.
+        if (this.isPaidFunction(functionPath)) {
+            this.sendSubscriptionError(ws, envelope.id, "BAD_REQUEST", paidSocketRefusal(functionPath, "streamed"));
+
+            return;
+        }
+
+        // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
+        // before handing them to the stream handler — mirrors the `/rpc` path,
+        // and the `subscribe` / `shape_subscribe` branches above.
+        //
+        // Decoded into a local FIRST, not inline in the call below. `decodeWire`
+        // throws a `RangeError` on an over-long bigint or past its 64-level
+        // nesting cap, and inline it threw during ARGUMENT EVALUATION — before
+        // `handleStream` had returned a promise, so the trailing `.catch()`
+        // could not see it. Neither `handleWebSocketMessage` nor
+        // `webSocketMessage` wraps this, so under the hibernation API one
+        // malformed frame killed the whole socket instead of failing one stream.
+        let streamArgs: Record<string, unknown>;
+
+        try {
+            streamArgs = decodeWire(query.args ?? {}) as Record<string, unknown>;
+        } catch {
+            this.sendFrame(
+                ws,
+                JSON.stringify({
+                    error: { code: "BAD_SUBSCRIPTION_ARGS", message: "stream args failed wire decoding" },
+                    id: envelope.id,
+                    type: "error",
+                }),
+                "control",
+            );
+
+            return;
+        }
+
+        // Fire-and-forget: handleStream owns its own error reporting (it
+        // sends `type:"error"` frames to the socket). The trailing no-op
+        // catch only guards the rare pre-try throw path (e.g. ws.send on a
+        // socket the runtime already tore down) so a dead socket can't
+        // surface as an unhandled rejection.
+        this.handleStream(
+            ws,
+            envelope.id,
+            functionPath,
+            streamArgs,
+            // Client input: a non-integer or negative watermark would seed
+            // `delivered` past real chunks and silently truncate the stream,
+            // so it is normalised here rather than trusted.
+            Number.isInteger(envelope.sinceChunk) && (envelope.sinceChunk as number) > 0 ? (envelope.sinceChunk as number) : 0,
+            // Same trust boundary for the resume generation: only a positive
+            // integer counts; anything else behaves like an older client
+            // that never sent one.
+            Number.isInteger(envelope.generation) && (envelope.generation as number) > 0 ? (envelope.generation as number) : undefined,
+        ).catch(() => {
+            /* socket already gone; nothing to report */
+        });
+    }
+
+    /** A `whisper_subscribe` / `whisper_unsubscribe` frame: join or leave a topic, running a room's `onJoin` / `onLeave`. */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- join/leave admission is an ordered gate (route topic, authorizer, closing socket, room-join budget, membership change, ack, room dispatch); each step can end the frame
+    private async handleWhisperMembershipFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): Promise<void> {
+        const { topic } = envelope;
+
+        // A `defineWebSocket` route's reserved topic is never joinable by a
+        // client: route membership is established only at upgrade, so a
+        // foreign socket can neither read nor inject on a route channel.
+        if (typeof topic === "string" && topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+            return;
+        }
+
+        if (typeof topic === "string" && topic.length > 0) {
+            const join = envelope.type === "whisper_subscribe";
+
+            // Only a JOIN is authorized. Leaving a topic is always permitted —
+            // an app that revokes access mid-session must not also strand the
+            // client subscribed to something it can no longer leave.
+            if (join && !(await this.authorizeWhisper(ws, topic, "subscribe"))) {
+                this.acknowledgeLiveJoin(ws, topic);
+
+                return;
+            }
+
+            // A room join runs the room's mutation, so it takes the same admission as
+            // a room message; otherwise a join loop is an unbounded write stream. A
+            // leave is not throttled: it only runs `onLeave` for a membership a
+            // (throttled) join created, so it cannot be used to flood, and a throttled
+            // socket must still be able to leave.
+            // A socket whose close is in flight changes no membership: the close tears it down.
+            if (this.closingSockets.has(ws)) {
+                return;
+            }
+
+            if (join && this.roomHandlerPath(topic) !== undefined && !this.allowRoomJoin(ws)) {
+                return;
+            }
+
+            // Only a real membership change fires the room handler: a duplicate
+            // join, a join refused at the topic cap, or a leave of a topic the
+            // socket never held must not run `onJoin` / `onLeave`.
+            if (!this.setWhisperMembership(ws, topic, join)) {
+                if (join) {
+                    this.acknowledgeLiveJoin(ws, topic);
+                }
+
+                return;
+            }
+
+            const joinEpoch = join ? this.membershipEpoch(ws, topic) : undefined;
+
+            // The ack follows the membership decision and precedes the room dispatch and the relay
+            // announce. It is not sent from a `finally`: an error from unrelated work must not be
+            // answered as a processed join.
+            if (join) {
+                this.acknowledgeLiveJoin(ws, topic);
+            }
+
+            // A `defineRoom` topic ALSO dispatches the room's server handler:
+            // `onJoin` after the authorized join is recorded, `onLeave` on
+            // every unsubscribe (never authorization-gated). An ordinary
+            // whisper topic resolves to no room and dispatches nothing. The
+            // dispatch is queued on this socket before any await, so a later
+            // leave cannot run its `onLeave` ahead of this `onJoin`.
+            const admitted = await this.dispatchSettlingJoin(ws, topic, join, joinEpoch);
+
+            // A join whose `onJoin` rejected was already undone in the queued handler,
+            // so the socket holds no membership and gets no relayed frames for it.
+            if (join && !admitted) {
+                return;
+            }
+
+            // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
+            // announces itself so the owner forwards whisper frames to it. The connect-time
+            // announce already covers grant routing; this one retries a failed attach.
+            if (join) {
+                await this.relay?.announce();
+            }
+        }
+    }
+
+    /** A `whisper` frame: relay it to the topic, or dispatch a room's `onMessage`. */
+    private async handleWhisperFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): Promise<void> {
+        // A route channel is not reachable through a whisper frame: a route's
+        // messages arrive only on its dedicated socket. Dropping the raw relay
+        // keeps a foreign socket from injecting into a route.
+        if (typeof envelope.topic === "string" && envelope.topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+            return;
+        }
+
+        if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
+            // The authorizer's await can outlast the sender's credential or window; the frame carries its user id.
+            if (this.dropIfLapsed(ws)) {
+                return;
+            }
+
+            // A room topic is handled server-side rather than blindly relayed:
+            // the shard decodes the client's typed message, dispatches the
+            // room's `onMessage` (which decides what, if anything, members
+            // see via `socket.broadcast`), and does NOT relay the raw frame.
+            // An ordinary whisper topic keeps the direct peer relay.
+            // Reuse the whisper rate bucket: a room's fan-out is the same
+            // O(members) cost a whisper is, so it gets the same admission. The
+            // client wire-encoded `data`; decode it back to real values
+            // (`bigint`/`Date`/bytes) before it reaches the handler, mirroring
+            // the `subscribe`/`stream` branches.
+            if (this.roomHandlerPath(envelope.topic) === undefined) {
+                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
+            } else if (
+                !this.closingSockets.has(ws) &&
+                this.isWhisperMember(ws, envelope.topic) &&
+                this.allowWhisper(ws) &&
+                this.fitsWhisperCap(envelope.data)
+            ) {
+                // The same 4 KiB cap an ordinary whisper carries: a room message is
+                // decoded, validated and run as a write, so it must not be unbounded.
+                // The membership epoch at receive travels with the message: if the socket
+                // leaves and rejoins before this runs, the message was sent under the old membership.
+                await this.dispatchRoomEvent(ws, envelope.topic, "message", envelope.data, this.membershipEpoch(ws, envelope.topic));
+            }
+        }
+    }
+
+    /** An `unsubscribe` frame: cancel a stream with that id, if any, and drop the subscription. */
+    private handleUnsubscribeFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): void {
+        // Stream cancel: abort the in-flight iterator (if any) before
+        // touching the subscription registry. unsubscribe() on a non-sub
+        // id is a no-op, so this stays safe even when id namespaces overlap.
+        const cancellers = this.streamCancellers.get(ws);
+        const controller = cancellers?.get(envelope.id);
+
+        if (controller) {
+            controller.abort();
+            cancellers?.delete(envelope.id);
+        }
+
+        // A subscribe still waiting on its function's load must not register after this.
+        this.loadingSubscribes.get(ws)?.delete(envelope.id);
+        this.unsubscribe(ws, envelope.id);
+        this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
     }
 
     /**
