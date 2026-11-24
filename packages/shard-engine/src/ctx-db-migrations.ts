@@ -36,7 +36,18 @@ import { migrateScheduleOutbox } from "./ctx-db-schedule-outbox";
 import { migrateSearchState } from "./ctx-db-search-state";
 import { migrateShapePokeCursor } from "./ctx-db-shape-poke-cursor";
 import { runAll, runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
+import {
+    AGG_COUNT,
+    AGG_KEY,
+    AGG_VALUE,
+    createIndexSql,
+    DOC_COLUMN,
+    geoTableName,
+    isFtsAvailable,
+    jsonPathSql,
+    probeFtsFromExistingTable,
+    tableColumns,
+} from "./do-sql";
 import { renderSql } from "./drizzle";
 import { migrateDurableStreams } from "./durable-stream";
 import { ftsCompanionDdl } from "./fts-companion";
@@ -96,6 +107,92 @@ const INDEX_LEDGER_TABLE = "__lunora_framework_indexes";
 
 /** An identifier as SQLite compares it: ASCII letters folded, everything else untouched. Not `toLowerCase()`, which also equates `ä` and `Ä`. */
 const foldIdentifier = (name: string): string => name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
+
+/** One index row from `sqlite_master`, folded for case-insensitive lookup. */
+interface IndexCatalogEntry {
+    name: string;
+    sql: null | string;
+    tableFolded: string;
+}
+
+/**
+ * Pass-local snapshot of `sqlite_master`'s indexes, keyed by folded index name.
+ * Read once per {@link runShardMigrations} pass and kept in step with every
+ * index create or drop so shape checks, uniqueness guards, and ledger adoption
+ * do not re-scan `sqlite_master` per index.
+ */
+type IndexCatalog = Map<string, IndexCatalogEntry>;
+
+/** Single-scan summary of `sqlite_master` for one {@link runShardMigrations} pass. */
+interface MigrationCatalog {
+    existingFtsTable: string | undefined;
+    indexes: IndexCatalog;
+    ledgerExists: boolean;
+}
+
+/**
+ * Pass-local snapshot of {@link INDEX_LEDGER_TABLE}, read once per
+ * {@link runShardMigrations} pass so `recordFrameworkIndex`, `isFrameworkIndex`,
+ * and `dropUndeclaredIndexes` avoid per-table scans of the ledger.
+ */
+interface IndexLedger {
+    byTable: Map<string, string[]>;
+    names: Set<string>;
+}
+
+const CREATE_VIRTUAL_TABLE_RE = /^CREATE\s+VIRTUAL\s+TABLE\b/iu;
+const USING_FTS5_RE = /\bUSING\s+fts5\b/iu;
+
+const isFtsVirtualTableSql = (statement: null | string): boolean =>
+    statement !== null && CREATE_VIRTUAL_TABLE_RE.test(statement) && USING_FTS5_RE.test(statement);
+
+/** Read `sqlite_master` once for the entire migration pass. */
+const loadMigrationCatalog = (sql: SqlExec): MigrationCatalog => {
+    const indexes: IndexCatalog = new Map();
+    const ledgerFolded = foldIdentifier(INDEX_LEDGER_TABLE);
+    let ledgerExists = false;
+    let existingFtsTable: string | undefined;
+
+    for (const row of runDrizzle<{ name: string; sql: null | string; tbl_name: string; type: string }>(
+        sql,
+        dsql`SELECT type, name, tbl_name, sql FROM sqlite_master`,
+    )) {
+        if (row.type === "index") {
+            indexes.set(foldIdentifier(row.name), { name: row.name, sql: row.sql, tableFolded: foldIdentifier(row.tbl_name) });
+        } else if (row.type === "table") {
+            if (foldIdentifier(row.name) === ledgerFolded) {
+                ledgerExists = true;
+            }
+
+            if (existingFtsTable === undefined && isFtsVirtualTableSql(row.sql)) {
+                existingFtsTable = row.name;
+            }
+        }
+    }
+
+    return { existingFtsTable, indexes, ledgerExists };
+};
+
+/**
+ * Execute `CREATE [UNIQUE] INDEX IF NOT EXISTS` and record newly created
+ * indexes in `catalog`. When SQLite already holds an index under `indexName`,
+ * `IF NOT EXISTS` is a no-op and the existing catalog entry stays untouched.
+ */
+const createIndexTracked = (sql: SqlExec, catalog: IndexCatalog, indexName: string, tableName: string, expressions: SQL, unique: boolean): void => {
+    const statement = createIndexSql(indexName, tableName, expressions, unique);
+
+    runDrizzle(sql, statement);
+
+    const folded = foldIdentifier(indexName);
+
+    if (!catalog.has(folded)) {
+        catalog.set(folded, {
+            name: indexName,
+            sql: renderSql("sqlite", statement).sql.replace("IF NOT EXISTS ", ""),
+            tableFolded: foldIdentifier(tableName),
+        });
+    }
+};
 
 /**
  * Raised when a UNIQUE index cannot be built because existing rows already violate
@@ -175,18 +272,15 @@ const assertNoDuplicatesUnder = (
  */
 const dropIndexIfShapeChanged = (
     sql: SqlExec,
+    catalog: IndexCatalog,
     indexName: string,
     tableName: string,
     expressions: SQL,
     unique: boolean,
     references: ReadonlyArray<SQL>,
 ): void => {
-    const existing = runDrizzle<{ sql: null | string }>(
-        sql,
-        dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName} COLLATE NOCASE`,
-    ).toArray();
-
-    const current = existing[0]?.sql;
+    const entry = catalog.get(foldIdentifier(indexName));
+    const current = entry?.tableFolded === foldIdentifier(tableName) ? entry.sql : undefined;
 
     // No row, or an implicit index SQLite created for a constraint (`sql` is
     // NULL there) — nothing of ours to replace.
@@ -223,6 +317,7 @@ const dropIndexIfShapeChanged = (
     }
 
     runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(indexName)}`);
+    catalog.delete(foldIdentifier(indexName));
 };
 
 /**
@@ -233,11 +328,8 @@ const dropIndexIfShapeChanged = (
  * something — an index already in place has been enforcing the constraint all
  * along, and re-scanning for it on every cold start would be pure cost.
  */
-const indexIsHeld = (sql: SqlExec, indexName: string, tableName: string): boolean =>
-    runDrizzle(
-        sql,
-        dsql`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName} COLLATE NOCASE LIMIT 1`,
-    ).toArray().length > 0;
+const indexIsHeld = (catalog: IndexCatalog, indexName: string, tableName: string): boolean =>
+    catalog.get(foldIdentifier(indexName))?.tableFolded === foldIdentifier(tableName);
 
 /**
  * Create one index, probing for duplicates first when it is UNIQUE and not yet
@@ -245,12 +337,20 @@ const indexIsHeld = (sql: SqlExec, indexName: string, tableName: string): boolea
  * index (a declared `unique: true` index, a `.unique()` column) go through here,
  * so neither can reach `CREATE UNIQUE INDEX` unguarded.
  */
-const createIndexGuarded = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean, references: ReadonlyArray<SQL>): void => {
-    if (unique && !indexIsHeld(sql, indexName, tableName)) {
+const createIndexGuarded = (
+    sql: SqlExec,
+    catalog: IndexCatalog,
+    indexName: string,
+    tableName: string,
+    expressions: SQL,
+    unique: boolean,
+    references: ReadonlyArray<SQL>,
+): void => {
+    if (unique && !indexIsHeld(catalog, indexName, tableName)) {
         assertNoDuplicatesUnder(sql, indexName, tableName, expressions, references, "cannot be created");
     }
 
-    runDrizzle(sql, createIndexSql(indexName, tableName, expressions, unique));
+    createIndexTracked(sql, catalog, indexName, tableName, expressions, unique);
 };
 
 /**
@@ -281,39 +381,44 @@ const looksFrameworkCreated = (tableName: string, name: string, statement: null 
     statement !== null &&
     (statement.includes("json_extract(") || statement.trimEnd().endsWith(INDEX_SORT_KEYS_TAIL));
 
-/**
- * The ledger's names as the current {@link runShardMigrations} pass knows them,
- * folded like the table's NOCASE key. Every cold start re-runs the pass and
- * re-declares every index it already owns, so the pass reads the ledger once
- * instead of writing one `INSERT OR IGNORE` per index. Reset at the start of each
- * pass, so it never outlives the reads it was built from.
- */
-const ledgerNames = new WeakMap<SqlExec, Set<string>>();
+const addLedgerTableEntry = (ledger: IndexLedger, tableName: string, indexName: string): void => {
+    const tableFolded = foldIdentifier(tableName);
+    const list = ledger.byTable.get(tableFolded);
 
-/** Note that this module owns the index `indexName` on `tableName`. */
-const recordFrameworkIndex = (sql: SqlExec, indexName: string, tableName: string): void => {
-    let known = ledgerNames.get(sql);
+    if (list === undefined) {
+        ledger.byTable.set(tableFolded, [indexName]);
+    } else {
+        list.push(indexName);
+    }
+};
 
-    if (known === undefined) {
-        known = new Set(
-            runDrizzle<{ name: string }>(sql, dsql`SELECT name FROM ${dsql.identifier(INDEX_LEDGER_TABLE)}`)
-                .toArray()
-                .map((row) => foldIdentifier(row.name)),
-        );
-        ledgerNames.set(sql, known);
+/** Read {@link INDEX_LEDGER_TABLE} once for the entire migration pass. */
+const loadIndexLedger = (sql: SqlExec): IndexLedger => {
+    const ledger: IndexLedger = { byTable: new Map(), names: new Set() };
+
+    for (const row of runDrizzle<{ name: string; table_name: string }>(sql, dsql`SELECT name, table_name FROM ${dsql.identifier(INDEX_LEDGER_TABLE)}`)) {
+        ledger.names.add(foldIdentifier(row.name));
+        addLedgerTableEntry(ledger, row.table_name, row.name);
     }
 
-    if (known.has(foldIdentifier(indexName))) {
+    return ledger;
+};
+
+/** Note that this module owns the index `indexName` on `tableName`. */
+const recordFrameworkIndex = (sql: SqlExec, ledger: IndexLedger, indexName: string, tableName: string): void => {
+    const folded = foldIdentifier(indexName);
+
+    if (ledger.names.has(folded)) {
         return;
     }
 
     runDrizzle(sql, dsql`INSERT OR IGNORE INTO ${dsql.identifier(INDEX_LEDGER_TABLE)} (name, table_name) VALUES (${indexName}, ${tableName})`);
-    known.add(foldIdentifier(indexName));
+    ledger.names.add(folded);
+    addLedgerTableEntry(ledger, tableName, indexName);
 };
 
 /** Whether this module recorded `indexName` as its own, as opposed to an index someone created by hand. */
-const isFrameworkIndex = (sql: SqlExec, indexName: string): boolean =>
-    runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} WHERE name = ${indexName} COLLATE NOCASE LIMIT 1`).toArray().length > 0;
+const isFrameworkIndex = (ledger: IndexLedger, indexName: string): boolean => ledger.names.has(foldIdentifier(indexName));
 
 /**
  * Create the ledger of framework-created indexes. A database that has none yet predates it, so the first run adopts every
@@ -322,28 +427,29 @@ const isFrameworkIndex = (sql: SqlExec, indexName: string): boolean =>
  *
  * The adoption follows the CREATE in the same synchronous turn, which a Durable Object commits as one write.
  */
-const ensureIndexLedger = (sql: SqlExec, tableNames: ReadonlyArray<string>): void => {
-    const existed =
-        runDrizzle(sql, dsql`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ${INDEX_LEDGER_TABLE} COLLATE NOCASE`).toArray().length > 0;
-
+const ensureIndexLedger = (sql: SqlExec, migrationCatalog: MigrationCatalog, tableNames: ReadonlyArray<string>): IndexLedger => {
     runDrizzle(sql, dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(INDEX_LEDGER_TABLE)} (name TEXT PRIMARY KEY COLLATE NOCASE, table_name TEXT NOT NULL)`);
 
-    if (existed) {
-        return;
+    if (migrationCatalog.ledgerExists) {
+        return loadIndexLedger(sql);
     }
 
-    for (const tableName of tableNames) {
-        const held = runDrizzle<{ name: string; sql: null | string }>(
-            sql,
-            dsql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ${tableName} COLLATE NOCASE AND sql IS NOT NULL`,
-        ).toArray();
+    const ledger: IndexLedger = { byTable: new Map(), names: new Set() };
+    const tableNamesByFolded = new Map(tableNames.map((tableName) => [foldIdentifier(tableName), tableName]));
 
-        for (const { name, sql: statement } of held) {
-            if (looksFrameworkCreated(tableName, name, statement)) {
-                recordFrameworkIndex(sql, name, tableName);
-            }
+    for (const entry of migrationCatalog.indexes.values()) {
+        if (entry.sql === null) {
+            continue;
+        }
+
+        const tableName = tableNamesByFolded.get(entry.tableFolded);
+
+        if (tableName !== undefined && looksFrameworkCreated(tableName, entry.name, entry.sql)) {
+            recordFrameworkIndex(sql, ledger, entry.name, tableName);
         }
     }
+
+    return ledger;
 };
 
 /**
@@ -357,21 +463,37 @@ const ensureIndexLedger = (sql: SqlExec, tableNames: ReadonlyArray<string>): voi
  * by hand is left alone whatever it looks like — and so is one on a system field
  * (`_creationTime`), which no shape test could have told from a hand-made one.
  */
-const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: ReadonlySet<string>): void => {
+const dropUndeclaredIndexes = (sql: SqlExec, catalog: IndexCatalog, ledger: IndexLedger, tableName: string, declared: ReadonlySet<string>): void => {
+    const tableFolded = foldIdentifier(tableName);
+    const owned = ledger.byTable.get(tableFolded);
+
+    if (owned === undefined || owned.length === 0) {
+        return;
+    }
+
     // SQLite folds ASCII case in an identifier, so `By_Slug` IS `by_slug`: an index renamed that way
     // is the declared one, and dropping it would leave the table with nothing.
     const declaredFolded = new Set([...declared].map((name) => foldIdentifier(name)));
-    const owned = runDrizzle<{ name: string }>(
-        sql,
-        dsql`SELECT "l"."name" FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} AS "l" WHERE "l"."table_name" = ${tableName} COLLATE NOCASE`,
-    ).toArray();
+    const remaining: string[] = [];
 
-    for (const { name } of owned) {
-        if (!declaredFolded.has(foldIdentifier(name))) {
-            runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(name)}`);
-            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} WHERE ${dsql.identifier(INDEX_LEDGER_TABLE)}."name" = ${name}`);
-            ledgerNames.get(sql)?.delete(foldIdentifier(name));
+    for (const name of owned) {
+        const folded = foldIdentifier(name);
+
+        if (declaredFolded.has(folded)) {
+            remaining.push(name);
+            continue;
         }
+
+        runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(name)}`);
+        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(INDEX_LEDGER_TABLE)} WHERE ${dsql.identifier(INDEX_LEDGER_TABLE)}."name" = ${name}`);
+        catalog.delete(folded);
+        ledger.names.delete(folded);
+    }
+
+    if (remaining.length === 0) {
+        ledger.byTable.delete(tableFolded);
+    } else {
+        ledger.byTable.set(tableFolded, remaining);
     }
 };
 
@@ -384,7 +506,14 @@ const dropUndeclaredIndexes = (sql: SqlExec, tableName: string, declared: Readon
  * JSON on the request that opens the shard, and a failure leaves the sweep on
  * its scan rather than failing the migration. The next cold start retries.
  */
-const migrateTtlIndex = (sql: SqlExec, tableName: string, definition: TableDefinitionLike, declared: Set<string>): void => {
+const migrateTtlIndex = (
+    sql: SqlExec,
+    catalog: IndexCatalog,
+    ledger: IndexLedger,
+    tableName: string,
+    definition: TableDefinitionLike,
+    declared: Set<string>,
+): void => {
     const indexName = `${tableName}${TTL_INDEX_SUFFIX}`;
 
     // A declared index already holds the name; never replace a user's index. SQLite folds
@@ -397,7 +526,7 @@ const migrateTtlIndex = (sql: SqlExec, tableName: string, definition: TableDefin
 
     // An index under this name that the ledger does not hold was made by hand; replacing it would drop it, and a
     // unique one would stop enforcing its constraint.
-    if (indexIsHeld(sql, indexName, tableName) && !isFrameworkIndex(sql, indexName)) {
+    if (indexIsHeld(catalog, indexName, tableName) && !isFrameworkIndex(ledger, indexName)) {
         return;
     }
 
@@ -406,9 +535,9 @@ const migrateTtlIndex = (sql: SqlExec, tableName: string, definition: TableDefin
     declared.add(indexName);
 
     try {
-        dropIndexIfShapeChanged(sql, indexName, tableName, expressions, false, []);
-        runDrizzle(sql, createIndexSql(indexName, tableName, expressions, false));
-        recordFrameworkIndex(sql, indexName, tableName);
+        dropIndexIfShapeChanged(sql, catalog, indexName, tableName, expressions, false, []);
+        createIndexTracked(sql, catalog, indexName, tableName, expressions, false);
+        recordFrameworkIndex(sql, ledger, indexName, tableName);
     } catch {
         /* degraded sweep path; the next cold start retries */
     }
@@ -422,7 +551,14 @@ const migrateTtlIndex = (sql: SqlExec, tableName: string, definition: TableDefin
  * the constraint would silently stop rejecting duplicates. That is data
  * corruption rather than a slow query, so the two cases are split deliberately.
  */
-const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike, blocked: string[] | undefined): void => {
+const migrateSecondaryIndexes = (
+    sql: SqlExec,
+    catalog: IndexCatalog,
+    ledger: IndexLedger,
+    tableName: string,
+    definition: TableDefinitionLike,
+    blocked: string[] | undefined,
+): void => {
     const declared = new Set<string>();
 
     for (const index of definition.indexes) {
@@ -435,9 +571,9 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
 
         declared.add(indexName);
         deferIfBlocked(blocked, () => {
-            dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, references);
-            createIndexGuarded(sql, indexName, tableName, expressions, unique, references);
-            recordFrameworkIndex(sql, indexName, tableName);
+            dropIndexIfShapeChanged(sql, catalog, indexName, tableName, expressions, unique, references);
+            createIndexGuarded(sql, catalog, indexName, tableName, expressions, unique, references);
+            recordFrameworkIndex(sql, ledger, indexName, tableName);
         });
     }
 
@@ -454,14 +590,14 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
         declared.add(indexName);
         deferIfBlocked(blocked, () => {
             // The name only differs from a held one by the field's case, whose path is another expression.
-            dropIndexIfShapeChanged(sql, indexName, tableName, reference, true, [reference]);
-            createIndexGuarded(sql, indexName, tableName, reference, true, [reference]);
-            recordFrameworkIndex(sql, indexName, tableName);
+            dropIndexIfShapeChanged(sql, catalog, indexName, tableName, reference, true, [reference]);
+            createIndexGuarded(sql, catalog, indexName, tableName, reference, true, [reference]);
+            recordFrameworkIndex(sql, ledger, indexName, tableName);
         });
     }
 
-    migrateTtlIndex(sql, tableName, definition, declared);
-    dropUndeclaredIndexes(sql, tableName, declared);
+    migrateTtlIndex(sql, catalog, ledger, tableName, definition, declared);
+    dropUndeclaredIndexes(sql, catalog, ledger, tableName, declared);
 };
 
 /**
@@ -498,7 +634,7 @@ const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: Table
  * Haversine-refine without re-decoding the source doc. A btree on
  * `(__geohash__, __id__)` answers the prefix range scan.
  */
-const migrateGeoIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
+const migrateGeoIndexes = (sql: SqlExec, catalog: IndexCatalog, tableName: string, definition: TableDefinitionLike): void => {
     if (!definition.geoIndexes) {
         return;
     }
@@ -513,7 +649,7 @@ const migrateGeoIndexes = (sql: SqlExec, tableName: string, definition: TableDef
 
         const btreeName = `${tableName}__geo_${index.name}__btree`;
 
-        runDrizzle(sql, createIndexSql(btreeName, geoTable, dsql`${dsql.identifier("__geohash__")} ASC, ${dsql.identifier("__id__")} ASC`, false));
+        createIndexTracked(sql, catalog, btreeName, geoTable, dsql`${dsql.identifier("__geohash__")} ASC, ${dsql.identifier("__id__")} ASC`, false);
     }
 };
 
@@ -565,7 +701,7 @@ const migrateAggregateIndexes = (sql: SqlExec, tableName: string, definition: Ta
  * fields, so the changed `sortBy` that got us here also rebuilds it on its next
  * touch. Dropping the table takes its btree index with it.
  */
-const dropRankCompanionIfColumnsChanged = (sql: SqlExec, rankTable: string, sortColumns: ReadonlyArray<string>): void => {
+const dropRankCompanionIfColumnsChanged = (sql: SqlExec, catalog: IndexCatalog, rankTable: string, sortColumns: ReadonlyArray<string>): void => {
     const held = runDrizzle<{ name: string }>(sql, dsql`PRAGMA table_info(${dsql.identifier(rankTable)})`)
         .toArray()
         .map((column) => column.name)
@@ -574,6 +710,14 @@ const dropRankCompanionIfColumnsChanged = (sql: SqlExec, rankTable: string, sort
     // An absent table reports no columns, so there is nothing to drop.
     if (held.length > 0 && (held.length !== sortColumns.length || held.some((name, i) => name !== sortColumns[i]))) {
         runDrizzle(sql, dsql`DROP TABLE ${dsql.identifier(rankTable)}`);
+
+        const rankTableFolded = foldIdentifier(rankTable);
+
+        for (const [indexFolded, entry] of catalog) {
+            if (entry.tableFolded === rankTableFolded) {
+                catalog.delete(indexFolded);
+            }
+        }
     }
 };
 
@@ -582,7 +726,7 @@ const dropRankCompanionIfColumnsChanged = (sql: SqlExec, rankTable: string, sort
  * `rankIndex` declarations. One row per source row keyed by `__id__`; the index
  * on `(__partition__, __sort_k0__, …, __id__)` answers `rank()` in O(log n).
  */
-const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
+const migrateRankIndexes = (sql: SqlExec, catalog: IndexCatalog, tableName: string, definition: TableDefinitionLike): void => {
     if (!definition.rankIndexes) {
         return;
     }
@@ -593,7 +737,7 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
         const columnDdls = sortColumns.map((column) => dsql`${dsql.identifier(column)} BLOB`);
         const columnPart = columnDdls.length > 0 ? dsql`, ${dsql.join(columnDdls, dsql`, `)}` : dsql``;
 
-        dropRankCompanionIfColumnsChanged(sql, rankTable, sortColumns);
+        dropRankCompanionIfColumnsChanged(sql, catalog, rankTable, sortColumns);
 
         runDrizzle(
             sql,
@@ -616,8 +760,8 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
         const btreeColumns = dsql.join(orderedColumns, dsql`, `);
 
         // A flipped sort direction changes the btree's column list under the same name.
-        dropIndexIfShapeChanged(sql, btreeName, rankTable, btreeColumns, false, []);
-        runDrizzle(sql, createIndexSql(btreeName, rankTable, btreeColumns, false));
+        dropIndexIfShapeChanged(sql, catalog, btreeName, rankTable, btreeColumns, false, []);
+        createIndexTracked(sql, catalog, btreeName, rankTable, btreeColumns, false);
     }
 };
 
@@ -656,8 +800,6 @@ export const runShardMigrations = (
 ): ReadonlyArray<string> => {
     const blocked: string[] | undefined = options.deferBlockedUniqueIndexes ? [] : undefined;
 
-    ledgerNames.delete(sql);
-
     // Record this schema shape in the version ledger before touching any table.
     // Codegen threads the snapshot it already computes for the deploy gate, so
     // the ledger and the gate can never describe different shapes. Absent (a
@@ -666,23 +808,30 @@ export const runShardMigrations = (
         recordSchemaVersion(sql, options.schemaSnapshot.hash, options.schemaSnapshot.json);
     }
 
+    // Read `sqlite_master` once for the pass so per-index shape checks,
+    // uniqueness guards, and ledger adoption do not scan the catalog O(indexes)
+    // times on every cold start.
+    const migrationCatalog = loadMigrationCatalog(sql);
+    const { indexes: catalog } = migrationCatalog;
+    const shardTableEntries = Object.entries(schema.tables).filter(([, definition]) => definition.shardMode?.kind !== "global");
+
+    if (migrationCatalog.existingFtsTable !== undefined && shardTableEntries.some(([, definition]) => (definition.searchIndexes?.length ?? 0) > 0)) {
+        probeFtsFromExistingTable(sql, migrationCatalog.existingFtsTable);
+    }
+
     // Before any table: the search backfill records its progress here, and it
     // runs inside the per-table pass below.
     migrateSearchState(sql);
-    ensureIndexLedger(
+
+    const ledger = ensureIndexLedger(
         sql,
-        Object.entries(schema.tables)
-            .filter(([, definition]) => definition.shardMode?.kind !== "global")
-            .map(([tableName]) => tableName),
+        migrationCatalog,
+        shardTableEntries.map(([tableName]) => tableName),
     );
 
     const declaredCompanions: string[] = [];
 
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind === "global") {
-            continue;
-        }
-
+    for (const [tableName, definition] of shardTableEntries) {
         runDrizzle(
             sql,
             dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(tableName)} (
@@ -717,13 +866,13 @@ export const runShardMigrations = (
         // partial index plus a persisted cursor, and would leave the reads this
         // exists for on the O(table) plan for as long as it ran — which on a
         // table big enough to care is the expensive state, not the build.
-        runDrizzle(sql, createIndexSql(`${tableName}${BY_CREATION_INDEX_SUFFIX}`, tableName, INDEX_SORT_KEYS, false));
+        createIndexTracked(sql, catalog, `${tableName}${BY_CREATION_INDEX_SUFFIX}`, tableName, INDEX_SORT_KEYS, false);
 
-        migrateSecondaryIndexes(sql, tableName, definition, blocked);
+        migrateSecondaryIndexes(sql, catalog, ledger, tableName, definition, blocked);
         migrateSearchIndexes(sql, tableName, definition);
-        migrateGeoIndexes(sql, tableName, definition);
+        migrateGeoIndexes(sql, catalog, tableName, definition);
         migrateAggregateIndexes(sql, tableName, definition);
-        migrateRankIndexes(sql, tableName, definition);
+        migrateRankIndexes(sql, catalog, tableName, definition);
 
         declaredCompanions.push(
             ...(definition.aggregateIndexes ?? []).map((index) => aggregateTableName(tableName, index.name)),

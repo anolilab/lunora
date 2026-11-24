@@ -16,6 +16,9 @@ import { runDrizzle } from "./do-exec";
 
 const IDEMPOTENCY_TABLE = "__idempotency";
 
+/** Index backing {@link trimIdempotent}'s `WHERE ts < ?` GC sweep without scanning the table. */
+const IDEMPOTENCY_TS_INDEX = `${IDEMPOTENCY_TABLE}_ts`;
+
 /** A previously-committed mutation, keyed by its client-issued id, so a replay returns the cached result instead of re-executing. */
 interface IdempotentRecord {
     /** The mutation handler's return value, JSON-stringified (`null` for a void mutation). */
@@ -42,6 +45,15 @@ const migrateIdempotency = (sql: SqlExec): void => {
             PRIMARY KEY (identity, mutation_id)
         )`,
     );
+
+    // Isolated like `__cdc_log`'s indexes: on an existing shard upgrading into
+    // this index, a failure during the first build must not brick cold starts;
+    // `trimIdempotent` falls back to its table scan until the next wake retries.
+    try {
+        runDrizzle(sql, dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(IDEMPOTENCY_TS_INDEX)} ON ${dsql.identifier(IDEMPOTENCY_TABLE)} (ts)`);
+    } catch {
+        /* degraded GC sweep; the next cold start retries */
+    }
 };
 
 /**
@@ -83,5 +95,5 @@ const trimIdempotent = (sql: SqlExec, olderThanTs: number): void => {
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(IDEMPOTENCY_TABLE)} WHERE ts < ${olderThanTs}`);
 };
 
-export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, writeIdempotent };
+export { IDEMPOTENCY_TABLE, IDEMPOTENCY_TS_INDEX, migrateIdempotency, readIdempotent, trimIdempotent, writeIdempotent };
 export type { IdempotentRecord };

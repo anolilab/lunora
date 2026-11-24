@@ -45,6 +45,9 @@ const QUERY_METRICS_TABLE = "__lunora_metrics_queries";
  */
 const QUERY_BUCKETS_TABLE = "__lunora_metrics_queries_buckets";
 
+/** Index backing `pruneQueryBuckets` (`WHERE bucket_ms < ?`) and `readQueryInsights`'s per-bucket time-series query (`WHERE bucket_ms >= ? GROUP BY bucket_ms`). */
+const QUERY_BUCKETS_TIME_INDEX = `${QUERY_BUCKETS_TABLE}_bucket_ms`;
+
 /**
  * Bucket width. Deliberately the SAME window as the per-function series
  * (`function-metrics.ts`), so the two can be charted on one time axis without
@@ -241,6 +244,16 @@ const ensureQueryBucketsTable = (sql: SqlExec): void => {
             PRIMARY KEY (sql_hash, bucket_ms)
         )`,
     );
+
+    // Isolated from the table DDL: if an existing shard fails to build the
+    // index on first upgrade, the bucket table still records and reads (falling
+    // back to a scan) and `ensuredBucketsHandles` bounds retries to one per
+    // handle so a hot path never loops on a failing DDL statement.
+    try {
+        runSql(sql, `CREATE INDEX IF NOT EXISTS "${QUERY_BUCKETS_TIME_INDEX}" ON "${QUERY_BUCKETS_TABLE}" (bucket_ms)`);
+    } catch {
+        /* degraded bucket-range scans; the next handle retries */
+    }
 
     ensuredBucketsHandles.add(sql);
 };
