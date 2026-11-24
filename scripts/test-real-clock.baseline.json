@@ -18,9 +18,5 @@
     {
         "file": "packages/runtime/__tests__/query-coordinator.test.ts",
         "reason": "pending conversion"
-    },
-    {
-        "file": "packages/shard-engine/__tests__/relay-hub.test.ts",
-        "reason": "a real-clock timeout sentinel in a race, pending conversion"
     }
 ]

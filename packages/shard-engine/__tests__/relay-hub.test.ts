@@ -914,7 +914,7 @@ describe("relay hub", () => {
      * that subscription, with nothing logged on either side.
      */
     describe("relay shape control frames vs. a resubscribe on the same subId", () => {
-        /** A relay member whose owner-bound posts are recorded, with `relay_shape_unsubscribe` held back by a tick. */
+        /** A relay member whose owner-bound posts are recorded, with `relay_shape_unsubscribe` held back by a macrotask. */
         const memberWithSlowUnsubscribe = (): { member: NonNullable<ReturnType<typeof createRelayLink>>; posts: string[] } => {
             const posts: string[] = [];
 
@@ -926,12 +926,12 @@ describe("relay hub", () => {
                             const frame = JSON.parse(init?.body ?? "{}") as { type: string };
 
                             // The unsubscribe takes the slow path to the owner. One
-                            // macrotask is enough: the seed's own `announce()` hop
-                            // already gives the subscribe a head start of several
-                            // microtasks, which is exactly the real race.
+                            // macrotask is enough: every double here answers within
+                            // microtasks, so an unqueued subscribe finishes its whole
+                            // round trip before this one lands — exactly the real race.
                             if (frame.type === "relay_shape_unsubscribe") {
                                 await new Promise((resolve) => {
-                                    setTimeout(resolve, 5);
+                                    setImmediate(resolve);
                                 });
                             }
 
@@ -1089,15 +1089,9 @@ describe("relay hub", () => {
             // Bob shares the relay, not the hazard: his proxy key is his own
             // `connectionId`, so nothing about Alice's in-flight seed orders against
             // it. One chain per member would hold him — and every socket behind him —
-            // until Alice's owner POST answered.
-            const outcome = await Promise.race([
-                seeded,
-                new Promise((resolve) => {
-                    setTimeout(resolve, 50, "blocked");
-                }),
-            ]);
-
-            expect(outcome).toBe("ok");
+            // until Alice's owner POST answered, which is only after this await: the
+            // test timeout reports that.
+            await expect(seeded).resolves.toBe("ok");
             expect(posts).toContain("relay_shape_subscribe:c-bob");
 
             openTheGate();
@@ -1109,22 +1103,20 @@ describe("relay hub", () => {
             expect.assertions(1);
 
             // The relay has not announced yet, so the seed's first act is a real
-            // cross-DO `relay_attach`. Held long enough for the release the client
-            // sent afterwards to reach the queue while it is still in flight.
-            const { connections, member, posts } = memberWithOwner((frame) =>
-                frame.type === "relay_attach"
-                    ? new Promise<void>((resolve) => {
-                          setTimeout(resolve, 5);
-                      })
-                    : undefined,
-            );
+            // cross-DO `relay_attach`. Held until the release the client sent
+            // afterwards has reached the queue, so it arrives while the attach is in flight.
+            const attach = Promise.withResolvers<undefined>();
+            const { connections, member, posts } = memberWithOwner((frame) => (frame.type === "relay_attach" ? attach.promise : undefined));
 
             const ws = {} as unknown as ShardSocketLike;
 
             connections.set(ws, "c-alice");
 
             const seeded = member.seedRelayShape(ws, "s1", OPEN_SHAPE, IDENTITY);
+            // Takes its queue slot synchronously: nothing before `queueShapeControl` awaits.
             const released = member.releaseRelayShapes(ws, "s1");
+
+            attach.resolve(undefined);
 
             await seeded;
             await released;
