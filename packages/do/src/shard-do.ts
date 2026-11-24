@@ -8999,7 +8999,7 @@ abstract class ShardDO {
         // opens: record its connection `context` on the attachment (so it
         // survives hibernation and can be replayed at close) and fire the
         // `onConnect` lifecycle hooks under the socket's verified identity.
-        const attachment = this.readAttachmentCopy(ws);
+        let attachment = this.readAttachmentCopy(ws);
 
         // Verified before `identity` is sent, so a refused socket learns nothing
         // about who it is. Only an unauthenticated socket reaches this check.
@@ -9055,6 +9055,10 @@ abstract class ShardDO {
         //
         // A failed attach leaves the relay unannounced, so the socket is still served; the next shape subscribe or whisper join retries it.
         await this.relay?.announce();
+
+        // Re-read after the await: a subscribe handled meanwhile persisted its entry, and the
+        // whole-attachment write below would otherwise put the copy from before it back.
+        attachment = this.readAttachmentCopy(ws);
 
         // The connection id rides here so the client can name this socket in a live
         // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
