@@ -1724,6 +1724,98 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         expect(dispatchedIds(scheduler)).not.toContain(waiting);
     });
 
+    it("keeps a job reusing a cancelled job's id off the slot until the cancelled attempt settles, and never fires the cancelled job again", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+
+        await schedule(scheduler, { id: "reused" });
+        scheduler.outcomes = ["hold"];
+
+        let kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        const firstDrain = scheduler.alarm();
+
+        await kicked;
+
+        const cancelled = scheduler.dispatched[0];
+
+        await scheduler.fetch(post("/cancel", { id: "reused" }));
+        await schedule(scheduler, { id: "reused" });
+        afterBackpressure();
+        await scheduler.alarm();
+
+        // Another scheduling under the same id: it waits for a slot of its own.
+        expect(dispatchedIds(scheduler)).toStrictEqual(["reused"]);
+
+        // The cancelled attempt fails, and its completion frees only its own share.
+        await scheduler.fetch(post("/complete", { attempt: scheduler.attempts[0], dedupKey: cancelled?.dedupKey, id: "reused", pool: "p" }));
+        scheduler.settleHeld?.(false);
+        await firstDrain;
+
+        scheduler.outcomes = ["hold"];
+        kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        afterBackpressure();
+
+        const replacementDrain = scheduler.alarm();
+
+        await kicked;
+
+        expect(scheduler.dispatched.at(-1)?.dedupKey).not.toBe(cancelled?.dedupKey);
+
+        const third = await schedule(scheduler);
+
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(third);
+
+        scheduler.settleHeld?.(true);
+        await replacementDrain;
+
+        expect(dispatchedIds(scheduler)).not.toContain(third);
+    });
+
+    it("does not fire a cancelled job again when a job reusing its id ran while the cancelled attempt was in flight", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const unpooled = async (): Promise<void> => {
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", id: "reused", scheduledFor: Date.now() - 1000 }));
+        };
+
+        await unpooled();
+        scheduler.outcomes = ["hold"];
+
+        const kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        const cancelledDrain = scheduler.alarm();
+
+        await kicked;
+        scheduler.onKick = undefined;
+
+        const cancelled = scheduler.dispatched[0];
+
+        await scheduler.fetch(post("/cancel", { id: "reused" }));
+        await unpooled();
+        advance(60_000);
+        // The new job runs and settles while the cancelled attempt is still out.
+        await scheduler.alarm();
+        scheduler.settleHeld?.(false);
+        await cancelledDrain;
+        advance(DISPATCH_LEASE_MS);
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toHaveLength(2);
+        expect(scheduler.dispatched.filter((record) => record.dedupKey === cancelled?.dedupKey)).toHaveLength(1);
+    });
+
     it("keeps a third job waiting while a job reusing a cancelled job's id is in flight", async () => {
         expect.assertions(3);
 

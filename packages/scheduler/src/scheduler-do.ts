@@ -659,6 +659,11 @@ class SchedulerDO {
         return { inFlight: slots.length, maxConcurrency, slots };
     }
 
+    /** One scheduling of a record: its id is free for a new job once its header goes, its key is not. */
+    private static leaseOf(record: ScheduleRecord): string {
+        return `${record.id}\u0000${SchedulerDO.dedupKey(record)}`;
+    }
+
     private static holds(slot: PoolSlot, id: string | undefined, owner: string): boolean {
         return slot.owner === owner && (id === undefined || slot.id === id);
     }
@@ -759,8 +764,8 @@ class SchedulerDO {
     private poolLock: Promise<unknown> = Promise.resolve();
 
     /**
-     * Record id → the `t:` index key its in-flight claim currently holds, for
-     * every dispatch this instance has open. See `drainRecordGuarded()`.
+     * Scheduling (see {@link SchedulerDO.leaseOf}) → the `t:` index key its in-flight claim currently
+     * holds, for every dispatch this instance has open. See `drainRecordGuarded()`.
      *
      * A lease moves a record's index entry without rewriting its `scheduledFor`,
      * so while a claim is held the live key is NOT the one derivable from the
@@ -777,7 +782,10 @@ class SchedulerDO {
     private readonly activeLeases = new Map<string, string>();
 
     /**
-     * Ids `/cancel` removed while this instance held their dispatch lease.
+     * Schedulings (see {@link SchedulerDO.leaseOf}) `/cancel` removed while this instance held their
+     * dispatch lease. Keyed by the scheduling, not the id: a new job reusing the id can drain while
+     * the cancelled attempt is still in flight, and clearing its own entry must not clear this one,
+     * or the cancelled attempt's failure would write the cancelled job back over the new one.
      *
      * The attempt is already in flight when such a cancel lands, and whatever it
      * settles to must not write the job back: `recordRetry()` and
@@ -1344,13 +1352,13 @@ class SchedulerDO {
             // Only now is `leaseKey` the record's live index key. `removeRecord`
             // reads this so a `/cancel` landing mid-dispatch deletes the key that
             // EXISTS rather than one derived from `scheduledFor`.
-            this.activeLeases.set(record.id, leaseKey);
+            this.activeLeases.set(SchedulerDO.leaseOf(record), leaseKey);
             await this.drainRecord(record);
         } catch {
             try {
                 // A job cancelled mid-attempt is terminal: drop the lease and
                 // re-assert nothing, or the claim below would re-fire it.
-                if (this.cancelledLeases.has(record.id)) {
+                if (this.cancelledLeases.has(SchedulerDO.leaseOf(record))) {
                     await this.state.storage.delete(leaseKey);
 
                     return;
@@ -1401,8 +1409,8 @@ class SchedulerDO {
             // finds nothing to remove) or the record has been rewritten at its own
             // retry/backpressure key, which `removeRecord` then derives correctly
             // from the record it just read.
-            this.activeLeases.delete(record.id);
-            this.cancelledLeases.delete(record.id);
+            this.activeLeases.delete(SchedulerDO.leaseOf(record));
+            this.cancelledLeases.delete(SchedulerDO.leaseOf(record));
         }
 
         try {
@@ -1490,7 +1498,7 @@ class SchedulerDO {
         // the id may since belong to a NEW job whose header the cleanup below
         // would delete. Leave the rows alone — except that a kick which went
         // through RAN the job, so its `canceled` outcome is corrected.
-        if (this.cancelledLeases.has(record.id)) {
+        if (this.cancelledLeases.has(SchedulerDO.leaseOf(record))) {
             if (ok) {
                 await this.correctCanceledToSucceeded(record).catch(() => undefined);
             }
@@ -1773,7 +1781,7 @@ class SchedulerDO {
     private async recordRetry(record: ScheduleRecord, inProgress = false): Promise<void> {
         // Cancelled mid-attempt: neither re-arm nor dead-letter a job the caller
         // was told is gone. See `cancelledLeases`.
-        if (this.cancelledLeases.has(record.id)) {
+        if (this.cancelledLeases.has(SchedulerDO.leaseOf(record))) {
             return;
         }
 
@@ -1905,7 +1913,7 @@ class SchedulerDO {
      */
     private async requeuePooled(record: ScheduleRecord): Promise<void> {
         // Cancelled while its lease was held: nothing to re-arm. See `cancelledLeases`.
-        if (this.cancelledLeases.has(record.id)) {
+        if (this.cancelledLeases.has(SchedulerDO.leaseOf(record))) {
             return;
         }
 
@@ -2428,7 +2436,7 @@ class SchedulerDO {
         const header = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`);
 
         if (header !== undefined) {
-            const record: ScheduledJobView = { ...header, state: this.activeLeases.has(id) ? "running" : "pending" };
+            const record: ScheduledJobView = { ...header, state: this.activeLeases.has(SchedulerDO.leaseOf(header)) ? "running" : "pending" };
 
             return SchedulerDO.json({ record });
         }
@@ -2924,13 +2932,13 @@ class SchedulerDO {
         // entry behind, holding the alarm at the horizon. The keys are equal
         // whenever nothing is leased, and deleting an absent key is a no-op.
         const keys = [...SchedulerDO.pendingKeys(record), SchedulerDO.indexKey(record.scheduledFor, record.id), `${RETRY_PREFIX}${record.id}`];
-        const leaseKey = this.activeLeases.get(record.id);
+        const leaseKey = this.activeLeases.get(SchedulerDO.leaseOf(record));
 
         if (leaseKey !== undefined) {
             keys.push(leaseKey);
             // Before the delete, so the in-flight attempt sees it however it
             // settles — see `cancelledLeases`.
-            this.cancelledLeases.add(record.id);
+            this.cancelledLeases.add(SchedulerDO.leaseOf(record));
         }
 
         await this.state.storage.delete(keys);
