@@ -337,8 +337,9 @@ describe(concurrentForEach, () => {
     });
 
     it("stops pulling new items after the first rejection, but lets in-flight calls settle", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
+        const listed: number[] = [];
         const started: number[] = [];
         const processed: number[] = [];
         let closed = false;
@@ -346,6 +347,7 @@ describe(concurrentForEach, () => {
         const listing = async function* (): AsyncGenerator<number> {
             try {
                 for (let index = 0; index < 6; index += 1) {
+                    listed.push(index);
                     yield index;
                 }
             } finally {
@@ -387,8 +389,63 @@ describe(concurrentForEach, () => {
         // nothing after them starts. `return()` on the way out is what lets a
         // generator source run its `finally` and release what it holds.
         expect(started.toSorted((a, b) => a - b)).toStrictEqual([0, 1]);
+        // Nor is anything after them even pulled: item 1's worker frees up after the failure and
+        // must not take a third item off the source only to discard it.
+        expect(listed).toStrictEqual([0, 1]);
         expect(processed).toStrictEqual([1]);
         expect(closed).toBe(true);
+    });
+
+    it("discards an item a worker was still pulling when another worker failed", async () => {
+        expect.assertions(3);
+
+        const started: number[] = [];
+        let returned = false;
+        const pullingSecond = Promise.withResolvers<undefined>();
+        const releaseSecond = Promise.withResolvers<undefined>();
+
+        // The second `next()` is held, so its worker is mid-pull when item 0 fails.
+        const listing = {
+            [Symbol.asyncIterator]: (): AsyncIterator<number> => {
+                let index = 0;
+
+                return {
+                    next: async (): Promise<IteratorResult<number>> => {
+                        index += 1;
+
+                        if (index === 2) {
+                            pullingSecond.resolve(undefined);
+                            await releaseSecond.promise;
+                        }
+
+                        return { done: false, value: index - 1 };
+                    },
+                    return: async (): Promise<IteratorResult<number>> => {
+                        returned = true;
+
+                        return { done: true, value: undefined };
+                    },
+                };
+            },
+        };
+
+        const run = concurrentForEach(listing, 2, async (item) => {
+            started.push(item);
+
+            await pullingSecond.promise;
+
+            throw new Error("boom");
+        });
+
+        // The failure is recorded while the other worker is still inside its pull.
+        await expect(stateAfterDrain(run)).resolves.toBe("pending");
+
+        releaseSecond.resolve(undefined);
+
+        await expect(run).rejects.toThrow("boom");
+
+        // Item 1 arrived after the failure, so it is work that had not started: never run.
+        expect({ returned, started }).toStrictEqual({ returned: true, started: [0] });
     });
 
     it("rejects an invalid limit", async () => {
