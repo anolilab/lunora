@@ -312,12 +312,16 @@ const indexColumnList = (statement: string): string | undefined => {
     return open === -1 ? undefined : statement.slice(open, statement.lastIndexOf(")") + 1);
 };
 
-/** The column list `spec` would be created with, rendered for the dialect. */
-const declaredIndexColumnList = (dialect: SqlDialect, spec: { columns: SQL; name: string; table: string; unique: boolean }): string | undefined => {
+/** The `CREATE INDEX` statement `spec` would create, rendered for the dialect. */
+const declaredIndexStatement = (dialect: SqlDialect, spec: { columns: SQL; name: string; table: string; unique: boolean }): string => {
     const unique = spec.unique ? sql`UNIQUE ` : sql``;
 
-    return indexColumnList(dialect.render(sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`).sql);
+    return dialect.render(sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`).sql;
 };
+
+/** The column list `spec` would be created with, rendered for the dialect. */
+const declaredIndexColumnList = (dialect: SqlDialect, spec: { columns: SQL; name: string; table: string; unique: boolean }): string | undefined =>
+    indexColumnList(declaredIndexStatement(dialect, spec));
 
 /**
  * Whether the index the engine already holds (`held`, its stored `CREATE` text) has a DIFFERENT column list than
@@ -374,6 +378,18 @@ const readTableCatalog = async (exec: SqlCtxExec, dialect: SqlDialect, tableName
     }
 
     return catalog;
+};
+
+/**
+ * Note the index `spec` now holds, as its `CREATE` text, so a later name in this run that folds to the same index is judged
+ * against it. A name already held stays as it was: `CREATE INDEX IF NOT EXISTS` left that index in place.
+ */
+const recordCreatedIndex = (catalog: TableCatalog, dialect: SqlDialect, spec: { columns: SQL; name: string; table: string; unique: boolean }): void => {
+    const folded = foldIdentifier(spec.name);
+
+    if (!catalog.indexes.has(folded)) {
+        catalog.indexes.set(folded, declaredIndexStatement(dialect, spec));
+    }
 };
 
 /**
@@ -638,19 +654,18 @@ const dropUndeclaredGlobalIndexes = async (
 };
 
 /** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
-const createGlobalTableIndexes = async (
-    exec: SqlCtxExec,
-    tableName: string,
-    definition: SchemaLike["tables"][string],
-    dialect: SqlDialect,
-    catalog: TableCatalog,
-): Promise<void> => {
+const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
     const specs = globalTableIndexSpecs(tableName, definition, dialect);
+    // Only a declared or unique-column index is judged against the catalog: a table with just its default-order index reads nothing.
+    const catalog: TableCatalog = specs.some((spec) => spec.kind !== "default-order")
+        ? await readTableCatalog(exec, dialect, tableName)
+        : { indexes: new Map(), table: undefined };
 
     for (const spec of specs) {
         if (spec.kind === "default-order") {
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
             await createIndexIfNotExists(exec, dialect, spec);
+            recordCreatedIndex(catalog, dialect, spec);
             continue;
         }
 
@@ -661,6 +676,7 @@ const createGlobalTableIndexes = async (
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
         await createIndexGuarded(exec, dialect, spec);
+        recordCreatedIndex(catalog, dialect, spec);
 
         if (dialect.name === "sqlite") {
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
@@ -1025,8 +1041,7 @@ const provisionGlobalTable = async (exec: SqlCtxExec, tableName: string, definit
     await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
     await alterGlobalTableDrift(exec, tableName, definition, dialect);
     await relaxNullAcceptingColumns(exec, tableName, definition, dialect);
-    // Read before any index DDL of this table, so each name is judged against the table as this run found it.
-    await createGlobalTableIndexes(exec, tableName, definition, dialect, await readTableCatalog(exec, dialect, tableName));
+    await createGlobalTableIndexes(exec, tableName, definition, dialect);
     await rewriteLegacyBigintColumns(exec, tableName, definition, dialect);
     await rewriteLegacyUntypedNumbers(exec, tableName, definition, dialect);
 };
@@ -1263,6 +1278,7 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
             await dropIndexIfShapeChanged(exec, dialect, btree, companionCatalog);
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
             await createIndexIfNotExists(exec, dialect, btree);
+            recordCreatedIndex(companionCatalog, dialect, btree);
         }
     }
 };
