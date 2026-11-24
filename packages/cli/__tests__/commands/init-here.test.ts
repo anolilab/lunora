@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,17 @@ const writeFailure = vi.hoisted(() => {
         noHardLinks: false,
         pathPart: undefined as string | undefined,
     };
+});
+
+/** When set, the scaffold's temp-file suffix, so a test can plant something at the exact name. */
+const temporaryName = vi.hoisted(() => {
+    return { uuid: undefined as string | undefined };
+});
+
+vi.mock(import("node:crypto"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, randomUUID: (() => temporaryName.uuid ?? actual.randomUUID()) as typeof actual.randomUUID };
 });
 
 vi.mock(import("node:fs"), async (importOriginal) => {
@@ -460,7 +471,7 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
     });
 
     it("does not follow a link planted at the scaffold's temp file", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
 
@@ -468,12 +479,42 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
 
         writeFileSync(victim, "keep\n", "utf8");
         mkdirSync(join(workdir, "lunora"), { recursive: true });
-        symlinkSync(victim, join(workdir, "lunora", `schema.ts.lunora-${String(process.pid)}.tmp`));
 
-        const result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        const planted = join(workdir, "lunora", `messages.ts.lunora-${String(process.pid)}-planted.tmp`);
+
+        symlinkSync(victim, planted);
+        temporaryName.uuid = "planted";
+
+        let result: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        } finally {
+            temporaryName.uuid = undefined;
+        }
 
         expect(result.code).toBe(1);
         expect(readFileSync(victim, "utf8")).toBe("keep\n");
+        // The planted link is not this run's to remove.
+        expect(lstatSync(planted).isSymbolicLink()).toBe(true);
+    });
+
+    it("a temp file an interrupted run left behind does not block or confuse a re-run", async () => {
+        expect.assertions(3);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const lunoraDirectory = join(workdir, "lunora");
+
+        // What a run killed between writing and publishing leaves: a temp file, no schema.ts. Its pid may be reused.
+        mkdirSync(lunoraDirectory, { recursive: true });
+        writeFileSync(join(lunoraDirectory, `schema.ts.lunora-${String(process.pid)}.tmp`), "half", "utf8");
+
+        const result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        expect(result.code).toBe(0);
+        expect(readFileSync(join(lunoraDirectory, "schema.ts"), "utf8")).toContain("defineSchema");
+        expect(readFileSync(join(lunoraDirectory, "messages.ts"), "utf8")).not.toBe("");
     });
 
     it("a write that fails part-way leaves no schema.ts, so a re-run writes the whole sample", async () => {

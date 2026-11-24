@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -1179,14 +1180,19 @@ const scaffoldLunoraDirectory = (cwd: string, logger: Logger): InitCommandResult
     for (const [path, content] of pending) {
         // A failed write (ENOSPC) can leave a truncated file behind, which the next run would take for
         // a finished sample; only a complete file is renamed into place.
-        const temporaryPath = `${path}.lunora-${String(process.pid)}.tmp`;
+        // Unique per attempt, so a temp file an interrupted run left behind never collides with this one;
+        // only `messages.ts` and `schema.ts` count as scaffolded, so a stray temp file is otherwise inert.
+        const temporaryPath = `${path}.lunora-${String(process.pid)}-${randomUUID()}.tmp`;
 
         try {
-            // `wx` creates the temp file exclusively: a link planted at its predictable name fails the write instead of being followed.
+            // `wx` creates the temp file exclusively: anything already at its name fails the write instead of being followed.
             writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx" });
             publishExclusively(temporaryPath, path);
         } catch (error) {
-            rmSync(temporaryPath, { force: true });
+            // EEXIST: the name was taken before this run created anything, so there is nothing of ours to remove.
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+                rmSync(temporaryPath, { force: true });
+            }
 
             return inPlaceIoFailure("write", path, error, cwd, logger);
         }
