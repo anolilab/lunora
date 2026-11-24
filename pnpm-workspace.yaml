@@ -499,8 +499,14 @@ catalogs:
     # `@lunora/config/cloudflare`; bump it with this entry.
     wrangler: ^4.156.1
   e2e:
-    "@playwright/test": ^1.64.1
-    playwright: ^1.64.1
+    # Flashwright (github.com/xcodebeast/flashwright) is a Playwright 1.64.1 fork
+    # published under its own names, aliased so imports and the `playwright` CLI
+    # stay unchanged. Exact-pinned: its versions are prereleases of 1.64.1, which
+    # a caret range would not track. Its defaults differ from Playwright's — one
+    # browser context reused per worker, no animation waits before a click — and
+    # act fast enough to land in windows stock Playwright's pacing never reached.
+    "@playwright/test": npm:flashwright-test@1.64.1-flashwright.12
+    playwright: npm:flashwright@1.64.1-flashwright.12
   flags:
     # Feature flags (@lunora/flags). OpenFeature is the base abstraction; the
     # Cloudflare Flagship provider is the first-class default. server-sdk is the
