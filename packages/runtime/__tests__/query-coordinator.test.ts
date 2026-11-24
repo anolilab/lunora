@@ -512,9 +512,8 @@ describe("error handling", () => {
 
             const spy = createShardSpy(async (shardKey) => {
                 if (shardKey === "slow") {
-                    await new Promise<void>((resolve) => {
-                        setTimeout(resolve, 10_000);
-                    });
+                    // Never answers: only the per-shard timeout ends this call.
+                    await new Promise<void>(() => {});
                 }
 
                 return json([{ from: shardKey }]);
@@ -797,6 +796,8 @@ describe("concurrency", () => {
 
         let inFlight = 0;
         let highWater = 0;
+        const firstWave = Promise.withResolvers<undefined>();
+        const gate = Promise.withResolvers<undefined>();
 
         const registry = createStaticShardRegistry({ messages: Array.from({ length: 10 }, (_, i) => `s${String(i)}`) });
         const coordinator = createQueryCoordinator({ maxConcurrency: 3, registry });
@@ -805,16 +806,28 @@ describe("concurrency", () => {
             inFlight += 1;
             highWater = Math.max(highWater, inFlight);
 
-            await new Promise<void>((resolve) => {
-                setTimeout(resolve, 10);
-            });
+            if (inFlight === 3) {
+                firstWave.resolve(undefined);
+            }
+
+            await gate.promise;
 
             inFlight -= 1;
 
             return json([]);
         });
 
-        await coordinator.fanOut(spy.namespace, buildRequest());
+        const pending = coordinator.fanOut(spy.namespace, buildRequest());
+
+        // Three calls are held open. One macrotask then drains every promise chain in flight (the
+        // shard double answers within microtasks), so an uncapped fan-out has started the rest by now.
+        await firstWave.promise;
+        await new Promise((resolve) => {
+            setImmediate(resolve);
+        });
+        gate.resolve(undefined);
+
+        await pending;
 
         expect(highWater).toBeLessThanOrEqual(3);
         expect(spy.calls).toHaveLength(10);
@@ -823,13 +836,14 @@ describe("concurrency", () => {
     it("registry that returns Promise of keys is awaited", async () => {
         expect.assertions(3);
 
+        const listed = Promise.withResolvers<undefined>();
+        const keys = Promise.withResolvers<undefined>();
         const asyncRegistry: ShardRegistry = {
             async listShardKeys(table) {
                 expect(table).toBe("messages");
 
-                await new Promise<void>((resolve) => {
-                    setTimeout(resolve, 5);
-                });
+                listed.resolve(undefined);
+                await keys.promise;
 
                 return ["x", "y"];
             },
@@ -838,7 +852,13 @@ describe("concurrency", () => {
         const coordinator = createQueryCoordinator({ registry: asyncRegistry });
         const spy = createShardSpy(() => json([]));
 
-        const result = await coordinator.fanOut(spy.namespace, buildRequest());
+        const pending = coordinator.fanOut(spy.namespace, buildRequest());
+
+        // The keys arrive only after the fan-out has asked for them.
+        await listed.promise;
+        keys.resolve(undefined);
+
+        const result = await pending;
 
         expect(spy.calls.map((call) => call.shardKey).toSorted((a, b) => a.localeCompare(b))).toEqual(["x", "y"]);
         expect(result.ok).toBe(2);
