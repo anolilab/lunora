@@ -46,6 +46,10 @@ type HTTPPoster func(endpoint string, headers map[string]string, body []byte) (s
 // library.
 type FrameSender func(frame map[string]any) error
 
+// FrameHandler applies one frame read from the socket it was returned for, as
+// [Client.HandleFrame] does, and ignores it once that socket is detached or replaced.
+type FrameHandler func(raw []byte) (string, error)
+
 // DataHandler receives each decoded subscription value.
 type DataHandler func(value any)
 
@@ -95,6 +99,19 @@ func (e SubscriptionError) Error() string {
 
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
+
+// ResubscribeConcurrency is how many re-sent subscribe frames a reconnect keeps
+// unanswered at once before it waits for a reply. Each one runs its query
+// server-side to build a snapshot, and most land on the one default-shard Durable
+// Object, so an unpaced burst can knock it over (RESUBSCRIBE_CONCURRENCY in
+// packages/client/src/client-tuning.ts, issue #796).
+const ResubscribeConcurrency = 3
+
+// ResubscribeAckTimeout is how long an unanswered re-subscribe holds its slot
+// before the next one goes out without it. A slot no reply ever frees would stop
+// every queued re-subscribe until the next reconnect, which is worse than the
+// burst the pacing avoids.
+const ResubscribeAckTimeout = 10 * time.Second
 
 // Client is a Lunora deployment client.
 type Client struct {
@@ -172,6 +189,17 @@ type Client struct {
 	// attachGeneration changes on every attach, detach and close, so a retry batch
 	// sent outside mu can tell that the socket it captured is gone. Guarded by mu.
 	attachGeneration int
+
+	// resubscribeQueue holds the query subscription ids a reconnect has yet to
+	// re-send, in subscribe order, and resubscribeSlots the ones sent and not yet
+	// heard back about, each with the deadline after which it stops holding a slot.
+	// See ResendSubscriptions. Guarded by mu; a nil map reads as empty.
+	resubscribeQueue []string
+	resubscribeSlots map[string]time.Time
+	// resubscribePumping marks a pumpResubscribes call draining the queue onto the
+	// socket of attach generation resubscribePumpGeneration. Guarded by mu.
+	resubscribePumping        bool
+	resubscribePumpGeneration int
 
 	// sessionToken is the WS session credential, sent as connect.token on every
 	// socket open. It is not the RPC bearer (authToken), and it never rides a URL.
@@ -482,7 +510,12 @@ func (c *Client) evictSessionLocked(deferred *[]func()) {
 // the write queue gates on: a write made before the FIRST connect fails fast by
 // default, so a misconfigured endpoint surfaces on the first write instead of
 // silently filling a queue that will never flush.
-func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
+//
+// It returns the handler for the frames this socket reads. Feed it every one: once
+// the socket is detached or replaced it ignores them, so a read loop still draining
+// the old socket cannot apply a stale frame to a subscription the next socket has
+// re-sent.
+func (c *Client) AttachSocket(send FrameSender, context map[string]any) FrameHandler {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -493,11 +526,15 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	c.socketGeneration = -1
 	c.attachGeneration++
 	clear(c.pendingRetries)
+	c.clearResubscribesLocked()
 	// A run held on the previous socket never finishes on this one.
 	c.discardRunsLocked()
 
+	generation := c.attachGeneration
+	handle := func(raw []byte) (string, error) { return c.handleFrame(raw, generation, true) }
+
 	if send(BuildConnectFrame(c.clientID, context, c.sessionToken, PageDeltaCapability)) != nil {
-		return
+		return handle
 	}
 
 	topics := make([]string, 0, len(c.whispers))
@@ -509,7 +546,7 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 
 	for _, topic := range topics {
 		if send(BuildWhisperSubscribeFrame(topic)) != nil {
-			return
+			return handle
 		}
 	}
 
@@ -517,6 +554,8 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	c.socketGeneration = c.credentialGeneration
 	c.wasEverConnected = true
 	c.unjoined = nil
+
+	return handle
 }
 
 // DetachSocket forgets the sender, so subsequent writes queue rather than fail, and
@@ -534,6 +573,7 @@ func (c *Client) DetachSocket(closeCode int, reason string) {
 	c.send = nil
 	c.attachGeneration++
 	clear(c.pendingRetries)
+	c.clearResubscribesLocked()
 	c.discardRunsLocked()
 
 	expired := closeCode == 4001
@@ -733,6 +773,7 @@ func (c *Client) Close() {
 	c.send = nil
 	c.attachGeneration++
 	clear(c.pendingRetries)
+	c.clearResubscribesLocked()
 	discarded := c.offline.Clear()
 
 	streams := make([]func(), 0, len(c.streams))
@@ -1244,10 +1285,17 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 		delete(c.subscriptions, id)
 		delete(c.pendingRetries, id)
 		sender := c.send
+		generation := c.attachGeneration
+		// Its frame will never be answered now, so the slot it holds goes to the next one.
+		released := c.releaseResubscribeSlotLocked(id)
 		c.mu.Unlock()
 
 		if sender != nil {
 			_ = sender(BuildUnsubscribeFrame(id))
+			// Pumped even after a failed unsubscribe write: the freed slot must not strand the queue.
+			if released {
+				_, _ = c.pumpResubscribes(sender, generation, time.Time{})
+			}
 		}
 	}
 }
@@ -1399,91 +1447,87 @@ func (c *Client) SubscribeShape(name string, args any, onRows RowsHandler, onErr
 
 // ResendSubscriptions re-subscribes everything after a reconnect, carrying each
 // subscription's resume cursor so the server can skip unchanged results.
+//
+// Query subscriptions go out at most [ResubscribeConcurrency] at a time, in
+// subscribe order, as the reference client sends them: each of the rest is sent
+// once HandleFrame sees a frame bearing the id of one already sent, or once
+// RetryDueSubscriptions finds one has gone unanswered for [ResubscribeAckTimeout]
+// (the deadline is included in [Client.NextSubscriptionRetryAt]). Shape
+// subscriptions all go out here.
+//
+// Args that no longer encode are returned before anything is sent. A failed write
+// is returned too, and the queries it left unsent go back to the front of the
+// queue, so the next reply or due deadline on a socket that stays open sends them.
 func (c *Client) ResendSubscriptions() error {
-	// Snapshot the resume state INSIDE the lock. Copying the pointers and
-	// reading entry.cursor/epoch afterwards races the frame goroutine, which
-	// writes both in advance() — `go test -race` proves it.
-	//
-	// One struct for both registries: name is the query's function path or the
-	// shape's name, cursor its sinceSeq or sinceCheckpoint, and the two resends
-	// differ only in which builder consumes them.
-	type resumePoint struct {
-		id     string
-		name   string
-		args   any
-		cursor any
-		epoch  any
-		sub    *subscription
+	c.mu.Lock()
+
+	send := c.send
+	if send == nil {
+		c.mu.Unlock()
+
+		return nil
 	}
 
-	c.mu.Lock()
-	send := c.send
-	entries := make([]resumePoint, 0, len(c.subscriptions))
+	ids := make([]string, 0, len(c.subscriptions))
+	for id := range c.subscriptions {
+		ids = append(ids, id)
+	}
 
-	for id, entry := range c.subscriptions {
-		entries = append(entries, resumePoint{
-			sub:    entry,
-			args:   entry.args,
-			cursor: entry.cursor,
-			epoch:  entry.epoch,
-			id:     id,
-			name:   entry.functionPath,
-		})
+	// Go's map order is random; `sub_N` ids compare by length first, then digits.
+	sort.Slice(ids, func(left, right int) bool {
+		if len(ids[left]) != len(ids[right]) {
+			return len(ids[left]) < len(ids[right])
+		}
+
+		return ids[left] < ids[right]
+	})
+
+	// Every query frame is built up front, so args that no longer encode are the
+	// caller's error here; later in the drain they can only be skipped. Built under
+	// the lock: the cursor and epoch are written by the frame goroutine.
+	for _, id := range ids {
+		entry := c.subscriptions[id]
+		if _, err := BuildSubscribeFrame(id, entry.functionPath, entry.args, "", entry.cursor, entry.epoch); err != nil {
+			c.mu.Unlock()
+
+			return err
+		}
 	}
 
 	// Shapes resume too. A resend that walks only the query registry leaves every
 	// shape view subscribed to a socket that no longer exists — silently, and for
-	// the rest of the process's life, because a shape is only ever fed by pokes
-	// the server stops sending.
-	shapes := make([]resumePoint, 0, len(c.shapes))
+	// the rest of the process's life, because a shape is only ever fed by pokes the
+	// server stops sending. They are not paced, as in the reference client.
+	shapeFrames := make([]map[string]any, 0, len(c.shapes))
 
 	for id, shape := range c.shapes {
-		shapes = append(shapes, resumePoint{
-			args:   shape.args,
-			cursor: shape.checkpoint,
-			epoch:  shape.epoch,
-			id:     id,
-			name:   shape.name,
-		})
+		frame, err := BuildShapeSubscribeFrame(id, shape.name, shape.args, shape.checkpoint, shape.epoch)
+		if err != nil {
+			c.mu.Unlock()
+
+			return err
+		}
+
+		shapeFrames = append(shapeFrames, frame)
 	}
 
+	c.clearResubscribesLocked()
+	c.resubscribeQueue = ids
+	generation := c.attachGeneration
 	c.mu.Unlock()
 
-	if send == nil {
-		return nil
+	if _, err := c.pumpResubscribes(send, generation, time.Time{}); err != nil {
+		return err
 	}
 
-	// The replay re-applies a dropped change from the frozen cursor, so the poison clears
-	// for each send. A poisoned subscription would ignore that replay. A failed build or
-	// send leaves the subscription frozen again.
-	for _, entry := range entries {
-		frame, err := BuildSubscribeFrame(entry.id, entry.name, entry.args, "", entry.cursor, entry.epoch)
-		if err != nil {
-			return err
-		}
-
+	for _, frame := range shapeFrames {
+		// A query write above may have replaced the socket, whose own resend sends these.
 		c.mu.Lock()
-		wasPoisoned := entry.sub.poisoned
-		entry.sub.poisoned = false
-		// The replay re-sends the whole run from the cursor before it.
-		entry.sub.discardRun()
+		current := c.attachGeneration == generation
 		c.mu.Unlock()
 
-		if err := send(frame); err != nil {
-			if wasPoisoned {
-				c.mu.Lock()
-				entry.sub.poisoned = true
-				c.mu.Unlock()
-			}
-
-			return err
-		}
-	}
-
-	for _, shape := range shapes {
-		frame, err := BuildShapeSubscribeFrame(shape.id, shape.name, shape.args, shape.cursor, shape.epoch)
-		if err != nil {
-			return err
+		if !current {
+			return nil
 		}
 
 		if err := send(frame); err != nil {
@@ -1494,12 +1538,180 @@ func (c *Client) ResendSubscriptions() error {
 	return nil
 }
 
+// resubscribe is a queued re-subscribe built for sending, with the freeze its send lifted.
+type resubscribe struct {
+	entry       *subscription
+	frame       map[string]any
+	wasPoisoned bool
+}
+
+// clearResubscribesLocked forgets the paced re-subscribe; call with mu held.
+func (c *Client) clearResubscribesLocked() {
+	c.resubscribeQueue = nil
+	clear(c.resubscribeSlots)
+}
+
+// releaseResubscribeSlotLocked frees the slot id's re-subscribe holds, and reports
+// whether it held one; call with mu held.
+func (c *Client) releaseResubscribeSlotLocked(id string) bool {
+	if _, held := c.resubscribeSlots[id]; !held {
+		return false
+	}
+
+	delete(c.resubscribeSlots, id)
+
+	return true
+}
+
+// claimResubscribeLocked takes the next queued re-subscribe that fits in a free
+// slot, builds its frame and claims the slot; call with mu held.
+//
+// The frame is BUILT here, at the moment it goes out, not when it was queued: it
+// reads the cursor and epoch the frame handler writes, and an identity change can
+// clear them while the subscription waits its turn.
+func (c *Client) claimResubscribeLocked(now time.Time) (resubscribe, bool) {
+	for len(c.resubscribeSlots) < ResubscribeConcurrency && len(c.resubscribeQueue) > 0 {
+		id := c.resubscribeQueue[0]
+		c.resubscribeQueue = c.resubscribeQueue[1:]
+
+		// Unsubscribed while it waited its turn: nothing to re-send.
+		entry := c.subscriptions[id]
+		if entry == nil {
+			continue
+		}
+
+		// Built before any state moves: args the caller mutated into something the
+		// wire cannot carry are skipped, rather than stalling the queue behind them.
+		frame, err := BuildSubscribeFrame(id, entry.functionPath, entry.args, "", entry.cursor, entry.epoch)
+		if err != nil {
+			continue
+		}
+
+		// The replay from the old cursor re-applies the dropped change, and poisons
+		// again if it is still unmergeable. Lifted only as its own frame goes out: a
+		// subscription still queued is not replaying yet, so a delta reaching it must
+		// not move the cursor past the dropped change.
+		wasPoisoned := entry.poisoned
+		entry.poisoned = false
+		entry.discardRun()
+
+		if c.resubscribeSlots == nil {
+			c.resubscribeSlots = map[string]time.Time{}
+		}
+
+		c.resubscribeSlots[id] = now.Add(ResubscribeAckTimeout)
+
+		return resubscribe{entry: entry, frame: frame, wasPoisoned: wasPoisoned}, true
+	}
+
+	return resubscribe{}, false
+}
+
+// pumpResubscribes sends the queued re-subscribes that fit in the free slots on
+// the socket of attach generation `generation`, one at a time and outside mu, and
+// returns how many it sent. Its slots are dated from the later of notBefore and the
+// clock when it starts: a late timer passes the deadline it was armed for, and slots
+// dated from that would already be (nearly) expired and pace nothing.
+//
+// One pump drains a socket's queue at a time. A slot freed while it writes is
+// filled by that pump once the write returns, so the queue goes out in subscribe
+// order however frames and unsubscribes interleave with it, and a caller that
+// finds a pump running returns at once. The generation is checked before every
+// claim, so a pump whose socket was replaced mid-drain writes nothing more to it.
+//
+// A send that fails means the server never saw that replay, so its dropped change
+// is still unapplied and a later delta must not advance the cursor past it: its
+// freeze comes back, its slot is freed, and it goes back to the front of the queue.
+// A replaced socket's resend owns the queue by then, so none of that happens once
+// the generation has moved on.
+func (c *Client) pumpResubscribes(send FrameSender, generation int, notBefore time.Time) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.attachGeneration != generation || (c.resubscribePumping && c.resubscribePumpGeneration == generation) {
+		return 0, nil
+	}
+
+	c.resubscribePumping = true
+	c.resubscribePumpGeneration = generation
+	sent := 0
+
+	// Runs with mu held, and only while this socket is current: a newer generation's
+	// pump owns the flag otherwise.
+	stop := func() {
+		if c.attachGeneration == generation {
+			c.resubscribePumping = false
+		}
+	}
+
+	now := time.Now()
+	if notBefore.After(now) {
+		now = notBefore
+	}
+
+	for {
+		item, ok := c.claimResubscribeLocked(now)
+		if !ok {
+			stop()
+
+			return sent, nil
+		}
+
+		c.mu.Unlock()
+		err := send(item.frame)
+		c.mu.Lock()
+
+		if err != nil {
+			if c.attachGeneration == generation {
+				if item.wasPoisoned {
+					item.entry.poisoned = true
+				}
+
+				delete(c.resubscribeSlots, item.entry.id)
+
+				if c.subscriptions[item.entry.id] == item.entry {
+					c.resubscribeQueue = append([]string{item.entry.id}, c.resubscribeQueue...)
+				}
+			}
+
+			stop()
+
+			return sent, err
+		}
+
+		sent++
+
+		// The frame went out after mu was released, so an unsubscribe on another
+		// goroutine may have reached the socket first; follow it with another, or the
+		// server keeps a subscription this client no longer holds.
+		if c.subscriptions[item.entry.id] != item.entry {
+			c.mu.Unlock()
+			err := send(BuildUnsubscribeFrame(item.entry.id))
+			c.mu.Lock()
+
+			if err != nil {
+				stop()
+
+				return sent, err
+			}
+		}
+
+		if c.attachGeneration != generation {
+			return sent, nil
+		}
+	}
+}
+
 // RetryDueSubscriptions re-subscribes, cold, every query whose retry hint has come
 // due at now, and returns how many frames it wrote. Nothing is sent while no socket is
 // attached. A failed write stops the batch and is returned, as ResendSubscriptions
 // does, so the caller can drop the socket; the retries not yet written stay due. A
 // subscription whose args cannot be encoded is skipped and its error returned. The
 // caller arms its own timer for [Client.NextSubscriptionRetryAt].
+//
+// It also frees each slot of ResendSubscriptions' pacing that has gone unanswered
+// past its deadline, and sends (and counts) the queued re-subscribes that then
+// fit. Those keep their resume cursor.
 func (c *Client) RetryDueSubscriptions(now time.Time) (int, error) {
 	type retryFrame struct {
 		id    string
@@ -1593,11 +1805,37 @@ func (c *Client) RetryDueSubscriptions(now time.Time) (int, error) {
 		sent++
 	}
 
-	return sent, buildErr
+	// Pumped only now: a slot claimed before a write above failed would keep its
+	// slot and lose its freeze without ever going out. A socket attached while the
+	// frames above were written has its own pacing, which this run must neither
+	// expire nor drain onto the socket it captured.
+	c.mu.Lock()
+
+	current := c.attachGeneration == generation
+	if current {
+		for id, deadline := range c.resubscribeSlots {
+			if !deadline.After(now) {
+				delete(c.resubscribeSlots, id)
+			}
+		}
+	}
+
+	c.mu.Unlock()
+
+	if !current {
+		return sent, buildErr
+	}
+
+	paced, err := c.pumpResubscribes(send, generation, now)
+	if err != nil {
+		return sent + paced, err
+	}
+
+	return sent + paced, buildErr
 }
 
-// NextSubscriptionRetryAt reports the earliest pending retry deadline, and false when
-// none is pending.
+// NextSubscriptionRetryAt reports the earliest pending retry or paced re-subscribe
+// deadline, and false when none is pending.
 func (c *Client) NextSubscriptionRetryAt() (time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1606,10 +1844,12 @@ func (c *Client) NextSubscriptionRetryAt() (time.Time, bool) {
 
 	found := false
 
-	for _, deadline := range c.pendingRetries {
-		if !found || deadline.Before(earliest) {
-			earliest = deadline
-			found = true
+	for _, deadlines := range []map[string]time.Time{c.pendingRetries, c.resubscribeSlots} {
+		for _, deadline := range deadlines {
+			if !found || deadline.Before(earliest) {
+				earliest = deadline
+				found = true
+			}
 		}
 	}
 
@@ -1631,7 +1871,17 @@ func retryHint(envelope map[string]any) (time.Duration, bool) {
 // HandleFrame applies one server frame, invoking the relevant callbacks. It
 // returns the frame's type so a caller (and the conformance suite) can assert
 // what happened. Unknown types are ignored, per the protocol's forward-compat rule.
+//
+// It applies a frame whatever socket it came from. Frames read from a socket go
+// through the [FrameHandler] AttachSocket returned for it instead, which ignores
+// them once that socket is detached or replaced.
 func (c *Client) HandleFrame(raw []byte) (string, error) {
+	return c.handleFrame(raw, 0, false)
+}
+
+// handleFrame is HandleFrame, ignoring the frame when scoped and the socket of
+// attach generation `generation` is no longer the attached one.
+func (c *Client) handleFrame(raw []byte, generation int, scoped bool) (string, error) {
 	// The keepalive is a bare non-JSON string; the protocol says ignore it.
 	if string(raw) == "lunora-ping" || string(raw) == "lunora-pong" {
 		return "", nil
@@ -1648,6 +1898,16 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 	id, _ := frame["id"].(string)
 
 	c.mu.Lock()
+
+	// A superseded socket's late frame belongs to subscriptions the next socket has
+	// re-sent: applying it would move their cursor, and it would free a slot the new
+	// socket's re-subscribe still holds.
+	if scoped && c.attachGeneration != generation {
+		c.mu.Unlock()
+
+		return "", nil
+	}
+
 	entry := c.subscriptions[id]
 	shape := c.shapes[id]
 
@@ -1658,7 +1918,22 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 		delete(c.pendingRetries, id)
 	}
 
+	// ANY frame bearing a re-sent subscription's id proves the server has taken it off its
+	// plate: an `ack`, but equally the `error` that refuses it or a `data` that overtakes its
+	// ack. Releasing here rather than per type keeps an unanticipated frame, or a case that
+	// returns early, from stalling the drain.
+	pacedSend := c.send
+	pacedGeneration := c.attachGeneration
+	released := c.releaseResubscribeSlotLocked(id)
 	c.mu.Unlock()
+
+	// Pumped once this frame is applied, whichever case returns: a write the pump makes can
+	// replace the socket, and a frame read before that must not land after the new socket's.
+	// Not this frame's error: returning it would end the caller's read loop, and the dead
+	// socket's detach starts the next resend anyway.
+	if released && pacedSend != nil {
+		defer func() { _, _ = c.pumpResubscribes(pacedSend, pacedGeneration, time.Time{}) }()
+	}
 
 	switch kind {
 	case "ack":

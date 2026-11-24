@@ -671,10 +671,16 @@ class TestClientConcurrency < Minitest::Test
     reader.join
 
     # Attached only now, and counting subscribe frames alone: attach's connect is not a resend.
-    resent = 0
-    client.attach_socket(->(frame) { resent += 1 if frame["type"] == "subscribe" })
+    # The resend is paced, so each re-sent subscription is answered to let the next one out.
+    resent = []
+    client.attach_socket(->(frame) { resent << frame["id"] if frame["type"] == "subscribe" })
     client.resend_subscriptions
+    answered = 0
+    while answered < resent.size
+      client.handle_frame(JSON.generate({ "id" => resent[answered], "type" => "ack" }))
+      answered += 1
+    end
 
-    assert_equal THREADS * PER_THREAD, resent, "every concurrent subscribe survived with a distinct id"
+    assert_equal THREADS * PER_THREAD, resent.uniq.size, "every concurrent subscribe survived with a distinct id"
   end
 end

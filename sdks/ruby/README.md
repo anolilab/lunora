@@ -41,8 +41,8 @@ messages = client.query("messages:list", { "channel" => "general" })
 client.mutation("messages:send", { "channel" => "general", "text" => "hi" })
 client.mutation("ledger:add", { "amount" => Lunora::WireBigInt.new(1000) })
 
-# Live subscription: attach your socket (it sends connect first), then feed it frames.
-client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) })
+# Live subscription: attach your socket (it sends connect first), then feed its frames to handle.
+handle = client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) })
 unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, method(:render))
 ```
 
@@ -51,12 +51,24 @@ redirect would replay your bearer token to another host. `Net::HTTP` does not fo
 redirects on its own; keep it that way and do not add a redirect-following wrapper
 around the poster.
 
-`client.handle_frame(raw)` is what you call with each inbound WebSocket message;
-`client.resend_subscriptions` re-subscribes everything after a reconnect —
+The handler `attach_socket` returns is what you call with each inbound WebSocket
+message (`handle.call(raw)`); once that socket is detached or replaced it ignores the
+frames a read loop still drains from it. `client.handle_frame(raw)` applies a frame that
+came from no socket. `client.resend_subscriptions` re-subscribes everything after a reconnect —
 queries and shape views alike — carrying each one's resume cursor or checkpoint.
+It sends at most three query subscriptions at once (`Lunora::RESUBSCRIBE_CONCURRENCY`),
+in subscribe order, as the reference client does, so a reconnect does not land every query
+on the shard in one burst. Each of the rest goes out when the handler sees a frame for
+one already sent, or once one has gone unanswered for 10 s (`Lunora::RESUBSCRIBE_ACK_TIMEOUT`):
+`next_subscription_retry_at` includes that deadline, and `retry_due_subscriptions` at or
+after it sends the next, one at a time and in order. Feed every frame to the handler and pull
+`retry_due_subscriptions` on that deadline (a retry hint on a subscription error arms the
+same one). Shape subscriptions all go out at once. Args that no longer encode make
+`resend_subscriptions` raise before anything is sent; a query whose args stop encoding while
+it waits its turn is skipped.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
-(`handle_frame` returns the frame's type). `attach_socket` sends the `connect` frame
+(the handler returns the frame's type). `attach_socket` sends the `connect` frame
 first on each socket open, then the whisper joins; `resend_subscriptions` follows it
 with the queries and shape views, and the loop then replays this shard's queued writes:
 
@@ -68,12 +80,26 @@ attempt = 0
 loop do
   retry_thread = nil
   retry_stop = false # set in ensure, so the retry thread does not flush after the run ends
+  pacer = nil
   socket = nil
   close_code = close_reason = nil # the close frame that ended the run; nil when the socket dropped without one
   begin
     socket = connect # your socket library
-    client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) }) # sends connect first, under session_token
+    handle = client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) }) # sends connect first, under session_token
     client.resend_subscriptions
+    # Frees a re-subscribe slot nobody answered and serves retry hints; stopped in ensure, so it
+    # never writes to the next socket. Waking at least every second sees a deadline armed later.
+    pacer = Thread.new do
+      until retry_stop
+        due = client.next_subscription_retry_at
+        sleep(due ? (due - Lunora.monotonic_now).clamp(0.0, 1.0) : 1.0)
+        begin
+          client.retry_due_subscriptions unless retry_stop
+        rescue StandardError
+          nil # a write to a dying socket: the read loop below sees it end, and the pacer keeps going
+        end
+      end
+    end
     report = client.flush_offline_queue # HTTP replay; transient failures stay queued
     if report.retry_after_ms || report.requeued.any?
       # requeued writes never stop the read loop: retry on a thread, stopped in ensure
@@ -93,7 +119,7 @@ loop do
       end
     end
     while (raw = socket.receive)
-      attempt = 0 if client.handle_frame(raw) == "ack"
+      attempt = 0 if handle.call(raw) == "ack"
     end
     close_code, close_reason = socket.close_frame # assumed: your socket library reports the close code and reason
   rescue StandardError
@@ -109,6 +135,12 @@ loop do
       retry_thread&.join # so a requeued write is seen by the next run's flush
     rescue StandardError
       nil # a flush that raised must not skip the close below
+    end
+    begin
+      pacer&.wakeup
+      pacer&.join
+    rescue StandardError
+      nil # a write that raised on the dying socket must not skip the close below
     end
     socket&.close # assumed: connect returns an IO-like socket; close it so each reconnect frees the last one
   end
@@ -137,7 +169,7 @@ A requeued or rate-limited replay must not stop the read loop: the retry runs on
 
 `client.whisper_subscribe(topic) { |value| ... }` joins a topic: the first listener sends `whisper_subscribe`, and removing the last one sends `whisper_unsubscribe`. Each attach rejoins every topic after `connect`. `client.whisper(topic, data)` relays `data` to the topic's other members. It is not queued: it returns `false`, and sends nothing, when no socket is attached. `client.connect_room(name) { |message| ... }` joins the topic `room:<name>` and returns a handle whose `send(message)` relays to the room and whose `close` leaves it. A room is never acknowledged, so there is nothing to wait for before sending.
 
-`handle_frame` never raises into your read loop: a frame that is not JSON, or
+The handler, like `handle_frame`, never raises into your read loop: a frame that is not JSON, or
 JSON not shaped like a server frame, is ignored (a non-integer `cursor` is not
 tracked), and a consumer callback that raises is contained so the others still
 run. A poke applies to each shape whole or not at all — a row that does not

@@ -23,6 +23,7 @@ import 'key_cases.dart';
 import 'model_cases.dart';
 import 'offline_cases.dart';
 import 'optimistic_cases.dart';
+import 'pacing_cases.dart';
 import 'replay_cases.dart';
 import 'retry_cases.dart';
 import 'rpc_cases.dart';
@@ -98,6 +99,27 @@ Future<void> main() async {
   await run(caseSubscriptionRetryKeptByAnUndecodableDelta);
   await run(caseSubscriptionRetryKeptByASettledThatCutsOffARun);
   await run(caseSubscriptionRetryLateHintAfterDetachOrCloseSchedulesNothing);
+
+  await run(casePacingOnlyTheWindowGoesOutUntilAReplyArrives);
+  await run(casePacingAnyFrameBearingTheIdLetsTheNextOneOut);
+  await run(casePacingEverySubscriptionGoesOutOnceInSubscribeOrder);
+  await run(casePacingUnsubscribeSkipsAQueuedOneAndFreesAnOutstandingOne);
+  await run(casePacingAnUnansweredOneStopsHoldingItsSlotAfterTheTimeout);
+  await run(casePacingAReconnectMidDrainStartsAFreshWindow);
+  await run(casePacingAQueuedOneCarriesTheCursorItHasWhenItGoesOut);
+  await run(casePacingAFailedPacedSendFromAFrameDoesNotThrow);
+  await run(casePacingAFailedSendPutsTheUnsentOnesBackInLine);
+  await run(casePacingAFailedUnsubscribeWriteStillSendsTheBatchItFreed);
+  await run(casePacingARetryAcrossASocketSwapLeavesTheNewQueueAlone);
+  await run(casePacingAQueuedOneWhoseArgsNoLongerEncodeDoesNotStallTheRest);
+  await run(casePacingTheCallersResendThrowsForArgsThatNoLongerEncode);
+  await run(casePacingShapeSubscriptionsAreNotPaced);
+  await run(casePacingAQueuedOneStaysFrozenWhileAnEarlierOneIsWritten);
+  await run(casePacingAReplyDuringTheFirstWindowDoesNotJumpTheQueue);
+  await run(casePacingASocketReplacedMidWindowGetsNoMoreOfIt);
+  await run(casePacingAReplacedSocketsLateFrameIsIgnored);
+  await run(casePacingAFrameIsAppliedBeforeThePumpItFreedCanReplaceTheSocket);
+  await run(casePacingShapesDoNotFollowAQueryWriteThatReplacedTheSocket);
 
   // The shared golden scenarios in protocol/fixtures/offline-optimistic.json,
   // which every port asserts the same values from — the manifest names below
