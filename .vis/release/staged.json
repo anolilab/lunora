@@ -3,6 +3,22 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-24T13:32:36.872Z",
+      "key": "@lunora/server@1.0.0-alpha.281"
+    },
+    {
+      "at": "2026-11-24T13:32:36.872Z",
+      "key": "@lunora/advisor@1.0.0-alpha.297"
+    },
+    {
+      "at": "2026-11-24T13:32:36.872Z",
+      "key": "@lunora/agent@1.0.0-alpha.288"
+    },
+    {
+      "at": "2026-11-24T13:32:36.872Z",
+      "key": "@lunora/codegen@1.0.0-alpha.441"
+    },
+    {
       "at": "2026-11-24T13:08:38.482Z",
       "key": "@lunora/runtime@1.0.0-alpha.302"
     },
@@ -385,24 +401,8 @@
     {
       "at": "2026-11-22T09:59:40.779Z",
       "key": "@lunora/observability@1.0.0-alpha.205"
-    },
-    {
-      "at": "2026-11-22T09:59:40.779Z",
-      "key": "@lunora/runtime@1.0.0-alpha.294"
-    },
-    {
-      "at": "2026-11-22T09:59:40.779Z",
-      "key": "@lunora/studio@1.0.0-alpha.389"
-    },
-    {
-      "at": "2026-11-22T09:59:40.779Z",
-      "key": "@lunora/config@1.0.0-alpha.470"
-    },
-    {
-      "at": "2026-11-22T09:59:40.779Z",
-      "key": "@lunora/astro@1.0.0-alpha.313"
     }
   ],
-  "updatedAt": "2026-11-24T13:08:38.483Z",
+  "updatedAt": "2026-11-24T13:32:36.872Z",
   "version": 1
 }
