@@ -61,7 +61,7 @@ const userCreatingMutationWithoutCaptcha: Lint = {
     level: "WARN",
     name: "user_creating_mutation_without_captcha",
     remediation:
-        "Add a server-verified human check: `.use(verifyTurnstileMiddleware({ secret, token: (c) => c.args.captchaToken }))` from `@lunora/auth`, or wrap it with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Pair with a rate limit for defense in depth. Note it is `verifyTurnstileMiddleware`, not the bare `verifyTurnstile` verdict function — that one returns a Promise and verifies nothing when placed in a `.use()` chain.",
+        "Add a server-verified human check: `.use(verifyTurnstileMiddleware({ secret, token: (c) => c.args.captchaToken }))` from `@lunora/auth`, or wrap it with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Pair with a rate limit for defense in depth. Note it is `verifyTurnstileMiddleware`, not the bare `verifyTurnstile` verdict function — that one returns a Promise and verifies nothing when placed in a `.use()` chain. A procedure that only a permitted caller may reach is not a bot target: gate it with `.use(authorize(...))` from `@lunora/server` instead.",
     run: (context) => {
         if (context.procedureProtections === undefined) {
             return [];
@@ -71,10 +71,15 @@ const userCreatingMutationWithoutCaptcha: Lint = {
         // feeder couldn't read the handler body (a cross-file handler), so it is
         // treated as "might write a user table" / "might send mail" rather than
         // cleared.
+        // A procedure behind `.use(authorize(...))` is reached only by a permitted, authenticated caller, so a bot check
+        // protects nothing the permission check does not already gate.
         return context.procedureProtections
             .filter(
                 (procedure) =>
-                    isPublicWrite(procedure) && (mightExhibit(procedure.writesUserTable) || mightExhibit(procedure.callsMail)) && !procedure.usesCaptcha,
+                    isPublicWrite(procedure) &&
+                    (mightExhibit(procedure.writesUserTable) || mightExhibit(procedure.callsMail)) &&
+                    !procedure.usesCaptcha &&
+                    procedure.usesAuthorize !== true,
             )
             .map((procedure) =>
                 emit(userCreatingMutationWithoutCaptcha, {

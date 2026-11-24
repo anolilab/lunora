@@ -68,7 +68,7 @@ const applyAdvisorFloor = (projectRoot: string, advisories: ReadonlyArray<Findin
 
 /**
  * The advisor policy codegen applies to its findings: `advisor.accept` first
- * (reviewed ERRORs become INFO, so they stop failing the gate), then the
+ * (reviewed findings become INFO, so an accepted ERROR stops failing the gate), then the
  * `advisor.minSeverity` floor. Both read the same config, so the report, the
  * shard and the gate can never disagree about what is accepted.
  */

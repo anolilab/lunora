@@ -90,7 +90,7 @@ studio.
 
 | Lint                           | Level | Detects                                                                                                                           |
 | ------------------------------ | ----- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `table_without_insert`         | info  | No function inserts into the table: dead schema, or seeded out-of-band.                                                           |
+| `table_without_insert`         | info  | No function inserts into the table: dead schema, or seeded out-of-band. Declare `.externallyManaged()` if another writer owns it. |
 | `workflow_unused`              | info  | A declared workflow is never started: dead code (still billed), or external.                                                      |
 | `queue_without_dlq`            | warn  | A `defineQueue` with no `deadLetterQueue`: exhausted messages are dropped, not captured or replayable.                            |
 | `container_oversized_instance` | info  | A container on a large instance type: provisioned memory/disk billed while running.                                               |

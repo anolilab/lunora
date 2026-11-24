@@ -521,6 +521,70 @@ const MIDDLEWARE_SIGNUP = `${PREAMBLE}
         });
 `;
 
+/**
+ * `.use(authorize(...))` from `@lunora/server`: a permission-gated write. The marker is matched by its import, so the fixture
+ * imports it; the module does not need to resolve for the syntactic check.
+ */
+const AUTHORIZED_MEMBER_ADD = `import { authorize } from "@lunora/server";
+${PREAMBLE}
+    export const addTeamMember = c.mutation
+        .use(authorize(() => true))
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
+/** A shared builder carrying `.use(authorize(...))`, declared in one module: the team-builder shape a project reuses across files. */
+const SHARED_AUTHORIZED_BUILDER = `import { authorize } from "@lunora/server";
+${PREAMBLE}
+    export const teamMutation = c.mutation.use(authorize(() => true));
+`;
+
+/** A procedure built on the imported shared builder, with no `authorize` step of its own. */
+const SHARED_AUTHORIZED_USER = `import { teamMutation } from "./crpc";
+
+    export const addTeamMember = teamMutation.mutation(async ({ ctx }) => {
+        await ctx.db.insert("users", {});
+    });
+`;
+
+/** A permission gate bound to a `const` and exported, so another module attaches it with `.use(teamAuthorize)`. */
+const AUTHORIZE_VALUE_GUARD = `import { authorize } from "@lunora/server";
+
+export const teamAuthorize = authorize(() => true);
+`;
+
+/** A `let` builder carrying `authorize()`, rebound to an unguarded builder before the procedure is built on it. */
+const REBOUND_LET_BUILDER = `import { authorize } from "@lunora/server";
+${PREAMBLE}
+    let teamBuilder = c.mutation.use(authorize(() => true));
+    teamBuilder = c.mutation;
+
+    export const addTeamMember = teamBuilder.mutation(async ({ ctx }) => {
+        await ctx.db.insert("users", {});
+    });
+`;
+
+/** A procedure that attaches the imported gate value with `.use(teamAuthorize)`, the form a project reuses across files. */
+const IMPORTED_AUTHORIZE_VALUE_USER = `import { teamAuthorize } from "./guards";
+${PREAMBLE}
+    export const addTeamMember = c.mutation
+        .use(teamAuthorize)
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
+/** A local `authorize` that shares the marker's name but is not imported from `@lunora/server`: no permission gate is proven. */
+const LOCAL_AUTHORIZE_MEMBER_ADD = `${PREAMBLE}
+    declare const authorize: (check: () => boolean) => (options: { ctx: unknown }) => unknown;
+    export const addTeamMember = c.mutation
+        .use(authorize(() => true))
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
 /** A builder-form mutation bundled with `protectPublic({ rateLimit, captcha })`. */
 const PROTECTED = `${PREAMBLE}
     export const register = c.mutation
@@ -670,6 +734,13 @@ describe("discoverProcedureMiddleware", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-mw-"));
         mkdirSync(join(workdir, "lunora"), { recursive: true });
+        // Symbol resolution proves the `authorize` import, so `@lunora/server` must resolve to a typed module.
+        mkdirSync(join(workdir, "node_modules", "@lunora", "server"), { recursive: true });
+        writeFileSync(
+            join(workdir, "node_modules", "@lunora", "server", "index.d.ts"),
+            "export declare const authorize: (check: unknown) => unknown;\n",
+            "utf8",
+        );
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
@@ -1060,6 +1131,71 @@ describe("discoverProcedureMiddleware", () => {
         expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: false, reachesOutbound: true });
     });
 
+    it("records a `.use(authorize(...))` imported from @lunora/server as a permission gate", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "members.ts"), AUTHORIZED_MEMBER_ADD, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "addTeamMember", usesAuthorize: true, usesCaptcha: false });
+    });
+
+    it("records a permission gate carried by a shared builder imported from another module", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "crpc.ts"), SHARED_AUTHORIZED_BUILDER, "utf8");
+        writeFileSync(join(workdir, "lunora", "members.ts"), SHARED_AUTHORIZED_USER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found.find((procedure) => procedure.exportName === "addTeamMember")).toMatchObject({ usesAuthorize: true, usesCaptcha: false });
+    });
+
+    it("records a permission gate bound to an imported const and attached with .use(...)", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "guards.ts"), AUTHORIZE_VALUE_GUARD, "utf8");
+        writeFileSync(join(workdir, "lunora", "members.ts"), IMPORTED_AUTHORIZE_VALUE_USER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found.find((procedure) => procedure.exportName === "addTeamMember")).toMatchObject({ usesAuthorize: true, usesCaptcha: false });
+    });
+
+    // An exported `let` can be rebound to middleware that checks nothing, so its initializer is not the gate that runs.
+    it("does not record a permission gate bound to an imported let, which can be rebound", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "guards.ts"), AUTHORIZE_VALUE_GUARD.replace("export const", "export let"), "utf8");
+        writeFileSync(join(workdir, "lunora", "members.ts"), IMPORTED_AUTHORIZE_VALUE_USER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found.find((procedure) => procedure.exportName === "addTeamMember")).toMatchObject({ usesAuthorize: false });
+    });
+
+    // A `let` builder can be rebound after its `authorize()` step, so the chain that runs may not carry the gate.
+    it("does not record a permission gate carried by a let builder that was rebound", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "members.ts"), REBOUND_LET_BUILDER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found.find((procedure) => procedure.exportName === "addTeamMember")).toMatchObject({ usesAuthorize: false });
+    });
+
+    it("does not record a locally declared `authorize` as a permission gate", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "members.ts"), LOCAL_AUTHORIZE_MEMBER_ADD, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "addTeamMember", usesAuthorize: false });
+    });
+
     it("records a `.use(rateLimit())` builder chain as rate-limited", () => {
         expect.assertions(1);
 
@@ -1232,6 +1368,8 @@ describe("discoverProcedureMiddleware", () => {
     it.each([
         ["the bare verdict function is not a captcha check", VERDICT_FUNCTION_SIGNUP, 1],
         ["the middleware is", MIDDLEWARE_SIGNUP, 0],
+        ["a permission gate imported from @lunora/server is", AUTHORIZED_MEMBER_ADD, 0],
+        ["a local helper named authorize is not", LOCAL_AUTHORIZE_MEMBER_ADD, 1],
     ])("feeds user_creating_mutation_without_captcha: %s", (_label, source, expected) => {
         expect.assertions(1);
 

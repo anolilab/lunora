@@ -36,9 +36,9 @@ const ownerFieldFromArgsNotAuth: Lint = {
         return context.ownerFieldWrites.flatMap((write) => {
             // The runtime already verified and stamped this column before the impl
             // ran — see `AdvisorOwnerFieldWrite.ownerScoped`. Reporting it would
-            // flag the shape the docs prescribe as an IDOR. Nothing at INFO either,
-            // unlike the `internal` case below: there is no forwarding caller to
-            // chase, the guarantee is enforced at the declaration.
+            // flag the shape the docs prescribe as an IDOR. Nothing at INFO either:
+            // the guarantee is enforced at the declaration, so there is no caller
+            // to chase.
             if (write.ownerScoped) {
                 return [];
             }
@@ -46,6 +46,13 @@ const ownerFieldFromArgsNotAuth: Lint = {
             // The handler proves the written value is the caller's own identity before
             // the write (a guard or an assert against the identity). Nothing to report.
             if (write.guarded) {
+                return [];
+            }
+
+            // Every caller is an `internal*` procedure, which no caller reaches directly, so the subject taken from
+            // `args` is the trusted caller passing it along. A public procedure that forwards raw `args` into one is
+            // not seen here: it writes no owner field itself.
+            if (write.trustedInternal === true) {
                 return [];
             }
 
@@ -57,19 +64,9 @@ const ownerFieldFromArgsNotAuth: Lint = {
                 visibility: write.visibility ?? "unknown",
             };
 
-            // An `internal*` procedure is not reachable by a caller — that is the
-            // entire point of the visibility split — so "any caller can act as
-            // any user" is simply false there, and taking the subject from `args`
-            // is the CORRECT shape for one: the trusted caller has already
-            // authenticated and is passing the subject along.
-            //
-            // The first large port had 9 of these and all 9 were internal
-            // mutations, i.e. zero signal at ERROR. Kept at INFO rather than
-            // dropped, because the public procedure that forwards raw `args` into
-            // one is a real vector and this is the breadcrumb to it.
             // A platform-admin procedure (`.use(platformAdmin(...))`) is reachable only by an
             // admin, who is trusted with any account by design. The subject from `args` is the
-            // admin's choice; the lint keeps a breadcrumb at INFO, like `internal`.
+            // admin's choice; the lint keeps a breadcrumb at INFO.
             if (write.adminOnly) {
                 return [
                     emit(ownerFieldFromArgsNotAuth, {
@@ -82,11 +79,13 @@ const ownerFieldFromArgsNotAuth: Lint = {
                 ];
             }
 
+            // A lifecycle or channel registration is `internal` in the registry, but a connected client triggers it with its
+            // own payload, so an `args` subject there is a real vector. The breadcrumb stays at INFO rather than being dropped.
             if (write.visibility === "internal") {
                 return [
                     emit(ownerFieldFromArgsNotAuth, {
                         cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
-                        detail: `${where} sets the ownership field \`${write.field}\` from \`args\`. This is expected for an \`internal\` procedure — no caller can reach it directly, and the trusted caller passes the subject along. Audit the PUBLIC procedures that dispatch to it: if one forwards \`args.${write.field}\` straight through, the IDOR is there.`,
+                        detail: `${where} sets the ownership field \`${write.field}\` from \`args\` in a socket, channel or lifecycle handler. A connected client supplies that payload, so stamp \`${write.field}\` from the server-trusted identity.`,
                         facing: "INTERNAL",
                         level: "INFO",
                         metadata,

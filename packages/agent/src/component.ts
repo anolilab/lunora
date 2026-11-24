@@ -156,6 +156,9 @@ const agentExtension: SchemaExtension<
             toolCalls: v.optional(v.array(v.object({ id: v.string(), input: v.any(), name: v.string() }))),
             toolName: v.optional(v.string()),
         })
+            // Written by this component's own functions through `context.db`, which the installing app's advisor does not scan, so the
+            // write path is declared here for every agent table below.
+            .externallyManaged()
             // Drives the ordered thread read (the live subscription).
             .index("byThread", ["threadKey", "seq"])
             // Drives the idempotent-persist lookup; unique = the dedup guarantee.
@@ -268,6 +271,7 @@ const agentExtension: SchemaExtension<
              */
             usage: v.optional(USAGE_VALIDATOR),
         })
+            .externallyManaged()
             .index("byKey", ["key"], { unique: true })
             .index("byAgent", ["agent"])
             // Targets a thread by the workflow instance that owns it — the
@@ -300,6 +304,7 @@ const agentExtension: SchemaExtension<
             position: v.number(),
             threadKey: v.string(),
         })
+            .externallyManaged()
             // FIFO dequeue.
             .index("byThread", ["threadKey", "position"])
             // Idempotent enqueue: a replay of a still-parked run's bootstrap
@@ -323,6 +328,7 @@ const agentExtension: SchemaExtension<
             threadKey: v.string(),
             toolName: v.string(),
         })
+            .externallyManaged()
             // One grant per tool per agent per thread; unique makes a repeated approve a no-op.
             .index("byThreadAgentTool", ["threadKey", "agent", "toolName"], { unique: true })
             // See the threads table for why the agent tables are `.public()`.
@@ -371,6 +377,7 @@ const agentExtension: SchemaExtension<
              */
             agent: v.optional(v.string().nullable()),
         })
+            .externallyManaged()
             // One request per slot per thread; the unique key makes a replayed pause a no-op.
             .index("byThreadCall", ["threadKey", "toolCallId"], { unique: true })
             .index("byThreadCallId", ["threadKey", "callId"])

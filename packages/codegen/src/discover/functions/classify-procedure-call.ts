@@ -2,8 +2,8 @@ import type { CallExpression, Identifier, PropertyAccessExpression, ts } from "t
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isServerSurfaceModule } from "../../module-specifiers";
-import { unwrapExpression } from "../ast";
-import { walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
+import { isConstDeclaration, unwrapExpression } from "../ast";
+import { builderChainSteps, walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
 import { isServerImport, resolveCalleeKind } from "../callee";
 import staticBuilderChain from "./internal/static-builder-chain";
 
@@ -128,13 +128,49 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
 };
 
 /**
- * Whether a chain carries a `.use(platformAdmin(...))` step. Follows a local
- * `const` (or an imported one) ONE hop, as {@link resolveBuilderRootKind} does, so the common shape
- * `const adminMutation = mutation.use(platformAdmin(...))` marks every procedure
- * built on it. Bounded to one hop so a `const a = b; const b = a;` cycle ends.
+ * The factory call an imported `.use(teamAuthorize)` argument is bound to, in the module that declares it: one hop,
+ * through the import alias to a `const` initializer. `wrappedCallsWhere` only follows same-file constants.
  */
-const usesPlatformAdmin = (receiver: Node, followedLocal = false): boolean => {
-    if (wrappedCallsWhere(receiver, "use", (callee) => isServerImport(callee, "platformAdmin")).length > 0) {
+const importedUseCall = (argument: Node): CallExpression | undefined => {
+    if (!Node.isIdentifier(argument)) {
+        return undefined;
+    }
+
+    const symbol = argument.getSymbol();
+    const declaration = (symbol?.isAlias() ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
+
+    // A `let` or `var` can be rebound after its initializer ran, so its initializer does not describe the middleware that runs.
+    if (!isConstDeclaration(declaration)) {
+        return undefined;
+    }
+
+    const initializer = unwrapExpression(declaration.getInitializer());
+
+    return initializer && Node.isCallExpression(initializer) ? initializer : undefined;
+};
+
+/** Whether a chain's `.use(...)` step names an imported const that is bound to the `<exportName>` factory from `@lunora/server`. */
+const importedUseCarriesMarker = (receiver: Node, exportName: string): boolean =>
+    builderChainSteps(receiver).some((step) => {
+        const argument = step.name === "use" ? step.call.getArguments()[0] : undefined;
+        const call = argument === undefined ? undefined : importedUseCall(argument);
+
+        return call !== undefined && isServerImport(call.getExpression(), exportName);
+    });
+
+/**
+ * Whether a chain carries a `.use(<exportName>(...))` step imported from `@lunora/server`, such as
+ * `platformAdmin` or `authorize`. Follows a local `const` (or an imported one) ONE hop, as
+ * {@link resolveBuilderRootKind} does, so the common shape `const adminMutation = mutation.use(platformAdmin(...))`
+ * marks every procedure built on it, including one imported from another module. Bounded to one hop so a
+ * `const a = b; const b = a;` cycle ends.
+ */
+const chainCarriesServerMarker = (receiver: Node, exportName: string, followedLocal = false): boolean => {
+    if (wrappedCallsWhere(receiver, "use", (callee) => isServerImport(callee, exportName)).length > 0) {
+        return true;
+    }
+
+    if (importedUseCarriesMarker(receiver, exportName)) {
         return true;
     }
 
@@ -146,9 +182,15 @@ const usesPlatformAdmin = (receiver: Node, followedLocal = false): boolean => {
     // declaration in the module that defines it. Without this, a builder shared across modules never marks.
     const symbol = builderChainRoot(receiver)?.getSymbol();
     const declaration = (symbol?.isAlias() ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
-    const initializer = declaration && Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
 
-    return initializer !== undefined && usesPlatformAdmin(initializer, true);
+    // A `let` or `var` builder can be rebound after its initializer ran, so its marker does not describe the chain that runs.
+    if (!isConstDeclaration(declaration)) {
+        return false;
+    }
+
+    const initializer = unwrapExpression(declaration.getInitializer());
+
+    return initializer !== undefined && chainCarriesServerMarker(initializer, exportName, true);
 };
 
 /**
@@ -156,7 +198,8 @@ const usesPlatformAdmin = (receiver: Node, followedLocal = false): boolean => {
  * `platformAdmin` import from `@lunora/server` used as a `.use(...)` step, matched
  * by its import origin and not by the name of the variable that holds the chain.
  */
-const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> => (usesPlatformAdmin(receiver) ? { adminOnly: true } : {});
+const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> =>
+    chainCarriesServerMarker(receiver, "platformAdmin") ? { adminOnly: true } : {};
 
 /** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
 interface ProcedureClassification {
@@ -367,5 +410,5 @@ const classifyProcedureCall = (call: CallExpression, lazyFunctions = false): Rea
     return byFlag.get(lazyFunctions);
 };
 
-export { classifyProcedureCall };
+export { chainCarriesServerMarker, classifyProcedureCall };
 export type { ChannelKind, LifecycleMoment, ProcedureClassification };
