@@ -1,13 +1,5 @@
 [
     {
-        "file": "packages/ai/__tests__/lazy-gateway.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/ai/__tests__/rag-primitives.test.ts",
-        "reason": "pending conversion"
-    },
-    {
         "file": "packages/cli/__tests__/commands/data-transfer.test.ts",
         "reason": "pending conversion"
     },

@@ -98,10 +98,9 @@ describe("lazy gateway routing", () => {
 
         ai.model("openai/gpt-4o");
         ai.model(CF_ID);
-        // Long enough for any import started at construction to have evaluated its module.
-        await new Promise((resolve) => {
-            setTimeout(resolve, 50);
-        });
+        // Settles once every import already started — by construction or by
+        // `model()` — has evaluated its module.
+        await vi.dynamicImportSettled();
 
         expect(state.evaluated).toStrictEqual([]);
 
