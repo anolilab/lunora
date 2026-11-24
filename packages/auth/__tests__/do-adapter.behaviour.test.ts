@@ -4,7 +4,7 @@ import { getAuthTables } from "better-auth/db";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { lunoraD1Adapter, lunoraDoAdapter } from "../src/adapter";
-import { createAuth } from "../src/create-auth";
+import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import type { DoStorageLike } from "../src/do-store";
 import { handleAuthRequest } from "../src/handler";
 import { admin, scim } from "../src/plugins";
@@ -47,7 +47,7 @@ const affinity = (type: ReadonlyArray<string> | string): string => {
 
 /** Create the better-auth tables for `options`, so the store reads and writes real rows. */
 const materialiseSchema = (options: Parameters<typeof getAuthTables>[0]): void => {
-    for (const table of Object.values(getAuthTables(options))) {
+    for (const table of Object.values(getAuthTables(resolveAuthOptions(options)))) {
         const columns = [
             `"id" TEXT PRIMARY KEY`,
             ...Object.entries(table.fields).map(([field, attribute]) => `"${attribute.fieldName ?? field}" ${affinity(attribute.type)}`),

@@ -26,6 +26,8 @@ interface Subscription {
     readonly id: string;
     /** When the provider says the last applied event happened (epoch ms); older redeliveries are ignored. */
     readonly lastEventAt?: number;
+    /** When the stored plan was last set (epoch ms); a stale event newer than this may still replace it. */
+    readonly priceEventAt?: number;
     readonly priceId: string;
 
     /**

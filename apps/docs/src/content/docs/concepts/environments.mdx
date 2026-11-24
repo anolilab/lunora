@@ -32,9 +32,21 @@ secrets are per-environment and **non-inheritable**, so a secret set on the
 default environment is not visible to `staging`:
 
 ```bash
-lunora env push --yes --env staging # push .dev.vars to one environment (--yes is required)
-lunora env diff --prod              # compare local keys against the deployed set
+lunora env set --env staging RESEND_API_KEY re_… # write .dev.vars.staging
+lunora env push --yes --env staging            # push .dev.vars.staging to staging (--yes is required)
+lunora env diff --prod                         # compare .dev.vars.production against the deployed set
 ```
+
+With `--env <name>` (or `--prod`, which is `--env production`) every `lunora env`
+subcommand reads and writes `.dev.vars.<name>`, never the bare `.dev.vars`. That
+is the file `lunora deploy --env <name>` records the secrets it generates in, so
+a later `env push --env <name>` re-pushes those values instead of overwriting
+them with your local dev ones. `env push --env <name>` fails when
+`.dev.vars.<name>` does not exist. To push the bare `.dev.vars` to a named
+environment anyway, add `--from-dev-vars`; it still refuses the secrets Lunora
+generates (`LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`, …), because a dev value must not
+become a production credential. `.dev.vars.*` is added to `.gitignore` the first
+time one of these files is written.
 
 `env diff` compares secret **names**, not values; Cloudflare never returns a
 secret's value. It is the check that catches the "deployed to staging, forgot

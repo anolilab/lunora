@@ -1,13 +1,17 @@
 import { getAuthTablesWithResolvedIndexes, invalidateSchemaChecks } from "@better-auth/core/db/internal";
 import { LunoraError } from "@lunora/errors";
 import { betterAuth } from "better-auth";
+import { getAdapter } from "better-auth/db/adapter";
 import { getMigrations } from "better-auth/db/migration";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
+import { authCanonicalEmailColumn, backfillCanonicalEmails, backfillCanonicalEmailsThroughAdapter, warnDuplicates } from "./canonical-email";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { prepareAuthOptions, resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
+import { backfillInvitationEmails, backfillInvitationEmailsThroughAdapter, invitationEmailColumns } from "./invitation-email-backfill";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
+import { d1Executor } from "./sql-store";
 
 /**
  * Reject a `database` better-auth's migrator cannot drive, *before* handing it
@@ -163,6 +167,43 @@ const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void>
 };
 
 /**
+ * Fill `user.emailCanonical` on rows that predate the column, and rewrite `signUpInvitation.email`
+ * to the same canonical form (invitations issued before it was NFC-normalised would otherwise not
+ * be found). The value needs Unicode lowercasing SQLite does not have, so it is computed here rather
+ * than in DDL.
+ *
+ * On D1, a bounded number of pages each, sharing the request's per-invocation query limit; the
+ * position is kept in the database, so the next call resumes. Any other database goes through
+ * better-auth's adapter, which has no such limit, to the end of each table.
+ * @returns Whether both reached the end of their tables.
+ */
+const backfillCanonicalEmailColumn = async (options: LunoraAuthOptions): Promise<boolean> => {
+    const { database } = options as { database?: unknown };
+    const column = authCanonicalEmailColumn(options);
+    const invitations = invitationEmailColumns(options);
+
+    if (!isD1Database(database)) {
+        const adapter = await getAdapter(options);
+
+        if (column !== undefined) {
+            warnDuplicates(await backfillCanonicalEmailsThroughAdapter(adapter), column);
+        }
+
+        if (invitations !== undefined) {
+            await backfillInvitationEmailsThroughAdapter(adapter);
+        }
+
+        return true;
+    }
+
+    const executor = d1Executor(database);
+    const users = column === undefined ? undefined : await backfillCanonicalEmails(executor, column);
+    const invited = invitations === undefined ? undefined : await backfillInvitationEmails(executor, invitations);
+
+    return (users?.complete ?? true) && (invited?.complete ?? true);
+};
+
+/**
  * Bump this database's schema revision, so a schema verdict `lunoraD1Adapter`'s
  * check cached before the migration is re-taken rather than replayed.
  *
@@ -204,6 +245,46 @@ const invalidateAuthSchemaChecks = (options: LunoraAuthOptions): void => {
  */
 const migrating = new WeakMap<object, Promise<void>>();
 
+/** The backfill pass in flight per `options`, so concurrent callers share one rather than racing over the same rows. */
+const backfilling = new WeakMap<object, Promise<void>>();
+
+/** The `options` whose backfills have reached the end of their tables; later calls skip them. */
+const backfilled = new WeakSet<object>();
+
+/**
+ * One backfill pass, never rejecting: a pass that fails, or stops at D1's query limit, has saved its
+ * position, and until the backfill is done the duplicate checks fold the rows it has not reached, so the
+ * request it runs in must not fail for it.
+ */
+const backfillPass = async (key: object, options: LunoraAuthOptions): Promise<void> => {
+    if (backfilled.has(key)) {
+        return;
+    }
+
+    let run = backfilling.get(key);
+
+    if (run === undefined) {
+        run = backfillCanonicalEmailColumn(options)
+            .then(
+                (complete) => {
+                    if (complete) {
+                        backfilled.add(key);
+                    }
+
+                    return undefined;
+                },
+                (error: unknown) => {
+                    // eslint-disable-next-line no-console -- no injected logger at the migration layer (workerd/Node both capture console)
+                    console.error("@lunora/auth: the canonical-email backfill stopped; the next ensureMigrated resumes it.", error);
+                },
+            )
+            .finally(() => backfilling.delete(key));
+        backfilling.set(key, run);
+    }
+
+    await run;
+};
+
 /**
  * Apply better-auth's required schema (`user`, `session`, `account`,
  * `verification`) to the configured database. Idempotent — better-auth
@@ -215,43 +296,41 @@ const migrating = new WeakMap<object, Promise<void>>();
  * caching against the options object — which captures the binding — is
  * sufficient.
  *
+ * Each call then runs one pass of the canonical-email backfill until it is done (on D1, a bounded
+ * number of pages; see `backfillCanonicalEmailColumn`), and a pass never rejects the call. A worker
+ * that calls this once per isolate, as the generated one does, continues it on its next cold start.
+ *
  * For production you should prefer pre-applying the schema at deploy time
  * via `compileMigrationsSql` + `wrangler d1 execute`; this helper exists for
  * dev/playground and small deployments.
  */
 export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOptions }): Promise<void> => {
-    const { options } = auth;
+    const { options: given } = auth;
 
-    assertMigratableDatabase(options);
+    assertMigratableDatabase(given);
 
-    const inFlight = migrating.get(options);
+    // The columns `resolveAuthOptions` declares (`user.emailCanonical`, the rate-limit table) are what
+    // `createAuth` writes, so raw options passed as `{ options }` migrate the same schema an instance has.
+    // Idempotent on an instance's options, which are resolved already.
+    const options = resolveAuthOptions(given);
+    let run = migrating.get(given);
 
-    if (inFlight) {
-        await inFlight;
+    if (run === undefined) {
+        run = (async (): Promise<void> => {
+            const { runMigrations } = await getMigrations(withD1MigrationSupport(options));
 
-        return;
+            await runMigrations();
+            await dropLegacyIssuerColumn(options);
+            invalidateAuthSchemaChecks(options);
+        })();
+        // Record the promise synchronously so concurrent callers single-flight onto this run. On failure,
+        // evict it so the next call can retry instead of replaying the error.
+        migrating.set(given, run);
+        run.catch(() => migrating.delete(given));
     }
 
-    const run = (async (): Promise<void> => {
-        const { runMigrations } = await getMigrations(withD1MigrationSupport(options));
-
-        await runMigrations();
-        await dropLegacyIssuerColumn(options);
-        invalidateAuthSchemaChecks(options);
-    })();
-
-    // Record the promise synchronously (before the first await above resolves)
-    // so concurrent callers single-flight onto this run. On failure, evict the
-    // cached promise so the next call can retry instead of replaying the error.
-    migrating.set(options, run);
-
-    try {
-        await run;
-    } catch (error) {
-        migrating.delete(options);
-
-        throw error;
-    }
+    await run;
+    await backfillPass(given, options);
 };
 
 /**
@@ -271,6 +350,12 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  * to make that moot. `ensureMigrated` handles it automatically; on this path, run
  * `legacyIssuerCleanupStatements()` once against a database that still has the column.
  * Leaving it in place fails every sign-up with `NOT NULL constraint failed: account.issuer`.
+ *
+ * The same goes for `user.emailCanonical`: the compiled DDL adds the column, but filling it
+ * on existing rows needs Unicode lowercasing SQLite lacks, so `ensureMigrated` (which the
+ * generated worker runs on its first auth request) does it. Until then the duplicate-address
+ * checks (the admin plane's, and the user create/update hook every sign-up and email change goes
+ * through) fold the addresses of the rows still unfilled themselves, so they hold.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
     const resolved = resolveAuthOptions(options);

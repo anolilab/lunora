@@ -646,7 +646,7 @@ class AppBuilder<Env extends object> {
         // Captured before the branch so the narrowing survives — reading
         // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
-        const { authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createAuthAuditWriter, createDoAuthWiring, createSqlAuthDataPort, d1Executor, effectiveCookieCache, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
+        const { authCanonicalEmailColumn, authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createAuthAuditWriter, createDoAuthWiring, createSqlAuthDataPort, d1Executor, effectiveCookieCache, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -734,6 +734,7 @@ class AppBuilder<Env extends object> {
                       authTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
                       authCredentialTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
                       authCredentialColumns(authInstance.options),
+                      authCanonicalEmailColumn(authInstance.options),
                   )
                 : undefined;
         }

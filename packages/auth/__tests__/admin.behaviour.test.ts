@@ -102,10 +102,12 @@ describe("createAuthAdmin", () => {
     it("refuses an address another account holds in mixed case, on create and on change", async () => {
         expect.assertions(2);
 
-        // An account written before addresses were lowercased, or imported as it was.
+        // An account written before addresses were lowercased, or imported as it was; the migration
+        // backfilled its canonical address.
         database["user"]?.push({
             createdAt: new Date(),
             email: "Legacy@Example.com",
+            emailCanonical: "legacy@example.com",
             emailVerified: false,
             id: "legacy",
             name: "Legacy",
@@ -128,6 +130,7 @@ describe("createAuthAdmin", () => {
             database["user"]?.push({
                 createdAt: new Date(),
                 email: "race@example.com",
+                emailCanonical: "race@example.com",
                 emailVerified: false,
                 id: "winner",
                 name: "Winner",

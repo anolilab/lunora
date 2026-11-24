@@ -4,6 +4,7 @@ import { getIP } from "better-auth/api";
 import { betterAuth } from "better-auth/minimal";
 
 import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
+import { withCanonicalEmail } from "./canonical-email";
 import { effectiveCookieCache } from "./cookie-cache";
 import { authDiscoveryPaths } from "./discovery";
 import { withOrgSessionRefresh } from "./org-session-refresh";
@@ -465,6 +466,10 @@ export type LunoraAuth = ReturnType<typeof fullBetterAuth>;
  * or team (see `org-session-refresh.ts`), so a membership change is not hidden
  * behind the cache window.
  *
+ * A `user.emailCanonical` column is declared and filled on every user write (see
+ * `canonical-email.ts`): the uniquely indexed, Unicode-folded address that makes
+ * duplicate detection exact and indexed.
+ *
  * Every explicit caller value is forwarded verbatim. The `rateLimit` fills all
  * merge into a single `rateLimit` object so none clobbers the others.
  */
@@ -489,11 +494,13 @@ export const resolveAuthOptions = (options: LunoraAuthOptions): LunoraAuthOption
                   },
               };
 
-    return withOrgSessionRefresh({
-        ...hardened,
-        ...rateLimit,
-        ...(hardened.session?.cookieCache === undefined ? { session: { ...hardened.session, cookieCache: effectiveCookieCache(hardened) } } : {}),
-    });
+    return withCanonicalEmail(
+        withOrgSessionRefresh({
+            ...hardened,
+            ...rateLimit,
+            ...(hardened.session?.cookieCache === undefined ? { session: { ...hardened.session, cookieCache: effectiveCookieCache(hardened) } } : {}),
+        }),
+    );
 };
 
 /**

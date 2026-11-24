@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.510](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.509...@lunora/cli@1.0.0-alpha.510) (2026-11-24)
+
+- security(cli)!: keep env push from uploading dev secrets to production (#1662)
+
 ## @lunora/cli [1.0.0-alpha.509](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.508...@lunora/cli@1.0.0-alpha.509) (2026-11-23)
 
 - fix: keep migrate generate from overwriting, make presence follow room changes (#1643)

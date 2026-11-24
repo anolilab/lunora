@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 import type { DevProcessSpawner, DiscoveryCache } from "@lunora/config";
-import { createDiscoveryCache, D1_PLACEHOLDER_ID, probeCelldToolchain } from "@lunora/config";
+import { createDiscoveryCache, D1_PLACEHOLDER_ID, parseDevVariableEntries, probeCelldToolchain } from "@lunora/config";
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV, HYPERDRIVE_PLACEHOLDER_ID } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
 import { runDeployCommand, runPreDeployPipeline } from "../../src/commands/deploy/handler";
 import type { DeployCommandResult } from "../../src/commands/deploy/types";
+import { UNCONFIRMED_MINT_MARKER } from "../../src/util/dev-variables-file";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
@@ -3184,6 +3186,123 @@ export const backfillNames = defineMigration({
                 expect(puts.every((call) => /^[a-f0-9]{64}$/u.test(call.descriptor.input ?? ""))).toBe(true);
             });
 
+            it("records the keys a failed bulk push carried, keeps an existing local value, and names the uncertain ones", async () => {
+                expect.assertions(8);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="local"\n', "utf8");
+
+                const calls: RecordedSpawn[] = [];
+                let puts = 0;
+                // Bulk fails, the first put lands, the second fails — as when auth
+                // expires mid-retry after a bulk request whose outcome is unknown.
+                const spawner: Spawner = (descriptor) => {
+                    calls.push({ descriptor });
+
+                    if (descriptor.args.includes("bulk")) {
+                        return Promise.resolve({ code: 1 });
+                    }
+
+                    if (descriptor.args.join(" ").includes("secret put")) {
+                        puts += 1;
+
+                        return Promise.resolve({ code: puts === 2 ? 1 : 0 });
+                    }
+
+                    return Promise.resolve({ code: 0 });
+                };
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                const bulkBody = JSON.parse(calls.find((call) => call.descriptor.args.includes("bulk"))?.descriptor.input ?? "{}") as Record<string, string>;
+                const recorded = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+                expect(result.code).not.toBe(0);
+                expect(Object.keys(bulkBody).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["AUTH_SECRET", "LUNORA_ADMIN_TOKEN"]);
+                expect(recorded).toContain(`LUNORA_ADMIN_TOKEN="${bulkBody.LUNORA_ADMIN_TOKEN ?? "missing"}"`);
+                // The key whose put failed may or may not be live: a local value it already had stays the active one,
+                // and the minted value is kept beside it, commented out, in case the bulk request did apply it.
+                expect(recorded).toContain('AUTH_SECRET="local"');
+                expect(parseDevVariableEntries(recorded).filter((entry) => entry.key === "AUTH_SECRET")).toStrictEqual([
+                    { key: "AUTH_SECRET", value: "local" },
+                ]);
+                expect(recorded).toMatch(new RegExp(String.raw`^# .*AUTH_SECRET="${bulkBody.AUTH_SECRET ?? "missing"}"`, "mu"));
+                expect(warns.join("\n")).toMatch(/AUTH_SECRET: the failed push may already have set/u);
+                expect(warns.join("\n")).not.toMatch(/LUNORA_ADMIN_TOKEN[^\n]*may already have set/u);
+            });
+
+            it("a re-deploy after an uncertain bulk push keeps the record of a key the target has and re-mints one it lacks", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const adminLine = `LUNORA_ADMIN_TOKEN="${"a".repeat(64)}"`;
+                const staleAuthLine = `AUTH_SECRET="${"b".repeat(64)}"`;
+
+                writeFileSync(join(workdir, ".dev.vars"), `${adminLine}\n${staleAuthLine}\n`, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    // The bulk request did set the admin token; AUTH_SECRET never reached the target.
+                    secretLister: () => Promise.resolve({ names: [...REGISTRY_SECRET_DEPLOYED, "LUNORA_ADMIN_TOKEN"], ok: true }),
+                    spawner,
+                });
+
+                const secretCalls = calls.filter((call) => /secret (?:put|bulk)/u.test(call.descriptor.args.join(" ")));
+                const recorded = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+                expect(result.code).toBe(0);
+                expect(secretCalls.map((call) => call.descriptor.args.join(" "))).toStrictEqual(["exec wrangler secret put AUTH_SECRET"]);
+                expect(recorded).toContain(adminLine);
+                expect(recorded).toContain(`AUTH_SECRET="${secretCalls[0]?.descriptor.input ?? "missing"}"`);
+            });
+
+            it("clears the unconfirmed-mint marker once a later deploy pushes that key successfully", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(
+                    join(workdir, ".dev.vars"),
+                    `LUNORA_ADMIN_TOKEN="${"a".repeat(64)}"\nAUTH_SECRET="old"\n${UNCONFIRMED_MINT_MARKER}AUTH_SECRET="${"c".repeat(64)}"\n`,
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    // The earlier uncertain push never reached the target, so AUTH_SECRET is re-minted and lands.
+                    secretLister: () => Promise.resolve({ names: [...REGISTRY_SECRET_DEPLOYED, "LUNORA_ADMIN_TOKEN"], ok: true }),
+                    spawner,
+                });
+
+                const put = calls.find((call) => call.descriptor.args.join(" ").includes("secret put AUTH_SECRET"));
+                const recorded = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+                // A marker left behind would make every later `env push` refuse AUTH_SECRET.
+                expect(result.code).toBe(0);
+                expect(recorded).toContain(`AUTH_SECRET="${put?.descriptor.input ?? "missing"}"`);
+                expect(recorded).not.toContain(UNCONFIRMED_MINT_MARKER);
+            });
+
             it("scans the project once per deploy: each discovery result is computed a single time", async () => {
                 expect.assertions(3);
 
@@ -3288,6 +3407,85 @@ export const backfillNames = defineMigration({
                 expect(readFileSync(join(workdir, ".gitignore"), "utf8")).toContain(".dev.vars.*");
             });
 
+            it("refuses to mint a secret before pushing it when its record file is tracked by git", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+                writeFileSync(join(workdir, ".dev.vars.production"), "OK=1\n", "utf8");
+                // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+                execFileSync("git", ["init", "-q"], { cwd: workdir });
+                // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+                execFileSync("git", ["add", ".dev.vars.production"], { cwd: workdir });
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                // The value could not be recorded, and a pushed write-only secret with no copy is lost: nothing is pushed.
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(calls.filter((call) => /secret (?:bulk|put)/u.test(call.descriptor.args.join(" ")))).toHaveLength(0);
+                expect(readFileSync(join(workdir, ".dev.vars.production"), "utf8")).toBe("OK=1\n");
+                expect(errors.join("\n")).toContain("git rm --cached .dev.vars.production");
+            });
+
+            it("refuses to mint a secret before pushing it when .gitignore cannot cover its record file", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+                // A directory where `.gitignore` should be: the ignore patterns cannot be written.
+                mkdirSync(join(workdir, ".gitignore"));
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "production",
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(calls.filter((call) => /secret (?:bulk|put)/u.test(call.descriptor.args.join(" ")))).toHaveLength(0);
+                expect(errors.join("\n")).toContain(".gitignore could not be updated");
+            });
+
+            it("records a default deploy's minted secret in .dev.vars even when a named file links to it", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), "LOCAL=1\n", "utf8");
+                // The named file is the link; it is refused where it is read or written, the bare file is not.
+                symlinkSync(join(workdir, ".dev.vars"), join(workdir, ".dev.vars.production"));
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toMatch(/LUNORA_ADMIN_TOKEN="?[a-f0-9]{64}/u);
+            });
+
             it("keeps the .dev.vars.example negation LAST when it appends a wider ignore above it", async () => {
                 expect.assertions(3);
 
@@ -3345,6 +3543,32 @@ export const backfillNames = defineMigration({
                 // The mintable secret was generated + pushed (via stdin) before the deploy spawn.
                 expect(argv.some((line) => line.includes("wrangler secret put LUNORA_ADMIN_TOKEN"))).toBe(true);
                 expect(argv.some((line) => line.includes("wrangler deploy"))).toBe(true);
+            });
+
+            it("records a single key whose `secret put` failed, since the write may still have landed", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                // One missing key, so no bulk request: the lone `secret put` exits non-zero.
+                const { calls, spawner } = createRecordingSpawner(1);
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                const put = calls.find((call) => call.descriptor.args.join(" ").includes("secret put LUNORA_ADMIN_TOKEN"));
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${put?.descriptor.input ?? "missing"}"`);
+                // No bulk request was sent, so none may be blamed.
+                expect(warns.join("\n")).not.toContain("bulk push");
             });
 
             it("aborts an interactive deploy when the confirmed secret push fails instead of deploying anyway", async () => {
@@ -3496,6 +3720,123 @@ export default defineNotify({ fcm: ${fcmValue}, webPush: (env) => webPushFromEnv
                 expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: FCM_SERVICE_ACCOUNT\./u);
             });
 
+            it("a staging deploy requires a secret-typed key declared only in .dev.vars.staging", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("staging"), "utf8");
+                writeFileSync(join(workdir, ".dev.vars.staging"), 'STRIPE_API_KEY="x"\n', "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "staging",
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: [...DEPLOYED_WITHOUT_FCM_KEYS, "FCM_SERVICE_ACCOUNT", "FCM_PROJECT_ID"], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: STRIPE_API_KEY\./u);
+            });
+
+            it("names only the missing keys in a non-interactive abort's fix, never a mint-everything generate and push", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("staging"), "utf8");
+                writeFileSync(join(workdir, ".dev.vars.staging"), 'STRIPE_API_KEY="x"\n', "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+                const deployed = [...DEPLOYED_WITHOUT_FCM_KEYS, "FCM_SERVICE_ACCOUNT", "FCM_PROJECT_ID"].filter((name) => name !== "LUNORA_ADMIN_TOKEN");
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "staging",
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: deployed, ok: true }),
+                    spawner,
+                });
+
+                // An unscoped `env generate --set` mints every generatable key and `env push` uploads them all,
+                // rotating the ones already live on the target.
+                expect(result.error).not.toMatch(/env generate --set|env push/u);
+                expect(result.error).toContain("wrangler secret put STRIPE_API_KEY --env staging");
+                expect(result.error).toContain("for LUNORA_ADMIN_TOKEN, run `lunora deploy --env staging` from a terminal");
+                // A provider-issued key cannot be generated, so it is never sent down the deploy path.
+                expect(result.error).not.toMatch(/for [^;]*STRIPE_API_KEY/u);
+            });
+
+            it("refuses to mint for an environment whose values cannot be recorded locally, before asking or pushing", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("example"), "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+                const confirm = vi.fn<(message: string) => Promise<boolean>>(() => Promise.resolve(true));
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    env: "example",
+                    interactive: true,
+                    logger,
+                    secretConfirm: confirm,
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).not.toBe(0);
+                expect(result.error).toMatch(/cannot be recorded/u);
+                expect(confirm).not.toHaveBeenCalled();
+                expect(calls.some((call) => /secret (?:put|bulk)/u.test(call.descriptor.args.join(" ")))).toBe(false);
+            });
+
+            it("records the pushed value and keeps the local one when a per-key retry after a failed bulk push throws", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="local"\n', "utf8");
+
+                const calls: RecordedSpawn[] = [];
+                let puts = 0;
+                // Bulk exits non-zero, then the spawner itself rejects on the second put (a spawn error).
+                const spawner: Spawner = (descriptor) => {
+                    calls.push({ descriptor });
+
+                    if (descriptor.args.includes("bulk")) {
+                        return Promise.resolve({ code: 1 });
+                    }
+
+                    if (descriptor.args.join(" ").includes("secret put")) {
+                        puts += 1;
+
+                        return puts === 2 ? Promise.reject(new Error("spawn EAGAIN")) : Promise.resolve({ code: 0 });
+                    }
+
+                    return Promise.resolve({ code: 0 });
+                };
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
+                    spawner,
+                });
+                const bulkBody = JSON.parse(calls.find((call) => call.descriptor.args.includes("bulk"))?.descriptor.input ?? "{}") as Record<string, string>;
+                const recorded = readFileSync(join(workdir, ".dev.vars"), "utf8");
+
+                expect(result.code).not.toBe(0);
+                expect(recorded).toContain(`LUNORA_ADMIN_TOKEN="${bulkBody.LUNORA_ADMIN_TOKEN ?? "missing"}"`);
+                expect(recorded).toContain('AUTH_SECRET="local"');
+            });
+
             it("a staging deploy's missing-secret remediation names --env staging, not --prod", async () => {
                 expect.assertions(2);
 
@@ -3514,7 +3855,7 @@ export default defineNotify({ fcm: ${fcmValue}, webPush: (env) => webPushFromEnv
                 });
 
                 expect(result.code).toBe(EXIT_CODE.USAGE);
-                expect(errors.some((line) => line.includes("lunora env push --yes --env staging") && !line.includes("--prod"))).toBe(true);
+                expect(errors.some((line) => line.includes("lunora deploy --env staging") && !line.includes("--prod"))).toBe(true);
             });
         });
 
