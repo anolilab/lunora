@@ -44,6 +44,13 @@ interface TraceRef {
 const SCHEDULE_OUTBOX_BATCH = 32;
 
 /**
+ * How many unconfirmed drops are remembered. Forgetting one only means the operator drops the
+ * row once more, so the oldest is evicted rather than letting a shard that never gets its
+ * scheduler back grow the set without bound.
+ */
+const SCHEDULE_OUTBOX_UNCONFIRMED_DROPS = 1024;
+
+/**
  * How many times a deferred schedule is re-offered to the scheduler before the
  * entry is parked. Together with {@link SCHEDULE_OUTBOX_BACKOFF_MS} this spans a
  * little over an hour — long enough to ride out a scheduler restart or a
@@ -184,13 +191,30 @@ const cancelScheduleOutboxJob = async (scheduler: SchedulerLike | undefined, id:
  * One hand-off awaiting the scheduler. `version` identifies the outbox row it was made for, so a
  * failure of an older attempt does not land on a row recorded anew under the same id. `token` is the
  * recording it carries (the `created_at` `record` answered, or the replayed row's), which is what a
- * drop and an acknowledgement are compared against.
+ * drop and an acknowledgement are compared against. `released` settles when the attempt is done,
+ * cancel included, which is what a same-id hand-off waits on while a drop covers the attempt.
  */
 interface ScheduleOutboxAttempt {
+    release: () => void;
+    released: Promise<void>;
     stale: boolean;
     token: number | undefined;
     version: string | undefined;
 }
+
+const newScheduleOutboxAttempt = (token: number | undefined, version: string | undefined): ScheduleOutboxAttempt => {
+    const released = Promise.withResolvers<undefined>();
+
+    return {
+        release: () => {
+            released.resolve(undefined);
+        },
+        released: released.promise,
+        stale: false,
+        token,
+        version,
+    };
+};
 
 /**
  * The dedup key a replay carries when its envelope was recorded without one (before the facade
@@ -307,6 +331,14 @@ class ScheduleOutboxRunner {
      * count: evicting a marker early would let a queued call of a dropped job run.
      */
     private readonly scheduleOutboxPendingHandOffs = new Map<string, number>();
+
+    /**
+     * Per id, the row version a drop parked because no scheduler was there to confirm its cancel.
+     * A parked row is removed without a confirmed cancel only by a drop that follows one of those:
+     * a row the retry loop parked looks the same, and its first drop must not remove it unasked.
+     * In memory, so a restart or an eviction asks the operator for one more drop, never one fewer.
+     */
+    private readonly unconfirmedScheduleOutboxDrops = new Map<string, string>();
 
     /** The `created_at` last handed to `recordScheduleOutbox`; see {@link ScheduleOutboxRunner.scheduleOutbox}. */
     private lastScheduleOutboxRecordAt = 0;
@@ -529,7 +561,9 @@ class ScheduleOutboxRunner {
                 cancelError = new Error("a hand-off that landed during the drop could not be cancelled, so the job may still run");
             }
 
-            if (this.removeUnconfirmableScheduleOutboxDrop(args, sql, id, cancelError, before.parked && after.parked, awaiting)) {
+            const confirmedBefore = before.parked && after.parked && this.unconfirmedScheduleOutboxDrops.get(id) === before.version;
+
+            if (this.removeUnconfirmableScheduleOutboxDrop(args, sql, id, cancelError, confirmedBefore, awaiting)) {
                 return { dropped: true };
             }
 
@@ -538,6 +572,7 @@ class ScheduleOutboxRunner {
                 // to stop, so the shard must not hand it over in the meantime: park it and report
                 // the failure. Dropping again, once the scheduler answers, completes the cancel.
                 this.parkLiveScheduleOutboxEntry(sql, id);
+                this.rememberUnconfirmedScheduleOutboxDrop(id, after.version, cancelError);
                 this.host.logs().push({
                     functionPath: "scheduler:outbox",
                     level: "error",
@@ -548,6 +583,8 @@ class ScheduleOutboxRunner {
 
                 throw scheduleOutboxDropFailure(id, cancelError.message, cancelError);
             }
+
+            this.unconfirmedScheduleOutboxDrops.delete(id);
 
             if (awaiting === undefined || awaiting.size === 0) {
                 dropScheduleOutbox(sql, id);
@@ -582,6 +619,7 @@ class ScheduleOutboxRunner {
             }
 
             this.scheduleOutboxDroppedThrough.delete(id);
+            this.unconfirmedScheduleOutboxDrops.delete(id);
         }
 
         return retried;
@@ -608,8 +646,9 @@ class ScheduleOutboxRunner {
 
     /**
      * With no scheduler to ask, waiting never confirms the cancel. The first drop parked the row (a
-     * job may have been accepted under a binding that has since gone); dropping a row that was already
-     * parked, with nothing in flight, is the operator accepting that, and removes it.
+     * job may have been accepted under a binding that has since gone); dropping it again, with
+     * nothing in flight, is the operator accepting that, and removes it. `confirmedBefore` says an
+     * earlier drop of this same row already failed that way: a row the retry loop parked does not count.
      * @returns whether the row was removed
      */
     private removeUnconfirmableScheduleOutboxDrop(
@@ -617,14 +656,15 @@ class ScheduleOutboxRunner {
         sql: SqlExec,
         id: string,
         cancelError: Error | undefined,
-        alreadyParked: boolean,
+        confirmedBefore: boolean,
         awaiting: ReadonlySet<ScheduleOutboxAttempt> | undefined,
     ): boolean {
-        if (!isSchedulerUnavailable(cancelError) || !alreadyParked || (awaiting !== undefined && awaiting.size > 0)) {
+        if (!isSchedulerUnavailable(cancelError) || !confirmedBefore || (awaiting !== undefined && awaiting.size > 0)) {
             return false;
         }
 
         dropScheduleOutbox(sql, id);
+        this.unconfirmedScheduleOutboxDrops.delete(id);
         this.host.logs().push({
             functionPath: "scheduler:outbox",
             level: "warn",
@@ -649,8 +689,8 @@ class ScheduleOutboxRunner {
         // The tick read its batch before awaiting the scheduler for the rows ahead of
         // this one, so the snapshot may predate an operator's drop, requeue or park.
         // The row is read again, synchronously with the claim below, and that read is
-        // what gets replayed. A drop in progress owns the id until it settles.
-        const entry = this.isScheduleOutboxBeingDropped(snapshot.id) ? undefined : readDueScheduleOutboxEntry(sql, snapshot.id, Date.now());
+        // what gets replayed. A cancel in flight, or an attempt a drop covers, owns the id until it settles.
+        const entry = this.scheduleOutboxFences(snapshot.id).length > 0 ? undefined : readDueScheduleOutboxEntry(sql, snapshot.id, Date.now());
         const state = readScheduleOutboxState(sql, snapshot.id);
 
         if (entry === undefined) {
@@ -679,7 +719,7 @@ class ScheduleOutboxRunner {
             return;
         }
 
-        const attempt: ScheduleOutboxAttempt = { stale: false, token: state?.createdAt, version: state?.version };
+        const attempt = newScheduleOutboxAttempt(state?.createdAt, state?.version);
         const awaiting = this.scheduleOutboxAttempts.get(entry.id) ?? new Set<ScheduleOutboxAttempt>();
 
         awaiting.add(attempt);
@@ -700,11 +740,7 @@ class ScheduleOutboxRunner {
         } catch (error) {
             await this.settleFailedScheduleOutboxAttempt(sql, scheduler, { attempt, attempts, envelope, error, forever, id: entry.id }, trace);
         } finally {
-            awaiting.delete(attempt);
-
-            if (awaiting.size === 0) {
-                this.scheduleOutboxAttempts.delete(entry.id);
-            }
+            this.releaseScheduleOutboxAttempt(entry.id, awaiting, attempt);
         }
     }
 
@@ -718,11 +754,11 @@ class ScheduleOutboxRunner {
         try {
             // Covered by a drop already: it never goes out, and waits for nothing.
             if (!this.isScheduleOutboxTokenDropped(id, token)) {
-                // A newer schedule must not meet an id-only cancel still in flight for the old one at
-                // the scheduler, so it goes out only after every drop in progress has settled.
-                for (let drops = this.scheduleOutboxDrops.get(id); drops !== undefined && drops.size > 0; drops = this.scheduleOutboxDrops.get(id)) {
-                    // eslint-disable-next-line no-await-in-loop -- a drop that starts while waiting must be waited for too
-                    await Promise.all(drops);
+                // A newer schedule must not meet an id-only cancel for the old one at the scheduler,
+                // so it goes out only once nothing that could still send one is left.
+                for (let fences = this.scheduleOutboxFences(id); fences.length > 0; fences = this.scheduleOutboxFences(id)) {
+                    // eslint-disable-next-line no-await-in-loop -- a fence that starts while waiting must be waited for too
+                    await Promise.all(fences);
                 }
             }
 
@@ -751,7 +787,7 @@ class ScheduleOutboxRunner {
             return;
         }
 
-        const attempt: ScheduleOutboxAttempt = { stale: false, token, version: state?.version };
+        const attempt = newScheduleOutboxAttempt(token, state?.version);
         const awaiting = this.scheduleOutboxAttempts.get(id) ?? new Set<ScheduleOutboxAttempt>();
 
         awaiting.add(attempt);
@@ -807,12 +843,50 @@ class ScheduleOutboxRunner {
         };
     }
 
+    /** Only a scheduler that is not there at all makes a cancel unconfirmable; one that is down is asked again. */
+    private rememberUnconfirmedScheduleOutboxDrop(id: string, version: string, cancelError: Error): void {
+        if (!isSchedulerUnavailable(cancelError)) {
+            return;
+        }
+
+        this.unconfirmedScheduleOutboxDrops.delete(id);
+
+        if (this.unconfirmedScheduleOutboxDrops.size >= SCHEDULE_OUTBOX_UNCONFIRMED_DROPS) {
+            const [oldest] = this.unconfirmedScheduleOutboxDrops.keys();
+
+            if (oldest !== undefined) {
+                this.unconfirmedScheduleOutboxDrops.delete(oldest);
+            }
+        }
+
+        this.unconfirmedScheduleOutboxDrops.set(id, version);
+    }
+
     private markScheduleOutboxDropped(id: string, through: number): void {
         this.scheduleOutboxDroppedThrough.set(id, Math.max(through, this.scheduleOutboxDroppedThrough.get(id) ?? 0));
     }
 
     private isScheduleOutboxBeingDropped(id: string): boolean {
         return (this.scheduleOutboxDrops.get(id)?.size ?? 0) > 0;
+    }
+
+    /**
+     * What a job under `id` must not overtake on its way to the scheduler: every id-only cancel in
+     * flight, and every attempt still in the air that a drop covers, since it cancels by id when it
+     * lands. Waiting only for the cancels is not enough: a drop can settle while such an attempt is
+     * awaiting the scheduler, and a replacement released then would land first and be cancelled by it.
+     * A Retry now does not wait on the attempts: it clears the drop, so they no longer cancel.
+     */
+    private scheduleOutboxFences(id: string): Promise<void>[] {
+        const fences: Promise<void>[] = [...(this.scheduleOutboxDrops.get(id) ?? [])];
+
+        for (const attempt of this.scheduleOutboxAttempts.get(id) ?? []) {
+            if (this.wasScheduleOutboxDropped(id, attempt)) {
+                fences.push(attempt.released);
+            }
+        }
+
+        return fences;
     }
 
     /** One recorded call is done with: handed off, skipped, or rolled back with its window. */
@@ -858,6 +932,7 @@ class ScheduleOutboxRunner {
 
     private releaseScheduleOutboxAttempt(id: string, awaiting: Set<ScheduleOutboxAttempt>, attempt: ScheduleOutboxAttempt): void {
         awaiting.delete(attempt);
+        attempt.release();
 
         if (awaiting.size === 0) {
             this.scheduleOutboxAttempts.delete(id);
@@ -950,17 +1025,14 @@ class ScheduleOutboxRunner {
 
         // `version` is the row this attempt was made for. A row recorded since under the same id is a
         // newer request the drop does not cover, and the retry loop's only copy of that call: it is
-        // neither deleted nor parked, and with an id-only cancel the job the scheduler holds may already
-        // be its, so this hand-off does not cancel either. An absent row is not a replacement.
+        // neither deleted nor parked. The job the scheduler holds under the id is still this attempt's
+        // to cancel: no newer call can have gone out, because every hand-off under the id waits for an
+        // attempt a drop covers (see `scheduleOutboxFences`). An absent row is not a replacement.
         const replaced = (): boolean => {
             const current = readScheduleOutboxState(sql, id)?.version;
 
             return current !== undefined && current !== attempt.version;
         };
-
-        if (replaced()) {
-            return;
-        }
 
         // Fenced like a drop's own cancel: once the drop has settled, a replacement under this id
         // would otherwise go out while this id-only cancel is still pending and be cancelled by it.
