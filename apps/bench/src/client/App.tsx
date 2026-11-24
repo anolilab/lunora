@@ -1,6 +1,6 @@
-import { useMutation, useQuery } from "@lunora/react";
+import { useLunora, useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
 import type { Id } from "../../lunora/_generated/dataModel";
@@ -209,16 +209,52 @@ const CreateOrganization = (): ReactElement => {
 const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId: string }): ReactElement => {
     // Every org-scoped call names the tenant's shard; `authorizeShard` refuses any other.
     const shard = { shardKey: organizationId };
-    const tasks = useQuery(api.tasks.list, {}, shard);
+    const client = useLunora();
+    // Keyed by the organisation it was read for, so switching organisations never shows the last one's list.
+    const [loaded, setLoaded] = useState<{ organizationId: string; tasks: Awaited<ReturnType<typeof client.query<typeof api.tasks.list>>> } | undefined>(
+        undefined,
+    );
+    const tasks = loaded?.organizationId === organizationId ? loaded.tasks : undefined;
+    // Bumped after each write so the list is fetched again.
+    const [listVersion, setListVersion] = useState(0);
     const { mutate: create } = useMutation(api.tasks.create);
     const { mutate: update } = useMutation(api.tasks.update);
     const [error, setError] = useState<string | undefined>(undefined);
+    // Separate from write errors and keyed by organisation: a later load clears it, and it never
+    // follows the user to another organisation.
+    const [loadError, setLoadError] = useState<{ message: string; organizationId: string } | undefined>(undefined);
+    const listError = loadError?.organizationId === organizationId ? loadError.message : undefined;
+
+    // A one-off query, not `useQuery`: `tasks.list` is an `orgQuery`, whose
+    // `rateLimit` step makes the shard refuse a live subscription to it.
+    useEffect(() => {
+        const controller = new AbortController();
+
+        client
+            .query(api.tasks.list, {}, { shardKey: organizationId, signal: controller.signal })
+            .then((next) => {
+                setLoaded({ organizationId, tasks: next });
+                setLoadError(undefined);
+
+                return next;
+            })
+            .catch((error_: unknown) => {
+                if (!controller.signal.aborted) {
+                    setLoadError({ message: error_ instanceof Error ? error_.message : "The tasks could not be loaded.", organizationId });
+                }
+            });
+
+        return () => {
+            controller.abort();
+        };
+    }, [client, organizationId, listVersion]);
 
     // `mutate` rejects when the write is refused; without the catch the failure would vanish.
     const submit = async (form: FormData): Promise<void> => {
         try {
             await create({ labels: [], title: field(form, "title") }, shard);
             setError(undefined);
+            setListVersion((version) => version + 1);
         } catch (error_) {
             setError(error_ instanceof Error ? error_.message : "The task could not be created. Try again.");
         }
@@ -228,6 +264,7 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
         try {
             await update({ id, status: "done" }, shard);
             setError(undefined);
+            setListVersion((version) => version + 1);
         } catch (error_) {
             setError(error_ instanceof Error ? error_.message : "The task could not be updated. Try again.");
         }
@@ -245,6 +282,19 @@ const Tasks = ({ canWrite, organizationId }: { canWrite: boolean; organizationId
                 </form>
             ) : undefined}
             {error === undefined ? undefined : <p role="alert">{error}</p>}
+            {listError === undefined ? undefined : (
+                <p role="alert">
+                    {listError}{" "}
+                    <button
+                        onClick={() => {
+                            setListVersion((version) => version + 1);
+                        }}
+                        type="button"
+                    >
+                        Try again
+                    </button>
+                </p>
+            )}
             <ul>
                 {(tasks?.page ?? []).map((task) => (
                     <li key={task._id}>

@@ -358,6 +358,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
         }
 
+        protected override isPerDispatchFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.perDispatch === true;
+        }
+
         private blockedUniqueIndexes: readonly string[] = [];
         private migrated = false;
         private migrationRetryAt = 0;

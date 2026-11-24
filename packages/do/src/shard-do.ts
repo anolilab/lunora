@@ -1822,6 +1822,16 @@ const paidSocketRefusal = (functionPath: string, verb: "streamed" | "subscribed"
     `paid (\`.x402\`) function "${functionPath}" cannot be ${verb}; call it individually over /_lunora/rpc`;
 
 /**
+ * The refusal a query with per-dispatch middleware (`rateLimit(...)`, Turnstile)
+ * gets on `subscribe`. A live query re-runs its whole `.use()` chain on the seed
+ * and on every refresh, including refreshes caused by someone else's write, so
+ * each one would charge the subscriber's limiter budget or replay a single-use
+ * token. Shared by the `subscribe` gate and the refresh sweep.
+ */
+const perDispatchSubscriptionRefusal = (functionPath: string): string =>
+    `query "${functionPath}" runs per-dispatch middleware (rate limit, Turnstile), so it cannot be subscribed to; call it as a one-off query, or move the check to a mutation`;
+
+/**
  * What the client is told when a socket cannot take another registration.
  *
  * Both refusals name the limit AND a way around it. An app only ever meets one
@@ -2667,7 +2677,15 @@ abstract class ShardDO {
     private readonly deliveryRequestPermits = new WeakMap<Request, DeliveryPermit>();
     private currentDeliveryPermit: DeliveryPermit | undefined;
     private transactionRequestScope: RequestScope | undefined;
-    private readonly deliveryRegistrations = new WeakMap<ShardSocketLike, Map<string, symbol>>();
+
+    /**
+     * Per socket, the identity of each subscription id's current registration: `subscribe` mints a
+     * new one when it (re)registers an id, `unsubscribe` drops it. A path that awaits between reading
+     * a subscription and acting on it compares identities so it never acts on a replacement. Memory
+     * only, so a subscription restored from hibernation gets one lazily — see
+     * {@link ShardDO.subscriptionRegistration}.
+     */
+    private readonly subscriptionRegistrations = new WeakMap<ShardSocketLike, Map<string, symbol>>();
 
     /** ctx-db relation knobs from {@link ShardDOOptions}, handed on by {@link ShardDO.ctxDbTuning}. */
     private readonly ctxDbRelationOptions: Pick<ShardDOOptions, "maxRelationKeys" | "relationExistsPushDown">;
@@ -3298,6 +3316,9 @@ abstract class ShardDO {
 
     /** Sockets whose close is in progress: their room membership is being torn down, so nothing new may join or leave. */
     private readonly closingSockets = new WeakSet<ShardSocketLike>();
+
+    /** Per socket, the subscribe ids waiting on their function's load; see {@link ShardDO.subscribeOutlivedLoad}. */
+    private readonly loadingSubscribes = new WeakMap<ShardSocketLike, Map<string, symbol>>();
 
     /**
      * Sockets holding at least one live grant, so a publish visits only grant holders. Kept as a
@@ -6509,6 +6530,19 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether `functionPath`'s `.use()` chain carries a per-dispatch middleware
+     * (`perDispatch` on the registered function). `subscribe` refuses such a
+     * query: a live query re-runs the chain on every refresh, and the effect —
+     * limiter budget, a single-use token — must happen once per request. The
+     * base class has no function registry, so the default is `false`; the
+     * codegen-generated subclass answers from `LUNORA_FUNCTIONS`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isPerDispatchFunction(_functionPath: string): boolean {
+        return false;
+    }
+
+    /**
      * The argument names of `functionPath` whose validators carry a `v.sensitive`
      * marker. The request log replaces them before anything is persisted, logged or
      * shipped, so a marked value survives neither the durable row nor a dev
@@ -6603,12 +6637,15 @@ abstract class ShardDO {
      * serialize. We never throw out of this path — the WS hibernation API
      * treats a thrown `webSocketMessage` as a fatal-channel error.
      *
-     * The `paid` refusal sits here rather than at the envelope so every
-     * registration path — not only the `subscribe` frame — goes through it.
+     * The `paid` and `per_dispatch` refusals sit here rather than at the
+     * envelope so every registration path — not only the `subscribe` frame —
+     * goes through them.
      */
-    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many" {
-        if (query.functionPath !== undefined && this.isPaidFunction(query.functionPath)) {
-            return "paid";
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "per_dispatch" | "serialize_failed" | "too_many" {
+        const refusal = query.functionPath === undefined ? undefined : this.liveQueryRefusal(query.functionPath);
+
+        if (refusal !== undefined) {
+            return refusal.status;
         }
 
         const attachment = this.readAttachmentCopy(ws);
@@ -6659,9 +6696,7 @@ abstract class ShardDO {
             return "serialize_failed";
         }
 
-        if (this.deliveryAuthorization) {
-            socketMap(this.deliveryRegistrations, ws).set(subId, Symbol("delivery registration"));
-        }
+        socketMap(this.subscriptionRegistrations, ws).set(subId, Symbol("subscription registration"));
         // Drop the diff baseline. A (re)subscribe asks for the current value, so
         // the seed must go out as a full snapshot; diffed against the old memo it
         // is answered `settled` (or a delta against a value the client just
@@ -6710,7 +6745,7 @@ abstract class ShardDO {
         this.socketIndex.forgetMemo(ws, subId);
         this.unrecordedQueries.get(ws)?.delete(subId);
         this.subscriptionFailures.clear(ws, subId);
-        this.deliveryRegistrations.get(ws)?.delete(subId);
+        this.subscriptionRegistrations.get(ws)?.delete(subId);
     }
 
     /**
@@ -8965,6 +9000,15 @@ abstract class ShardDO {
                 }
             }
 
+            const preparation = functionPath === undefined || isAdmin ? undefined : this.prepareForLiveQueryGate(functionPath);
+
+            if (preparation === undefined) {
+                // This subscribe is the newest for its id, so one still waiting on a load must not register over it.
+                this.loadingSubscribes.get(ws)?.delete(envelope.id);
+            } else if (!(await this.subscribeOutlivedLoad(ws, envelope.id, preparation))) {
+                return;
+            }
+
             const registered = this.readAttachment(ws).subs;
             const isRetry = Object.hasOwn(registered, envelope.id) && isSameSubscription(registered[envelope.id], query);
             const status = this.subscribe(ws, envelope.id, query);
@@ -8975,6 +9019,7 @@ abstract class ShardDO {
                 // subscription (seed + every poke) cannot be.
                 const { code, message: errorMessage } = {
                     paid: { code: "BAD_REQUEST", message: paidSocketRefusal(String(functionPath), "subscribed") },
+                    per_dispatch: { code: "BAD_REQUEST", message: perDispatchSubscriptionRefusal(String(functionPath)) },
                     serialize_failed: {
                         code: "SUBSCRIPTION_PERSIST_FAILED",
                         message: subscriptionRefusal("size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
@@ -9246,6 +9291,8 @@ abstract class ShardDO {
                 cancellers?.delete(envelope.id);
             }
 
+            // A subscribe still waiting on its function's load must not register after this.
+            this.loadingSubscribes.get(ws)?.delete(envelope.id);
             this.unsubscribe(ws, envelope.id);
             this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
         }
@@ -9974,6 +10021,133 @@ abstract class ShardDO {
     }
 
     /**
+     * Load `functionPath`'s module before a live-query gate reads its registry entry: a lazy
+     * registry's stub carries no `perDispatch` until then, so the gate would wave a cold per-dispatch
+     * query through and run it once. A failed load is left to the run that follows, which reports it.
+     *
+     * The per-request fields are left alone: a socket path pins its identity around each run it
+     * makes, so it holds no scope here, and putting a snapshot back after the wait would overwrite
+     * those of a dispatch that ran meanwhile.
+     */
+    //
+    // `undefined` when there is nothing to wait for (a warm function, or an admin path, which has no
+    // module): the gate then stays synchronous, as a warm `prepareFunction` promises.
+    private prepareForLiveQueryGate(functionPath: string): Promise<void> | undefined {
+        if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            return undefined;
+        }
+
+        try {
+            return this.prepareFunction(functionPath, "subscription")?.catch(() => undefined);
+        } catch {
+            // Reported by the run that follows: see above.
+            return undefined;
+        }
+    }
+
+    /**
+     * Wait out a subscribe's function load, answering whether the subscribe may still register: an
+     * unsubscribe for the same id, or the socket closing, during the wait makes it moot.
+     */
+    private async subscribeOutlivedLoad(ws: ShardSocketLike, subId: string, preparation: Promise<void>): Promise<boolean> {
+        const token = Symbol(subId);
+        const loading = this.loadingSubscribes.get(ws) ?? new Map<string, symbol>();
+
+        loading.set(subId, token);
+        this.loadingSubscribes.set(ws, loading);
+
+        await preparation;
+
+        // An unsubscribe deletes the entry; a newer subscribe for the same id replaces it.
+        const stillWanted = loading.get(subId) === token;
+
+        if (stillWanted) {
+            loading.delete(subId);
+        }
+
+        return stillWanted && !this.closingSockets.has(ws);
+    }
+
+    /** The identity of `subId`'s current registration on `ws`, minted for one restored from hibernation. */
+    private subscriptionRegistration(ws: ShardSocketLike, subId: string): symbol {
+        const registrations = socketMap(this.subscriptionRegistrations, ws);
+        const registration = registrations.get(subId) ?? Symbol("subscription registration");
+
+        registrations.set(subId, registration);
+
+        return registration;
+    }
+
+    /** Whether `subId` on `ws` is still the registration a caller read before awaiting. */
+    private holdsRegistration(ws: ShardSocketLike, subId: string, registration: symbol): boolean {
+        return this.subscriptionRegistrations.get(ws)?.get(subId) === registration;
+    }
+
+    /**
+     * The refresh sweep's gate: drop `subId` (and tell the client) when its function may not be held
+     * live, once that function is loaded. `undefined` keeps it, decided without a yield; a promise
+     * answers whether the sweep must skip it — dropped, or replaced or unsubscribed during the load,
+     * in which case `functionPath` names a query the id no longer holds — and is only pending while
+     * a cold function loads.
+     */
+    private dropIfNotLive(
+        ws: ShardSocketLike,
+        subId: string,
+        functionPath: string,
+        adminAuthorized: boolean,
+        registration: symbol,
+    ): Promise<boolean> | undefined {
+        // Same drift as the paywall below, on the credential rather than the price: an admin
+        // subscription registered under a token since rotated or cleared would otherwise keep being
+        // re-run and pushed — arbitrary read-only SQL over the shard — for the life of the socket.
+        // The token is checked at upgrade and never again.
+        if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX) && !adminAuthorized) {
+            this.unsubscribe(ws, subId);
+            this.sendSubscriptionError(ws, subId, "FORBIDDEN", "admin authorization for this socket is no longer valid");
+
+            return Promise.resolve(true);
+        }
+
+        const drop = (): boolean => {
+            if (!this.holdsRegistration(ws, subId, registration)) {
+                return true;
+            }
+
+            const refusal = this.liveQueryRefusal(functionPath);
+
+            if (refusal === undefined) {
+                return false;
+            }
+
+            this.unsubscribe(ws, subId);
+            this.sendSubscriptionError(ws, subId, "BAD_REQUEST", refusal.message);
+
+            return true;
+        };
+        const preparation = this.prepareForLiveQueryGate(functionPath);
+
+        if (preparation !== undefined) {
+            return preparation.then(drop);
+        }
+
+        // Warm: decided now, so a kept subscription costs the sweep no yield.
+        return drop() ? Promise.resolve(true) : undefined;
+    }
+
+    /** Why `functionPath` may not be held as a live subscription, or `undefined` when it may; shared by `subscribe` and the refresh sweep. */
+    private liveQueryRefusal(functionPath: string): { message: string; status: "paid" | "per_dispatch" } | undefined {
+        if (this.isPaidFunction(functionPath)) {
+            return { message: paidSocketRefusal(functionPath, "subscribed"), status: "paid" };
+        }
+
+        if (this.isPerDispatchFunction(functionPath)) {
+            return { message: perDispatchSubscriptionRefusal(functionPath), status: "per_dispatch" };
+        }
+
+        return undefined;
+    }
+
+    /**
      * Whether a subscription gets its updates by re-execution, which diffs the
      * query's own result. A broadcast row would bypass that diff baseline (no
      * later delta removes it) and the subscriber's RLS, masks and query filter,
@@ -10078,7 +10252,7 @@ abstract class ShardDO {
         }
         this.unsubscribe(ws, subId);
         this.socketIndex.forgetMemo(ws, subId);
-        this.deliveryRegistrations.get(ws)?.delete(subId);
+        this.subscriptionRegistrations.get(ws)?.delete(subId);
         this.sendSubscriptionError(ws, subId, "FORBIDDEN", "AccessDenied");
     }
 
@@ -10088,7 +10262,7 @@ abstract class ShardDO {
                 return false;
             }
             const { permit, subId } = delivery;
-            if (permit === undefined || this.deliveryRegistrations.get(ws)?.get(subId) !== permit.registration) {
+            if (permit === undefined || this.subscriptionRegistrations.get(ws)?.get(subId) !== permit.registration) {
                 return false;
             }
             if (!this.deliveryRoleSupported() || !this.deliveryFence.allows(permit)) {
@@ -10155,9 +10329,8 @@ abstract class ShardDO {
         if (query?.functionPath !== functionPath || stableWireKey(query.args ?? {}) !== stableWireKey(args)) {
             return undefined;
         }
-        const registrations = socketMap(this.deliveryRegistrations, ws);
-        const registration = registrations.get(subId) ?? Symbol("delivery registration");
-        registrations.set(subId, registration);
+        const registrations = socketMap(this.subscriptionRegistrations, ws);
+        const registration = this.subscriptionRegistration(ws, subId);
         let permit: DeliveryPermit | undefined;
         try {
             permit = await this.authorizeDelivery(identity, functionPath, args, "subscription", { admin: false, system: false });
@@ -15173,6 +15346,32 @@ abstract class ShardDO {
         );
     }
 
+    /** The refresh sweep's answer to a subscription run that threw. */
+    private failRefresh(ws: ShardSocketLike, subId: string, functionPath: string, error: unknown, attachment: SocketAttachment): void {
+        // A throwing subscription must not abort the refresh of its
+        // siblings, nor fail the mutation that triggered it. The memo
+        // is left untouched ("unknown deps"), so the subscription is
+        // retried — but not on every flush: a failure that repeats
+        // (a bad handler cast, say) is latched with a growing backoff
+        // and announced to the client once. See `noteFailingSubscription`.
+        // Errors a retry cannot fix end the subscription rather than latch it.
+        if (this.isDeterministicSubscriptionFailure(error)) {
+            if (isDeliveryAccessDenied(error)) {
+                this.revokeSubscription(ws, subId);
+                return;
+            }
+            this.unsubscribe(ws, subId);
+            // `toErrorBody` resolves the catalog hint (and redacts as the other paths do); the client no longer
+            // falls back to one when it rebuilds the error.
+            const { body } = toErrorBody(error);
+
+            this.sendSubscriptionError(ws, subId, body.code, body.message, body);
+            this.recordSubscriptionRefreshError(functionPath, error, { subId });
+            return;
+        }
+        this.noteFailingSubscription(ws, subId, functionPath, error, attachment);
+    }
+
     /**
      * A subscription's refresh threw: count and log it, latch it for backoff, and
      * tell the client the first time of a streak. The subscription stays
@@ -15266,11 +15465,16 @@ abstract class ShardDO {
 
             const refreshQuery = async (
                 subId: string,
+                registration: symbol,
                 functionPath: string,
                 args: Record<string, unknown>,
                 isAdmin: boolean,
                 backingOff: boolean,
             ): Promise<void> => {
+                // Every await below lets a `subscribe` replace `subId` (or an `unsubscribe` end it); from then on
+                // `functionPath`/`args` name the old query, whose result or error must not reach the id.
+                const current = (): boolean => this.holdsRegistration(ws, subId, registration);
+
                 try {
                     // Re-run under the socket's OWN verified identity (stamped on the
                     // attachment at upgrade, unforgeable by the client) — passed BY
@@ -15308,6 +15512,10 @@ abstract class ShardDO {
                         refreshBookmark,
                     );
 
+                    if (!current()) {
+                        return;
+                    }
+
                     if (!outcome) {
                         // A clean resolve to "nothing to deliver" still ends the failure streak.
                         this.subscriptionFailures.clear(ws, subId);
@@ -15324,33 +15532,18 @@ abstract class ShardDO {
                     // stalls the others. Mirrors the `handleStream` gate.
                     await awaitWsDrain(ws);
 
+                    if (!current()) {
+                        return;
+                    }
+
                     // A result moves a broadcast subscription to re-execution for good; this push is its full snapshot.
                     this.unmarkBroadcastSubscription(ws, subId);
                     this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit);
                     this.subscriptionFailures.clear(ws, subId);
                 } catch (error) {
-                    // A throwing subscription must not abort the refresh of its
-                    // siblings, nor fail the mutation that triggered it. The memo
-                    // is left untouched ("unknown deps"), so the subscription is
-                    // retried — but not on every flush: a failure that repeats
-                    // (a bad handler cast, say) is latched with a growing backoff
-                    // and announced to the client once. See `noteFailingSubscription`.
-                    // Errors a retry cannot fix end the subscription rather than latch it.
-                    if (this.isDeterministicSubscriptionFailure(error)) {
-                        if (isDeliveryAccessDenied(error)) {
-                            this.revokeSubscription(ws, subId);
-                            return;
-                        }
-                        this.unsubscribe(ws, subId);
-                        // `toErrorBody` resolves the catalog hint (and redacts as the other paths do); the client no longer
-                        // falls back to one when it rebuilds the error.
-                        const { body } = toErrorBody(error);
-
-                        this.sendSubscriptionError(ws, subId, body.code, body.message, body);
-                        this.recordSubscriptionRefreshError(functionPath, error, { subId });
-                        return;
+                    if (current()) {
+                        this.failRefresh(ws, subId, functionPath, error, attachment);
                     }
-                    this.noteFailingSubscription(ws, subId, functionPath, error, attachment);
                 }
             };
 
@@ -15366,32 +15559,23 @@ abstract class ShardDO {
 
                 const { functionPath } = query;
 
-                // A subscription registered BEFORE the procedure was paywalled
-                // is still sitting in this socket's hibernated attachment, and
-                // the registration-time gate in `subscribe` can no longer see
-                // it. Without this it keeps being re-run and pushed on every
-                // write for the life of the socket — the paid result, free.
-                if (this.isPaidFunction(functionPath)) {
-                    this.unsubscribe(ws, subId);
-                    this.sendSubscriptionError(ws, subId, "BAD_REQUEST", paidSocketRefusal(functionPath, "subscribed"));
+                // A subscription registered BEFORE the procedure was paywalled,
+                // or gained a `rateLimit(...)` / Turnstile step, is still sitting
+                // in this socket's hibernated attachment, and the
+                // registration-time gate in `subscribe` can no longer see it.
+                // Without this it keeps being re-run on every write for the life
+                // of the socket — the paid result served free, or the
+                // subscriber charged for writes it did not make.
+                const registration = this.subscriptionRegistration(ws, subId);
+                const dropped = this.dropIfNotLive(ws, subId, functionPath, adminAuthorized, registration);
 
+                // Only a cold function is waited for; a warm one keeps the sweep synchronous.
+                // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket are refreshed in order
+                if (dropped !== undefined && (await dropped)) {
                     continue;
                 }
 
                 const isAdmin = functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
-
-                // Same drift as the paywall above, on the credential rather than
-                // the price: `isAdmin` is recomputed from the PATH, so without
-                // this an admin subscription registered under a token that has
-                // since been rotated or cleared keeps being re-run and pushed —
-                // arbitrary read-only SQL over the shard — for the life of the
-                // socket. The token is checked at upgrade and never again.
-                if (isAdmin && !adminAuthorized) {
-                    this.unsubscribe(ws, subId);
-                    this.sendSubscriptionError(ws, subId, "FORBIDDEN", "admin authorization for this socket is no longer valid");
-
-                    continue;
-                }
 
                 const memo = this.socketIndex.memo(ws, subId);
 
@@ -15407,7 +15591,7 @@ abstract class ShardDO {
                 }
 
                 // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
-                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin, backingOff);
+                await refreshQuery(subId, registration, functionPath, query.args ?? {}, isAdmin, backingOff);
             }
 
             finishIndexVisit(subs);
@@ -18534,7 +18718,7 @@ abstract class ShardDO {
     }
 
     private allowsSubscriptionOutcome(ws: ShardSocketLike, subId: string, permit: SubscriptionDeliveryPermit | undefined, generation: number): boolean {
-        if (this.deliveryAuthorization && permit !== undefined && this.deliveryRegistrations.get(ws)?.get(subId) !== permit.registration) {
+        if (this.deliveryAuthorization && permit !== undefined && this.subscriptionRegistrations.get(ws)?.get(subId) !== permit.registration) {
             return false;
         }
         if (this.deliveryAuthorization && !this.deliveryFence.allows(permit)) {

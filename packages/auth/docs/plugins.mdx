@@ -604,7 +604,9 @@ package root:
   middleware (`.use()`) that gates any procedure on a Turnstile check. Its
   `token` selector reads from **`ctx`** — see the caveat below before reaching
   for it. Fails **closed** by default; pass `failOpen: true` to admit on a
-  siteverify outage.
+  siteverify outage. A query gated by it cannot be subscribed to: a live query
+  re-runs on every write and would replay the single-use token, so the shard
+  refuses the subscription. Call such a query as a one-off query.
 
 A Turnstile token arrives in the request body, so it lands in the function
 `args`. Call `verifyTurnstile` directly in the handler, where `args` is in

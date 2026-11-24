@@ -581,13 +581,14 @@ abstract class ShardDO {
     }): void;
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult>;
     protected isPaidFunction(_functionPath: string): boolean;
+    protected isPerDispatchFunction(_functionPath: string): boolean;
     protected sensitiveArgNames(_functionPath: string): ReadonlySet<string>;
     protected openSensitiveScope(functionPath: string, args: Record<string, unknown>): SensitiveScope;
     protected withSensitiveScope<T>(functionPath: string, args: Record<string, unknown>, run: (sensitive: SensitiveScope) => Promise<T>): Promise<T>;
     protected maskSensitiveError(error: unknown, scope: SensitiveScope): unknown;
     protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void;
     protected admitSensitiveValues(scope: SensitiveScope | undefined, args: Record<string, unknown>, names: ReadonlySet<string>): void;
-    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many";
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "per_dispatch" | "serialize_failed" | "too_many";
     protected unsubscribe(ws: ShardSocketLike, subId: string): void;
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many";
     protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void;

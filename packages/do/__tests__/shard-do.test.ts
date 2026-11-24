@@ -1125,6 +1125,19 @@ describe("shardDO subscription re-execution", () => {
         state = createFakeState();
     });
 
+    /** Holds `cursors:listCursors`'s load open until the test calls `finishLoad`; every other function is warm. */
+    class SlowLoadShard extends ReexecShard {
+        public finishLoad: (() => void) | undefined;
+
+        protected override prepareFunction(functionPath: string): Promise<void> | undefined {
+            return functionPath === "cursors:listCursors"
+                ? new Promise<void>((resolve) => {
+                      this.finishLoad = resolve;
+                  })
+                : undefined;
+        }
+    }
+
     const subscribe = async (shard: ReexecShard, ws: FakeWebSocket): Promise<void> => {
         await shard.driveMessage(ws, {
             id: "sub-1",
@@ -1236,6 +1249,330 @@ describe("shardDO subscription re-execution", () => {
         });
         // ...and the registration is gone, so the next flush skips it too.
         expect(ws.attachment?.subs).toEqual({});
+    });
+
+    const perDispatchRefusal = {
+        code: "BAD_REQUEST",
+        error: {
+            code: "BAD_REQUEST",
+            message:
+                'query "cursors:listCursors" runs per-dispatch middleware (rate limit, Turnstile), so it cannot be subscribed to; call it as a one-off query, or move the check to a mutation',
+        },
+        id: "sub-1",
+        type: "error",
+    };
+
+    it("refuses to subscribe a query with per-dispatch middleware, and still serves it as a one-off rpc", async () => {
+        expect.assertions(6);
+
+        // Stands in for the codegen override that reads the registered function's `perDispatch` flag.
+        class PerDispatchShard extends ReexecShard {
+            public rpcCount = 0;
+
+            public override async handleRpc(): Promise<unknown> {
+                this.rpcCount += 1;
+
+                return super.handleRpc();
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- override hook; the registry lookup needs no instance state
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return functionPath === "cursors:listCursors";
+            }
+        }
+
+        const shard = new PerDispatchShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        // Every refresh would re-run the `.use()` chain and charge the
+        // subscriber's limiter (or replay a single-use token), so nothing is
+        // seeded and nothing is registered for a later write to re-run.
+        expect(JSON.parse(ws.sent[0]!)).toEqual(perDispatchRefusal);
+        expect(ws.sent).toHaveLength(1);
+        expect(shard.execCount).toBe(0);
+        expect(ws.attachment).toEqual({ subs: {} });
+
+        const response = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: { roomId: "lobby" }, functionPath: "cursors:listCursors" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        expect(shard.rpcCount).toBe(1);
+    });
+
+    it("refuses a per-dispatch query whose module is not loaded yet, judging it once loaded", async () => {
+        expect.assertions(3);
+
+        // A lazy registry's stub carries no `perDispatch` until `prepareFunction` loads its module.
+        class ColdShard extends ReexecShard {
+            public loaded = false;
+
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return this.loaded && functionPath === "cursors:listCursors";
+            }
+
+            protected override async prepareFunction(): Promise<void> {
+                this.loaded = true;
+            }
+        }
+
+        const shard = new ColdShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual(perDispatchRefusal);
+        expect(shard.execCount).toBe(0);
+        expect(ws.attachment).toEqual({ subs: {} });
+    });
+
+    it("still subscribes a query without per-dispatch middleware", async () => {
+        expect.assertions(2);
+
+        class PerDispatchShard extends ReexecShard {
+            // eslint-disable-next-line class-methods-use-this -- override hook; the registry lookup needs no instance state
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return functionPath === "cursors:limited";
+            }
+        }
+
+        const shard = new PerDispatchShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual({ id: "sub-1", type: "ack" });
+        expect(JSON.parse(ws.sent[1]!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
+    });
+
+    it("leaves the request scope of a dispatch that ran while a cold query loaded", async () => {
+        expect.assertions(1);
+
+        // Another dispatch takes the shard's per-request fields while this subscribe waits on the load.
+        class InterleavedShard extends ReexecShard {
+            protected override async prepareFunction(functionPath: string): Promise<void> {
+                if (functionPath === "cursors:listCursors") {
+                    Reflect.set(this, "currentRequestUserId", "user-b");
+                }
+            }
+        }
+
+        const shard = new InterleavedShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        await subscribe(shard, ws);
+
+        // The subscribe set no scope of its own, so it has nothing to put back over that dispatch's.
+        expect(Reflect.get(shard, "currentRequestUserId")).toBe("user-b");
+    });
+
+    it("does not register a cold subscription whose unsubscribe arrived while its function loaded", async () => {
+        expect.assertions(2);
+
+        const shard = new SlowLoadShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        const subscribing = subscribe(shard, ws);
+
+        await shard.driveMessage(ws, { id: "sub-1", type: "unsubscribe" });
+        shard.finishLoad?.();
+        await subscribing;
+
+        expect(ws.attachment?.subs ?? {}).toEqual({});
+        expect(shard.execCount).toBe(0);
+    });
+
+    it("keeps a warm subscribe that replaced a cold one for the same id while its function loaded", async () => {
+        expect.assertions(1);
+
+        const shard = new SlowLoadShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        shard.outcomes.set("cursors:count", { result: 1, tables: new Set(["cursors"]) });
+
+        const subscribing = subscribe(shard, ws);
+
+        await shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "cursors:count", table: "cursors" }, type: "subscribe" });
+        shard.finishLoad?.();
+        await subscribing;
+
+        expect(ws.attachment?.subs["sub-1"]?.functionPath).toBe("cursors:count");
+    });
+
+    it("drops a hibernated per-dispatch subscription on a cold isolate without running it once", async () => {
+        expect.assertions(3);
+
+        // The lazy registry's stub carries no `perDispatch` until `prepareFunction` loads the module.
+        class ColdSweepShard extends ReexecShard {
+            public limited = false;
+
+            public loaded = false;
+
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return this.limited && this.loaded && functionPath === "cursors:listCursors";
+            }
+
+            protected override async prepareFunction(functionPath: string): Promise<void> {
+                if (functionPath === "cursors:listCursors") {
+                    this.loaded = true;
+                }
+            }
+        }
+
+        const shard = new ColdSweepShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        await subscribe(shard, ws);
+
+        // A deploy added a `rateLimit(...)` step, and the socket woke in a fresh isolate.
+        shard.limited = true;
+        shard.loaded = false;
+        shard.changedTableOnRpc = "cursors";
+
+        const execBefore = shard.execCount;
+
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(execBefore);
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual(perDispatchRefusal);
+        expect(ws.attachment?.subs).toEqual({});
+    });
+
+    it("drops a subscription whose query gained per-dispatch middleware on the next refresh", async () => {
+        expect.assertions(4);
+
+        // Subscribed while the query was plain; a later deploy added a
+        // `rateLimit(...)` step. Only the refresh sweep can still see this one.
+        class LateLimitShard extends ReexecShard {
+            public limited = false;
+
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return this.limited && functionPath === "cursors:listCursors";
+            }
+        }
+
+        const shard = new LateLimitShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        await subscribe(shard, ws);
+
+        expect(Object.keys(ws.attachment?.subs ?? {})).toEqual(["sub-1"]);
+
+        shard.limited = true;
+        shard.changedTableOnRpc = "cursors";
+
+        const execBefore = shard.execCount;
+
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(execBefore);
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual(perDispatchRefusal);
+        expect(ws.attachment?.subs).toEqual({});
+    });
+
+    describe("a sub id re-subscribed while the refresh sweep loads its old query", () => {
+        /** Holds the sweep's load of `cursors:listCursors` open once `hold` is set; every other load is warm. */
+        class HeldLoadShard extends ReexecShard {
+            public finishLoad: (() => void) | undefined;
+
+            public hold = false;
+
+            public limited = false;
+
+            public readonly loadStarted = Promise.withResolvers<undefined>();
+
+            protected override isPerDispatchFunction(functionPath: string): boolean {
+                return this.limited && functionPath === "cursors:listCursors";
+            }
+
+            protected override prepareFunction(functionPath: string): Promise<void> | undefined {
+                if (!this.hold || functionPath !== "cursors:listCursors") {
+                    return undefined;
+                }
+
+                return new Promise<void>((resolve) => {
+                    this.finishLoad = resolve;
+                    this.loadStarted.resolve(undefined);
+                });
+            }
+        }
+
+        const replacement = { args: {}, functionPath: "cursors:countCursors", table: "cursors" };
+
+        /**
+         * Subscribes `sub-1` to the old query, then re-subscribes it to `replacement` inside the sweep's
+         * load; `limited` makes the old query per-dispatch from that sweep on. Answers the frames sent
+         * from the re-subscribe on.
+         */
+        const replaceDuringLoad = async (limited: boolean): Promise<{ frames: string[]; ws: FakeWebSocket }> => {
+            const shard = new HeldLoadShard(state, {});
+            const ws = createFakeWebSocket();
+
+            shard.registerSocket(ws);
+            shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "old", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+            shard.outcomes.set("cursors:countCursors", { result: 7, tables: new Set(["cursors"]) });
+            await subscribe(shard, ws);
+
+            shard.hold = true;
+            shard.limited = limited;
+            shard.changedTableOnRpc = "cursors";
+
+            const writing = shard.writeRpc();
+
+            await shard.loadStarted.promise;
+
+            const sentBefore = ws.sent.length;
+
+            await shard.driveMessage(ws, { id: "sub-1", query: replacement, type: "subscribe" });
+            shard.finishLoad?.();
+            await writing;
+
+            return { frames: ws.sent.slice(sentBefore), ws };
+        };
+
+        it("keeps the replacement when the old query turns out not to be live", async () => {
+            expect.assertions(2);
+
+            const { frames, ws } = await replaceDuringLoad(true);
+
+            expect(ws.attachment?.subs["sub-1"]).toEqual(replacement);
+            expect(frames.map((frame) => JSON.parse(frame) as unknown)).not.toContainEqual(perDispatchRefusal);
+        });
+
+        it("never pushes the old query's result under the replacement's id", async () => {
+            expect.assertions(2);
+
+            const { frames, ws } = await replaceDuringLoad(false);
+
+            expect(ws.attachment?.subs["sub-1"]).toEqual(replacement);
+            expect(frames.filter((frame) => frame.includes('"old"'))).toEqual([]);
+        });
     });
 
     it("shares the per-socket cap between subscriptions and shapes", async () => {

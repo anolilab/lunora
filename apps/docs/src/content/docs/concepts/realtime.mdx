@@ -68,6 +68,13 @@ Two consequences worth knowing:
   the handler, and a reconnecting client's `sinceSeq` skips the re-snapshot
   entirely when nothing it reads has changed.
 
+A query whose `.use()` chain carries per-dispatch middleware (`rateLimit(...)`,
+`verifyTurnstileMiddleware(...)`) cannot be subscribed to: each re-run would
+charge the subscriber's rate-limit budget, or replay its single-use token, even
+for writes someone else made. The shard answers the `subscribe` with a
+`BAD_REQUEST` error and registers nothing; call such a query as a one-off query,
+or move the check to a mutation.
+
 There is also a lower-level `delta` frame — `ShardDO.broadcastDelta(delta)`
 fanned out to sockets whose subscription registered a matching `table` string.
 It predates re-execution and is there for hand-written `ShardDO` subclasses that

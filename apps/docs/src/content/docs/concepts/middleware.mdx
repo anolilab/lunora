@@ -89,6 +89,10 @@ const limiter = new RateLimiter({
 const limited = c.mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }));
 ```
 
+A rate-limited query works as a one-off call, but the shard refuses a live
+subscription to it: every re-run on a write would charge the subscriber's budget.
+See [live queries](/docs/concepts/realtime#how-an-update-reaches-a-subscriber).
+
 ### Installing many at once
 
 A plugin packages a schema extension plus middleware. To attach several

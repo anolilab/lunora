@@ -218,10 +218,11 @@ describe("ctx.ip over the WebSocket", () => {
             expect(rerun.threaded).toBe(SUBSCRIBER_IP);
 
             // Why the by-value channel is load-bearing rather than incidental: at the
-            // instant of the re-run the shared per-request field still holds the
-            // writer's IP, because the flush runs before that dispatch's
-            // `endDispatch`. Reading it — as `buildCtx` did — is the leak.
-            expect(rerun.shared).toBe(WRITER_IP);
+            // instant of the re-run the shared per-request field holds whatever the
+            // last dispatch left there (the writer's IP while its flush runs inline,
+            // nothing once it has ended), never the subscriber's. Reading it — as
+            // `buildCtx` did — is the leak.
+            expect(rerun.shared).not.toBe(SUBSCRIBER_IP);
         },
     );
 });

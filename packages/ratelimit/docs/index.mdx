@@ -49,6 +49,11 @@ Like [row-level security](/docs/concepts/rls) and [data masking](/docs/concepts/
 it rides the `.use(...)` chain and is **opt-in per procedure**: a bare
 `query`/`mutation` is never rate-limited.
 
+A rate-limited query can be called but not subscribed to. A live query re-runs on
+every write to the tables it reads, so each re-run would charge the subscriber's
+bucket, even for writes someone else made; the shard refuses the subscription
+with `BAD_REQUEST`. Call it as a one-off query, or move the limit to a mutation.
+
 ## Algorithms
 
 Each named limit declares a `kind`. Pick by the burst behavior you want:
