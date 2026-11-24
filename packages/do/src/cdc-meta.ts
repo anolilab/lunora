@@ -131,9 +131,14 @@ class CdcMeta {
             return this.cachedCdcEpoch();
         }
 
+        // Latched only once the bump has written: a write that throws leaves the epoch as it
+        // was, and a latch set anyway would refuse the next witness's seal for the rest of the
+        // wake while consumers kept resuming on the pre-fork epoch.
+        const epoch = this.bumpCdcEpochUncached();
+
         this.forkSealed = true;
 
-        return this.bumpCdcEpochUncached();
+        return epoch;
     }
 
     /**
