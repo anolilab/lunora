@@ -2,7 +2,7 @@ import { encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
 import createWorkpool from "../src/create-workpool";
-import { SchedulerDO } from "../src/scheduler-do";
+import { DISPATCH_LEASE_MS, SchedulerDO } from "../src/scheduler-do";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord } from "../src/types";
 import { createFakeState } from "./fake-state";
 
@@ -726,63 +726,42 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
         expect(poolIds(state, "p")).toStrictEqual(["reused"]);
     });
 
-    it("keeps a cancelled record pending when releasing its held slot fails, so a retried cancel frees it", async () => {
-        expect.assertions(4);
-
-        const state = createFakeState();
-        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
-        const held = await scheduledId(
-            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 1, pool: "p", scheduledFor: Date.now() + 60_000 })),
-        );
-
-        state.storageMap.set("pool:p", { inFlight: 1, inFlightIds: [held], maxConcurrency: 1 });
-
-        const { put } = state.storage;
-        let failPoolWrite = true;
-
-        state.storage.put = async (keyOrEntries: string | Record<string, unknown>, value?: unknown) => {
-            if (failPoolWrite && keyOrEntries === "pool:p") {
-                failPoolWrite = false;
-
-                throw new Error("storage unavailable");
-            }
-
-            return put(keyOrEntries as string, value);
-        };
-
-        const failed = await scheduler.fetch(post("/cancel", { id: held })).catch(() => undefined);
-
-        expect(failed?.ok).not.toBe(true);
-        expect(state.storageMap.has(`id:${held}`)).toBe(true);
-
-        const retried = await scheduler.fetch(post("/cancel", { id: held }));
-
-        await expect(retried.json()).resolves.toMatchObject({ cancelled: true });
-        expect(poolIds(state, "p")).toStrictEqual([]);
-    });
-
-    it("releases the slot a pending record holds when it is cancelled, and leaves other holders alone", async () => {
-        expect.assertions(2);
+    it("keeps a cancelled record's slot, and reclaims it once it outlives the claim ceiling", async () => {
+        expect.assertions(3);
 
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const held = await scheduledId(
             await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 2, pool: "p", scheduledFor: Date.now() + 60_000 })),
         );
-        const queued = await scheduledId(
-            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 2, pool: "p", scheduledFor: Date.now() + 60_000 })),
-        );
+        const fresh = Date.now();
 
-        state.storageMap.set("pool:p", { inFlight: 2, inFlightIds: [held, "running-elsewhere"], maxConcurrency: 2 });
+        state.storageMap.set("pool:p", {
+            heldAt: { [held]: fresh, "running-elsewhere": fresh },
+            inFlight: 2,
+            inFlightIds: [held, "running-elsewhere"],
+            maxConcurrency: 2,
+        });
 
-        // A job that holds no slot frees nothing; one re-armed after a decline frees its own.
-        await scheduler.fetch(post("/cancel", { id: queued }));
+        // The attempt that kept the slot may still be running, so cancelling the record does not free it.
+        await scheduler.fetch(post("/cancel", { id: held }));
 
         expect(poolIds(state, "p")).toStrictEqual([held, "running-elsewhere"]);
 
-        await scheduler.fetch(post("/cancel", { id: held }));
+        // Once the slot is older than the claim ceiling, the next reservation reclaims it and leaves the other holder alone.
+        state.storageMap.set("pool:p", {
+            heldAt: { [held]: fresh - DISPATCH_LEASE_MS - 1, "running-elsewhere": fresh },
+            inFlight: 2,
+            inFlightIds: [held, "running-elsewhere"],
+            maxConcurrency: 2,
+        });
 
-        expect(poolIds(state, "p")).toStrictEqual(["running-elsewhere"]);
+        const [next] = await enqueuePool(scheduler, "p", 2, 1);
+
+        await scheduler.alarm();
+
+        expect(poolIds(state, "p")).toStrictEqual(["running-elsewhere", next]);
+        expect(state.storageMap.has(`dead:${held}`)).toBe(false);
     });
 
     it("keeps the slot when the kick is declined in-progress, and re-arms the job", async () => {
@@ -814,6 +793,79 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
         // Cancelled, so no re-fire will come back for it: this is the slot's last release.
         expect(scheduler.dispatched).toStrictEqual([id]);
         expect(poolIds(state, "p")).toStrictEqual([]);
+    });
+});
+
+describe("schedulerDO — an id that still holds a slot", () => {
+    it("refuses to schedule an id whose earlier attempt holds a live slot", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const fresh = Date.now();
+
+        state.storageMap.set("pool:p", { heldAt: { reused: fresh }, inFlight: 1, inFlightIds: ["reused"], maxConcurrency: 1 });
+
+        const response = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "job", id: "reused", maxConcurrency: 1, pool: "p", scheduledFor: fresh + 60_000 }),
+        );
+
+        // A new job under this id would be taken for a re-fire and admitted past the cap.
+        expect(response.status).toBe(409);
+        expect(state.storageMap.has("id:reused")).toBe(false);
+    });
+
+    it("accepts the id once its held slot has outlived the claim ceiling", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const stale = Date.now() - DISPATCH_LEASE_MS - 1;
+
+        state.storageMap.set("pool:p", { heldAt: { reused: stale }, inFlight: 1, inFlightIds: ["reused"], maxConcurrency: 1 });
+
+        const response = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "job", id: "reused", maxConcurrency: 1, pool: "p", scheduledFor: Date.now() + 60_000 }),
+        );
+
+        expect(response.status).toBe(200);
+    });
+
+    it("replays a kicked marker whose write failed, without dispatching the job again", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 1, pool: "p", scheduledFor: Date.now() - 1000 })),
+        );
+
+        // The kick succeeds, then every write of the kicked marker fails (three attempts).
+        const { put } = state.storage;
+        let failMarkerWrites = 3;
+
+        state.storage.put = async (keyOrEntries: string | Record<string, unknown>, value?: unknown) => {
+            const kicked = (value as { kickedIds?: string[] } | undefined)?.kickedIds;
+
+            if (failMarkerWrites > 0 && keyOrEntries === "pool:p" && kicked?.includes(id) === true) {
+                failMarkerWrites -= 1;
+
+                throw new Error("storage unavailable");
+            }
+
+            return put(keyOrEntries as string, value);
+        };
+
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toHaveLength(1);
+        expect(state.storageMap.has(`kick:${id}`)).toBe(true);
+
+        // The next alarm writes the marker from the recovery key, and the job is not dispatched again.
+        await scheduler.alarm();
+
+        expect((state.storageMap.get("pool:p") as { kickedIds?: string[] }).kickedIds).toStrictEqual([id]);
+        expect(scheduler.dispatched).toHaveLength(1);
     });
 });
 
@@ -853,8 +905,8 @@ describe("schedulerDO — a failed re-fire through a slot it already holds", () 
         expect(state.storageMap.has(`id:${id}`)).toBe(true);
     });
 
-    it("releases the kept slot when the job is dead-lettered", async () => {
-        expect.assertions(3);
+    it("keeps the kept slot after the job is dead-lettered, and reclaims it once it outlives the claim ceiling", async () => {
+        expect.assertions(4);
 
         const state = createFakeState();
         const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
@@ -863,9 +915,18 @@ describe("schedulerDO — a failed re-fire through a slot it already holds", () 
         await scheduler.alarm();
         await scheduler.alarm();
 
-        // Parked, the job never re-fires, so this is the slot's last release.
+        // Parked, the job never re-fires; its slot stays held until the claim ceiling reclaims it.
         expect(scheduler.attempts).toBe(2);
         expect(state.storageMap.has(`dead:${id}`)).toBe(true);
-        expect(poolIds(state, "p")).toStrictEqual([]);
+        expect(poolIds(state, "p")).toStrictEqual([id]);
+
+        state.storageMap.set("pool:p", { heldAt: { [id]: 0 }, inFlight: 1, inFlightIds: [id], maxConcurrency: 1 });
+
+        const successor = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const [next] = await enqueuePool(successor, "p", 1, 1);
+
+        await successor.alarm();
+
+        expect(poolIds(state, "p")).toStrictEqual([next]);
     });
 });
