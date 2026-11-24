@@ -1,10 +1,11 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { InsightsPanel } from "../../../src/features/advisors/insights-panel";
 import type { AdvisoryFinding, FunctionStatsResult, MetricsSnapshot, ShardMetrics, ShardTrafficResult } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import drainMicrotasks from "../../drain-microtasks";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 import wrapInRouter from "../../render-with-router";
@@ -303,7 +304,7 @@ describe("insightsPanel", () => {
     });
 
     it("degrades a stale batched reply once a shard change supersedes it (stale-shard guard)", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // shardA's listTablesIndexes reply is deferred — resolved only after
         // shardB's own enumeration has already completed — proving a late-arriving
@@ -341,57 +342,63 @@ describe("insightsPanel", () => {
             },
         });
 
-        render(
-            wrapInRouter(
-                <LunoraProvider client={mock.asClient}>
-                    <InsightsPanel initialShardKey="shardA" />
-                </LunoraProvider>,
-            ),
-        );
+        // Fake from before the first render: the shard input arms its 400 ms debounce on mount, and a
+        // timer armed on the real clock can be neither cleared by the switch below nor stepped past.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
-        // Wait for shardA's batched call to have been issued (and left pending)
-        // before switching shards.
-        await waitFor(() => {
-            const issued = mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTablesIndexes);
+        try {
+            render(
+                wrapInRouter(
+                    <LunoraProvider client={mock.asClient}>
+                        <InsightsPanel initialShardKey="shardA" />
+                    </LunoraProvider>,
+                ),
+            );
 
-            if (!issued) {
-                throw new Error("shardA's listTablesIndexes not yet issued");
+            // The query layer delivers on 0 ms timers. Stepping to just short of the debounce runs
+            // shardA's whole enumeration up to its batched call, which stays pending.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(399);
+            });
+
+            if (!mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTablesIndexes)) {
+                throw new Error("shardA's listTablesIndexes was not issued before the shard switch");
             }
-        });
 
-        // Switch to shardB before shardA's reply lands (debounced 400ms).
-        fireEvent.change(screen.getByTestId("in-shard-input"), { target: { value: "shardB" } });
+            // Switch to shardB before shardA's reply lands, and step past the debounce.
+            fireEvent.change(screen.getByTestId("in-shard-input"), { target: { value: "shardB" } });
 
-        await waitFor(
-            () => {
-                const started = mock.query.mock.calls.some(
-                    (call) =>
-                        (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTables &&
-                        (call[2] as { shardKey?: string } | undefined)?.shardKey === "shardB",
-                );
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(400);
+            });
+        } finally {
+            vi.useRealTimers();
+        }
 
-                if (!started) {
-                    throw new Error("shardB enumeration not yet started");
-                }
-            },
-            { timeout: 2000 },
-        );
+        expect(
+            mock.query.mock.calls.some(
+                (call) =>
+                    (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTables &&
+                    (call[2] as { shardKey?: string } | undefined)?.shardKey === "shardB",
+            ),
+        ).toBe(true);
 
-        // NOW resolve shardA's stale reply, well after shardB has taken over —
-        // it names a table/index shardB's enumeration never reported.
-        resolveStaleReply({ indexesByTable: { legacy: [{ fields: ["x"], name: "stale_index", type: "index" }] } });
-
-        // Give the stale promise's continuation a tick to run — if the guard were
-        // broken, this is where it would overwrite `declaredIndexes`.
-        await new Promise((resolve) => {
-            setTimeout(resolve, 50);
+        // NOW resolve shardA's stale reply, after shardB has taken over — it names a
+        // table/index shardB's enumeration never reported. Draining its continuation is
+        // where a broken guard would overwrite `declaredIndexes`.
+        await act(async () => {
+            resolveStaleReply({ indexesByTable: { legacy: [{ fields: ["x"], name: "stale_index", type: "index" }] } });
+            await drainMicrotasks();
         });
 
         const empty = await screen.findByTestId("lunora-insights-empty");
 
-        // shardB's clean state survived: no dead-index advisory at all, and
-        // specifically nothing naming the stale shardA index.
+        // shardB's clean state survived: no error at all, and nothing naming the stale
+        // shardA index on the Info tab, where the INFO-severity dead-index lint would list it.
         expect(empty.textContent).toContain("No errors detected");
+
+        fireEvent.click(screen.getByTestId("lunora-insights-tab-info"));
+
         expect(screen.queryByText(/stale_index/)).toBeNull();
     });
 

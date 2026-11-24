@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { PermissionsPlayground } from "../../../src/features/permissions/permissions-playground";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { FunctionDescriptor } from "../../../src/lib/types";
+import drainMicrotasks from "../../drain-microtasks";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -161,7 +162,7 @@ describe("permissionsPlayground", () => {
     });
 
     it("drops a probe verdict that lands after a matrix prefill selected another function", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         let finishProbe: (rows: unknown) => void = () => {};
         const mock = createMockClient({
@@ -185,12 +186,14 @@ describe("permissionsPlayground", () => {
         fireEvent.click(screen.getByTestId("pp-run"));
         rerender(withPrefill({ functionPath: "listSecrets", nonce: 1 }));
 
+        // Let the prefill's queued selection apply; the probe is still held on `finishProbe`.
+        await act(drainMicrotasks);
+
+        expect(mock.query).toHaveBeenCalledTimes(1);
+
         await act(async () => {
-            await Promise.resolve();
             finishProbe([{ _id: "doc_1" }]);
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
+            await drainMicrotasks();
         });
 
         // The verdict is `listDocuments`'; the prefill cleared the outcome for `listSecrets`.
