@@ -12073,7 +12073,19 @@ abstract class ShardDO {
     private async handleRetryOutboxEntry(args: Record<string, unknown>): Promise<Response> {
         const { id } = parseScheduleOutboxEntryArgs("retryOutboxEntry", args);
         const now = Date.now();
-        const retried = this.scheduleOutboxRunner.retry(id, now);
+        const outcome = this.scheduleOutboxRunner.retry(id, now);
+
+        // Not `retried: false`: Studio reads that as "no such entry", and this one exists and is
+        // retryable as soon as the cancel at the scheduler settles.
+        if (outcome === "cancelling") {
+            this.recordAudit(args, "retryOutboxEntry", { id, detail: { outcome: "refused" } });
+
+            throw new LunoraError("CONFLICT", `retryOutboxEntry: a cancel of "${id}" at the scheduler is still in flight; retry once it settles`, {
+                status: 409,
+            });
+        }
+
+        const retried = outcome === "retried";
 
         if (retried) {
             // The in-memory alarm time may name a wake the host never delivered (an init

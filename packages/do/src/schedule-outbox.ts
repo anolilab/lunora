@@ -51,6 +51,13 @@ const SCHEDULE_OUTBOX_BATCH = 32;
 const SCHEDULE_OUTBOX_UNCONFIRMED_DROPS = 1024;
 
 /**
+ * How long a post-commit hand-off waits for a same-id cancel or covered attempt before leaving
+ * its call to the retry loop. The mutation's reply waits on the hand-off, and it should not wait
+ * on another job's scheduler round trip for longer than this; the row is already in custody.
+ */
+const SCHEDULE_OUTBOX_FENCE_WAIT_MS = 2000;
+
+/**
  * How many times a deferred schedule is re-offered to the scheduler before the
  * entry is parked. Together with {@link SCHEDULE_OUTBOX_BACKOFF_MS} this spans a
  * little over an hour — long enough to ride out a scheduler restart or a
@@ -453,18 +460,25 @@ class ScheduleOutboxRunner {
             return undefined;
         }
 
+        let fenced = false;
+
         if (probe.dueAt !== undefined && probe.dueAt <= now) {
             const scheduler = this.host.scheduler();
 
             for (const entry of readDueScheduleOutbox(sql, now, SCHEDULE_OUTBOX_BATCH)) {
                 // eslint-disable-next-line no-await-in-loop -- each attempt is an outbound RPC to one DO; firing the batch at once is what the per-tick bound exists to prevent
-                await this.retryScheduleOutboxEntry(sql, scheduler, entry, trace);
+                fenced = (await this.retryScheduleOutboxEntry(sql, scheduler, entry, trace)) || fenced;
             }
         }
 
         trimScheduleOutbox(sql, now - SCHEDULE_OUTBOX_RETENTION_MS);
 
-        return probeScheduleOutbox(sql).dueAt;
+        const { dueAt } = probeScheduleOutbox(sql);
+
+        // A row skipped for a fence is still due, and handing its past due time back would re-arm the
+        // shared alarm at once, tick after tick, for as long as that scheduler call is outstanding. The
+        // outbox is exempt from the re-arm breaker, so nothing else would stop it: wait a retry interval.
+        return fenced && dueAt !== undefined ? Math.max(dueAt, Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS) : dueAt;
     }
 
     /**
@@ -605,24 +619,28 @@ class ScheduleOutboxRunner {
      * entry, and a way to skip a long backoff once the scheduler is healthy. The
      * caller arms the poll alarm, because nothing else is due to wake a shard
      * whose entries were all parked.
-     * @returns whether the entry was requeued
+     * @returns `retried`, `missing` when there is no such entry, or `cancelling` while a cancel
+     * owns the id: requeueing then would report a retry the cancel undoes when it settles
      */
-    public retry(id: string, now: number): boolean {
-        // A drop owns the id until its cancel settles; requeueing now would report a retry the drop then undoes.
-        const retried = !this.isScheduleOutboxBeingDropped(id) && requeueScheduleOutbox(this.host.sql(), id, now);
-
-        if (retried) {
-            // The operator wants the job after all: an attempt still carrying an earlier drop must
-            // not cancel it or delete the requeued row when it lands.
-            for (const attempt of this.scheduleOutboxAttempts.get(id) ?? []) {
-                attempt.stale = true;
-            }
-
-            this.scheduleOutboxDroppedThrough.delete(id);
-            this.unconfirmedScheduleOutboxDrops.delete(id);
+    public retry(id: string, now: number): "cancelling" | "missing" | "retried" {
+        if (this.isScheduleOutboxBeingDropped(id)) {
+            return "cancelling";
         }
 
-        return retried;
+        if (!requeueScheduleOutbox(this.host.sql(), id, now)) {
+            return "missing";
+        }
+
+        // The operator wants the job after all: an attempt still carrying an earlier drop must
+        // not cancel it or delete the requeued row when it lands.
+        for (const attempt of this.scheduleOutboxAttempts.get(id) ?? []) {
+            attempt.stale = true;
+        }
+
+        this.scheduleOutboxDroppedThrough.delete(id);
+        this.unconfirmedScheduleOutboxDrops.delete(id);
+
+        return "retried";
     }
 
     /**
@@ -684,17 +702,25 @@ class ScheduleOutboxRunner {
      * An envelope that will not parse is parked immediately rather than retried:
      * no number of attempts turns malformed JSON into a job, and the log line is
      * the only useful output left.
+     * @returns whether the row was left alone because a cancel in flight, or an attempt a drop
+     * covers, owns its id, so the caller can wait before polling it again
      */
-    private async retryScheduleOutboxEntry(sql: SqlExec, scheduler: SchedulerLike | undefined, snapshot: ScheduleOutboxRow, trace?: TraceRef): Promise<void> {
+    private async retryScheduleOutboxEntry(
+        sql: SqlExec,
+        scheduler: SchedulerLike | undefined,
+        snapshot: ScheduleOutboxRow,
+        trace?: TraceRef,
+    ): Promise<boolean> {
         // The tick read its batch before awaiting the scheduler for the rows ahead of
         // this one, so the snapshot may predate an operator's drop, requeue or park.
         // The row is read again, synchronously with the claim below, and that read is
         // what gets replayed. A cancel in flight, or an attempt a drop covers, owns the id until it settles.
-        const entry = this.scheduleOutboxFences(snapshot.id).length > 0 ? undefined : readDueScheduleOutboxEntry(sql, snapshot.id, Date.now());
+        const fenced = this.scheduleOutboxFences(snapshot.id).length > 0;
+        const entry = fenced ? undefined : readDueScheduleOutboxEntry(sql, snapshot.id, Date.now());
         const state = readScheduleOutboxState(sql, snapshot.id);
 
         if (entry === undefined) {
-            return;
+            return fenced;
         }
 
         const attempts = nextScheduleOutboxAttempt(entry.attempts);
@@ -703,7 +729,7 @@ class ScheduleOutboxRunner {
         if (!stored.ok) {
             this.parkScheduleOutboxEntry(sql, entry.id, attempts, stored.target, stored.reason, trace);
 
-            return;
+            return false;
         }
 
         const { envelope } = stored;
@@ -716,7 +742,7 @@ class ScheduleOutboxRunner {
                 this.parkScheduleOutboxEntry(sql, entry.id, attempts, envelope.target, "no scheduler is configured on this shard", trace);
             }
 
-            return;
+            return false;
         }
 
         const attempt = newScheduleOutboxAttempt(state?.createdAt, state?.version);
@@ -742,6 +768,8 @@ class ScheduleOutboxRunner {
         } finally {
             this.releaseScheduleOutboxAttempt(entry.id, awaiting, attempt);
         }
+
+        return false;
     }
 
     /**
@@ -752,19 +780,47 @@ class ScheduleOutboxRunner {
      */
     private async runScheduleOutboxHandOff(id: string, run: () => Promise<unknown>, token: number | undefined): Promise<void> {
         try {
-            // Covered by a drop already: it never goes out, and waits for nothing.
-            if (!this.isScheduleOutboxTokenDropped(id, token)) {
-                // A newer schedule must not meet an id-only cancel for the old one at the scheduler,
-                // so it goes out only once nothing that could still send one is left.
-                for (let fences = this.scheduleOutboxFences(id); fences.length > 0; fences = this.scheduleOutboxFences(id)) {
-                    // eslint-disable-next-line no-await-in-loop -- a fence that starts while waiting must be waited for too
-                    await Promise.all(fences);
-                }
+            // Covered by a drop already: it never goes out, and waits for nothing. Otherwise a newer
+            // schedule must not meet an id-only cancel for the old one at the scheduler, so it goes out
+            // only once nothing that could still send one is left.
+            if (!this.isScheduleOutboxTokenDropped(id, token) && !(await this.awaitScheduleOutboxFences(id))) {
+                // Still fenced at the deadline. The call stays in custody, live, and the retry loop
+                // hands it off once the fences clear; the reply does not wait on another job's RPC.
+                this.host.scheduleGlobalPoll(Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS).catch(() => {
+                    /* the host could not arm; the next cold start probes again */
+                });
+
+                return;
             }
 
             await this.handOffRecordedScheduleOutboxCall(id, run, token);
         } finally {
             this.finishScheduleOutboxHandOff(id);
+        }
+    }
+
+    /**
+     * Wait until no fence is left on `id` (see {@link ScheduleOutboxRunner.scheduleOutboxFences}),
+     * for at most {@link SCHEDULE_OUTBOX_FENCE_WAIT_MS}.
+     * @returns `false` when the deadline came first
+     */
+    private async awaitScheduleOutboxFences(id: string): Promise<boolean> {
+        const deadline = Promise.withResolvers<false>();
+        const timer = setTimeout(() => {
+            deadline.resolve(false);
+        }, SCHEDULE_OUTBOX_FENCE_WAIT_MS);
+
+        try {
+            for (let fences = this.scheduleOutboxFences(id); fences.length > 0; fences = this.scheduleOutboxFences(id)) {
+                // eslint-disable-next-line no-await-in-loop -- a fence that starts while waiting must be waited for too
+                if (!(await Promise.race([Promise.all(fences).then(() => true), deadline.promise]))) {
+                    return false;
+                }
+            }
+
+            return true;
+        } finally {
+            clearTimeout(timer);
         }
     }
 

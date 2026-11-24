@@ -784,7 +784,7 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
     });
 
     it("refuses a Retry now for an entry whose drop is still cancelling", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const harness = createHarness();
 
@@ -798,7 +798,9 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
 
         await entered;
 
-        await expect(harness.shard.requeue(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { retried: false } });
+        await expect(harness.shard.requeue(id)).rejects.toThrow(/cancel .* is still in flight/u);
+        // Refused, not missing: the entry exists and is retryable once the cancel settles.
+        expect(harness.audit().at(-1)).toStrictEqual({ detail: JSON.stringify({ outcome: "refused" }), op: "retryOutboxEntry" });
 
         release();
         await drop;
@@ -1511,6 +1513,83 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.outbox()).toStrictEqual([]);
     });
 
+    it("polls a fenced due entry again after a retry interval, not at once", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        const { entered, release } = harness.holdCancel();
+        const drop = harness.drop("dup-id");
+
+        await entered;
+        harness.makeDue();
+
+        // The drop owns the due row until its cancel settles. Answering the row's past due time would
+        // re-arm the shared alarm at once, tick after tick, for as long as the cancel is outstanding.
+        const sentBefore = harness.received.length;
+        const startedAt = Date.now();
+        const next = await harness.retry();
+
+        expect(next).toBeGreaterThan(startedAt);
+        expect(harness.received).toHaveLength(sentBefore);
+
+        release();
+        await drop;
+
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("leaves a hand-off still fenced at the deadline to the retry loop, so the reply does not wait on another job", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        harness.setReachable(true);
+
+        const handOff = harness.hold();
+
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await handOff.entered;
+        // The attempt the drop covers is stuck at the scheduler, and only it can say whether to cancel.
+        await harness.drop("dup-id");
+
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        try {
+            const sentBefore = harness.received.length;
+            const replacement = harness.shard.handleRpc("outbox:sameId", {});
+
+            await vi.advanceTimersByTimeAsync(60_000);
+            await replacement;
+
+            // The reply came back while the old attempt was still in the air, without sending anything...
+            expect(harness.received).toHaveLength(sentBefore);
+            // ...and the replacement's call is still in custody, live, for the retry loop.
+            expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
+        } finally {
+            vi.useRealTimers();
+        }
+
+        handOff.release();
+        await attempt;
+        harness.makeDue();
+        await harness.retry();
+
+        // Handed off once the old attempt had landed and cancelled.
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
     it("forgets the drop marker once the last attempt it covered has finished", async () => {
         expect.assertions(2);
 
@@ -1569,7 +1648,7 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         await cancel.entered;
 
         // A requeue now would be deleted by the cancel when it confirms, while reporting that it worked.
-        await expect(harness.shard.requeue(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { retried: false } });
+        await expect(harness.shard.requeue(id)).rejects.toThrow(/cancel .* is still in flight/u);
 
         cancel.release();
         await attempt;
@@ -1602,7 +1681,7 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         await firstDrop;
 
         // The second drop is still cancelling: a Retry now must not be accepted yet.
-        await expect(harness.shard.requeue(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { retried: false } });
+        await expect(harness.shard.requeue(id)).rejects.toThrow(/cancel .* is still in flight/u);
 
         secondGate.release();
         await secondDrop;
