@@ -87,6 +87,12 @@ const HEADER_PREFIX = "id:";
 const RETRY_PREFIX = "retry:";
 const DEAD_PREFIX = "dead:";
 const POOL_PREFIX = "pool:";
+
+/**
+ * Owner and share token of a slot carried over from a pool row written before slots had owners
+ * (see `migrateLegacyPools`). No dedup key can equal it: `:` is outside their grammar.
+ */
+const LEGACY_SLOT_OWNER = "legacy:";
 // `pq:<encoded pool>:<id>` — one row per pending pooled job, written and removed
 // in the SAME storage call as its `id:` header, so `/pool` counts one pool by
 // listing its own prefix instead of walking every header. The pool name is
@@ -633,9 +639,9 @@ class SchedulerDO {
     }
 
     /**
-     * A row in an older shape (`inFlightIds`, a bare counter, or slots whose attempts carry no start)
-     * reads as empty: it records neither who owns a slot nor when its attempts started. The cost is
-     * one pass where those jobs run beside new ones past the cap.
+     * A row in an older shape reads as empty: it records neither who owns a slot nor when its
+     * attempts started. The shape before slots had owners is carried into slots before any drain
+     * (`migrateLegacyPools`); one this file wrote and never shipped is not.
      */
     private static poolFromRow(stored: PoolState | undefined, now: number, maxConcurrencyHint?: number): PoolState {
         const maxConcurrency = stored?.maxConcurrency ?? SchedulerDO.normalizeConcurrency(maxConcurrencyHint, 1);
@@ -665,6 +671,12 @@ class SchedulerDO {
      */
     private static releaseOwner(pool: PoolState, owner: string, jobId: string | undefined, attempt: string | undefined): PoolState {
         const slots = pool.slots.flatMap((slot) => {
+            // A job dispatched before attempt tokens completes naming its id and no attempt. Its slot
+            // is a migrated one, which holds no share of any later attempt, so freeing it is safe.
+            if (attempt === undefined && slot.owner === LEGACY_SLOT_OWNER && slot.id === jobId) {
+                return [];
+            }
+
             if (!SchedulerDO.holds(slot, jobId, owner)) {
                 return [slot];
             }
@@ -3012,6 +3024,8 @@ class SchedulerDO {
 
     /** One run of {@link reindexOrphanedRecords}. */
     private async recoverStore(): Promise<void> {
+        await this.migrateLegacyPools();
+
         if ((await this.state.storage.get(CLEAN_KEY)) === undefined) {
             await this.reindexWalk();
             await this.state.storage.put(CLEAN_KEY, true);
@@ -3058,6 +3072,41 @@ class SchedulerDO {
 
         // Record first, drop second: a failure keeps the marker for the next walk.
         await this.state.storage.delete([`${REPAIR_PREFIX}${row.id}`, ...SchedulerDO.pendingKeys(row), `${RETRY_PREFIX}${row.id}`]);
+    }
+
+    /**
+     * Carry pool rows written before slots had owners (`{ inFlight, inFlightIds? }`) into slots,
+     * before this instance's first drain reads them: read as empty, their jobs would run beside new
+     * ones past the cap. Every route and the alarm wait for this, so nothing else touches a pool row
+     * meanwhile. Each job gets a kicked slot under {@link LEGACY_SLOT_OWNER} with one share stamped
+     * now, so a lost job's slot lapses at the ceiling; its completion, which names its id and no
+     * attempt, frees it sooner. A row with a count but no ids gets anonymous slots, which only the
+     * ceiling or the operator's `/pool/release` frees.
+     */
+    private async migrateLegacyPools(): Promise<void> {
+        const migrated: [string, PoolState][] = [];
+        const now = Date.now();
+
+        await this.forEachPage<PoolState & { inFlightIds?: unknown }>(POOL_PREFIX, (row, key) => {
+            if (Array.isArray(row.slots)) {
+                return;
+            }
+
+            const count = Number.isSafeInteger(row.inFlight) && row.inFlight > 0 ? row.inFlight : 0;
+            const ids = Array.isArray(row.inFlightIds)
+                ? row.inFlightIds.filter((id): id is string => typeof id === "string")
+                : Array.from({ length: count }, (_, index) => `${LEGACY_SLOT_OWNER}${String(index)}`);
+            const slots = ids.map((id): PoolSlot => {
+                return { attempts: [{ at: now, token: LEGACY_SLOT_OWNER }], id, kicked: true, owner: LEGACY_SLOT_OWNER };
+            });
+
+            migrated.push([key, { inFlight: slots.length, maxConcurrency: row.maxConcurrency, slots }]);
+        });
+
+        for (const [key, row] of migrated) {
+            // eslint-disable-next-line no-await-in-loop -- one write per old-shape row, of which a store has a handful at most; a batched put caps at 128 keys
+            await this.state.storage.put(key, row);
+        }
     }
 
     /** The full orphan walk — see {@link reindexOrphanedRecords}. */

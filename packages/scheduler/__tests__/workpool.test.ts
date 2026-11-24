@@ -1224,20 +1224,6 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
 
         expect(scheduler.dispatched).toHaveLength(2);
     });
-
-    it("reads a pool row stored before slots had owners as empty, so its jobs are not held forever", async () => {
-        expect.assertions(2);
-
-        const state = createFakeState();
-        const scheduler = new ScriptedScheduler(state, origin);
-
-        state.storageMap.set("pool:p", { inFlight: 1, inFlightIds: ["old"], kickedIds: ["old"], maxConcurrency: 1 });
-        await schedule(scheduler, 1);
-        await scheduler.alarm();
-
-        expect(scheduler.dispatched).toHaveLength(1);
-        expect(poolRow(state, "p")?.slots.map((slot) => slot.owner)).toStrictEqual([scheduler.dispatched[0]?.dedupKey]);
-    });
 });
 
 describe("schedulerDO — a slot whose attempt may still be running", () => {
@@ -1486,6 +1472,51 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
 
         scheduler.settleHeld?.(true);
         await drain;
+    });
+
+    it("holds a job's slot from a pool row written before slots had owners until that job completes", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+
+        state.storageMap.set("pool:p", { inFlight: 1, inFlightIds: ["old"], maxConcurrency: 1 });
+
+        const scheduler = new ScriptedScheduler(state, origin);
+        const waiting = await schedule(scheduler);
+
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        // The runtime reports a job dispatched before attempt tokens by its id and key alone.
+        await scheduler.fetch(post("/complete", { dedupKey: "old-key", id: "old", pool: "p" }));
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).toContain(waiting);
+    });
+
+    it.each([
+        ["listed ids", { inFlight: 1, inFlightIds: ["old"], maxConcurrency: 1 }],
+        ["a bare count", { inFlight: 1, maxConcurrency: 1 }],
+    ])("lets a slot carried over from a pool row with %s lapse at the ceiling when its job never completes", async (_shape, row) => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+
+        state.storageMap.set("pool:p", row);
+
+        const scheduler = new ScriptedScheduler(state, origin);
+        const waiting = await schedule(scheduler);
+
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        advance(DISPATCH_LEASE_MS);
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).toContain(waiting);
     });
 
     it("keeps a renewal the running attempt made while a re-fire beside it failed", async () => {
