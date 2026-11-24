@@ -1129,6 +1129,59 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
         await expect(inFlight(scheduler)).resolves.toBe(1);
     });
 
+    it("drops the oldest slot whose kick went through when the operator names no job", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const now = Date.now();
+
+        state.storageMap.set("pool:p", {
+            inFlight: 3,
+            maxConcurrency: 3,
+            slots: [
+                { at: now - 2000, id: "a", kicked: true, owner: "newer" },
+                { at: now - 5000, id: "b", kicked: true, owner: "stuck" },
+                { at: now, id: "c", owner: "settling" },
+            ],
+        });
+
+        await scheduler.fetch(post("/complete", { pool: "p" }));
+
+        expect(poolRow(state, "p")?.slots.map((slot) => slot.owner)).toStrictEqual(["newer", "settling"]);
+    });
+
+    it("gives two jobs sharing a fixed dedup key a slot each", async () => {
+        expect.assertions(2);
+
+        const scheduler = new ScriptedScheduler(createFakeState(), origin);
+
+        for (const shardKey of ["one", "two"]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential enqueue keeps the dispatch order fixed
+            await scheduler.fetch(
+                post("/schedule", {
+                    args: {},
+                    dedupKey: "shared",
+                    functionPath: "job",
+                    maxConcurrency: 1,
+                    pool: "p",
+                    scheduledFor: Date.now() - 1000,
+                    shardKey,
+                }),
+            );
+        }
+
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toHaveLength(1);
+
+        await complete(scheduler, scheduler.dispatched[0]);
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toHaveLength(2);
+    });
+
     it("reads a pool row stored before slots had owners as empty, so its jobs are not held forever", async () => {
         expect.assertions(2);
 

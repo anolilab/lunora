@@ -365,8 +365,9 @@ interface ScheduleRequestBody {
 }
 
 /**
- * One held pool slot. Owned by the scheduling (its `dedupKey`), not by the job id: an id is free for
- * a new job once its header goes, while the job that ran under it may still be running on the slot.
+ * One held pool slot. Owned by the scheduling (its id and `dedupKey` together), not by the job id
+ * alone: an id is free for a new job once its header goes, while the job that ran under it may still
+ * be running on the slot; and a fixed `dedupKey` can be shared by distinct jobs bound for other shards.
  */
 interface PoolSlot {
     /**
@@ -632,22 +633,37 @@ class SchedulerDO {
         return { inFlight: slots.length, maxConcurrency, slots };
     }
 
+    private static holds(slot: PoolSlot, id: string | undefined, owner: string): boolean {
+        return slot.owner === owner && (id === undefined || slot.id === id);
+    }
+
     /**
-     * The row with `owner`'s slot freed (pure — the caller persists it); unchanged when it holds none.
+     * The row with the slot of `owner` under `jobId` freed (pure — the caller persists it); unchanged
+     * when it holds none.
      */
-    private static releaseOwner(pool: PoolState, owner: string): PoolState {
-        const slots = pool.slots.filter((slot) => slot.owner !== owner);
+    private static releaseOwner(pool: PoolState, owner: string, jobId: string | undefined): PoolState {
+        const slots = pool.slots.filter((slot) => !SchedulerDO.holds(slot, jobId, owner));
 
         return { ...pool, inFlight: slots.length, slots };
     }
 
     /**
      * Release for a `/complete` that names no owner (the operator's `/pool/release`): every slot an
-     * attempt under `jobId` holds at the origin, or with no id the newest slot. A slot whose kick has
-     * not gone through is left alone, since its own dispatch settles it.
+     * attempt under `jobId` holds at the origin, or with no id the oldest such slot, the one most
+     * likely leaked. A slot whose kick has not gone through is left alone, since its own dispatch
+     * settles it; with no id and no kicked slot, the oldest slot goes, so the operator always frees one.
      */
     private static releaseUnowned(pool: PoolState, jobId: string | undefined): PoolState {
-        const slots = jobId === undefined ? pool.slots.slice(0, -1) : pool.slots.filter((slot) => slot.id !== jobId || slot.kicked !== true);
+        if (jobId !== undefined) {
+            const slots = pool.slots.filter((slot) => slot.id !== jobId || slot.kicked !== true);
+
+            return { ...pool, inFlight: slots.length, slots };
+        }
+
+        const kicked = pool.slots.filter((slot) => slot.kicked === true);
+        const candidates = kicked.length > 0 ? kicked : pool.slots;
+        const oldest = candidates.toSorted((left, right) => left.at - right.at)[0];
+        const slots = pool.slots.filter((slot) => slot !== oldest);
 
         return { ...pool, inFlight: slots.length, slots };
     }
@@ -1385,7 +1401,6 @@ class SchedulerDO {
         const outcome = await this.dispatch(record);
         const ok = outcome === true;
         const poolName = record.pool;
-        const owner = SchedulerDO.dedupKey(record);
         const now = Date.now();
 
         if (poolName !== undefined && outcome !== false) {
@@ -1394,17 +1409,17 @@ class SchedulerDO {
             // ceiling frees the slot, and nothing else may.
             // Swallowed: a kicked job must never re-fire, and a throw from here would re-claim it.
             // Unmarked, the slot is still held by its owner, which is the safe side.
-            await this.updateSlot(poolName, owner, (slot) => {
+            await this.updateSlot(poolName, record, (slot) => {
                 return { ...slot, at: now, kicked: true };
             }).catch(() => undefined);
         } else if (poolName !== undefined && reserved === "reserved") {
             // The kick failed and nothing else of this owner may be running: no completion is coming.
-            await this.updateSlot(poolName, owner, () => undefined);
+            await this.updateSlot(poolName, record, () => undefined);
         } else if (poolName !== undefined && typeof reserved === "object") {
             // A re-fire whose kick failed started nothing, so it does not extend the hold. The slot
             // stays for the earlier attempt until its /complete or the ceiling from that attempt's
             // start, so a retry.forever job failing every re-fire cannot keep it longer.
-            await this.updateSlot(poolName, owner, (slot) => {
+            await this.updateSlot(poolName, record, (slot) => {
                 return { ...slot, at: reserved.reenteredFrom };
             });
         }
@@ -1491,13 +1506,13 @@ class SchedulerDO {
             const pool = await this.loadPool(poolName);
             const owner = SchedulerDO.dedupKey(record);
             const now = Date.now();
-            const held = pool.slots.find((slot) => slot.owner === owner);
+            const held = pool.slots.find((slot) => SchedulerDO.holds(slot, record.id, owner));
 
             // Re-entry before the cap: a record still holding its slot (an earlier attempt was
             // declined in-progress or lost with its instance, and that slot is kept until the
             // attempt settles) counts against the cap itself, so checking the cap first would
-            // backpressure its own re-fire forever. By owner: a new job under a reused id is
-            // another scheduling and queues for a slot of its own.
+            // backpressure its own re-fire forever. By owner and id: a new job under a reused id, or
+            // another job sharing a fixed key, is another scheduling and queues for a slot of its own.
             if (held !== undefined) {
                 // Counted as running while this re-fire is in flight; drainRecord() puts the earlier
                 // start back if the kick fails.
@@ -1782,17 +1797,19 @@ class SchedulerDO {
         console.warn(`@lunora/scheduler: job "${record.id}" (${record.functionPath ?? record.workflow ?? "unknown"}) parked in dead-letter ${reason}`);
     }
 
-    /** Rewrite `owner`'s slot under the pool lock (`undefined` frees it); a no-op when it holds none. */
-    private async updateSlot(poolName: string, owner: string, change: (slot: PoolSlot) => PoolSlot | undefined): Promise<void> {
+    /** Rewrite `record`'s slot under the pool lock (`undefined` frees it); a no-op when it holds none. */
+    private async updateSlot(poolName: string, record: ScheduleRecord, change: (slot: PoolSlot) => PoolSlot | undefined): Promise<void> {
+        const owner = SchedulerDO.dedupKey(record);
+
         await this.withPoolLock(async () => {
             const pool = await this.loadPool(poolName);
 
-            if (!pool.slots.some((slot) => slot.owner === owner)) {
+            if (!pool.slots.some((slot) => SchedulerDO.holds(slot, record.id, owner))) {
                 return;
             }
 
             const slots = pool.slots.flatMap((slot) => {
-                if (slot.owner !== owner) {
+                if (!SchedulerDO.holds(slot, record.id, owner)) {
                     return [slot];
                 }
 
@@ -1861,7 +1878,7 @@ class SchedulerDO {
 
             // The runtime names the owner, so a re-delivered completion, or one for an earlier job
             // under a reused id, frees nothing of anyone else's.
-            const released = owner === undefined ? SchedulerDO.releaseUnowned(pool, jobId) : SchedulerDO.releaseOwner(pool, owner);
+            const released = owner === undefined ? SchedulerDO.releaseUnowned(pool, jobId) : SchedulerDO.releaseOwner(pool, owner, jobId);
 
             await this.savePool(poolName, released);
 
