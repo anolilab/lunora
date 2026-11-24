@@ -796,7 +796,7 @@ describe("concurrency", () => {
 
         let inFlight = 0;
         let highWater = 0;
-        const firstWave = Promise.withResolvers<undefined>();
+        const firstCall = Promise.withResolvers<undefined>();
         const gate = Promise.withResolvers<undefined>();
 
         const registry = createStaticShardRegistry({ messages: Array.from({ length: 10 }, (_, i) => `s${String(i)}`) });
@@ -806,9 +806,7 @@ describe("concurrency", () => {
             inFlight += 1;
             highWater = Math.max(highWater, inFlight);
 
-            if (inFlight === 3) {
-                firstWave.resolve(undefined);
-            }
+            firstCall.resolve(undefined);
 
             await gate.promise;
 
@@ -819,9 +817,10 @@ describe("concurrency", () => {
 
         const pending = coordinator.fanOut(spy.namespace, buildRequest());
 
-        // Three calls are held open. One macrotask then drains every promise chain in flight (the
-        // shard double answers within microtasks), so an uncapped fan-out has started the rest by now.
-        await firstWave.promise;
+        // Every call is held open. One macrotask after the first starts drains every promise chain in
+        // flight (the shard double answers within microtasks), so by then the fan-out has started all
+        // it is going to: a cap above three, or none, starts more, and one below three starts fewer.
+        await firstCall.promise;
         await new Promise((resolve) => {
             setImmediate(resolve);
         });
@@ -829,7 +828,7 @@ describe("concurrency", () => {
 
         await pending;
 
-        expect(highWater).toBeLessThanOrEqual(3);
+        expect(highWater).toBe(3);
         expect(spy.calls).toHaveLength(10);
     });
 
