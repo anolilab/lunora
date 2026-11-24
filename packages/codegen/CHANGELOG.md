@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.441](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.440...@lunora/codegen@1.0.0-alpha.441) (2026-11-24)
+
+- fix(advisor): keep table accepts exact and skip CAPTCHA on admin actions (#1690)
+
 ## @lunora/codegen [1.0.0-alpha.440](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.439...@lunora/codegen@1.0.0-alpha.440) (2026-11-24)
 
 - fix(advisor): let reviewed WARN and INFO findings be accepted (#1685)

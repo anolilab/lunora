@@ -1,3 +1,7 @@
+## @lunora/server [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.280...@lunora/server@1.0.0-alpha.281) (2026-11-24)
+
+- fix(advisor): keep table accepts exact and skip CAPTCHA on admin actions (#1690)
+
 ## @lunora/server [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.279...@lunora/server@1.0.0-alpha.280) (2026-11-24)
 
 - fix(advisor): let reviewed WARN and INFO findings be accepted (#1685)
