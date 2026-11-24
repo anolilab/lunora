@@ -8,14 +8,6 @@
         "reason": "kept: the byte-ceiling upload test (\"stops reading a refused upload past the byte ceiling…\") asserts a real loopback socket pushes back once the server stops reading. A stall is the absence of progress, which no event marks, so the clock is the detector: the upload loop ends at the first write that has not flushed within 200 ms. A slow runner can only end it early, which still satisfies the < 32 MiB bound rather than failing it."
     },
     {
-        "file": "packages/replica/__tests__/runtime-edges.test.ts",
-        "reason": "a real-clock timeout sentinel in a race, pending conversion"
-    },
-    {
-        "file": "packages/replica/__tests__/sync-events.test.ts",
-        "reason": "pending conversion"
-    },
-    {
         "file": "packages/runtime/__tests__/query-coordinator.test.ts",
         "reason": "pending conversion"
     }

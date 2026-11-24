@@ -350,13 +350,15 @@ describe(EventsSync, () => {
         let activeCalls = 0;
         let maxConcurrent = 0;
 
+        const gate = Promise.withResolvers<undefined>();
         const sync = new EventsSync({
             fetchEventsSince: async () => {
                 activeCalls += 1;
                 maxConcurrent = Math.max(maxConcurrent, activeCalls);
-                // Simulate a slow fetch
-                await new Promise((r) => setTimeout(r, 50));
+                // A slow fetch: held until the test releases it.
+                await gate.promise;
                 activeCalls -= 1;
+
                 return [];
             },
             applyEvents: () => {},
@@ -367,7 +369,15 @@ describe(EventsSync, () => {
         });
 
         // Trigger two syncs concurrently
-        await Promise.all([sync.sync(), sync.sync()]);
+        const both = Promise.all([sync.sync(), sync.sync()]);
+
+        // One macrotask drains every promise chain in flight: every double here answers within
+        // microtasks, so an unguarded second cycle has reached its own fetch by now.
+        await new Promise((resolve) => {
+            setImmediate(resolve);
+        });
+        gate.resolve(undefined);
+        await both;
 
         // Only one should have been active at a time
         expect(maxConcurrent).toBe(1);

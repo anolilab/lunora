@@ -211,18 +211,10 @@ describe("eventSource edge paths", () => {
 
         controller.abort();
 
-        // Race against a real-timer sentinel: pre-fix, `pending` never settles
-        // (the idle park is resolved only by the state-changed listener, which
-        // an abort never fires), so the sentinel wins and this assertion fails
-        // by mismatch rather than the test wedging vitest.
-        const TIMEOUT = Symbol("timeout");
-        const sentinel = new Promise((resolve) => {
-            setTimeout(resolve, 200, TIMEOUT);
-        });
-
-        const settled = await Promise.race([pending, sentinel]);
-
-        expect(settled).toStrictEqual({ done: true, value: undefined });
+        // Pre-fix, `pending` never settles (the idle park is resolved only by
+        // the state-changed listener, which an abort never fires); the test
+        // timeout reports that.
+        await expect(pending).resolves.toStrictEqual({ done: true, value: undefined });
     });
 
     it("plan 284: abort tears down the state-changed listener (no leaked listener/buffer)", async () => {
