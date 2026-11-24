@@ -32,7 +32,7 @@ import { getAuthTables } from "better-auth/db";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { AUTH_AUDIT_TABLE } from "./audit";
 import type { CanonicalEmailColumn } from "./canonical-email";
-import { asciiSuffix, CANONICAL_EMAIL_FIELD, canonicalEmail as foldEmail, warnDuplicates, withCanonicalEmailValue } from "./canonical-email";
+import { CANONICAL_EMAIL_FIELD, canonicalEmail as foldEmail, foldSafeKey, warnDuplicates, withCanonicalEmailValue } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
 
@@ -357,12 +357,12 @@ const heldByUnfilledRow = async (
     }
 
     const email = quoteIdentifier(column.email);
-    const suffix = asciiSuffix(address);
+    const key = foldSafeKey(address);
     const unfilled = await sql.all(
         `SELECT ${email} AS "email" FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(column.canonical)} IS NULL${
-            suffix === "" ? "" : ` AND substr(LOWER(${email}), -length(?)) = LOWER(?)`
+            key === "" ? "" : ` AND instr(LOWER(${email}), LOWER(?)) > 0`
         }`,
-        suffix === "" ? [] : [suffix, suffix],
+        key === "" ? [] : [key],
     );
 
     return unfilled.some((holder) => typeof holder["email"] === "string" && foldEmail(holder["email"]) === address);

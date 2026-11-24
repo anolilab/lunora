@@ -247,6 +247,43 @@ const backfillInvitationEmailsSync = (
     return report;
 };
 
+/** Rewrite one invitation unless another holds its folded address; guarded like the SQL, on the address read. */
+const rewriteThroughAdapter = async (adapter: BackfillAdapter, row: { email?: unknown; id: string }, unchanged: string[]): Promise<void> => {
+    if (typeof row.email !== "string" || canonicalEmail(row.email) === row.email) {
+        return;
+    }
+
+    const folded = canonicalEmail(row.email);
+
+    if ((await adapter.findOne({ model: INVITATION_MODEL, where: [{ field: "email", value: folded }] })) === null) {
+        await adapter.update({
+            model: INVITATION_MODEL,
+            update: { email: folded },
+            where: [
+                { field: "id", value: row.id },
+                { field: "email", value: row.email },
+            ],
+        });
+    } else {
+        unchanged.push(row.id);
+    }
+};
+
+/** A keyset position: the last `createdAt` read, and the ids already read at it (a tie can span pages). */
+type KeysetPosition = { createdAt: Date | number | string; ids: string[] };
+
+const nextPosition = (at: KeysetPosition | undefined, rows: { createdAt: Date | number | string; id: string }[]): KeysetPosition | undefined => {
+    const last = rows.at(-1);
+
+    if (last === undefined) {
+        return at;
+    }
+
+    const tied = rows.filter((row) => String(row.createdAt) === String(last.createdAt)).map((row) => row.id);
+
+    return { createdAt: last.createdAt, ids: at !== undefined && String(at.createdAt) === String(last.createdAt) ? [...at.ids, ...tied] : tied };
+};
+
 /**
  * The same rewrite through better-auth's adapter, for a database the SQL above cannot target.
  * The adapter cannot narrow the read to rows out of canonical form, so it pages every invitation,
@@ -256,38 +293,28 @@ const backfillInvitationEmailsSync = (
  */
 const backfillInvitationEmailsThroughAdapter = async (adapter: BackfillAdapter): Promise<InvitationBackfillReport> => {
     const report: InvitationBackfillReport = { complete: false, unchanged: [] };
+    // Keyset, not offset: an invitation revoked meanwhile would shift every later page and skip a row.
+    let at: KeysetPosition | undefined;
 
     try {
-        for (let offset = 0; ; offset += BACKFILL_PAGE_ROWS) {
+        for (;;) {
             // eslint-disable-next-line no-await-in-loop -- pages in order
-            const rows = await adapter.findMany<{ email?: unknown; id: string }>({
+            const rows = await adapter.findMany<{ createdAt: Date | number | string; email?: unknown; id: string }>({
                 limit: BACKFILL_PAGE_ROWS,
                 model: INVITATION_MODEL,
-                offset,
                 sortBy: { direction: "desc", field: "createdAt" },
+                where:
+                    at === undefined
+                        ? []
+                        : [
+                              { field: "createdAt", operator: "lte", value: at.createdAt },
+                              ...(at.ids.length > 0 ? [{ field: "id", operator: "not_in" as const, value: at.ids }] : []),
+                          ],
             });
 
             for (const row of rows) {
-                const folded = typeof row.email === "string" ? canonicalEmail(row.email) : undefined;
-
-                if (folded === undefined || folded === row.email) {
-                    continue;
-                }
-
-                // eslint-disable-next-line no-await-in-loop -- the check must see the rows this pass has already rewritten
-                if ((await adapter.findOne({ model: INVITATION_MODEL, where: [{ field: "email", value: folded }] })) === null) {
-                    // eslint-disable-next-line no-await-in-loop -- guarded like the SQL: only while the row still holds the address read
-                    await adapter.update({
-                        model: INVITATION_MODEL,
-                        update: { email: folded },
-                        where: [
-                            { field: "id", value: row.id },
-                            { field: "email", value: row.email as string },
-                        ],
-                    });
-                } else {
-                    report.unchanged.push(row.id);
-                }
+                // eslint-disable-next-line no-await-in-loop -- the holder check must see the rows this pass has already rewritten
+                await rewriteThroughAdapter(adapter, row, report.unchanged);
             }
 
             if (rows.length < BACKFILL_PAGE_ROWS) {
@@ -295,6 +322,8 @@ const backfillInvitationEmailsThroughAdapter = async (adapter: BackfillAdapter):
 
                 return report;
             }
+
+            at = nextPosition(at, rows);
         }
     } finally {
         warnUnchanged(report.unchanged);

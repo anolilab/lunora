@@ -353,10 +353,9 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  *
  * The same goes for `user.emailCanonical`: the compiled DDL adds the column, but filling it
  * on existing rows needs Unicode lowercasing SQLite lacks, so `ensureMigrated` (which the
- * generated worker runs on its first auth request) does it. Until then the admin plane's
- * duplicate-address check folds the addresses of the rows still unfilled itself, so the
- * check holds; better-auth's own sign-up check, which matches the address exactly, does not
- * see a variant of an unfilled row's address.
+ * generated worker runs on its first auth request) does it. Until then the duplicate-address
+ * checks (the admin plane's, and the user create/update hook every sign-up and email change goes
+ * through) fold the addresses of the rows still unfilled themselves, so they hold.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
     const resolved = resolveAuthOptions(options);

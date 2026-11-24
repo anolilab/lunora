@@ -76,7 +76,7 @@ const withCanonicalData = (replaced: Record<string, unknown> | undefined, data: 
     return { ...replaced, [CANONICAL_EMAIL_FIELD]: typeof email === "string" ? canonicalEmail(email) : undefined };
 };
 
-type Where = { field: string; mode?: "insensitive"; operator?: "ends_with" | "gt" | "in"; value: string[] | string | null }[];
+type Where = { field: string; mode?: "insensitive"; operator?: "contains" | "gt" | "in" | "lte" | "not_in"; value: Date | number | string[] | string | null }[];
 
 /**
  * The subset of better-auth's adapter the adapter-driven backfill and {@link canonicalHolders}
@@ -99,16 +99,28 @@ interface BackfillAdapter {
 const UNFILLED: Where = [{ field: CANONICAL_EMAIL_FIELD, value: null }];
 
 /**
- * The longest run of printable ASCII `canonical` ends with. A stored address folds to `canonical` only if it
- * ends with the same characters in some ASCII case: lowercasing and NFC leave printable ASCII as it is (bar
- * the Kelvin sign, which NFC maps to `K`), and compose only into non-ASCII characters.
+ * The printable-ASCII characters a non-ASCII one folds to: U+037E (Greek question mark) and U+1FEF (Greek
+ * varia) under NFC, U+212A (Kelvin sign) under NFC and lowercasing. Found by folding every code point; any
+ * other folds to non-ASCII, or to ASCII followed by a combining mark.
  */
-const asciiSuffix = (canonical: string): string => {
+const FOLDED_FROM_NON_ASCII = new Set([";", "`", "k"]);
+
+/**
+ * A run of `canonical` that every stored address folding to it contains, in some ASCII case: the
+ * printable-ASCII run it ends with, after the last character a non-ASCII one could have folded to. Those
+ * characters are stored as they appear, bar ASCII case, since lowercasing and NFC leave the rest of printable
+ * ASCII alone and compose only into non-ASCII characters. Contained rather than ended with, because the stored
+ * address may carry whitespace `trim` removes. Empty when no such run exists: then nothing narrows the read.
+ */
+const foldSafeKey = (canonical: string): string => {
     let start = canonical.length;
 
-    // Printable ASCII is U+0020 (space) to U+007E (tilde).
-    // A surrogate half reads as 0xD800-0xDFFF, outside the range, so a code unit at a time is enough.
+    // Printable ASCII is U+0020 (space) to U+007E (tilde); a surrogate half reads as 0xD800-0xDFFF, outside it.
     for (let code = canonical.codePointAt(start - 1) ?? 0; start > 0 && code >= 0x20 && code <= 0x7e; code = canonical.codePointAt(start - 1) ?? 0) {
+        if (FOLDED_FROM_NON_ASCII.has(canonical[start - 1] ?? "")) {
+            break;
+        }
+
         start -= 1;
     }
 
@@ -121,13 +133,13 @@ const asciiSuffix = (canonical: string): string => {
  * column and not yet backfilled, or a duplicate the backfill leaves) and whose address folds
  * to it. Those cannot be matched in SQL (`LOWER()` folds ASCII only, and nothing in SQLite
  * normalises Unicode form), so they are folded here; the read is narrowed in SQL first, to
- * the canonical index's `IS NULL` range and, within it, the addresses that end with the same
- * printable-ASCII run ({@link asciiSuffix}). Once a table is filled this is one empty count.
+ * the canonical index's `IS NULL` range and, within it, the addresses that contain the run
+ * {@link foldSafeKey} picks. Once a table is filled this is one empty count.
  */
 const canonicalHolders = async (adapter: BackfillAdapter, email: string): Promise<{ email?: unknown; id: string }[]> => {
     const canonical = canonicalEmail(email);
-    const suffix = asciiSuffix(canonical);
-    const candidates: Where = suffix === "" ? UNFILLED : [...UNFILLED, { field: "email", mode: "insensitive", operator: "ends_with", value: suffix }];
+    const key = foldSafeKey(canonical);
+    const candidates: Where = key === "" ? UNFILLED : [...UNFILLED, { field: "email", mode: "insensitive", operator: "contains", value: key }];
     const [held, unfilledCount] = await Promise.all([
         adapter.findMany<{ email?: unknown; id: string }>({ limit: 1, model: "user", where: [{ field: CANONICAL_EMAIL_FIELD, value: canonical }] }),
         adapter.count({ model: "user", where: candidates }),
@@ -638,7 +650,6 @@ const backfillCanonicalEmailsThroughAdapter = async (adapter: BackfillAdapter): 
 export type { BackfillAdapter, BackfillExecutor, BackfillReport, BackfillStep, BackfillSteps, CanonicalEmailColumn };
 export {
     aliasBeside,
-    asciiSuffix,
     authCanonicalEmailColumn,
     BACKFILL_MAX_PAGES,
     BACKFILL_MAX_PAGES_SYNC,
@@ -650,6 +661,7 @@ export {
     CANONICAL_EMAIL_FIELD,
     canonicalEmail,
     canonicalHolders,
+    foldSafeKey,
     quote,
     readBackfillState,
     runBackfill,

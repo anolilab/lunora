@@ -24,7 +24,12 @@ import type { AuthDataPortLike } from "../src/data-port";
 import { authCredentialColumns, authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "../src/data-port";
 import { authDoSchemaStatements } from "../src/do-schema";
 import { createDoAuthWiring } from "../src/do-wiring";
-import { backfillInvitationEmails, backfillInvitationEmailsSync, invitationEmailColumns } from "../src/invitation-email-backfill";
+import {
+    backfillInvitationEmails,
+    backfillInvitationEmailsSync,
+    backfillInvitationEmailsThroughAdapter,
+    invitationEmailColumns,
+} from "../src/invitation-email-backfill";
 import { inviteOnly } from "../src/invite-only";
 import { admin } from "../src/plugins";
 import authTables from "../src/schema";
@@ -220,10 +225,10 @@ describe("canonical email", () => {
 
         expect(lookups).toStrictEqual([
             `SELECT * FROM "user" WHERE (("emailCanonical" = ?)) LIMIT ?`,
-            `SELECT COUNT(*) AS __count FROM "user" WHERE (("emailCanonical" IS NULL) AND (substr(LOWER("email"), -length(?)) = LOWER(?)))`,
+            `SELECT COUNT(*) AS __count FROM "user" WHERE (("emailCanonical" IS NULL) AND (instr(LOWER("email"), LOWER(?)) > 0))`,
         ]);
         // The unfilled-row count reads the canonical index's `IS NULL` range, not the table.
-        expect((database.prepare(`EXPLAIN QUERY PLAN ${lookups[1]!}`).all("x", "x") as { detail: string }[]).map((step) => step.detail).join("\n")).toContain(
+        expect((database.prepare(`EXPLAIN QUERY PLAN ${lookups[1]!}`).all("x") as { detail: string }[]).map((step) => step.detail).join("\n")).toContain(
             "USING INDEX user_emailCanonical_uidx",
         );
     });
@@ -447,6 +452,35 @@ describe("canonical email", () => {
         await bare.importRows([{ doc: { ...userRow("forged", UPPER).doc, emailCanonical: "someone-else@example.com" }, table: "user" }]);
 
         expect(canonicalOf("forged")).toBe(canonicalEmail(UPPER));
+    });
+
+    it.each([
+        ["trailing whitespace", "Alice@Example.com ", "alice@example.com"],
+        ["the Kelvin sign", "Kate@example.com", "kate@example.com"],
+        ["a Greek question mark", "a;@example.com", "a;@example.com"],
+    ])("refuses an admin create, and counts an import, of an address an unfilled row holds with %s", async (_, legacy, variant) => {
+        expect.assertions(3);
+
+        database
+            .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('legacy', 'Legacy', ?, 0, 'x', 'x')`)
+            .run(legacy);
+
+        await expect(adminApi.createUser({ email: variant, name: "Twin" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+        await expect(port.importRows([userRow("twin", variant)])).resolves.toMatchObject({ conflicts: 1, inserted: 0 });
+        expect(userCount()).toBe(1);
+    });
+
+    it("answers a public sign-up for an address an unfilled row holds with trailing whitespace like a plain duplicate", async () => {
+        expect.assertions(2);
+
+        database
+            .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('legacy', 'Legacy', ?, 0, 'x', 'x')`)
+            .run("Alice@Example.com ");
+
+        const twin = await signUp(auth, "alice@example.com");
+
+        await expect(twin.json()).resolves.toMatchObject({ code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" });
+        expect(userCount()).toBe(1);
     });
 
     it("never lets an internal-adapter update set or clear the canonical address without changing the address", async () => {
@@ -1085,6 +1119,51 @@ describe("invitation addresses stored before canonical form", () => {
         await authDo.fetch(new Request(`https://example.test${RESOLVE_SESSION_PATH}`, { headers: { [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET } }));
 
         expect(emails(database)).toStrictEqual({ restored: "émile@example.com" });
+    });
+
+    it("rewrites an invitation on the adapter path though one before it is revoked between pages", async () => {
+        expect.assertions(1);
+
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(
+            `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "tokenHash" text, "invitedBy" text, "acceptedAt" date, "createdAt" date NOT NULL, "expiresAt" date NOT NULL)`,
+        );
+
+        const insert = database.prepare(`INSERT INTO "signUpInvitation" ("id", "email", "createdAt", "expiresAt") VALUES (?, ?, ?, '2099-01-01')`);
+
+        insert.run("legacy", DECOMPOSED, "2026-01-01T00:00:00.000Z");
+
+        for (let index = 0; index < BACKFILL_PAGE_ROWS; index += 1) {
+            insert.run(
+                `newer${String(index)}`,
+                `newer${String(index)}@example.com`,
+                `2026-02-01T00:00:${String(index % 60).padStart(2, "0")}.${String(index).padStart(3, "0")}Z`,
+            );
+        }
+
+        const adapter = (await getAdapter(
+            resolveAuthOptions({ database: database as never, plugins: [inviteOnly()], secret: SECRET }),
+        )) as unknown as BackfillAdapter;
+        const findMany = adapter.findMany.bind(adapter);
+        let pages = 0;
+
+        // The newest invitation is revoked once the first page is read.
+        adapter.findMany = async <T>(query: Parameters<BackfillAdapter["findMany"]>[0]): Promise<T[]> => {
+            const rows = await findMany<T>(query);
+
+            pages += 1;
+
+            if (pages === 1) {
+                database.prepare(`DELETE FROM "signUpInvitation" WHERE "id" = ?`).run((rows[0] as { id: string }).id);
+            }
+
+            return rows;
+        };
+
+        await backfillInvitationEmailsThroughAdapter(adapter);
+
+        expect(emails(database)["legacy"]).toBe(canonicalEmail(DECOMPOSED));
     });
 
     it("rewrites them on a Durable Object's cold start, including one restored after an earlier pass", async () => {
