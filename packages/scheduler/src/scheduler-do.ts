@@ -364,6 +364,19 @@ interface ScheduleRequestBody {
     workflow?: string;
 }
 
+/** One attempt's share of a pool slot. */
+interface SlotShare {
+    /**
+     * When the attempt started, or last renewed (`/pool/renew`, sent while its handler runs). The
+     * share lapses {@link DISPATCH_LEASE_MS} later, `/complete` or not. That is the recovery for a
+     * lost completion: an isolate that died before `/complete` stops renewing too.
+     */
+    at: number;
+
+    /** Names the attempt; the runtime echoes it on `/complete` and `/pool/renew`. */
+    token: string;
+}
+
 /**
  * One held pool slot. Owned by the scheduling (its id and `dedupKey` together), not by the job id
  * alone: an id is free for a new job once its header goes, while the job that ran under it may still
@@ -371,19 +384,11 @@ interface ScheduleRequestBody {
  */
 interface PoolSlot {
     /**
-     * When the newest attempt of this owner that may still be running started, or last renewed it
-     * (`/pool/renew`, sent while its handler runs). A slot is reclaimed {@link DISPATCH_LEASE_MS}
-     * later, `/complete` or not. That is the recovery for a lost completion: an isolate that died
-     * before `/complete` stops renewing too.
+     * The attempts of this owner that may still be running. A re-fire shares the slot with the
+     * attempt before it, and each share lapses on its own, so the slot is held until the last of
+     * them settles or goes silent, not when the first does.
      */
-    at: number;
-
-    /**
-     * One token per attempt of this owner that may still be running, each echoed back by the
-     * runtime's `/complete`. A re-fire shares the slot with the attempt before it, so the slot is
-     * freed once the last of them settles, not when the first does.
-     */
-    attempts?: string[];
+    attempts: SlotShare[];
     id: string;
 
     /**
@@ -627,14 +632,22 @@ class SchedulerDO {
     }
 
     /**
-     * A row in an older shape (`inFlightIds`, a bare counter, or slots without `at`) reads as empty:
-     * it records neither who owns a slot nor when its attempt started. The cost is one pass where
-     * those jobs run beside new ones past the cap.
+     * A row in an older shape (`inFlightIds`, a bare counter, or slots whose attempts carry no start)
+     * reads as empty: it records neither who owns a slot nor when its attempts started. The cost is
+     * one pass where those jobs run beside new ones past the cap.
      */
     private static poolFromRow(stored: PoolState | undefined, now: number, maxConcurrencyHint?: number): PoolState {
         const maxConcurrency = stored?.maxConcurrency ?? SchedulerDO.normalizeConcurrency(maxConcurrencyHint, 1);
-        // Past the ceiling a slot is reclaimed (see `PoolSlot.at`); one with no start reads as past it.
-        const slots = Array.isArray(stored?.slots) ? stored.slots.filter((slot) => typeof slot.at === "number" && now - slot.at < DISPATCH_LEASE_MS) : [];
+        // A share past the ceiling has lapsed (see `SlotShare.at`), and a slot with none left is free.
+        const live = (share: SlotShare | undefined): boolean =>
+            typeof share?.token === "string" && typeof share.at === "number" && now - share.at < DISPATCH_LEASE_MS;
+        const slots = Array.isArray(stored?.slots)
+            ? stored.slots.flatMap((slot) => {
+                  const attempts = Array.isArray(slot.attempts) ? slot.attempts.filter((share) => live(share)) : [];
+
+                  return attempts.length === 0 ? [] : [{ ...slot, attempts }];
+              })
+            : [];
 
         return { inFlight: slots.length, maxConcurrency, slots };
     }
@@ -654,7 +667,7 @@ class SchedulerDO {
                 return [slot];
             }
 
-            const attempts = attempt === undefined ? [] : (slot.attempts ?? []).filter((token) => token !== attempt);
+            const attempts = attempt === undefined ? [] : slot.attempts.filter((share) => share.token !== attempt);
 
             return attempts.length === 0 ? [] : [{ ...slot, attempts }];
         });
@@ -677,7 +690,8 @@ class SchedulerDO {
 
         const kicked = pool.slots.filter((slot) => slot.kicked === true);
         const candidates = kicked.length > 0 ? kicked : pool.slots;
-        const oldest = candidates.toSorted((left, right) => left.at - right.at)[0];
+        const lastSeen = (slot: PoolSlot): number => Math.max(...slot.attempts.map((share) => share.at));
+        const oldest = candidates.toSorted((left, right) => lastSeen(left) - lastSeen(right))[0];
         const slots = pool.slots.filter((slot) => slot !== oldest);
 
         return { ...pool, inFlight: slots.length, slots };
@@ -946,7 +960,7 @@ class SchedulerDO {
         // open and a concurrent /complete can decrement the pool row. A stale
         // cached copy written back afterwards would resurrect the completed
         // job's slot and hold pool capacity until the claim ceiling reclaims it
-        // (see `PoolSlot.at`).
+        // (see `SlotShare.at`).
         //
         // A drain is the only place an orphan can be minted (see
         // reindexOrphanedRecords), so the store stops vouching for itself for
@@ -1422,45 +1436,40 @@ class SchedulerDO {
         const ok = outcome === true;
         const poolName = record.pool;
         const now = Date.now();
-        const { attempt, reenteredAt, reenteredFrom } = reserved;
-        const withoutOwnAttempt = (slot: PoolSlot, change: Partial<PoolSlot>): PoolSlot | undefined => {
-            const attempts = (slot.attempts ?? []).filter((token) => token !== attempt);
-
-            return attempts.length === 0 ? undefined : { ...slot, ...change, attempts };
-        };
+        const { attempt, reenteredFrom } = reserved;
 
         if (poolName !== undefined && outcome !== false) {
-            // A kick that went through: the shard took this delivery, so no attempt before it is
-            // still running there, and only this attempt's share is left, for its /complete (which
-            // the receiver sends before answering, so the slot goes if it already landed). Or a
-            // decline for an attempt still running, whose claim, and so the attempt, the shard ends
-            // within the ceiling from now. A declined re-fire started nothing, so it gives up its own
-            // share, and the slot goes if the attempt before it settled meanwhile. A declined first
-            // dispatch keeps its share standing in for the attempt the shard says is running, whose
-            // token this slot never had: the ceiling frees it.
+            // A kick that went through: this attempt's /complete frees its share (the receiver sends
+            // it before answering, so it may be gone already), and an attempt before it keeps its own
+            // until it completes or goes silent, since past the shard's claim ceiling a re-delivery
+            // runs beside a handler still going. Or a decline for an attempt still running, whose
+            // claim, and so the attempt, the shard ends within the ceiling from now: the shares held
+            // are counted from now. A declined re-fire started nothing and gives up its own share, and
+            // the slot goes if the attempt before it settled meanwhile. A declined first dispatch
+            // keeps its share standing in for the attempt the shard says is running, whose token
+            // this slot never had: the ceiling frees it.
             // Swallowed: a kicked job must never re-fire, and a throw from here would re-claim it.
             // Unmarked, the slot is still held by its owner, which is the safe side.
             await this.updateSlot(poolName, record, (slot) => {
-                const change = { at: now, kicked: true } as const;
-
                 if (outcome === true) {
-                    return attempt !== undefined && slot.attempts?.includes(attempt) === true ? { ...slot, ...change, attempts: [attempt] } : undefined;
+                    return { ...slot, kicked: true };
                 }
 
-                return reenteredFrom === undefined ? { ...slot, ...change } : withoutOwnAttempt(slot, change);
+                const attempts = slot.attempts.flatMap((share) => (share.token === attempt && reenteredFrom !== undefined ? [] : [{ ...share, at: now }]));
+
+                return attempts.length === 0 ? undefined : { ...slot, attempts, kicked: true };
             }).catch((error: unknown) => {
                 // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; a slot left unmarked cannot be freed by `/pool/release { id }`
                 console.warn(`@lunora/scheduler: job "${record.id}" kept its slot in pool "${poolName}" unmarked`, error);
             });
         } else if (poolName !== undefined) {
-            // The kick failed and started nothing: this attempt's share goes. A re-fire puts back
-            // the earlier attempt's start, so a retry.forever job failing every re-fire cannot keep
-            // the slot past the ceiling from that start.
-            // Only while the start is still the one this re-fire wrote: a renewal since then is the
-            // earlier attempt saying it still runs, and putting the old start back would expire it.
-            await this.updateSlot(poolName, record, (slot) =>
-                withoutOwnAttempt(slot, reenteredFrom === undefined ? {} : { ...reenteredFrom, at: slot.at === reenteredAt ? reenteredFrom.at : slot.at }),
-            );
+            // The kick failed and started nothing: this attempt's share goes, and a re-fire puts back
+            // the mark the slot had. The earlier attempts' shares keep their own starts and renewals.
+            await this.updateSlot(poolName, record, (slot) => {
+                const attempts = slot.attempts.filter((share) => share.token !== attempt);
+
+                return attempts.length === 0 ? undefined : { ...slot, ...reenteredFrom, attempts };
+            });
         }
 
         // Cancelled mid-attempt: `/cancel` already removed this job's rows, and
@@ -1520,9 +1529,8 @@ class SchedulerDO {
     /**
      * Concurrency gate for a pooled record. Returns `false` (and re-arms the
      * job via {@link requeuePooled}) when the pool is at `maxConcurrency`;
-     * otherwise the token naming this attempt's share of the slot, plus `reenteredFrom` (the start
-     * and kick mark the slot had) and `reenteredAt` (the start this re-fire wrote) when the record
-     * already holds a slot an earlier attempt kept. Non-pooled
+     * otherwise the token naming this attempt's share of the slot, plus `reenteredFrom` (the kick
+     * mark the slot had) when the record already holds a slot an earlier attempt kept. Non-pooled
      * records get `{}` without touching any pool state.
      *
      * The pool row is read FRESH from storage on every call — never cached
@@ -1535,53 +1543,49 @@ class SchedulerDO {
      * both believing a slot was free — without it the pool oversubscribes past
      * `maxConcurrency` and one holder is dropped from `slots`.
      */
-    private async reservePoolSlot(
-        record: ScheduleRecord,
-    ): Promise<false | { attempt?: string; reenteredAt?: number; reenteredFrom?: Pick<PoolSlot, "at" | "kicked"> }> {
+    private async reservePoolSlot(record: ScheduleRecord): Promise<false | { attempt?: string; reenteredFrom?: Pick<PoolSlot, "kicked"> }> {
         const poolName = record.pool;
 
         if (poolName === undefined) {
             return {};
         }
 
-        const reserved = await this.withPoolLock(
-            async (): Promise<false | { attempt: string; reenteredAt?: number; reenteredFrom?: Pick<PoolSlot, "at" | "kicked"> }> => {
-                const pool = await this.loadPool(poolName);
-                const owner = SchedulerDO.dedupKey(record);
-                const now = Date.now();
-                const attempt = crypto.randomUUID();
-                const held = pool.slots.find((slot) => SchedulerDO.holds(slot, record.id, owner));
+        const reserved = await this.withPoolLock(async (): Promise<false | { attempt: string; reenteredFrom?: Pick<PoolSlot, "kicked"> }> => {
+            const pool = await this.loadPool(poolName);
+            const owner = SchedulerDO.dedupKey(record);
+            const now = Date.now();
+            const attempt = crypto.randomUUID();
+            const held = pool.slots.find((slot) => SchedulerDO.holds(slot, record.id, owner));
 
-                // Re-entry before the cap: a record still holding its slot (an earlier attempt was
-                // declined in-progress or lost with its instance, and that slot is kept until the
-                // attempt settles) counts against the cap itself, so checking the cap first would
-                // backpressure its own re-fire forever. By owner and id: a new job under a reused id, or
-                // another job sharing a fixed key, is another scheduling and queues for a slot of its own.
-                if (held !== undefined) {
-                    // Counted as running while this re-fire is in flight, and unmarked, so the operator's
-                    // `/pool/release { id }` leaves it to this dispatch; drainRecord() marks it again once
-                    // the kick reached the origin, or puts the earlier start and mark back if it failed.
-                    const refired: PoolSlot = { at: now, attempts: [...(held.attempts ?? []), attempt], id: held.id, owner: held.owner };
+            // Re-entry before the cap: a record still holding its slot (an earlier attempt was
+            // declined in-progress or lost with its instance, and that slot is kept until the
+            // attempt settles) counts against the cap itself, so checking the cap first would
+            // backpressure its own re-fire forever. By owner and id: a new job under a reused id, or
+            // another job sharing a fixed key, is another scheduling and queues for a slot of its own.
+            if (held !== undefined) {
+                // A share of its own while this re-fire is in flight, and the slot unmarked, so the
+                // operator's `/pool/release { id }` leaves it to this dispatch; drainRecord() marks
+                // it again once the kick reached the origin, or puts the mark back if it failed.
+                const refired: PoolSlot = { attempts: [...held.attempts, { at: now, token: attempt }], id: held.id, owner: held.owner };
 
-                    await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot === held ? refired : slot)) });
+                await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot === held ? refired : slot)) });
 
-                    return { attempt, reenteredAt: now, reenteredFrom: held.kicked === true ? { at: held.at, kicked: true } : { at: held.at } };
-                }
+                return { attempt, reenteredFrom: held.kicked === true ? { kicked: true } : {} };
+            }
 
-                if (pool.slots.length >= pool.maxConcurrency) {
-                    return false;
-                }
+            if (pool.slots.length >= pool.maxConcurrency) {
+                return false;
+            }
 
-                // Reserve a slot durably BEFORE dispatching so neither a concurrent
-                // alarm nor a sibling lane in this same pass can oversubscribe the
-                // pool.
-                const slots = [...pool.slots, { at: now, attempts: [attempt], id: record.id, owner }];
+            // Reserve a slot durably BEFORE dispatching so neither a concurrent
+            // alarm nor a sibling lane in this same pass can oversubscribe the
+            // pool.
+            const slots = [...pool.slots, { attempts: [{ at: now, token: attempt }], id: record.id, owner }];
 
-                await this.savePool(poolName, { ...pool, inFlight: slots.length, slots });
+            await this.savePool(poolName, { ...pool, inFlight: slots.length, slots });
 
-                return { attempt };
-            },
-        );
+            return { attempt };
+        });
 
         if (reserved === false) {
             // Backpressure, not failure: re-arm outside the lock — it writes only
@@ -1826,7 +1830,7 @@ class SchedulerDO {
      */
     private async parkDead(record: ScheduleRecord, attempts: number, reason: string): Promise<void> {
         // A slot this job still holds is left alone: the attempt holding it may still be running,
-        // and its /complete or the claim ceiling (`PoolSlot.at`) frees it.
+        // and its /complete or the claim ceiling (`SlotShare.at`) frees it.
         const completedAt = Date.now();
 
         // Indexed in `dt:` like any other outcome, so `/history` lists the failure
@@ -1943,7 +1947,7 @@ class SchedulerDO {
 
     /**
      * `POST /pool/renew { pool, id, dedupKey, attempt }` — a pooled attempt still running says so,
-     * which restarts its slot's {@link DISPATCH_LEASE_MS} window. The runtime sends it while the
+     * which restarts its share's {@link DISPATCH_LEASE_MS} window. The runtime sends it while the
      * handler runs (see `keepPoolSlotAlive` in `@lunora/runtime`), so a job outliving the ceiling
      * keeps its slot; one whose isolate died stops renewing and its slot goes at the ceiling.
      *
@@ -1964,15 +1968,16 @@ class SchedulerDO {
 
         const renewed = await this.withPoolLock(async () => {
             const pool = await this.loadPool(poolName);
-            const held = pool.slots.find((slot) => SchedulerDO.holds(slot, jobId, owner) && slot.attempts?.includes(attempt) === true);
+            const held = pool.slots.find((slot) => SchedulerDO.holds(slot, jobId, owner) && slot.attempts.some((share) => share.token === attempt));
 
             if (held === undefined) {
                 return false;
             }
 
             const now = Date.now();
+            const renewedSlot = { ...held, attempts: held.attempts.map((share) => (share.token === attempt ? { ...share, at: now } : share)) };
 
-            await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot === held ? { ...slot, at: now } : slot)) });
+            await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot === held ? renewedSlot : slot)) });
 
             return true;
         });
@@ -2257,7 +2262,7 @@ class SchedulerDO {
         }
 
         // A slot this record still holds is not freed here: the attempt holding it may still be
-        // running, and its /complete or the claim ceiling (`PoolSlot.at`) frees it.
+        // running, and its /complete or the claim ceiling (`SlotShare.at`) frees it.
         await this.removeRecord(record);
         // The cancel already took effect; a failed outcome write costs only the history row.
         await this.writeTerminal(record, "canceled").catch(() => undefined);

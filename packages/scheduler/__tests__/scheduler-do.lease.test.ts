@@ -646,7 +646,7 @@ describe("schedulerDO dispatch lease — claiming an already-leased record", () 
         state.storageMap.set("pool:p", {
             inFlight: 1,
             maxConcurrency: 1,
-            slots: [{ at: at + DISPATCH_LEASE_MS, id: "other", kicked: true, owner: "other-key" }],
+            slots: [{ attempts: [{ at: at + DISPATCH_LEASE_MS, token: "other-attempt" }], id: "other", kicked: true, owner: "other-key" }],
         });
         advanceTo(at + DISPATCH_LEASE_MS + 1);
 

@@ -128,7 +128,11 @@ const holding = (state: ReturnType<typeof createFakeState>, maxConcurrency: numb
         inFlight: ids.length,
         maxConcurrency,
         slots: ids.map((id) => {
-            return { at: Date.now(), attempts: [`earlier-${id}`], id, owner: (state.storageMap.get(`id:${id}`) as ScheduleRecord | undefined)?.dedupKey ?? id };
+            return {
+                attempts: [{ at: Date.now(), token: `earlier-${id}` }],
+                id,
+                owner: (state.storageMap.get(`id:${id}`) as ScheduleRecord | undefined)?.dedupKey ?? id,
+            };
         }),
     };
 };
@@ -784,7 +788,7 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
         // The first attempt is still running and its completion is still coming: the slot stays counted,
         // held for that attempt.
         expect(poolRow(state, "p")?.slots).toStrictEqual([
-            { at: expect.any(Number), attempts: [expect.any(String)], id, kicked: true, owner: scheduler.dispatchedKeys[0] },
+            { attempts: [{ at: expect.any(Number), token: expect.any(String) }], id, kicked: true, owner: scheduler.dispatchedKeys[0] },
         ]);
         expect(state.storageMap.has(`id:${String(id)}`)).toBe(true);
     });
@@ -1143,9 +1147,9 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
             inFlight: 3,
             maxConcurrency: 3,
             slots: [
-                { at: Date.now(), id: "reused", kicked: true, owner: "first" },
-                { at: Date.now(), id: "reused", owner: "second" },
-                { at: Date.now(), id: "other", kicked: true, owner: "third" },
+                { attempts: [{ at: Date.now(), token: "first-attempt" }], id: "reused", kicked: true, owner: "first" },
+                { attempts: [{ at: Date.now(), token: "second-attempt" }], id: "reused", owner: "second" },
+                { attempts: [{ at: Date.now(), token: "third-attempt" }], id: "other", kicked: true, owner: "third" },
             ],
         });
 
@@ -1171,9 +1175,9 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
             inFlight: 3,
             maxConcurrency: 3,
             slots: [
-                { at: now - 2000, id: "a", kicked: true, owner: "newer" },
-                { at: now - 5000, id: "b", kicked: true, owner: "stuck" },
-                { at: now, id: "c", owner: "settling" },
+                { attempts: [{ at: now - 2000, token: "a-attempt" }], id: "a", kicked: true, owner: "newer" },
+                { attempts: [{ at: now - 5000, token: "b-attempt" }], id: "b", kicked: true, owner: "stuck" },
+                { attempts: [{ at: now, token: "c-attempt" }], id: "c", owner: "settling" },
             ],
         });
 
@@ -1240,7 +1244,7 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
     const heldByEarlierAttempt = (state: ReturnType<typeof createFakeState>, id: string): void => {
         const owner = (state.storageMap.get(`id:${id}`) as ScheduleRecord).dedupKey ?? id;
 
-        state.storageMap.set("pool:p", { inFlight: 1, maxConcurrency: 1, slots: [{ at: Date.now(), attempts: ["earlier"], id, owner }] });
+        state.storageMap.set("pool:p", { inFlight: 1, maxConcurrency: 1, slots: [{ attempts: [{ at: Date.now(), token: "earlier" }], id, owner }] });
     };
 
     const advance = (ms: number): void => {
@@ -1332,15 +1336,15 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         expect(dispatchedIds(scheduler)).toContain(waiting);
     });
 
-    it("frees the slot once a re-fire the shard accepted completes, though the attempt before it never did", async () => {
-        expect.assertions(1);
+    it("keeps the slot for the attempt before an accepted re-fire until that attempt completes or goes silent", async () => {
+        expect.assertions(2);
 
         const state = createFakeState();
         const scheduler = new ScriptedScheduler(state, origin);
         const refired = await schedule(scheduler);
         const owner = (state.storageMap.get(`id:${refired}`) as ScheduleRecord).dedupKey;
 
-        // The earlier attempt was lost: its /complete never comes.
+        // Past the shard's claim ceiling a re-delivery runs beside a handler that may still be going.
         heldByEarlierAttempt(state, refired);
         scheduler.outcomes = ["hold"];
 
@@ -1360,6 +1364,12 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
 
         await scheduler.alarm();
 
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        // The earlier attempt never renews: its share lapses at the ceiling from its start.
+        advance(DISPATCH_LEASE_MS);
+        await scheduler.alarm();
+
         expect(dispatchedIds(scheduler)).toContain(waiting);
     });
 
@@ -1375,7 +1385,7 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         state.storageMap.set("pool:p", {
             inFlight: 1,
             maxConcurrency: 1,
-            slots: [{ at: Date.now(), attempts: ["earlier"], id: refired, kicked: true, owner }],
+            slots: [{ attempts: [{ at: Date.now(), token: "earlier" }], id: refired, kicked: true, owner }],
         });
         scheduler.outcomes = ["hold"];
 
