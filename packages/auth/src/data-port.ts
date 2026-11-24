@@ -299,12 +299,22 @@ const importRefusalOf = (table: string, isAuthTable: (table: string) => boolean)
  * empty, rather than refused or dropped, so the rows that reference it still have their user. A variant of
  * an address only the target holds still collides, like an exact duplicate.
  */
-const heldCanonical = (column: CanonicalEmailColumn | undefined): { dropped: () => number; without: (row: Row, table: string) => Row } => {
+const heldCanonical = (
+    column: CanonicalEmailColumn | undefined,
+): { dropped: () => number; hold: (row: Row, table: string) => void; without: (row: Row, table: string) => Row } => {
     const held = new Set<string>();
     let dropped = 0;
 
     return {
         dropped: () => dropped,
+        // Only once the row is written: one an import skips holds nothing, and a later variant keeps its value for the index to judge.
+        hold: (row, table) => {
+            const address = column?.table === table ? row[column.canonical] : undefined;
+
+            if (typeof address === "string") {
+                held.add(address);
+            }
+        },
         without: (row, table) => {
             const address = column?.table === table ? row[column.canonical] : undefined;
 
@@ -317,8 +327,6 @@ const heldCanonical = (column: CanonicalEmailColumn | undefined): { dropped: () 
 
                 return Object.fromEntries(Object.entries(row).filter(([name]) => name !== column?.canonical));
             }
-
-            held.add(address);
 
             return row;
         },
@@ -385,6 +393,7 @@ const insertAuthRows = async (
             );
 
             if (written.length > 0) {
+                seen.hold(row, table);
                 result.inserted += 1;
             } else {
                 result.conflicts += 1;
@@ -492,6 +501,8 @@ const planAuthReplace = async (
             continue;
         }
 
+        // A replace writes every planned row or none, so a planned row holds its address.
+        seen.hold(row, table);
         decoded.push({ row, table });
     }
 

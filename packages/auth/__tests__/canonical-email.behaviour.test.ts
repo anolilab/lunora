@@ -178,6 +178,16 @@ describe("canonical email", () => {
         warn.mockRestore();
     });
 
+    it("keeps the canonical address of a variant whose earlier twin in the import was not written", async () => {
+        expect.assertions(2);
+
+        // The target already holds the first row's id, so that row is skipped and holds nothing.
+        await port.importRows([userRow("a", "taken@example.com")]);
+
+        await expect(port.importRows([userRow("a", UPPER), userRow("b", LOWER)])).resolves.toMatchObject({ conflicts: 1, errors: [], inserted: 1 });
+        expect(canonicalOf("b")).toBe(canonicalEmail(LOWER));
+    });
+
     it("restores a snapshot holding two Unicode-case variants of one address, leaving the later one's canonical address empty", async () => {
         expect.assertions(3);
 
@@ -366,6 +376,22 @@ describe("canonical email", () => {
                 context: { ...context, session: { user: { id: "mover" } } },
             } as never),
         ).rejects.toMatchObject({ body: { code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" } });
+    });
+
+    it("checks a route that updates another account against the caller's own address too", async () => {
+        expect.assertions(1);
+
+        // The caller's address as imported, in mixed case; the admin plane would have lowercased it.
+        await port.importRows([userRow("caller", STORED)]);
+
+        const other = await adminApi.createUser({ email: "other@example.com", name: "Other" });
+        const context = await auth.$context;
+        // better-auth's `/admin/update-user`: the caller's session, the other account in the body.
+        const route = { body: { userId: other.id }, context: { ...context, session: { user: { id: "caller" } } }, params: {}, path: "/admin/update-user" };
+
+        await expect(auth.options.databaseHooks?.user?.update?.before?.({ email: "alice@example.com" }, route as never)).rejects.toMatchObject({
+            body: { code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" },
+        });
     });
 
     it("never lets an internal-adapter update set or clear the canonical address without changing the address", async () => {
