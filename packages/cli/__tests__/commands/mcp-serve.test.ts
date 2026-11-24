@@ -464,21 +464,28 @@ describe("lunora mcp serve", () => {
         it("serves until the client disconnects, rather than exiting once connected", async () => {
             expect.assertions(2);
 
-            const server: ClosableServer = {};
-            const pending = runMcpServe({ cwd: workdir, version: "1.0.0", writeError: () => undefined }, async () => server);
-
+            // Registering `onclose` is how the command parks on the server; the setter marks that moment.
+            const parked = Promise.withResolvers<undefined>();
+            let onclose: (() => void) | undefined;
+            const server: ClosableServer = {
+                get onclose() {
+                    return onclose;
+                },
+                set onclose(callback) {
+                    onclose = callback;
+                    parked.resolve(undefined);
+                },
+            };
             let settled = false;
+            const pending = runMcpServe({ cwd: workdir, version: "1.0.0", writeError: () => undefined }, async () => server).finally(() => {
+                settled = true;
+            });
 
-            pending
-                .then(() => {
-                    settled = true;
-
-                    return undefined;
-                })
-                .catch(() => undefined);
-
+            // Parked on the server, then given one macrotask turn: a command that registered the
+            // callback but did not wait on it returns within microtasks, so it would have settled.
+            await parked.promise;
             await new Promise((resolve) => {
-                setTimeout(resolve, 10);
+                setImmediate(resolve);
             });
 
             // Still serving: the command framework exits with whatever this

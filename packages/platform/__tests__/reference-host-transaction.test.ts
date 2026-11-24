@@ -10,11 +10,6 @@ import { createReferenceHost } from "../src/conformance";
  * — same assertions, same dedicated `transactionTail` lane fix.
  */
 describe("createReferenceHost transaction concurrency", () => {
-    const sleep = (ms: number): Promise<void> =>
-        new Promise((resolve) => {
-            setTimeout(resolve, ms);
-        });
-
     it("serializes two overlapping bare transaction() calls instead of corrupting each other's commits", async () => {
         expect.assertions(1);
 
@@ -23,10 +18,13 @@ describe("createReferenceHost transaction concurrency", () => {
         try {
             host.shard.sql.exec("CREATE TABLE rows_ (id TEXT PRIMARY KEY)");
 
+            const gate = Promise.withResolvers<undefined>();
+            const entered = Promise.withResolvers<undefined>();
             const first = host.shard.transaction(async () => {
                 host.shard.sql.exec("INSERT INTO rows_ (id) VALUES ('A')");
+                entered.resolve(undefined);
 
-                await sleep(20);
+                await gate.promise;
 
                 host.shard.sql.exec("INSERT INTO rows_ (id) VALUES ('B')");
             });
@@ -36,6 +34,11 @@ describe("createReferenceHost transaction concurrency", () => {
             const second = host.shard.transaction(async () => {
                 host.shard.sql.exec("INSERT INTO rows_ (id) VALUES ('C')");
             });
+
+            // `first` runs its callback after an await: opened before it is held there, the gate
+            // would let it through and the two would never overlap.
+            await entered.promise;
+            gate.resolve(undefined);
 
             await Promise.all([first, second]);
 

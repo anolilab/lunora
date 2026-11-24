@@ -1,7 +1,7 @@
 import { createCollection } from "@tanstack/db";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bindMutators, defineMutator, getShardCheckpoints, lunoraCollectionOptions } from "../src";
+import { bindMutators, CHECKPOINT_FALLBACK_MS, defineMutator, getShardCheckpoints, lunoraCollectionOptions } from "../src";
 
 /**
  * The documented partial-replication setup, end to end: a shape collection that
@@ -25,11 +25,13 @@ interface Push {
 const makeClient = () => {
     const shapes: ShapeSubscription[] = [];
     const pushes: Push[] = [];
+    const pushed = Promise.withResolvers<undefined>();
     const client = {
         callMutator: vi.fn<
             (serverRef: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean }>
         >(async (_serverRef: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => {
             pushes.push({ args, clientSeq: options.clientSeq, shardKey: options.shardKey });
+            pushed.resolve(undefined);
 
             return { applied: true };
         }),
@@ -47,12 +49,12 @@ const makeClient = () => {
         },
     };
 
-    return { client: client as never, pushes, shapes };
+    return { client: client as never, pushed: pushed.promise, pushes, shapes };
 };
 
 /** The documented wiring (docs "Shapes — partial replication" + "Custom mutators"). */
 const documentedSetup = () => {
-    const { client, pushes, shapes } = makeClient();
+    const { client, pushed, pushes, shapes } = makeClient();
     // Destructured once, at creation — before any scope exists.
     const { checkpoints, config, scope } = lunoraCollectionOptions<{ _id: string; channelId: string; text: string }>({
         client,
@@ -77,36 +79,57 @@ const documentedSetup = () => {
         },
     );
 
-    return { checkpoints, client, messages, pushes, scope, send, shapes };
+    return { checkpoints, client, messages, pushed, pushes, scope, send, shapes };
 };
 
-/** Settle `promise`, or report that it was still pending after `ms`. */
-const within = async (promise: Promise<unknown>, ms: number): Promise<"pending" | "settled"> =>
-    Promise.race([
-        promise.then(() => "settled" as const),
-        new Promise<"pending">((resolve) => {
-            setTimeout(resolve, ms, "pending");
-        }),
-    ]);
+/**
+ * Whether `promise` is still pending once every promise chain has run and the fake clock has moved to
+ * just short of the checkpoint fallback: by then only the echo, or the fallback itself, can settle it.
+ */
+const pendingShortOfFallback = async (promise: Promise<unknown>): Promise<"pending" | "settled"> => {
+    let settled = false;
+    const markSettled = (): undefined => {
+        settled = true;
+
+        return undefined;
+    };
+
+    // A rejection counts too: a settle of either kind is what the caller asks about.
+    promise.then(markSettled).catch(markSettled);
+
+    await vi.advanceTimersByTimeAsync(CHECKPOINT_FALLBACK_MS - 1);
+
+    return settled ? "settled" : "pending";
+};
 
 const SCOPE_BY_RE = /scopeBy/u;
 
 describe("scope-following shape collection + scoped mutators", () => {
+    // The checkpoint registry's fallback timer is the only other way a write settles; on the fake
+    // clock it fires only when a test advances past it, and a settle that needed it would hang here.
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("pushes to the scoped shard and holds the optimistic row until that shard's echo resolves it", async () => {
-        const { checkpoints, messages, pushes, send, shapes } = documentedSetup();
+        const { checkpoints, messages, pushed, pushes, send, shapes } = documentedSetup();
 
         expect(shapes.at(-1)?.shardKey).toBe("general");
 
         const transaction = send.sendMessage({ channelId: "general", id: "m1", text: "hi" });
 
-        await vi.waitFor(() => {
-            expect(pushes).toHaveLength(1);
-        });
+        await pushed;
+
+        expect(pushes).toHaveLength(1);
 
         expect(pushes[0]?.shardKey).toBe("general");
         expect(messages.get("m1")).toMatchObject({ text: "hi" });
         // Accepted but not yet echoed: the overlay is held, not dropped on the ack.
-        await expect(within(transaction.isPersisted.promise, 50)).resolves.toBe("pending");
+        await expect(pendingShortOfFallback(transaction.isPersisted.promise)).resolves.toBe("pending");
         expect(messages.get("m1")).toMatchObject({ text: "hi" });
 
         // The general shard echoes the write: the row, stamped with this client's watermark.
@@ -116,7 +139,7 @@ describe("scope-following shape collection + scoped mutators", () => {
         shape.onRows([{ _id: "m1", channelId: "general", text: "hi" }]);
 
         // Resolved by the echo, well inside the fallback window.
-        await expect(within(transaction.isPersisted.promise, 1000)).resolves.toBe("settled");
+        await expect(transaction.isPersisted.promise).resolves.toBe(transaction);
         expect(checkpoints.stats().fallbacks).toBe(0);
         expect(messages.get("m1")).toMatchObject({ text: "hi" });
     });
@@ -128,58 +151,58 @@ describe("scope-following shape collection + scoped mutators", () => {
 
         getShardCheckpoints(client, "general").resolve({ mutationId: 7 });
 
-        await expect(within(general, 100)).resolves.toBe("settled");
-        await expect(within(checkpoints.awaitMutationId(8), 50)).resolves.toBe("pending");
+        await expect(general).resolves.toBeUndefined();
+        await expect(pendingShortOfFallback(checkpoints.awaitMutationId(8))).resolves.toBe("pending");
     });
 
     it("settles a write at once when the collection re-scopes away from its shard before the echo", async () => {
-        const { messages, pushes, scope, send } = documentedSetup();
+        const { messages, pushed, pushes, scope, send } = documentedSetup();
         const transaction = send.sendMessage({ channelId: "general", id: "m3", text: "then left" });
 
-        await vi.waitFor(() => {
-            expect(pushes).toHaveLength(1);
-        });
+        await pushed;
 
-        await expect(within(transaction.isPersisted.promise, 50)).resolves.toBe("pending");
+        expect(pushes).toHaveLength(1);
+
+        await expect(pendingShortOfFallback(transaction.isPersisted.promise)).resolves.toBe("pending");
 
         // Nothing will echo on "general" any more: its subscription just closed.
         scope({ channelId: "random" });
 
         // Settled now, not after the fallback window.
-        await expect(within(transaction.isPersisted.promise, 100)).resolves.toBe("settled");
+        await expect(transaction.isPersisted.promise).resolves.toBe(transaction);
         expect(messages.get("m3")).toBeUndefined();
     });
 
     it("settles a write at once when the collection's sync stops before the echo", async () => {
-        const { messages, pushes, send } = documentedSetup();
+        const { messages, pushed, pushes, send } = documentedSetup();
         const transaction = send.sendMessage({ channelId: "general", id: "m4", text: "then unmounted" });
 
-        await vi.waitFor(() => {
-            expect(pushes).toHaveLength(1);
-        });
+        await pushed;
 
-        await expect(within(transaction.isPersisted.promise, 50)).resolves.toBe("pending");
+        expect(pushes).toHaveLength(1);
+
+        await expect(pendingShortOfFallback(transaction.isPersisted.promise)).resolves.toBe("pending");
 
         // The last subscriber went away and TanStack tore the sync down: nothing will echo.
         await messages.cleanup();
 
-        await expect(within(transaction.isPersisted.promise, 100)).resolves.toBe("settled");
+        await expect(transaction.isPersisted.promise).resolves.toBe(transaction);
     });
 
     it("routes a mutator call to the shard its own args name, not the current scope", async () => {
-        const { pushes, send } = documentedSetup();
+        const { pushed, pushes, send } = documentedSetup();
 
         send.sendMessage({ channelId: "random", id: "m2", text: "elsewhere" });
 
-        await vi.waitFor(() => {
-            expect(pushes).toHaveLength(1);
-        });
+        await pushed;
+
+        expect(pushes).toHaveLength(1);
 
         expect(pushes[0]?.shardKey).toBe("random");
     });
 
     it("accepts a pinned shardKey with a scope-following checkpoint registry, gating on that shard", async () => {
-        const { client, pushes, shapes } = makeClient();
+        const { client, pushed, pushes, shapes } = makeClient();
         const { checkpoints, config, scope } = lunoraCollectionOptions<{ _id: string; channelId: string; text: string }>({
             client,
             scopeBy: "channelId",
@@ -204,17 +227,17 @@ describe("scope-following shape collection + scoped mutators", () => {
         );
         const transaction = send.sendMessage({ id: "p1", text: "pinned" });
 
-        await vi.waitFor(() => {
-            expect(pushes).toHaveLength(1);
-        });
+        await pushed;
+
+        expect(pushes).toHaveLength(1);
 
         expect(pushes[0]?.shardKey).toBe("general");
-        await expect(within(transaction.isPersisted.promise, 50)).resolves.toBe("pending");
+        await expect(pendingShortOfFallback(transaction.isPersisted.promise)).resolves.toBe("pending");
 
         shapes.at(-1)?.onCheckpoint({ checkpoint: 1, mutationId: pushes[0]!.clientSeq, rowsFollow: true });
         shapes.at(-1)?.onRows([{ _id: "p1", channelId: "general", text: "pinned" }]);
 
-        await expect(within(transaction.isPersisted.promise, 1000)).resolves.toBe("settled");
+        await expect(transaction.isPersisted.promise).resolves.toBe(transaction);
     });
 
     it("refuses to bind a scope-following checkpoint registry to mutators that do not follow the scope", () => {

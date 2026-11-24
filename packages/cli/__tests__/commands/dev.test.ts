@@ -1595,6 +1595,7 @@ describe("lunora dev", () => {
             const exited = new Promise<number>((resolve) => {
                 resolveExit = resolve;
             });
+            const spawned = Promise.withResolvers<undefined>();
 
             const runPromise = runDevCommand({
                 cwd: workdir,
@@ -1608,14 +1609,14 @@ describe("lunora dev", () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
                 },
                 startWorker: () => {
+                    spawned.resolve(undefined);
+
                     return { exited, kill: () => {} };
                 },
             });
 
-            // Let startup complete (scaffold offer + spawn + state write).
-            await new Promise((resolve) => {
-                setTimeout(resolve, 25);
-            });
+            // The record is claimed before the worker is spawned.
+            await spawned.promise;
 
             const state = readDevServerState(workdir);
 
@@ -1640,21 +1641,21 @@ describe("lunora dev", () => {
                 resolveExit = resolve;
             });
             let childEnvironment: Record<string, string> | undefined;
+            const spawned = Promise.withResolvers<undefined>();
 
             const runPromise = runDevCommand({
                 cwd: workdir,
                 logger: silentLogger(),
                 startWorker: (descriptor) => {
                     childEnvironment = descriptor.env ? { ...descriptor.env } : undefined;
+                    spawned.resolve(undefined);
 
                     return { exited, kill: () => {} };
                 },
             });
 
-            // Let startup complete (claim + scaffold offer + spawn).
-            await new Promise((resolve) => {
-                setTimeout(resolve, 25);
-            });
+            // The provisional record is claimed before the child is spawned.
+            await spawned.promise;
 
             // The provisional record carries this CLI's pid until the vite
             // dev-state plugin (in the child) supersedes it.
