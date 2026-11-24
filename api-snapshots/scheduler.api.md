@@ -455,7 +455,7 @@ class SchedulerDO {
     constructor(state: SchedulerDOState, env: SchedulerEnv);
     fetch(request: Request): Promise<Response>;
     alarm(): Promise<void>;
-    protected dispatch(record: ScheduleRecord): Promise<boolean | "in-progress">;
+    protected dispatch(record: ScheduleRecord, attempt?: string): Promise<boolean | "in-progress">;
 }
 ```
 

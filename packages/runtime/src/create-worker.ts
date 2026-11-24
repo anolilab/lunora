@@ -4188,7 +4188,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * that reserved a slot must reach this call — except a claim decline, whose
      * slot belongs to the attempt still running (see {@link handleSchedulerDispatch}).
      */
-    const releasePoolSlot = async (candidate: { dedupKey?: unknown; id?: unknown; instanceName?: unknown; pool?: unknown }): Promise<void> => {
+    const releasePoolSlot = async (candidate: {
+        attempt?: unknown;
+        dedupKey?: unknown;
+        id?: unknown;
+        instanceName?: unknown;
+        pool?: unknown;
+    }): Promise<void> => {
         const pool = typeof candidate.pool === "string" && candidate.pool.length > 0 ? candidate.pool : undefined;
 
         if (!pool || !schedulerDO || typeof candidate.id !== "string") {
@@ -4201,9 +4207,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             await resolveShard(schedulerDO, instanceName).fetch(
                 new Request("https://scheduler.internal/complete", {
                     // The key names the scheduling that owns the slot; the id alone may since belong
-                    // to a new job holding a slot of its own. Both callers run after the dispatch
-                    // handler checked the key.
-                    body: JSON.stringify({ dedupKey: candidate.dedupKey, id: candidate.id, pool }),
+                    // to a new job holding a slot of its own. `attempt` names this attempt's share of
+                    // it, so a re-fire sharing the slot keeps it held until it settles too. Both
+                    // callers run after the dispatch handler checked the key.
+                    body: JSON.stringify({ attempt: candidate.attempt, dedupKey: candidate.dedupKey, id: candidate.id, pool }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
                 }),
@@ -4267,6 +4274,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const candidate = (body ?? {}) as {
             args?: unknown;
+            attempt?: unknown;
             dedupKey?: unknown;
             functionPath?: unknown;
             id?: unknown;

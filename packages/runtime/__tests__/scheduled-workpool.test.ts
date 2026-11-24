@@ -80,12 +80,21 @@ describe("createWorker — workpool slot release", () => {
         const sched = schedulerSpy();
         const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
 
-        await dispatch(worker, { args: {}, dedupKey: "job-1-first", functionPath: "jobs:sweep", id: "job-1", instanceName: "tenant-a", pool: "stripe" });
+        await dispatch(worker, {
+            args: {},
+            attempt: "attempt-1",
+            dedupKey: "job-1-first",
+            functionPath: "jobs:sweep",
+            id: "job-1",
+            instanceName: "tenant-a",
+            pool: "stripe",
+        });
 
         const complete = sched.calls.find((call) => call.path === "/complete");
 
-        // The key names the scheduling that owns the slot: a later job under the same id owns another.
-        expect(complete?.body).toStrictEqual({ dedupKey: "job-1-first", id: "job-1", pool: "stripe" });
+        // The key names the scheduling that owns the slot (a later job under the same id owns another),
+        // and the attempt its share of it (a re-fire sharing the slot holds a share of its own).
+        expect(complete?.body).toStrictEqual({ attempt: "attempt-1", dedupKey: "job-1-first", id: "job-1", pool: "stripe" });
         expect(complete?.instance).toBe("tenant-a");
         expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
     });

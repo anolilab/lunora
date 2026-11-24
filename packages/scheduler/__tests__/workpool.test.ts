@@ -122,13 +122,13 @@ const poolRow = (state: ReturnType<typeof createFakeState>, pool: string): PoolR
 
 const poolIds = (state: ReturnType<typeof createFakeState>, pool: string): string[] | undefined => poolRow(state, pool)?.slots.map((slot) => slot.id);
 
-/** A pool row in which each of `ids` holds a slot for its own scheduling, as a reservation writes it. */
+/** A pool row in which each of `ids` holds a slot for its own scheduling, taken by an earlier attempt. */
 const holding = (state: ReturnType<typeof createFakeState>, maxConcurrency: number, ids: string[]): PoolRow & { maxConcurrency: number } => {
     return {
         inFlight: ids.length,
         maxConcurrency,
         slots: ids.map((id) => {
-            return { at: Date.now(), id, owner: (state.storageMap.get(`id:${id}`) as ScheduleRecord | undefined)?.dedupKey ?? id };
+            return { at: Date.now(), attempts: [`earlier-${id}`], id, owner: (state.storageMap.get(`id:${id}`) as ScheduleRecord | undefined)?.dedupKey ?? id };
         }),
     };
 };
@@ -783,7 +783,9 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
         expect(scheduler.dispatched).toStrictEqual([id]);
         // The first attempt is still running and its completion is still coming: the slot stays counted,
         // held for that attempt.
-        expect(poolRow(state, "p")?.slots).toStrictEqual([{ at: expect.any(Number), id, kicked: true, owner: scheduler.dispatchedKeys[0] }]);
+        expect(poolRow(state, "p")?.slots).toStrictEqual([
+            { at: expect.any(Number), attempts: [expect.any(String)], id, kicked: true, owner: scheduler.dispatchedKeys[0] },
+        ]);
         expect(state.storageMap.has(`id:${String(id)}`)).toBe(true);
     });
 
@@ -861,6 +863,9 @@ describe("schedulerDO — a failed re-fire through a slot it already holds", () 
  * kick stays open until {@link ScriptedScheduler.settleHeld}.
  */
 class ScriptedScheduler extends SchedulerDO {
+    /** The pool-slot attempt token each dispatch carried, in dispatch order. */
+    public attempts: (string | undefined)[] = [];
+
     public dispatched: ScheduleRecord[] = [];
 
     public outcomes: (boolean | "hold" | "in-progress")[] = [];
@@ -870,8 +875,9 @@ class ScriptedScheduler extends SchedulerDO {
 
     public settleHeld: ((ok: boolean) => void) | undefined;
 
-    protected override async dispatch(record: ScheduleRecord): Promise<boolean | "in-progress"> {
+    protected override async dispatch(record: ScheduleRecord, attempt?: string): Promise<boolean | "in-progress"> {
         this.dispatched.push(record);
+        this.attempts.push(attempt);
 
         const outcome = this.outcomes.shift() ?? true;
 
@@ -985,6 +991,31 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
 
         expect(scheduler.dispatched).toHaveLength(2);
         await expect(inFlight(scheduler)).resolves.toBe(1);
+    });
+
+    it("logs a kick marker it cannot write", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const { put } = state.storage;
+
+        state.storage.put = async (keyOrEntries: string | Record<string, unknown>, value?: unknown) => {
+            if (keyOrEntries === "pool:p" && (value as { slots?: { kicked?: true }[] } | undefined)?.slots?.some((slot) => slot.kicked === true) === true) {
+                throw new Error("storage unavailable");
+            }
+
+            return put(keyOrEntries as string, value);
+        };
+
+        const id = await schedule(scheduler, 1);
+
+        await scheduler.alarm();
+
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`job "${id}"`), expect.any(Error));
+
+        warn.mockRestore();
     });
 
     it("never re-dispatches a kicked job whose kick marker cannot be written at all, and holds its slot until it completes", async () => {
@@ -1209,7 +1240,7 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
     const heldByEarlierAttempt = (state: ReturnType<typeof createFakeState>, id: string): void => {
         const owner = (state.storageMap.get(`id:${id}`) as ScheduleRecord).dedupKey ?? id;
 
-        state.storageMap.set("pool:p", { inFlight: 1, maxConcurrency: 1, slots: [{ at: Date.now(), id, owner }] });
+        state.storageMap.set("pool:p", { inFlight: 1, maxConcurrency: 1, slots: [{ at: Date.now(), attempts: ["earlier"], id, owner }] });
     };
 
     const advance = (ms: number): void => {
@@ -1254,6 +1285,48 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
 
         // Past the claim ceiling no attempt this scheduler started can still be running.
         advance(DISPATCH_LEASE_MS);
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).toContain(waiting);
+    });
+
+    it("keeps the slot for a re-fire still running when the attempt before it completes", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const refired = await schedule(scheduler);
+        const owner = (state.storageMap.get(`id:${refired}`) as ScheduleRecord).dedupKey;
+
+        heldByEarlierAttempt(state, refired);
+        scheduler.outcomes = ["hold"];
+
+        const kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        const drain = scheduler.alarm();
+
+        await kicked;
+        scheduler.onKick = undefined;
+        // The earlier attempt settles while the re-fire runs a handler of its own.
+        await scheduler.fetch(post("/complete", { attempt: "earlier", dedupKey: owner, id: refired, pool: "p" }));
+
+        const waiting = await schedule(scheduler);
+
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        scheduler.settleHeld?.(true);
+        await drain;
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        await scheduler.fetch(post("/complete", { attempt: scheduler.attempts[0], dedupKey: owner, id: refired, pool: "p" }));
+        afterBackpressure();
         await scheduler.alarm();
 
         expect(dispatchedIds(scheduler)).toContain(waiting);
