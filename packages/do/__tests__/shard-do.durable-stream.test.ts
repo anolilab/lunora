@@ -8,16 +8,18 @@
  */
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { migrateDurableStreams } from "@lunora/shard-engine";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
+import waitForFrames from "./_helpers/wait-for-frames";
 
 interface FakeWebSocket {
     attachment: SocketAttachment | undefined;
     deserializeAttachment: () => unknown;
     send: (data: string) => void;
+    sendListeners: Set<() => void>;
     sent: string[];
     serializeAttachment: (value: unknown) => void;
 }
@@ -30,7 +32,12 @@ const createFakeWebSocket = (): FakeWebSocket => {
         },
         send(data: string) {
             this.sent.push(data);
+
+            for (const listener of this.sendListeners) {
+                listener();
+            }
         },
+        sendListeners: new Set(),
         sent: [],
         serializeAttachment(value: unknown) {
             this.attachment = value as SocketAttachment | undefined;
@@ -40,19 +47,13 @@ const createFakeWebSocket = (): FakeWebSocket => {
 
 const parseFrames = (ws: FakeWebSocket) => ws.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
 
-const waitForTerminator = async (ws: FakeWebSocket, deadlineMs = 500): Promise<void> => {
-    const start = Date.now();
+const waitForTerminator = async (ws: FakeWebSocket): Promise<void> => {
+    await waitForFrames(ws, (frames) => frames.some((frame) => frame.type === "complete" || frame.type === "error"));
+};
 
-    while (Date.now() - start < deadlineMs) {
-        if (parseFrames(ws).some((frame) => frame.type === "complete" || frame.type === "error")) {
-            return;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- polling loop must wait between frame checks
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 1);
-        });
-    }
+/** Resolves once `ws` has received a stream chunk: the run is producing, and its first chunk is in the transcript. */
+const waitForChunk = async (ws: FakeWebSocket): Promise<void> => {
+    await waitForFrames(ws, (frames) => frames.some((frame) => frame.type === "chunk"));
 };
 
 /** A ShardDO whose streams are all declared durable, with test-supplied generators. */
@@ -167,26 +168,45 @@ describe("shardDO durable streams", () => {
     it("drops a durable-run consumer whose credential lapses mid-run, without killing the run", async () => {
         expect.assertions(3);
 
+        // Only `Date`: the credential check reads `Date.now()`, and the run's own turns stay real.
+        vi.useFakeTimers({ now: 1_000_000, toFake: ["Date"] });
+
         const shard = new DurableStreamShard(state, {});
+        const expiresAt = Date.now() + 25;
+        const finished = Promise.withResolvers<undefined>();
 
         shard.registered.set("chat:slow", async function* slow() {
-            for (let index = 0; index < 40; index += 1) {
-                yield index;
-                // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
-                await new Promise<void>((resolve) => {
-                    setTimeout(resolve, 3);
-                });
+            try {
+                for (let index = 0; index < 40; index += 1) {
+                    yield index;
+
+                    // Live for the first few chunks, lapsed from then on.
+                    if (index === 2) {
+                        vi.setSystemTime(expiresAt);
+                    }
+
+                    // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
+                    await new Promise<void>((resolve) => {
+                        setImmediate(resolve);
+                    });
+                }
+            } finally {
+                finished.resolve(undefined);
             }
         });
 
         const ws = createFakeWebSocket();
 
-        // Live when the stream frame arrived, lapsed a few chunks into the run.
-        shard.registerSocket(ws, { expiresAt: Date.now() + 25, subs: {} });
-        await shard.driveMessage(ws, { id: "slow_1", query: { functionPath: "chat:slow" }, type: "stream" });
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 250);
-        });
+        try {
+            // Live when the stream frame arrived, lapsed a few chunks into the run.
+            shard.registerSocket(ws, { expiresAt, subs: {} });
+            await shard.driveMessage(ws, { id: "slow_1", query: { functionPath: "chat:slow" }, type: "stream" });
+            await waitForFrames(ws, (frames) => frames.some((frame) => frame.code === "TOKEN_EXPIRED"));
+            // The run carries on past the dropped consumer, to its last chunk.
+            await finished.promise;
+        } finally {
+            vi.useRealTimers();
+        }
 
         const frames = parseFrames(ws);
 
@@ -218,10 +238,8 @@ describe("shardDO durable streams", () => {
         shard.registerSocket(b, { clientId: "client-a", subs: {} });
 
         await shard.driveMessage(a, { id: "stream_a", query: { functionPath: "chat:answer" }, type: "stream" });
-        // Let the producer emit its first chunk before the second client attaches.
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 5);
-        });
+        // The producer emits its first chunk before the second client attaches.
+        await waitForChunk(a);
         await shard.driveMessage(b, { id: "stream_b", query: { functionPath: "chat:answer" }, type: "stream" });
 
         release();
@@ -258,9 +276,7 @@ describe("shardDO durable streams", () => {
 
         shard.registerSocket(first, { clientId: "client-a", subs: {} });
         await shard.driveMessage(first, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 5);
-        });
+        await waitForChunk(first);
 
         // A fresh instance over the same storage — the in-memory producer is gone
         // but the half-written transcript survived, exactly as after an eviction.
@@ -438,16 +454,12 @@ describe("shardDO durable streams", () => {
         shard.registerSocket(bob, { subs: {}, userId: "bob" });
 
         await shard.driveMessage(alice, { id: "stream_a", query: { functionPath: "chat:answer" }, type: "stream" });
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 5);
-        });
+        await waitForChunk(alice);
         // Same function, same args, different verified identity: Bob must get his
         // own run, not a replay of Alice's transcript — an attach never drives the
         // procedure, so it would also skip its RLS middleware.
         await shard.driveMessage(bob, { id: "stream_b", query: { functionPath: "chat:answer" }, type: "stream" });
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 5);
-        });
+        await waitForChunk(bob);
         release();
 
         expect(shard.starts).toBe(2);
@@ -473,9 +485,8 @@ describe("shardDO durable streams", () => {
 
             shard.registerSocket(ws, { identity, subs: {}, userId: "alice" });
             await shard.driveMessage(ws, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
-            await new Promise<void>((resolve) => {
-                setTimeout(resolve, 5);
-            });
+            // Its own run's first row, or the shared run's replayed one.
+            await waitForChunk(ws);
         };
 
         await attach({ orgId: "org-a" });

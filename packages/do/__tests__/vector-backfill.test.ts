@@ -164,6 +164,14 @@ class VectorShard extends ShardDO {
         );
     }
 
+    /** Resolves once every after-commit link queued so far, a page held behind a stall included, has run. */
+    public async drained(): Promise<void> {
+        await this.runOrderedAfterWrites(
+            () => undefined,
+            async () => undefined,
+        );
+    }
+
     protected override runShardVectorBackfill(options: { maxPages?: number; restart?: boolean }): Promise<VectorBackfillProgress> {
         const sync = createVectorBackfillSync({ allowSharedNamespace: true, schema, upsertMany: this.vectors.upsertMany as never, vectors: this.vectors });
 
@@ -266,10 +274,18 @@ describe("backfillVectors admin RPC", () => {
         }
 
         // Both rows are committed in SQLite while the page still holds its stale
-        // snapshot of them — an action has no transaction to wait on.
+        // snapshot of them — an action has no transaction to wait on. Everything
+        // between the calls above and that commit is synchronous SQLite and
+        // promise hops, so one macrotask turn drains it; the check below proves it.
         await new Promise((resolve) => {
-            setTimeout(resolve, 20);
+            setImmediate(resolve);
         });
+
+        const bodies = database.raw("SELECT id, json_extract(__doc__, '$.body') AS body FROM posts WHERE id IN ('p_0001', 'p_0002')");
+
+        if (bodies.length !== 1 || bodies[0]?.body !== "new body") {
+            throw new Error(`the writes had not committed before the page was released: ${JSON.stringify(bodies)}`);
+        }
 
         release();
         await Promise.all([backfill, patch, remove]);
@@ -333,12 +349,9 @@ describe("backfillVectors admin RPC", () => {
 
         await embedding;
 
-        const second = await Promise.race([
-            shard.fetch(adminRequest({})).then((response) => response.status),
-            new Promise<string>((resolve) => {
-                setTimeout(resolve, 200, "still waiting");
-            }),
-        ]);
+        // Answered while the first call is still held on its embeds: a call that
+        // queued behind it instead would never settle, as nothing releases it first.
+        const second = await shard.fetch(adminRequest({})).then((response) => response.status);
 
         release();
 
@@ -394,9 +407,7 @@ describe("backfillVectors admin RPC", () => {
 
         // The queued page runs once the stall clears, but its cursor was never
         // written, so the next call walks the same page again — every row, from the top.
-        await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-        });
+        await shard.drained();
 
         const response = await shard.fetch(adminRequest({}));
         const body = await response.json<{ result: VectorBackfillProgress }>();

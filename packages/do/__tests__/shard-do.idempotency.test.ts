@@ -65,11 +65,15 @@ class ParkingActionShard extends ShardDO {
     /** Set by the test: the action handler awaits it before returning. */
     public parked: Promise<void> | undefined;
 
+    /** Resolves once the action handler is awaiting {@link ParkingActionShard.parked}. */
+    public readonly reachedPark = Promise.withResolvers<undefined>();
+
     public override async handleRpc(functionPath: string): Promise<unknown> {
         this.started.push(functionPath);
         this.runs += 1;
 
         if (functionPath === "messages:slowAction" && this.parked !== undefined) {
+            this.reachedPark.resolve(undefined);
             await this.parked;
         }
 
@@ -95,6 +99,9 @@ class InterleavingBookkeepingShard extends ParkingActionShard {
     /** Released by the test once the action has resumed inside the mutation's committed window. */
     public parkedMutationTail: Promise<void> | undefined;
 
+    /** Resolves once the mutation has committed its bookkeeping and is awaiting {@link InterleavingBookkeepingShard.parkedMutationTail}. */
+    public readonly mutationParked = Promise.withResolvers<undefined>();
+
     public override async handleRpc(functionPath: string): Promise<unknown> {
         if (functionPath !== "messages:send") {
             return super.handleRpc(functionPath);
@@ -111,6 +118,7 @@ class InterleavingBookkeepingShard extends ParkingActionShard {
             return value;
         });
 
+        this.mutationParked.resolve(undefined);
         await this.parkedMutationTail;
 
         return result;
@@ -225,23 +233,18 @@ describe("shardDO mutation-replay dedup (dispatch path)", () => {
             // repeatedly, with a fresh id each time.
             const slowAction = shard.fetch(rpcRequest("messages:slowAction", "m-1", "u1"));
 
-            // Let the action reach its park before the sibling is dispatched.
-            await new Promise((resolve) => {
-                setTimeout(resolve, 0);
-            });
+            // The action is parked before the sibling is dispatched.
+            await shard.reachedPark.promise;
 
             expect(shard.started).toStrictEqual(["messages:slowAction"]);
 
             const sibling = shard.fetch(rpcRequest("messages:otherAction", "m-2", "u1"));
 
-            const outcome = await Promise.race([
-                sibling.then(() => "sibling-served"),
-                new Promise((resolve) => {
-                    setTimeout(resolve, 50, "blocked-behind-action");
-                }),
-            ]);
+            // Served while the action is still parked: nothing releases it before
+            // this settles, so a sibling queued behind it never would.
+            const siblingResponse = await sibling;
 
-            expect(outcome).toBe("sibling-served");
+            await expect(siblingResponse.json()).resolves.toEqual({ result: { ran: "messages:otherAction" } });
 
             release();
 
@@ -275,10 +278,7 @@ describe("shardDO mutation-replay dedup (dispatch path)", () => {
             // `this` — so without a re-pin it files u1's dedup row under u2.
             const slow = shard.fetch(rpcRequest("messages:slowAction", "m-1", "u1"));
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 0);
-            });
-
+            await shard.reachedPark.promise;
             await shard.fetch(rpcRequest("messages:otherAction", "m-2", "u2"));
 
             release();
@@ -319,18 +319,14 @@ describe("shardDO mutation-replay dedup (dispatch path)", () => {
             // u1's action parks mid-handler, holding mutation id m-1.
             const slow = shard.fetch(rpcRequest("messages:slowAction", "m-1", "u1"));
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 0);
-            });
+            await shard.reachedPark.promise;
 
             // u2's MUTATION commits its bookkeeping and then parks, so the shard's
             // shared "bookkeeping committed" state is set and has NOT yet been
             // cleared by that dispatch's epilogue.
             const mutation = shard.fetch(mutationRequest("m-2", "u2"));
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 0);
-            });
+            await shard.mutationParked.promise;
 
             // The action resumes squarely inside that window. Reading the shared
             // state as its own made it skip its `__idempotency` write entirely.
