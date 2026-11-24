@@ -14,6 +14,7 @@ import useMirroredRef from "../../../src/hooks/use-mirrored-ref";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import { dataViewToSearch, searchToDataView } from "../../../src/lib/data-view-params";
 import type { DataView } from "../../../src/lib/saved-queries";
+import drainMicrotasks from "../../drain-microtasks";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -3236,58 +3237,66 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
     it("never re-seeds on a keystroke, even once the URL mirror echoes it back (contract — holds before AND after the fix)", async () => {
         expect.assertions(2);
 
-        const mock = createSameTableClient();
+        // The search and shard inputs debounce on timers; a re-seed loop would run on them too.
+        // The clock is fake from the first render, so no debounce armed on the real clock can
+        // fire after the assertion below has already passed.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
-        render(
-            <LunoraProvider client={mock.asClient}>
-                <MiniTableEditor pageSize={10} />
-            </LunoraProvider>,
-        );
+        try {
+            const advance = async (ms: number): Promise<void> => {
+                await act(async () => {
+                    await vi.advanceTimersByTimeAsync(ms);
+                    await drainMicrotasks();
+                });
+            };
+            const mock = createSameTableClient();
+            const pageReads = (): number =>
+                mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
 
-        await screen.findByText("hello");
-
-        // Type a search that only matches one of the root shard's rows — the
-        // debounced round trip (state → debounce → onViewChange → URL →
-        // `initialSearch`) must be a fixed point: it can echo `initialSearch`
-        // back without ever resetting what's on screen.
-        await typeFilter("hel");
-
-        await waitFor(() => {
-            const reads = mock.query.mock.calls.filter(
-                (call) =>
-                    (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage && (call[1] as { search?: string }).search === "hel",
+            render(
+                <LunoraProvider client={mock.asClient}>
+                    <MiniTableEditor pageSize={10} />
+                </LunoraProvider>,
             );
 
-            if (reads.length === 0) {
-                throw new Error("debounced search not applied yet");
+            // The query layer batches its notifications on a 0 ms timer, so even the mount's reads land through the clock.
+            await advance(0);
+            screen.getByText("hello");
+
+            // Type a search that only matches one of the root shard's rows — the
+            // debounced round trip (state → debounce → onViewChange → URL →
+            // `initialSearch`) must be a fixed point: it can echo `initialSearch`
+            // back without ever resetting what's on screen.
+            fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "hel" } });
+
+            // The debounce issues the read; the page it answers commits on the next notification turn.
+            await advance(300);
+            await advance(0);
+
+            if (
+                !mock.query.mock.calls.some(
+                    (call) =>
+                        (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage && (call[1] as { search?: string }).search === "hel",
+                )
+            ) {
+                throw new Error("debounced search not applied");
             }
-        });
 
-        // The wait above only proves the read was ISSUED. `keepPreviousData` is
-        // off, so between that call and the new page committing the whole page —
-        // filter bar included — is unmounted, and a synchronous `getByTestId`
-        // here is a race that only loses on a loaded runner. Same reason, and
-        // same fix, as the sibling test below.
-        const filterInput = await screen.findByTestId<HTMLInputElement>("db-filter");
+            // The typed value is still exactly what was typed — never reset by a
+            // re-seed reacting to the mirror's own echo of `initialSearch`.
+            expect(screen.getByTestId<HTMLInputElement>("db-filter").value).toBe("hel");
 
-        // The typed value is still exactly what was typed — never reset by a
-        // re-seed reacting to the mirror's own echo of `initialSearch`.
-        expect(filterInput.value).toBe("hel");
+            const settledCount = pageReads();
 
-        const settledCount = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
+            // Run well past every debounce window (search 300 ms, shard 400 ms); a
+            // re-seed loop would keep issuing reads (its own reset re-triggers the
+            // mirror, which re-seeds again, …). No loop → the read count stays put.
+            await advance(1600);
 
-        // Wait well past every debounce window; a re-seed loop would keep
-        // issuing reads (its own reset re-triggers the mirror, which re-seeds
-        // again, …). No loop → the read count stays put.
-        await act(async () => {
-            await new Promise((resolve) => {
-                setTimeout(resolve, 500);
-            });
-        });
-
-        const laterCount = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
-
-        expect(laterCount).toBe(settledCount);
+            expect(pageReads()).toBe(settledCount);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("keeps mirroring — and never reverts a SECOND change — after the URL has already echoed back the first one", async () => {
@@ -3673,9 +3682,7 @@ describe("dataBrowser — AI filter reply after a table switch", () => {
         // The reply names `messages.text`; `users` is open now.
         await act(async () => {
             finishAi([{ column: "text", operator: "eq", value: "hello" }]);
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
+            await drainMicrotasks();
         });
 
         const filteredUserReads = mock.query.mock.calls.filter((call) => {
@@ -3922,9 +3929,7 @@ describe("dataBrowser — bulk op finishing after a table switch", () => {
 
         await act(async () => {
             finishClear();
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
+            await drainMicrotasks();
         });
 
         // "3 rows deleted." describes `messages`, and page 2 of `users` stays put.
@@ -3967,9 +3972,7 @@ describe("dataBrowser — bulk op finishing after a table switch", () => {
 
         await act(async () => {
             finishClear();
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
+            await drainMicrotasks();
         });
 
         expect(screen.queryByTestId("db-write-notice")).toBeNull();

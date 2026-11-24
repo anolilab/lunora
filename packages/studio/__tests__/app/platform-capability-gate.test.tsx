@@ -10,6 +10,7 @@ import type { CapabilityKey } from "../../src/app/tab-gates";
 import { TAB_GATES } from "../../src/app/tab-gates";
 import type { StudioPlatform } from "../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../src/lib/admin";
+import drainMicrotasks from "../drain-microtasks";
 import type { MockClientHooks } from "../mock-client";
 import { createMockClient } from "../mock-client";
 
@@ -193,12 +194,13 @@ describe("platform capability gate", () => {
         const pitrCalls = (): number =>
             mock.query.mock.calls.filter(([reference]) => (reference as { __lunoraRef?: string }).__lunoraRef === ADMIN_FUNCTIONS.getPitrBookmark).length;
 
+        // Load the panel's chunk up front, so a panel the gate let through would resolve its lazy
+        // boundary, mount and fire its first read within the drain below instead of on an import's I/O.
+        await import("../../src/features/database/pitr-panel");
+
         renderStudio(mock);
         await screen.findByTestId("lunora-studio", undefined, ROUTE_LOAD);
-        // Long enough for the lazy panel chunk to load and fire its first read, had it mounted.
-        await new Promise((resolve) => {
-            setTimeout(resolve, 300);
-        });
+        await act(drainMicrotasks);
 
         expect(pitrCalls()).toBe(0);
 

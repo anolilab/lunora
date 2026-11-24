@@ -5,6 +5,7 @@ import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { WorkflowInstanceHistory } from "../../../src/features/workflows/workflow-instances";
+import drainMicrotasks from "../../drain-microtasks";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -194,13 +195,13 @@ describe("workflowInstanceHistory after switching workflow", () => {
 
         rerender(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="refunds" />));
 
-        await act(async () => {
+        act(() => {
             pending.get("refunds")?.([{ id: "refund-1", status: "complete" }]);
-            await Promise.resolve();
         });
+        await screen.findByTestId("workflow-instance-refund-1");
         await act(async () => {
             pending.get("orders")?.([{ id: "order-1", status: "running" }]);
-            await Promise.resolve();
+            await drainMicrotasks();
         });
 
         expect(screen.getByTestId("workflow-instance-refund-1")).toBeDefined();
@@ -227,7 +228,7 @@ describe("workflowInstanceHistory after switching workflow", () => {
 
         await act(async () => {
             finishDetail(DETAIL);
-            await Promise.resolve();
+            await drainMicrotasks();
         });
 
         // `i1`'s steps belong to `orders`; the panel now shows `refunds`.
@@ -257,9 +258,7 @@ describe("workflowInstanceHistory after switching workflow", () => {
 
         await act(async () => {
             finishAction();
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
+            await drainMicrotasks();
         });
 
         expect(screen.getByTestId("workflow-instance-refund-1")).toBeDefined();

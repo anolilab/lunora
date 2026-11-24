@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { PitrPanel } from "../../../src/features/database/pitr-panel";
 import type { PitrBookmarkResult, PitrRestoreResult } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import drainMicrotasks from "../../drain-microtasks";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -266,9 +267,9 @@ describe("pitrPanel", () => {
         rerender(renderPanel(next));
         await screen.findByTestId("pitr-error");
 
-        answerOld?.({ current: "bm-from-old-host" });
-        await new Promise((resolve) => {
-            setTimeout(resolve, 20);
+        await act(async () => {
+            answerOld?.({ current: "bm-from-old-host" });
+            await drainMicrotasks();
         });
 
         fireEvent.change(screen.getByTestId("pitr-bookmark"), { target: { value: "bm-target" } });
@@ -305,6 +306,7 @@ describe("pitrPanel", () => {
 
         await act(async () => {
             answerA?.({ current: "bm-room-a" });
+            await drainMicrotasks();
         });
 
         expect(screen.getByTestId("pitr-current").textContent).toBe("bm-room-b");

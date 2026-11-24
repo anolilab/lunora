@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { useFileBrowser } from "../../../src/features/storage/hooks/use-file-browser";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import drainMicrotasks from "../../drain-microtasks";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
@@ -53,8 +54,10 @@ describe("useFileBrowser list cancellation", () => {
         const { result } = renderHook(() => useFileBrowser({ pageSize: 50 }), { wrapper: wrapperFor(mock) });
 
         // The mount effect kicked off the root ("") listing — its resolver is parked.
-        await act(async () => {
-            await Promise.resolve();
+        await waitFor(() => {
+            if (!deferred.some((entry) => entry.prefix === "")) {
+                throw new Error("root listing not requested yet");
+            }
         });
 
         // Navigate into a folder, kicking off a second (newer) listing for "docs/".
@@ -68,9 +71,9 @@ describe("useFileBrowser list cancellation", () => {
         // Resolve the NEWER (docs/) response first, then the older/stale root one.
         await act(async () => {
             docsCall?.resolve({ objects: [{ etag: "d1", key: "docs/guide.md", size: 300 }] });
-            await Promise.resolve();
+            await drainMicrotasks();
             rootCall?.resolve({ objects: [{ etag: "r1", key: "root.txt", size: 10 }] });
-            await Promise.resolve();
+            await drainMicrotasks();
         });
 
         // The stale root response must NOT have overwritten the docs/ listing.
@@ -172,8 +175,10 @@ describe("useFileBrowser bucket switch during a write", () => {
         act(() => {
             result.current.onFile(new File(["hi"], "big.bin"));
         });
-        await act(async () => {
-            await Promise.resolve();
+        await waitFor(() => {
+            if (mock.uploadStorageObject.mock.calls.length === 0) {
+                throw new Error("upload not sent yet");
+            }
         });
         act(() => {
             result.current.selectBucket("beta");
@@ -188,9 +193,7 @@ describe("useFileBrowser bucket switch during a write", () => {
         // under the beta picker — a row Delete from there would send alpha's key to beta.
         await act(async () => {
             finishUpload();
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
+            await drainMicrotasks();
         });
 
         expect(result.current.files.map((file) => file.key)).toStrictEqual(["beta-only.txt"]);
