@@ -1142,7 +1142,12 @@ const publishExclusively = (temporaryPath: string, path: string): void => {
 
         throw error;
     } finally {
-        rmSync(temporaryPath, { force: true });
+        // Best-effort: once linked, `path` is published, and a temp file that cannot be removed must not report it failed.
+        try {
+            rmSync(temporaryPath, { force: true });
+        } catch {
+            // A stray temp file is inert: only `messages.ts` and `schema.ts` count as scaffolded.
+        }
     }
 };
 

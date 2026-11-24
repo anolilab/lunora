@@ -15,6 +15,7 @@ const writeFailure = vi.hoisted(() => {
         beforeWrite: undefined as ((path: string) => void) | undefined,
         noHardLinks: false,
         pathPart: undefined as string | undefined,
+        tempRemovalFails: false,
     };
 });
 
@@ -45,6 +46,13 @@ vi.mock(import("node:fs"), async (importOriginal) => {
 
             actual.writeFileSync(path, data, options);
         }) as typeof actual.writeFileSync,
+        rmSync: ((path: string, options?: Parameters<typeof actual.rmSync>[1]) => {
+            if (writeFailure.tempRemovalFails && path.includes(".lunora-")) {
+                throw Object.assign(new Error("EBUSY: resource busy or locked, rm"), { code: "EBUSY" });
+            }
+
+            actual.rmSync(path, options);
+        }) as typeof actual.rmSync,
         // A filesystem without hard links, and a hook for another process acting just before publication.
         linkSync: ((existing: string, created: string) => {
             writeFailure.beforePublish?.(created);
@@ -468,6 +476,25 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
         expect(logger.lines.join("\n")).toContain("does not support hard links");
         expect(readFileSync(destination, "utf8")).toBe("user\n");
         expect(readdirSync(lunoraDirectory).filter((name) => name.includes(".lunora-"))).toStrictEqual([]);
+    });
+
+    it("reports success when a published sample's temp file cannot be removed", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+        writeFailure.tempRemovalFails = true;
+
+        let result: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        } finally {
+            writeFailure.tempRemovalFails = false;
+        }
+
+        // Both samples were linked into place; the leftover temp files are inert.
+        expect(result.code).toBe(0);
+        expect(readFileSync(join(workdir, "lunora", "schema.ts"), "utf8")).toContain("defineSchema");
     });
 
     it("does not follow a link planted at the scaffold's temp file", async () => {
