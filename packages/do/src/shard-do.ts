@@ -257,7 +257,6 @@ import {
     siblingSecretOf,
     stableStringify,
     stableWireKey,
-    stubByName,
     subscriptionFrames,
     summarizeFanoutTopics,
     summarizeSubscriptions,
@@ -426,17 +425,11 @@ import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { isRegistryNamespace, isRegistryRpc, registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
+import ShardRegistration from "./shard-registration";
 import type { SubscriptionMemo } from "./socket-table-index";
 import { SocketTableIndex } from "./socket-table-index";
 import SubscriptionFailureLatch from "./subscription-backoff";
 import watchPendingWork from "./unawaited-work";
-
-/** The registry writes a shard makes, whether they reach a namespace or an entrypoint. */
-interface RegistryWriter {
-    register: (table: string, shardKey: string) => Promise<void>;
-    unregister: (table: string, shardKey: string) => Promise<void>;
-}
 
 /**
  * A named admin token cannot manage tokens (or it could mint its own successor),
@@ -1903,9 +1896,6 @@ const streamFrames = (
  */
 
 const ROOT_SHARD_NAME = "__root__";
-
-/** How long a failed shard-registry registration waits before a later write retries it. */
-const SHARD_REGISTRY_RETRY_MS = 30_000;
 
 /**
  * Whether a subscription's memo proves this write cannot have changed its
@@ -3470,12 +3460,17 @@ abstract class ShardDO {
     private shardBinding: string | undefined;
 
     /**
-     * The `.shardBy()` tables this instance has registered with the shard
-     * registry, or is registering right now — claimed before the round trip so
-     * two concurrent first writes send one. Registration is idempotent, so this
-     * only saves round trips; it resets with the instance.
+     * This shard's registrations with the shard registry. Built from thunks, so
+     * this field initializer can run before the constructor assigns `state` and
+     * `env`, and `shardRegistry` stays the subclass's hook, asked per write.
      */
-    private readonly registeredTables = new Set<string>();
+    private readonly shardRegistration = new ShardRegistration({
+        env: () => this.env,
+        jurisdiction: () => this.state.id?.jurisdiction,
+        registry: () => this.shardRegistry(),
+        shardKey: () => this.currentShardKey(),
+        sql: () => this.sql as SqlExec,
+    });
 
     /**
      * The hand-offs awaiting the scheduler, per outbox id. `retryOutboxEntry` makes them `stale`
@@ -3511,19 +3506,6 @@ abstract class ShardDO {
 
     /** The `created_at` last handed to `recordScheduleOutbox`; see {@link ShardDO.scheduleOutbox}. */
     private lastScheduleOutboxRecordAt = 0;
-
-    /**
-     * Epoch millis before which registration is not retried, set when one
-     * fails: a registry outage costs one attempt per window rather than one per
-     * write, against the single DO that has to recover.
-     */
-    private registryRetryAt = 0;
-
-    /**
-     * Every registry round trip this shard makes, in order — see
-     * {@link ShardDO.serializeRegistry}. Never rejects.
-     */
-    private registryTail: Promise<void> = Promise.resolve();
 
     /**
      * Memoised {@link ShardDO.currentAdminBinding} result, keyed by the token it
@@ -14860,190 +14842,21 @@ abstract class ShardDO {
     }
 
     /**
-     * Run one registry step after every step before it. Registration and release
-     * both go through here, so a release's emptiness check and unregister can
-     * never interleave with a registration: a write that lands mid-release
-     * registers AFTER the unregister, not before it.
-     */
-    private async serializeRegistry<T>(work: () => Promise<T>): Promise<T> {
-        const run = this.registryTail.then(work);
-
-        this.registryTail = run.then(
-            () => undefined,
-            () => undefined,
-        );
-
-        return run;
-    }
-
-    /** The registry stub, pinned to this DO's own jurisdiction — the subnamespace the worker pins the registry it reads. */
-    private registryStub(namespace: unknown): ReturnType<typeof stubByName> {
-        return stubByName(namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
-    }
-
-    /**
-     * Where this shard's registry writes go. A Durable Object namespace is this app's own
-     * registry: signed directly with this worker's secret. Anything else is the RPC surface of
-     * the worker that hosts the registry, reached through its service binding, so the binding
-     * itself is the capability and no secret is needed. `undefined` when a namespace is not in
-     * this shard's jurisdiction.
-     */
-    private registryWriter(binding: unknown): RegistryWriter | undefined {
-        if (!isRegistryNamespace(binding)) {
-            if (!isRegistryRpc(binding)) {
-                return undefined;
-            }
-
-            const host = binding;
-
-            return {
-                register: async (table, shardKey) => host.register(table, shardKey),
-                unregister: async (table, shardKey) => host.unregister(table, shardKey),
-            };
-        }
-
-        const stub = this.registryStub(binding);
-
-        if (stub === undefined) {
-            return undefined;
-        }
-
-        const secret = siblingSecretOf(this.env);
-
-        return {
-            register: async (table, shardKey) => registerShardKey(stub, table, shardKey, secret),
-            unregister: async (table, shardKey) => unregisterShardKey(stub, table, shardKey, secret),
-        };
-    }
-
-    /**
-     * Tell the shard registry this shard holds rows of each `.shardBy()` table
-     * the flushed write touched, once per table per instance. The cross-shard
-     * fan-outs (export, CDC sync, migrations) only reach the shards the registry
-     * lists, so a shard that never registers is left out of every one of them.
-     *
-     * Runs past the response (see `flushChangedTables`) and never rejects: the
-     * write has already committed, so a failure is logged, the table's claim
-     * released, and the first write after {@link SHARD_REGISTRY_RETRY_MS} retries.
-     */
-    private async registerWrittenShard(changed: ReadonlySet<string>): Promise<void> {
-        await this.serializeRegistry(async () => {
-            const registry = this.shardRegistry();
-
-            if (registry === undefined || Date.now() < this.registryRetryAt) {
-                return;
-            }
-
-            const shardKey = this.currentShardKey();
-
-            // A replica or relay is a copy of (or a door to) another shard, not a
-            // shard of its own. Listed, it would join every fan-out and refuse the
-            // admin RPCs it was sent — a replica answers 421 to anything not routed
-            // to it as a read — so every export and backup of the table would fail.
-            if (parseReplicaName(shardKey) !== undefined || parseRelayName(shardKey) !== undefined) {
-                return;
-            }
-
-            const tables = [...changed].filter((table) => registry.shardedTables.has(table) && !this.registeredTables.has(table));
-
-            if (tables.length === 0) {
-                return;
-            }
-
-            const writer = this.registryWriter(registry.namespace);
-
-            if (writer === undefined) {
-                // eslint-disable-next-line no-console -- server-side diagnostic: a misbound registry leaves this shard out of every fan-out
-                console.error(
-                    `[@lunora/do] shard registry binding is neither a Durable Object namespace in this shard's jurisdiction nor a registry entrypoint; shard "${shardKey}" is not registered`,
-                );
-
-                return;
-            }
-
-            await Promise.all(
-                tables.map(async (table) => {
-                    this.registeredTables.add(table);
-
-                    try {
-                        await writer.register(table, shardKey);
-                    } catch (error: unknown) {
-                        this.registeredTables.delete(table);
-                        this.registryRetryAt = Date.now() + SHARD_REGISTRY_RETRY_MS;
-                        // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose registration failed
-                        console.error(
-                            `[@lunora/do] could not register shard "${shardKey}" for "${table}"; cross-shard export, sync and migrations miss it until a later write registers it:`,
-                            error,
-                        );
-                    }
-                }),
-            );
-        });
-    }
-
-    /**
      * `__lunora_admin__:releaseShardRegistration`: drop this shard from the
      * registry for each named table it holds no rows of, and keep it for the rest.
-     *
-     * The shard decides rather than the caller because only here can the check
-     * be ordered against this shard's own writes. It runs on the registry chain
-     * (see {@link ShardDO.serializeRegistry}) and clears the table's claim, so a
-     * row written before the check is seen by it and keeps the table, and one
-     * written after re-registers once the unregister has landed. A caller that
-     * probed first and unregistered second could hide a shard written in between:
-     * its claim would say "registered" while the registry said otherwise.
-     *
-     * A soft-deleted row still counts as a row — the shard is kept.
+     * See {@link ShardRegistration.release} for why the shard, not the caller,
+     * decides.
      */
     private async handleReleaseShardRegistration(args: Record<string, unknown>): Promise<Response> {
         const { dryRun, tables } = parseReleaseShardRegistrationArgs(args);
 
-        const result = await this.serializeRegistry(async () => {
-            const registry = this.shardRegistry();
-            const writer = registry === undefined ? undefined : this.registryWriter(registry.namespace);
-
-            if (registry === undefined || writer === undefined) {
-                throw new LunoraError("BAD_REQUEST", "releaseShardRegistration: this shard has no shard registry bound", { status: 400 });
-            }
-
-            const shardKey = this.currentShardKey();
-            const kept: string[] = [];
-            const released: string[] = [];
-
-            for (const table of tables) {
-                if (this.tableHasRows(table)) {
-                    kept.push(table);
-                    continue;
-                }
-
-                if (!dryRun) {
-                    // eslint-disable-next-line no-await-in-loop -- one small round trip per table this shard is listed for; ordered with the rest of the chain
-                    await writer.unregister(table, shardKey);
-                    this.registeredTables.delete(table);
-                }
-
-                released.push(table);
-            }
-
-            return { kept, released };
-        });
+        const result = await this.shardRegistration.release(tables, dryRun);
 
         if (!dryRun && result.released.length > 0) {
             this.recordAudit(args, "releaseShardRegistration", { detail: { released: result.released } });
         }
 
         return adminResponse(result);
-    }
-
-    /** Whether this shard's SQLite holds at least one row of `table` — `false` for a table it never created. */
-    private tableHasRows(table: string): boolean {
-        const sql = this.sql as SqlExec;
-
-        if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray().length === 0) {
-            return false;
-        }
-
-        return sql.exec(`SELECT 1 FROM ${quoteIdentifier(table)} LIMIT 1`).toArray().length > 0;
     }
 
     /**
@@ -15094,7 +14907,7 @@ abstract class ShardDO {
         // the registry having heard about it. Checked here first so a shard with
         // no registry pays nothing on the write path.
         if (this.shardRegistry() !== undefined) {
-            await this.deferPastResponse(this.registerWrittenShard(changed));
+            await this.deferPastResponse(this.shardRegistration.register(changed));
         }
 
         await this.startSubscriptionRefresh();
