@@ -369,6 +369,14 @@ interface ScheduleRequestBody {
  * a new job once its header goes, while the job that ran under it may still be running on the slot.
  */
 interface PoolSlot {
+    /**
+     * When the newest attempt of this owner that may still be running started. A slot is reclaimed
+     * {@link DISPATCH_LEASE_MS} later, `/complete` or not: every attempt is an `alarm()` fetch, which
+     * the platform tears down at that wall time, and the shard's claim lets a new delivery run over a
+     * handler past the same ceiling, so no attempt is still counted as running by anything after it.
+     * That is the recovery for a lost completion (an isolate that died before `/complete`).
+     */
+    at: number;
     id: string;
 
     /**
@@ -616,9 +624,10 @@ class SchedulerDO {
      * holders' completions name owners it never recorded, so it could only ever be freed by hand.
      * The cost is one pass where those jobs run beside new ones past the cap.
      */
-    private static poolFromRow(stored: PoolState | undefined, maxConcurrencyHint?: number): PoolState {
+    private static poolFromRow(stored: PoolState | undefined, now: number, maxConcurrencyHint?: number): PoolState {
         const maxConcurrency = stored?.maxConcurrency ?? SchedulerDO.normalizeConcurrency(maxConcurrencyHint, 1);
-        const slots = Array.isArray(stored?.slots) ? [...stored.slots] : [];
+        // Past the ceiling a slot is reclaimed (see `PoolSlot.at`); one with no start reads as past it.
+        const slots = Array.isArray(stored?.slots) ? stored.slots.filter((slot) => typeof slot.at === "number" && now - slot.at < DISPATCH_LEASE_MS) : [];
 
         return { inFlight: slots.length, maxConcurrency, slots };
     }
@@ -902,8 +911,8 @@ class SchedulerDO {
         // dispatch() awaits an outbound fetch, during which the DO input gate is
         // open and a concurrent /complete can decrement the pool row. A stale
         // cached copy written back afterwards would resurrect the completed
-        // job's slot and leak pool capacity forever (a POOL SLOT has no expiry to
-        // reclaim it — unlike the dispatch claim, see DISPATCH_LEASE_MS).
+        // job's slot and hold pool capacity until the claim ceiling reclaims it
+        // (see `PoolSlot.at`).
         //
         // A drain is the only place an orphan can be minted (see
         // reindexOrphanedRecords), so the store stops vouching for itself for
@@ -1376,22 +1385,28 @@ class SchedulerDO {
         const outcome = await this.dispatch(record);
         const ok = outcome === true;
         const poolName = record.pool;
+        const owner = SchedulerDO.dedupKey(record);
+        const now = Date.now();
 
-        if (outcome !== false && poolName !== undefined) {
-            // A kick that went through, or a decline for an attempt still running: either way an
-            // attempt is at the origin and its /complete frees the slot, so a cancel must not.
+        if (poolName !== undefined && outcome !== false) {
+            // A kick that went through, or a decline for an attempt still running (whose claim, and
+            // so the attempt, the shard ends within the ceiling from now): its /complete or the
+            // ceiling frees the slot, and nothing else may.
             // Swallowed: a kicked job must never re-fire, and a throw from here would re-claim it.
             // Unmarked, the slot is still held by its owner, which is the safe side.
-            await this.markKicked(poolName, SchedulerDO.dedupKey(record)).catch(() => undefined);
-        }
-
-        // The kick itself failed. A slot reserved for it has no completion coming, so it is freed
-        // now. One an earlier attempt kept stays: a failed kick says nothing about whether that
-        // attempt ended, and parkDead() frees it if the job runs out of retries. Cancelled, the
-        // record will not re-fire, so that slot is freed too unless an attempt holds it at the
-        // origin.
-        if (outcome === false && (reserved === "reserved" || this.cancelledLeases.has(record.id))) {
-            await this.releaseHeldSlot(record);
+            await this.updateSlot(poolName, owner, (slot) => {
+                return { ...slot, at: now, kicked: true };
+            }).catch(() => undefined);
+        } else if (poolName !== undefined && reserved === "reserved") {
+            // The kick failed and nothing else of this owner may be running: no completion is coming.
+            await this.updateSlot(poolName, owner, () => undefined);
+        } else if (poolName !== undefined && typeof reserved === "object") {
+            // A re-fire whose kick failed started nothing, so it does not extend the hold. The slot
+            // stays for the earlier attempt until its /complete or the ceiling from that attempt's
+            // start, so a retry.forever job failing every re-fire cannot keep it longer.
+            await this.updateSlot(poolName, owner, (slot) => {
+                return { ...slot, at: reserved.reenteredFrom };
+            });
         }
 
         // Cancelled mid-attempt: `/cancel` already removed this job's rows, and
@@ -1451,40 +1466,45 @@ class SchedulerDO {
     /**
      * Concurrency gate for a pooled record. Returns `false` (and re-arms the
      * job via {@link requeuePooled}) when the pool is at `maxConcurrency`;
-     * `"reentered"` when the record already holds a slot an earlier attempt kept;
-     * otherwise reserves a slot durably and returns `"reserved"`. Non-pooled
+     * `{ reenteredFrom }` (the start it had) when the record already holds a slot an earlier
+     * attempt kept; otherwise reserves a slot durably and returns `"reserved"`. Non-pooled
      * records always return `"reserved"` without touching any pool state.
      *
      * The pool row is read FRESH from storage on every call — never cached
      * across the drain — and the read-modify-write runs under
      * the pool lock (`withPoolLock`). Both halves are load-bearing. Freshness is what
      * keeps a concurrent `/complete` landing during a dispatch from being
-     * clobbered by a stale in-memory copy (which would leak a slot permanently: a
-     * POOL SLOT has no expiry, unlike the dispatch claim's). The lock is what
+     * clobbered by a stale in-memory copy (which would hold a freed slot until the
+     * claim ceiling). The lock is what
      * keeps two drain lanes from both reading the same pre-reservation row and
      * both believing a slot was free — without it the pool oversubscribes past
      * `maxConcurrency` and one holder is dropped from `slots`, so its
      * slot is never released.
      */
-    private async reservePoolSlot(record: ScheduleRecord): Promise<"reentered" | "reserved" | false> {
+    private async reservePoolSlot(record: ScheduleRecord): Promise<"reserved" | false | { reenteredFrom: number }> {
         const poolName = record.pool;
 
         if (poolName === undefined) {
             return "reserved";
         }
 
-        const reserved = await this.withPoolLock(async () => {
+        const reserved = await this.withPoolLock(async (): Promise<"reserved" | false | { reenteredFrom: number }> => {
             const pool = await this.loadPool(poolName);
             const owner = SchedulerDO.dedupKey(record);
+            const now = Date.now();
+            const held = pool.slots.find((slot) => slot.owner === owner);
 
             // Re-entry before the cap: a record still holding its slot (an earlier attempt was
             // declined in-progress or lost with its instance, and that slot is kept until the
             // attempt settles) counts against the cap itself, so checking the cap first would
-            // backpressure its own re-fire forever — and that re-fire is what releases the slot
-            // when the first attempt's receiver never reports back. By owner: a new job under a
-            // reused id is another scheduling and queues for a slot of its own.
-            if (pool.slots.some((slot) => slot.owner === owner)) {
-                return "reentered" as const;
+            // backpressure its own re-fire forever. By owner: a new job under a reused id is
+            // another scheduling and queues for a slot of its own.
+            if (held !== undefined) {
+                // Counted as running while this re-fire is in flight; drainRecord() puts the earlier
+                // start back if the kick fails.
+                await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot === held ? { ...slot, at: now } : slot)) });
+
+                return { reenteredFrom: held.at };
             }
 
             if (pool.slots.length >= pool.maxConcurrency) {
@@ -1494,11 +1514,11 @@ class SchedulerDO {
             // Reserve a slot durably BEFORE dispatching so neither a concurrent
             // alarm nor a sibling lane in this same pass can oversubscribe the
             // pool.
-            const slots = [...pool.slots, { id: record.id, owner }];
+            const slots = [...pool.slots, { at: now, id: record.id, owner }];
 
             await this.savePool(poolName, { ...pool, inFlight: slots.length, slots });
 
-            return "reserved" as const;
+            return "reserved";
         });
 
         if (reserved === false) {
@@ -1743,11 +1763,8 @@ class SchedulerDO {
      * schedulable time (see {@link isIndexableTime}).
      */
     private async parkDead(record: ScheduleRecord, attempts: number, reason: string): Promise<void> {
-        // A parked job never re-fires, so a slot it kept through failed re-fires is freed here —
-        // first, so a failed release leaves the job pending and re-fireable rather than parked
-        // with the slot stranded.
-        await this.releaseHeldSlot(record);
-
+        // A slot this job still holds is left alone: the attempt holding it may still be running,
+        // and its /complete or the claim ceiling (`PoolSlot.at`) frees it.
         const completedAt = Date.now();
 
         // Indexed in `dt:` like any other outcome, so `/history` lists the failure
@@ -1766,42 +1783,32 @@ class SchedulerDO {
         console.warn(`@lunora/scheduler: job "${record.id}" (${record.functionPath ?? record.workflow ?? "unknown"}) parked in dead-letter ${reason}`);
     }
 
-    /**
-     * Free `record`'s slot unless an attempt holds it at the origin (`PoolSlot.kicked`), whose
-     * `/complete` is then the release. Re-read under the pool lock, so a `/complete` or a sibling
-     * lane's reservation that landed during the dispatch await is not clobbered.
-     */
-    private async releaseHeldSlot(record: ScheduleRecord): Promise<void> {
-        const poolName = record.pool;
-
-        if (poolName === undefined) {
-            return;
-        }
-
-        const owner = SchedulerDO.dedupKey(record);
-
+    /** Rewrite `owner`'s slot under the pool lock (`undefined` frees it); a no-op when it holds none. */
+    private async updateSlot(poolName: string, owner: string, change: (slot: PoolSlot) => PoolSlot | undefined): Promise<void> {
         await this.withPoolLock(async () => {
             const pool = await this.loadPool(poolName);
 
-            if (pool.slots.some((slot) => slot.owner === owner && slot.kicked !== true)) {
-                await this.savePool(poolName, SchedulerDO.releaseOwner(pool, owner));
+            if (!pool.slots.some((slot) => slot.owner === owner)) {
+                return;
             }
-        });
-    }
 
-    private async markKicked(poolName: string, owner: string): Promise<void> {
-        await this.withPoolLock(async () => {
-            const pool = await this.loadPool(poolName);
+            const slots = pool.slots.flatMap((slot) => {
+                if (slot.owner !== owner) {
+                    return [slot];
+                }
 
-            if (pool.slots.some((slot) => slot.owner === owner && slot.kicked !== true)) {
-                await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot.owner === owner ? { ...slot, kicked: true } : slot)) });
-            }
+                const next = change(slot);
+
+                return next === undefined ? [] : [next];
+            });
+
+            await this.savePool(poolName, { ...pool, inFlight: slots.length, slots });
         });
     }
 
     /** Read the durable `pool:<name>` row, defaulting to a fresh empty pool. */
     private async loadPool(name: string, maxConcurrencyHint?: number): Promise<PoolState> {
-        return SchedulerDO.poolFromRow(await this.state.storage.get<PoolState>(`${POOL_PREFIX}${name}`), maxConcurrencyHint);
+        return SchedulerDO.poolFromRow(await this.state.storage.get<PoolState>(`${POOL_PREFIX}${name}`), Date.now(), maxConcurrencyHint);
     }
 
     private async savePool(name: string, pool: PoolState): Promise<void> {
@@ -1923,7 +1930,7 @@ class SchedulerDO {
         await this.forEachPage<PoolState>(POOL_PREFIX, (pool, key) => {
             const name = key.slice(POOL_PREFIX.length);
             // Read as the alarm path reads it, so an old-shape row counts the same here.
-            const slots = SchedulerDO.poolFromRow(pool).inFlight;
+            const slots = SchedulerDO.poolFromRow(pool, Date.now()).inFlight;
             const queued = queuedByPool.get(name) ?? 0;
 
             pools.push({ inFlight: slots, maxConcurrency: pool.maxConcurrency, name, queued });
@@ -2142,19 +2149,8 @@ class SchedulerDO {
             return SchedulerDO.json({ cancelled: false });
         }
 
-        // Read before removeRecord(), which does not touch the lease map but marks the record cancelled.
-        const inFlightHere = this.activeLeases.has(record.id);
-
-        // A pending record can still hold a slot: one an attempt lost with its instance kept, whose
-        // next re-fire was going to be its release. Cancelled, it never re-fires, so release it
-        // here — before the record goes, so a failed release leaves it for a retried cancel instead
-        // of stranding the slot with nothing left to free it. A slot an attempt holds at the origin
-        // (a decline) stays for that attempt's /complete, and a record whose dispatch is in flight
-        // on this instance is left to drainRecord(), which sees the outcome.
-        if (!inFlightHere) {
-            await this.releaseHeldSlot(record);
-        }
-
+        // A slot this record still holds is not freed here: the attempt holding it may still be
+        // running, and its /complete or the claim ceiling (`PoolSlot.at`) frees it.
         await this.removeRecord(record);
         // The cancel already took effect; a failed outcome write costs only the history row.
         await this.writeTerminal(record, "canceled").catch(() => undefined);

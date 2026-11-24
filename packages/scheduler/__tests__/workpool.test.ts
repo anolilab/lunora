@@ -2,7 +2,7 @@ import { encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import createWorkpool from "../src/create-workpool";
-import { SchedulerDO } from "../src/scheduler-do";
+import { DISPATCH_LEASE_MS, SchedulerDO } from "../src/scheduler-do";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord } from "../src/types";
 import { createFakeState } from "./fake-state";
 
@@ -128,7 +128,7 @@ const holding = (state: ReturnType<typeof createFakeState>, maxConcurrency: numb
         inFlight: ids.length,
         maxConcurrency,
         slots: ids.map((id) => {
-            return { id, owner: (state.storageMap.get(`id:${id}`) as ScheduleRecord | undefined)?.dedupKey ?? id };
+            return { at: Date.now(), id, owner: (state.storageMap.get(`id:${id}`) as ScheduleRecord | undefined)?.dedupKey ?? id };
         }),
     };
 };
@@ -747,42 +747,7 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
         expect(poolIds(state, "p")).toStrictEqual(["reused"]);
     });
 
-    it("keeps a cancelled record pending when releasing its held slot fails, so a retried cancel frees it", async () => {
-        expect.assertions(4);
-
-        const state = createFakeState();
-        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
-        const held = await scheduledId(
-            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 1, pool: "p", scheduledFor: Date.now() + 60_000 })),
-        );
-
-        state.storageMap.set("pool:p", holding(state, 1, [held]));
-
-        const { put } = state.storage;
-        let failPoolWrite = true;
-
-        state.storage.put = async (keyOrEntries: string | Record<string, unknown>, value?: unknown) => {
-            if (failPoolWrite && keyOrEntries === "pool:p") {
-                failPoolWrite = false;
-
-                throw new Error("storage unavailable");
-            }
-
-            return put(keyOrEntries as string, value);
-        };
-
-        const failed = await scheduler.fetch(post("/cancel", { id: held })).catch(() => undefined);
-
-        expect(failed?.ok).not.toBe(true);
-        expect(state.storageMap.has(`id:${held}`)).toBe(true);
-
-        const retried = await scheduler.fetch(post("/cancel", { id: held }));
-
-        await expect(retried.json()).resolves.toMatchObject({ cancelled: true });
-        expect(poolIds(state, "p")).toStrictEqual([]);
-    });
-
-    it("releases the slot a pending record holds when it is cancelled, and leaves other holders alone", async () => {
+    it("leaves every held slot alone when a pending record is cancelled", async () => {
         expect.assertions(2);
 
         const state = createFakeState();
@@ -796,14 +761,15 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
 
         state.storageMap.set("pool:p", holding(state, 2, [held, "running-elsewhere"]));
 
-        // A job that holds no slot frees nothing; one re-armed after a decline frees its own.
+        // A job that holds no slot frees nothing. One that does may still have its attempt running:
+        // that attempt's /complete or the claim ceiling frees it.
         await scheduler.fetch(post("/cancel", { id: queued }));
 
         expect(poolIds(state, "p")).toStrictEqual([held, "running-elsewhere"]);
 
         await scheduler.fetch(post("/cancel", { id: held }));
 
-        expect(poolIds(state, "p")).toStrictEqual(["running-elsewhere"]);
+        expect(poolIds(state, "p")).toStrictEqual([held, "running-elsewhere"]);
     });
 
     it("keeps the slot when the kick is declined in-progress, and re-arms the job", async () => {
@@ -818,7 +784,7 @@ describe("schedulerDO — a slot held by a still-running attempt", () => {
         expect(scheduler.dispatched).toStrictEqual([id]);
         // The first attempt is still running and its completion is still coming: the slot stays counted,
         // held for that attempt.
-        expect(poolRow(state, "p")?.slots).toStrictEqual([{ id, kicked: true, owner: scheduler.dispatchedKeys[0] }]);
+        expect(poolRow(state, "p")?.slots).toStrictEqual([{ at: expect.any(Number), id, kicked: true, owner: scheduler.dispatchedKeys[0] }]);
         expect(state.storageMap.has(`id:${String(id)}`)).toBe(true);
     });
 
@@ -874,7 +840,7 @@ describe("schedulerDO — a failed re-fire through a slot it already holds", () 
         expect(state.storageMap.has(`id:${id}`)).toBe(true);
     });
 
-    it("releases the kept slot when the job is dead-lettered", async () => {
+    it("keeps the kept slot when the job is dead-lettered, for the attempt holding it", async () => {
         expect.assertions(3);
 
         const state = createFakeState();
@@ -884,10 +850,10 @@ describe("schedulerDO — a failed re-fire through a slot it already holds", () 
         await scheduler.alarm();
         await scheduler.alarm();
 
-        // Parked, the job never re-fires, so this is the slot's last release.
+        // The earlier attempt may still be running; its /complete or the claim ceiling frees the slot.
         expect(scheduler.attempts).toBe(2);
         expect(state.storageMap.has(`dead:${id}`)).toBe(true);
-        expect(poolIds(state, "p")).toStrictEqual([]);
+        expect(poolIds(state, "p")).toStrictEqual([id]);
     });
 });
 
@@ -1147,9 +1113,9 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
             inFlight: 3,
             maxConcurrency: 3,
             slots: [
-                { id: "reused", kicked: true, owner: "first" },
-                { id: "reused", owner: "second" },
-                { id: "other", kicked: true, owner: "third" },
+                { at: Date.now(), id: "reused", kicked: true, owner: "first" },
+                { at: Date.now(), id: "reused", owner: "second" },
+                { at: Date.now(), id: "other", kicked: true, owner: "third" },
             ],
         });
 
@@ -1176,5 +1142,257 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
 
         expect(scheduler.dispatched).toHaveLength(1);
         expect(poolRow(state, "p")?.slots.map((slot) => slot.owner)).toStrictEqual([scheduler.dispatched[0]?.dedupKey]);
+    });
+});
+
+describe("schedulerDO — a slot whose attempt may still be running", () => {
+    const origin = { LUNORA_ORIGIN_URL: "https://app.test" };
+
+    const schedule = async (scheduler: SchedulerDO, body: Record<string, unknown> = {}): Promise<string> =>
+        scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "job", maxConcurrency: 1, pool: "p", scheduledFor: Date.now() - 1000, ...body })),
+        );
+
+    /** The row as a reservation writes it: `id`'s scheduling holds the only slot for an attempt started now. */
+    const heldByEarlierAttempt = (state: ReturnType<typeof createFakeState>, id: string): void => {
+        const owner = (state.storageMap.get(`id:${id}`) as ScheduleRecord).dedupKey ?? id;
+
+        state.storageMap.set("pool:p", { inFlight: 1, maxConcurrency: 1, slots: [{ at: Date.now(), id, owner }] });
+    };
+
+    const advance = (ms: number): void => {
+        vi.setSystemTime(Date.now() + ms);
+    };
+
+    /** Past the backpressure delay, so a job re-armed for want of a slot is due again. */
+    const afterBackpressure = (): void => {
+        advance(60_000);
+    };
+
+    const dispatchedIds = (scheduler: ScriptedScheduler): string[] => scheduler.dispatched.map((record) => record.id);
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("keeps the slot when re-fires exhaust the retries before the attempt holding it can have ended", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const parked = await schedule(scheduler, { retry: { baseMs: 0, maxAttempts: 1 } });
+
+        // Its first attempt was lost with its instance and may still be running at the origin.
+        heldByEarlierAttempt(state, parked);
+        scheduler.outcomes = [false, false];
+        await scheduler.alarm();
+        await scheduler.alarm();
+
+        expect(state.storageMap.has(`dead:${parked}`)).toBe(true);
+
+        const waiting = await schedule(scheduler);
+
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        // Past the claim ceiling no attempt this scheduler started can still be running.
+        advance(DISPATCH_LEASE_MS);
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).toContain(waiting);
+    });
+
+    it("keeps a declined attempt's slot through a cancel when marking it failed, so a job reusing the id waits", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const { put } = state.storage;
+
+        state.storage.put = async (keyOrEntries: string | Record<string, unknown>, value?: unknown) => {
+            if (keyOrEntries === "pool:p" && (value as { slots?: { kicked?: true }[] } | undefined)?.slots?.some((slot) => slot.kicked === true) === true) {
+                throw new Error("storage unavailable");
+            }
+
+            return put(keyOrEntries as string, value);
+        };
+
+        await schedule(scheduler, { id: "reused" });
+        scheduler.outcomes = ["in-progress"];
+        await scheduler.alarm();
+
+        const running = scheduler.dispatched[0];
+
+        await scheduler.fetch(post("/cancel", { id: "reused" }));
+        await schedule(scheduler, { id: "reused" });
+        afterBackpressure();
+        await scheduler.alarm();
+
+        // The attempt the shard declined for still runs on the only slot.
+        expect(scheduler.dispatched).toHaveLength(1);
+
+        await scheduler.fetch(post("/complete", { dedupKey: running?.dedupKey, id: running?.id, pool: "p" }));
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toHaveLength(2);
+    });
+
+    it("reclaims a kicked slot whose completion never arrives once the claim ceiling has passed", async () => {
+        expect.assertions(2);
+
+        const scheduler = new ScriptedScheduler(createFakeState(), origin);
+
+        await schedule(scheduler);
+        await scheduler.alarm();
+
+        const waiting = await schedule(scheduler);
+
+        // The attempt's /complete is lost: the slot stays counted while it may still run.
+        advance(DISPATCH_LEASE_MS - 1);
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).toContain(waiting);
+    });
+
+    it("does not let a retry.forever job whose re-fires never reach a receiver hold its slot past the claim ceiling", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const failing = await schedule(scheduler, { retry: { baseMs: 0, forever: true } });
+
+        heldByEarlierAttempt(state, failing);
+        scheduler.outcomes = Array.from<boolean>({ length: 40 }).fill(false);
+
+        const waiting = await schedule(scheduler);
+
+        // Every re-fire fails before reaching a receiver; none of them started anything.
+        for (let elapsed = 0; elapsed < DISPATCH_LEASE_MS - 120_000; elapsed += 60_000) {
+            // eslint-disable-next-line no-await-in-loop -- one alarm per minute of fake time
+            await scheduler.alarm();
+            afterBackpressure();
+        }
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        advance(120_000);
+        await scheduler.alarm();
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).toContain(waiting);
+    });
+
+    it("leaves the slot to a dispatch that claims the record while a cancel is under way", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const cancelled = await schedule(scheduler);
+        const { get: read } = state.storage;
+        let resumeCancel: () => void = () => {};
+        const resumed = new Promise<void>((resolve) => {
+            resumeCancel = resolve;
+        });
+        let reachOutcomeRead: () => void = () => {};
+        const cancelPaused = new Promise<void>((resolve) => {
+            reachOutcomeRead = resolve;
+        });
+
+        // `/cancel` reads the job's outcome row after its header; hold it there.
+        state.storage.get = async <T = unknown>(key: string): Promise<T | undefined> => {
+            if (key === `done:${cancelled}`) {
+                reachOutcomeRead();
+                await resumed;
+            }
+
+            return read<T>(key);
+        };
+
+        const cancelling = scheduler.fetch(post("/cancel", { id: cancelled }));
+
+        await cancelPaused;
+
+        scheduler.outcomes = ["hold"];
+
+        const kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        const drain = scheduler.alarm();
+
+        await kicked;
+        resumeCancel();
+        await cancelling;
+
+        const waiting = await schedule(scheduler);
+
+        afterBackpressure();
+        await scheduler.alarm();
+
+        // The claimed dispatch still holds the only slot.
+        expect(dispatchedIds(scheduler)).toStrictEqual([cancelled]);
+
+        scheduler.settleHeld?.(true);
+        await drain;
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+    });
+
+    it("keeps a third job waiting while a job reusing a cancelled job's id is in flight", async () => {
+        expect.assertions(3);
+
+        const scheduler = new ScriptedScheduler(createFakeState(), origin);
+
+        await schedule(scheduler, { id: "reused" });
+        scheduler.outcomes = ["hold"];
+
+        let kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        const firstDrain = scheduler.alarm();
+
+        await kicked;
+        await scheduler.fetch(post("/cancel", { id: "reused" }));
+        await schedule(scheduler, { id: "reused" });
+
+        // The cancelled job's attempt fails and frees its own slot.
+        scheduler.settleHeld?.(false);
+        await firstDrain;
+
+        scheduler.outcomes = ["hold"];
+        kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        afterBackpressure();
+
+        const replacementDrain = scheduler.alarm();
+
+        await kicked;
+
+        expect(dispatchedIds(scheduler)).toStrictEqual(["reused", "reused"]);
+
+        const third = await schedule(scheduler);
+
+        afterBackpressure();
+        await scheduler.alarm();
+
+        // The replacement is in flight on the only slot.
+        expect(dispatchedIds(scheduler)).not.toContain(third);
+
+        scheduler.settleHeld?.(true);
+        await replacementDrain;
+
+        expect(dispatchedIds(scheduler)).not.toContain(third);
     });
 });

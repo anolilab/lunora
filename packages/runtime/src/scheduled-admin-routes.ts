@@ -130,16 +130,14 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
      * `POST /pool/release { pool, id? }` — release one held workpool concurrency
      * slot, by proxying the SchedulerDO's `/complete`.
      *
-     * This is the ONLY shipped way to undo a leaked slot. `releasePoolSlot` in
-     * `create-worker` is best-effort by design (a release failure must not fail
-     * the dispatch the scheduler awaits), there is no lease and nothing
-     * reconciles, so a dispatch that succeeds followed by a failed release —
-     * an isolate evicted at the invocation boundary, a 500, a rotated binding —
-     * holds that slot for the lifetime of the pool. At the default
-     * `maxConcurrency: 1` that wedges the pool permanently while every queued job
-     * re-arms the alarm once a second and never runs. `/status` diagnoses it
-     * exactly (`inFlight` pinned with a growing `backlog`) and, before this
-     * route, offered no way out.
+     * The way to free a slot sooner than the scheduler does on its own.
+     * `releasePoolSlot` in `create-worker` is best-effort by design (a release
+     * failure must not fail the dispatch the scheduler awaits), so a dispatch that
+     * succeeds followed by a failed release — an isolate evicted at the invocation
+     * boundary, a 500, a rotated binding — leaves the slot held until the
+     * scheduler's claim ceiling reclaims it, fifteen minutes after the attempt
+     * started. At the default `maxConcurrency: 1` every queued job waits that
+     * long. `/status` diagnoses it (`inFlight` pinned with a growing `backlog`).
      *
      * `id` is OPTIONAL on purpose: `/status` reports slot counts, not the ids
      * holding them, so an operator staring at a wedged pool usually cannot name

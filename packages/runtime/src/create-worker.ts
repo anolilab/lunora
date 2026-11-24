@@ -4180,12 +4180,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * `instanceName`). No-op for non-pooled jobs.
      *
      * Best-effort in the sense that a failure must not fail the dispatch the
-     * scheduler awaits — but understand what that costs: there is NO
-     * reconciliation and NO lease. `reservePoolSlot` holds a durable slot for the
-     * scheduling and only a `/complete` naming it frees it, so a swallowed release leaks
-     * that slot for the lifetime of the pool. At the default `maxConcurrency: 1`
-     * one leak wedges the pool permanently, with every later job re-arming the
-     * alarm every 1000 ms and never running. Every early return from a dispatch
+     * scheduler awaits — but understand what that costs: `reservePoolSlot` holds a
+     * durable slot for the scheduling, and without a `/complete` naming it the slot
+     * is held until the scheduler's claim ceiling (`DISPATCH_LEASE_MS`, fifteen
+     * minutes from the attempt's start) reclaims it. At the default
+     * `maxConcurrency: 1` every later job waits that long. Every early return from a dispatch
      * that reserved a slot must reach this call — except a claim decline, whose
      * slot belongs to the attempt still running (see {@link handleSchedulerDispatch}).
      */
@@ -4361,7 +4360,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // A claim decline (the header only the shard's claim path sets) means this record's first
         // attempt is still running: its own dispatch releases the slot when it settles, or the
-        // scheduler's next re-fire of the record does if that one was cut off. Releasing here
+        // scheduler's claim ceiling does if that one was cut off. Releasing here
         // would let another pooled job run beside it past `maxConcurrency`.
         if (isClaimDecline(response)) {
             return response;
