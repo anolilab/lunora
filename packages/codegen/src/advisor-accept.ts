@@ -6,8 +6,9 @@
  * An accepted finding carries its reason in the detail and is reported as INFO,
  * so an accepted ERROR stops failing `lunora codegen`, `deploy` and `vite build`,
  * and an accepted WARN stops reading as an open item; both stay in the report.
- * Every entry is exact: it matches one rule in one file for one export at the
- * level the reviewer saw, never a rule in general. The level is part of the
+ * Every entry is exact: it matches one rule in one file for one export (and one
+ * table, once a procedure has the finding for several) at the level the
+ * reviewer saw, never a rule in general. The level is part of the
  * match, so an acceptance written for an INFO or WARN cannot silently cover the
  * same export after it becomes an ERROR. An entry that matches no finding is a
  * WARN, so an acceptance that no longer applies cannot linger unnoticed.
@@ -20,6 +21,33 @@ import type { Finding, Level } from "@lunora/advisor";
  */
 const subjectOf = (advisory: Finding): unknown => advisory.metadata["exportName"] ?? advisory.metadata["table"] ?? advisory.metadata["helper"];
 
+/** The table a procedure's finding is about, when the finding names both. */
+const procedureTableOf = (advisory: Finding): unknown => (advisory.metadata["exportName"] === undefined ? undefined : advisory.metadata["table"]);
+
+const namesFinding = (candidate: AcceptedFinding, advisory: Finding): boolean =>
+    candidate.rule === advisory.name &&
+    candidate.level === advisory.level &&
+    candidate.file === advisory.metadata["file"] &&
+    candidate.exportName === subjectOf(advisory);
+
+/**
+ * Whether the entry's `table` fits the finding. One procedure can carry the same finding for several tables (an RLS
+ * gap, an unmasked PII column), so an entry that names no table covers a procedure's table findings only while they
+ * are all about one table: once a second table shows up, the entry matches none of them, and the unused-entry WARN
+ * asks for the table. A table the procedure starts reaching later is never accepted unseen. Several findings about one
+ * table (one per hashed column) still count as one table. A shape's finding names its one table, so an entry for it
+ * keeps matching without one.
+ */
+const tableFits = (candidate: AcceptedFinding, advisory: Finding, advisories: ReadonlyArray<Finding>): boolean => {
+    const table = procedureTableOf(advisory);
+
+    if (candidate.table !== undefined || table === undefined) {
+        return candidate.table === table;
+    }
+
+    return new Set(advisories.filter((other) => namesFinding(candidate, other)).map((other) => procedureTableOf(other))).size === 1;
+};
+
 /** One reviewed finding to accept. `reason` says why it is by design; it is shown with the finding. */
 interface AcceptedFinding {
     /** The export, table or helper the finding fires on, as the finding names it. */
@@ -29,20 +57,26 @@ interface AcceptedFinding {
     level: Level;
     reason: string;
     rule: string;
+    /** The table, for a finding that names both a procedure and a table. Needed once the procedure has that finding for more than one table. */
+    table?: string;
 }
 
-/** The WARN for an entry that matched no ERROR. */
+const subjectLabel = (entry: AcceptedFinding): string =>
+    entry.table === undefined ? `\`${entry.exportName}\`` : `\`${entry.exportName}\` on table \`${entry.table}\``;
+
+/** The WARN for an entry that matched no finding. */
 const staleAcceptance = (entry: AcceptedFinding): Finding => {
     return {
-        cacheKey: `advisor_accept_unused:${entry.rule}:${entry.level}:${entry.file}:${entry.exportName}`,
+        cacheKey: `advisor_accept_unused:${entry.rule}:${entry.level}:${entry.file}:${entry.exportName}${entry.table === undefined ? "" : `:${entry.table}`}`,
         categories: ["SCHEMA"],
         description: "`advisor.accept` in `lunora.config.*` accepts a finding the advisor does not report.",
-        detail: `No ${entry.level} \`${entry.rule}\` in \`${entry.file}\` for \`${entry.exportName}\` — the acceptance no longer applies.`,
+        detail: `No ${entry.level} \`${entry.rule}\` in \`${entry.file}\` for ${subjectLabel(entry)} — the acceptance no longer applies.`,
         facing: "INTERNAL",
         level: "WARN",
-        metadata: { exportName: entry.exportName, file: entry.file, rule: entry.rule },
+        metadata: { exportName: entry.exportName, file: entry.file, rule: entry.rule, ...(entry.table === undefined ? {} : { table: entry.table }) },
         name: "advisor_accept_unused",
-        remediation: "Remove the entry, or correct the rule, file and export name it names.",
+        remediation:
+            "Remove the entry, or correct the rule, file and export name it names. When a procedure has the finding for more than one table, name the table with `table`.",
         title: "An accepted advisor finding matches no finding",
     };
 };
@@ -54,13 +88,7 @@ const staleAcceptance = (entry: AcceptedFinding): Finding => {
 const applyAcceptedFindings = (advisories: ReadonlyArray<Finding>, accepted: ReadonlyArray<AcceptedFinding>): Finding[] => {
     const matched = new Set<AcceptedFinding>();
     const reviewed = advisories.map((advisory): Finding => {
-        const entry = accepted.find(
-            (candidate) =>
-                candidate.rule === advisory.name &&
-                candidate.level === advisory.level &&
-                candidate.file === advisory.metadata["file"] &&
-                candidate.exportName === subjectOf(advisory),
-        );
+        const entry = accepted.find((candidate) => namesFinding(candidate, advisory) && tableFits(candidate, advisory, advisories));
 
         if (entry === undefined) {
             return advisory;
@@ -85,7 +113,7 @@ const unreadableAcceptance = (): Finding => {
         cacheKey: "advisor_accept_invalid",
         categories: ["SCHEMA"],
         description: "`advisor.accept` in `lunora.config.*` is read by parsing the file, so every entry must be a literal.",
-        detail: "`advisor.accept` is not an array of literal `{ rule, file, exportName, level, reason }` objects with non-empty strings, so codegen ignored all of it and every finding keeps its level.",
+        detail: "`advisor.accept` is not an array of literal `{ rule, file, exportName, level, reason, table? }` objects with non-empty strings, so codegen ignored all of it and every finding keeps its level.",
         facing: "INTERNAL",
         level: "WARN",
         metadata: {},

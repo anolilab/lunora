@@ -91,6 +91,75 @@ describe("applyAcceptedFindings", () => {
         expect(result[0]?.level).toBe("INFO");
     });
 
+    // One procedure can carry the same finding for several tables, so accepting one table must not accept the others.
+    it("accepts only the table an entry names when a procedure has the same finding for several tables", () => {
+        expect.assertions(2);
+
+        const tableFinding = (table: string): Finding =>
+            finding({ level: "WARN", metadata: { exportName: "listMembers", file: "lunora/team.ts", table }, name: "rls_uncovered_table" });
+        const result = applyAcceptedFindings(
+            [tableFinding("members"), tableFinding("invites")],
+            [{ exportName: "listMembers", file: "lunora/team.ts", level: "WARN", reason: "members are public", rule: "rls_uncovered_table", table: "members" }],
+        );
+
+        expect(result.map((advisory) => [advisory.metadata["table"], advisory.level])).toStrictEqual([
+            ["members", "INFO"],
+            ["invites", "WARN"],
+        ]);
+        expect(result.some((advisory) => advisory.name === "advisor_accept_unused")).toBe(false);
+    });
+
+    // A procedure that starts reaching a second table must not have it accepted by an entry written for the first.
+    it("accepts none of a procedure's table findings for an entry without a table once there is more than one", () => {
+        expect.assertions(3);
+
+        const tableFinding = (table: string): Finding =>
+            finding({ level: "WARN", metadata: { exportName: "listMembers", file: "lunora/team.ts", table }, name: "rls_uncovered_table" });
+        const untabled: AcceptedFinding = {
+            exportName: "listMembers",
+            file: "lunora/team.ts",
+            level: "WARN",
+            reason: "members are public",
+            rule: "rls_uncovered_table",
+        };
+
+        const [single] = applyAcceptedFindings([tableFinding("members")], [untabled]);
+        const several = applyAcceptedFindings([tableFinding("members"), tableFinding("invites")], [untabled]);
+
+        expect(single?.level).toBe("INFO");
+        expect(several.map((advisory) => advisory.level)).toStrictEqual(["WARN", "WARN", "WARN"]);
+        expect(several[2]?.remediation).toContain("`table`");
+    });
+
+    // A weak hash reports one finding per column, so two hashed columns of one table are still one table.
+    it("accepts every finding about one table for an entry without a table, one per column", () => {
+        expect.assertions(2);
+
+        const columnFinding = (column: string, table: string): Finding =>
+            finding({ level: "WARN", metadata: { column, exportName: "listUsers", file: "lunora/users.ts", table }, name: "mask_weak_hash_strategy_on_pii" });
+        const untabled: AcceptedFinding = {
+            exportName: "listUsers",
+            file: "lunora/users.ts",
+            level: "WARN",
+            reason: "hashes are salted",
+            rule: "mask_weak_hash_strategy_on_pii",
+        };
+
+        const result = applyAcceptedFindings([columnFinding("email", "users"), columnFinding("phone", "users")], [untabled]);
+        const unknownTable = applyAcceptedFindings([columnFinding("email", "")], [untabled]);
+
+        expect(result.map((advisory) => advisory.level)).toStrictEqual(["INFO", "INFO"]);
+        expect(unknownTable.map((advisory) => advisory.level)).toStrictEqual(["INFO"]);
+    });
+
+    it("does not match an entry that names a table to a finding about no table", () => {
+        expect.assertions(1);
+
+        const [kept] = applyAcceptedFindings([finding({})], [{ ...entry, table: "members" }]);
+
+        expect(kept?.level).toBe("ERROR");
+    });
+
     // The floor keeps an accepted ERROR, but not an accepted WARN or INFO, so an acceptance cannot bring back a finding the floor hides.
     it("keeps the floor's exemption for an accepted ERROR only", () => {
         expect.assertions(3);
