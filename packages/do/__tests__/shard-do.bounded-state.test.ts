@@ -39,7 +39,7 @@ class CountingMutationShard extends ShardDO {
 
     /** The in-memory per-function counters, which are `private` on the base — read here to assert the bound directly rather than through the durable read the admin RPC prefers. */
     public functionStatPaths(): string[] {
-        return [...(this as unknown as { functionStats: Map<string, unknown> }).functionStats.keys()];
+        return [...(this as unknown as { functionMetrics: { functionStats: Map<string, unknown> } }).functionMetrics.functionStats.keys()];
     }
 }
 
