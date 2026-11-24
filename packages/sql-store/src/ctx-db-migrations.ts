@@ -329,6 +329,53 @@ const indexShapeChanged = (dialect: SqlDialect, held: string, spec: { columns: S
     return wanted !== undefined && wanted !== indexColumnList(held);
 };
 
+/** An identifier as SQLite compares it: ASCII letters folded to lower case, everything else untouched. Not `toLowerCase()`, which also folds non-ASCII letters that SQLite keeps distinct. */
+const foldIdentifier = (name: string): string => name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
+
+/**
+ * The `sqlite_master` rows one table's provisioning judges its DDL against: the table's own `CREATE TABLE` text and the
+ * stored `CREATE INDEX` text of each index on it. Read by {@link readTableCatalog} in one query per table, and kept in step
+ * with the table's own DROPs, so a name is never judged against a definition the run has already removed.
+ */
+interface TableCatalog {
+    /** Index definitions by folded name. An implicit index (no stored `sql`) is absent: there is nothing of ours in it to replace. */
+    indexes: Map<string, string>;
+    /** The table's `CREATE TABLE` text, or `undefined` when it does not exist yet. */
+    table: string | undefined;
+}
+
+/**
+ * Read `tableName`'s rows from `sqlite_master` with one targeted query. A lookup per declared index would scan the whole
+ * catalog each time, since `sqlite_master` has no index to seek. The query is targeted rather than the whole catalog because
+ * the sequential route is the fallback for an engine that refuses the batched planner's whole-catalog read; it must keep
+ * working when that read is refused.
+ */
+const readTableCatalog = async (exec: SqlCtxExec, dialect: SqlDialect, tableName: string): Promise<TableCatalog> => {
+    const catalog: TableCatalog = { indexes: new Map(), table: undefined };
+
+    if (dialect.name !== "sqlite") {
+        return catalog;
+    }
+
+    const rows = await queryAll(exec, dialect, sql`SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ${tableName} COLLATE NOCASE`);
+
+    for (const row of rows) {
+        const statement = row["sql"];
+
+        if (typeof statement !== "string") {
+            continue;
+        }
+
+        if (row["type"] === "table") {
+            catalog.table = statement;
+        } else if (row["type"] === "index") {
+            catalog.indexes.set(foldIdentifier(String(row["name"])), statement);
+        }
+    }
+
+    return catalog;
+};
+
 /**
  * Drop `name` when the engine already holds an index by that name built from a
  * DIFFERENT column list.
@@ -348,21 +395,16 @@ const dropIndexIfShapeChanged = async (
     exec: SqlCtxExec,
     dialect: SqlDialect,
     spec: { columns: SQL; name: string; refs: SQL[]; table: string; unique: boolean },
+    catalog: TableCatalog,
 ): Promise<void> => {
     if (dialect.name !== "sqlite") {
         return;
     }
 
-    const held = await queryAll(
-        exec,
-        dialect,
-        sql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${spec.name} COLLATE NOCASE AND tbl_name = ${spec.table} COLLATE NOCASE`,
-    );
-    const current = held[0]?.["sql"];
+    // No entry, or an implicit index the engine created for a constraint — nothing of ours to replace.
+    const current = catalog.indexes.get(foldIdentifier(spec.name));
 
-    // No row, or an implicit index the engine created for a constraint (`sql` is
-    // NULL there) — nothing of ours to replace.
-    if (typeof current !== "string") {
+    if (current === undefined) {
         return;
     }
 
@@ -388,6 +430,7 @@ const dropIndexIfShapeChanged = async (
     }
 
     await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(spec.name)}`);
+    catalog.indexes.delete(foldIdentifier(spec.name));
 };
 
 /** One index a `.global()` table is provisioned with. */
@@ -492,9 +535,6 @@ const indexLedgerDdl = (): SQL =>
 const recordIndexStatement = (indexName: string, tableName: string): SQL =>
     sql`INSERT OR IGNORE INTO ${sql.identifier(INDEX_LEDGER_TABLE)} (name, table_name) VALUES (${indexName}, ${tableName})`;
 
-/** An identifier as SQLite compares it: ASCII letters folded to lower case, everything else untouched. Not `toLowerCase()`, which also folds non-ASCII letters that SQLite keeps distinct. */
-const foldIdentifier = (name: string): string => name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
-
 /**
  * Create the ledger of framework-created indexes for these tables. A database that has none yet predates it, so the first
  * run adopts every index the old name-and-SQL-shape rule would have called ours (named `<table>_<something>`, bar the
@@ -567,7 +607,13 @@ const undeclaredFrameworkIndexes = (dialect: SqlDialect, specs: ReadonlyArray<Gl
 };
 
 /** Drop the indexes a global table holds for declarations it no longer has (see {@link undeclaredFrameworkIndexes}). */
-const dropUndeclaredGlobalIndexes = async (exec: SqlCtxExec, tableName: string, specs: ReadonlyArray<GlobalIndexSpec>, dialect: SqlDialect): Promise<void> => {
+const dropUndeclaredGlobalIndexes = async (
+    exec: SqlCtxExec,
+    tableName: string,
+    specs: ReadonlyArray<GlobalIndexSpec>,
+    dialect: SqlDialect,
+    catalog: TableCatalog,
+): Promise<void> => {
     if (dialect.name !== "sqlite") {
         return;
     }
@@ -585,13 +631,20 @@ const dropUndeclaredGlobalIndexes = async (exec: SqlCtxExec, tableName: string, 
     )) {
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
         await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(name)}`);
+        catalog.indexes.delete(foldIdentifier(name));
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(INDEX_LEDGER_TABLE)} WHERE ${sql.identifier(INDEX_LEDGER_TABLE)}."name" = ${name}`);
     }
 };
 
 /** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
-const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
+const createGlobalTableIndexes = async (
+    exec: SqlCtxExec,
+    tableName: string,
+    definition: SchemaLike["tables"][string],
+    dialect: SqlDialect,
+    catalog: TableCatalog,
+): Promise<void> => {
     const specs = globalTableIndexSpecs(tableName, definition, dialect);
 
     for (const spec of specs) {
@@ -603,7 +656,7 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
 
         if (spec.kind === "declared") {
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-            await dropIndexIfShapeChanged(exec, dialect, spec);
+            await dropIndexIfShapeChanged(exec, dialect, spec, catalog);
         }
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
@@ -615,7 +668,7 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
         }
     }
 
-    await dropUndeclaredGlobalIndexes(exec, tableName, specs, dialect);
+    await dropUndeclaredGlobalIndexes(exec, tableName, specs, dialect, catalog);
 };
 
 /**
@@ -972,7 +1025,8 @@ const provisionGlobalTable = async (exec: SqlCtxExec, tableName: string, definit
     await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
     await alterGlobalTableDrift(exec, tableName, definition, dialect);
     await relaxNullAcceptingColumns(exec, tableName, definition, dialect);
-    await createGlobalTableIndexes(exec, tableName, definition, dialect);
+    // Read before any index DDL of this table, so each name is judged against the table as this run found it.
+    await createGlobalTableIndexes(exec, tableName, definition, dialect, await readTableCatalog(exec, dialect, tableName));
     await rewriteLegacyBigintColumns(exec, tableName, definition, dialect);
     await rewriteLegacyUntypedNumbers(exec, tableName, definition, dialect);
 };
@@ -1127,24 +1181,23 @@ const dropRankCompanionIfColumnsChanged = async (
     dialect: SqlDialect,
     rankTable: string,
     sortColumns: ReadonlyArray<string>,
-): Promise<void> => {
-    if (dialect.name !== "sqlite") {
-        return;
-    }
-
-    const rows = await queryAll(exec, dialect, sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${rankTable} COLLATE NOCASE`);
-    const statement = rows[0]?.["sql"];
-
+    catalog: TableCatalog,
+): Promise<TableCatalog> => {
     // An absent table has nothing to drop.
-    if (typeof statement !== "string") {
-        return;
+    if (dialect.name !== "sqlite" || catalog.table === undefined) {
+        return catalog;
     }
 
-    const held = statement.match(SORT_COLUMN_NAME) ?? [];
+    const held = catalog.table.match(SORT_COLUMN_NAME) ?? [];
 
-    if (held.length !== sortColumns.length || held.some((name, i) => name !== sortColumns[i])) {
-        await queryRun(exec, dialect, sql`DROP TABLE ${sql.identifier(rankTable)}`);
+    if (held.length === sortColumns.length && held.every((name, i) => name === sortColumns[i])) {
+        return catalog;
     }
+
+    await queryRun(exec, dialect, sql`DROP TABLE ${sql.identifier(rankTable)}`);
+
+    // Dropping the table takes its indexes with it, so nothing of the old catalog still holds.
+    return { indexes: new Map(), table: undefined };
 };
 
 /**
@@ -1179,12 +1232,16 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
             const rankTable = rankTableName(tableName, index.name);
             const sortColumnDefs = rankSortColumnDefs(dialect, index, definition);
 
+            // eslint-disable-next-line no-await-in-loop -- one targeted read per companion, before its DDL.
+            const rankCatalog = await readTableCatalog(exec, dialect, rankTable);
+
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection; a reshaped companion goes before its CREATE below.
-            await dropRankCompanionIfColumnsChanged(
+            const companionCatalog = await dropRankCompanionIfColumnsChanged(
                 exec,
                 dialect,
                 rankTable,
                 index.sortBy.map((_, i) => sortColumnName(i)),
+                rankCatalog,
             );
 
             const columnPart = sortColumnDefs.length > 0 ? sql`, ${sql.join(sortColumnDefs, sql`, `)}` : sql``;
@@ -1203,7 +1260,7 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
 
             // A flipped sort direction changes the btree's column list under the same name.
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
-            await dropIndexIfShapeChanged(exec, dialect, btree);
+            await dropIndexIfShapeChanged(exec, dialect, btree, companionCatalog);
             // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
             await createIndexIfNotExists(exec, dialect, btree);
         }
