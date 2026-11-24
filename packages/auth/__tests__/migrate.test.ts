@@ -353,10 +353,9 @@ describe("ensureMigrated", () => {
         warn.mockRestore();
     });
 
-    it("fills a table larger than any page budget in one call, and resumes a call cut short", async () => {
-        // A hand-written or event-only worker may run `ensureMigrated` once per isolate, so one
-        // call must finish the backfill; a call D1 cuts short rejects, and the retry resumes.
-        expect.assertions(3);
+    it("runs a bounded backfill pass per call that never rejects it, each call resuming where the last stopped", async () => {
+        // The generated worker awaits this ahead of every route, sharing D1's per-invocation query limit.
+        expect.assertions(4);
 
         mockGetMigrations.mockReset();
         mockGetMigrations.mockResolvedValue(makeMigrations() as never);
@@ -391,12 +390,49 @@ describe("ensureMigrated", () => {
             return prepare(query);
         };
 
-        await expect(ensureMigrated({ options })).rejects.toThrow("Too many API requests");
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        // Cut short on its third page: the request still gets its auth, and the two pages it wrote stay written.
+        await expect(ensureMigrated({ options })).resolves.toBeUndefined();
         await expect(unfilled()).resolves.toStrictEqual({ n: 601 });
 
+        // One bounded pass a call.
         await ensureMigrated({ options });
 
         await expect(unfilled()).resolves.toStrictEqual({ n: 0 });
+
+        const later = vi.spyOn(database, "prepare");
+
+        await ensureMigrated({ options });
+
+        expect(later).not.toHaveBeenCalled();
+
+        error.mockRestore();
+    });
+
+    it("rewrites decomposed invitation addresses through better-auth's adapter on a database that is not D1", async () => {
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = sqliteWithUsers();
+
+        database.exec(
+            `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "tokenHash" text, "invitedBy" text, "acceptedAt" date, "createdAt" date NOT NULL, "expiresAt" date NOT NULL)`,
+        );
+        database
+            .prepare(`INSERT INTO "signUpInvitation" ("id", "email", "createdAt", "expiresAt") VALUES ('i', ?, '2026-01-01', '2099-01-01')`)
+            .run("élise@example.com");
+
+        await ensureMigrated({ options: resolveAuthOptions({ database: database as never, plugins: [inviteOnly()], secret: "x".repeat(32) }) });
+
+        expect(
+            database
+                .prepare(`SELECT "email" FROM "signUpInvitation"`)
+                .all()
+                .map((row) => (row as { email: string }).email),
+        ).toStrictEqual(["élise@example.com"]);
     });
 
     it("migrates raw options to the schema an instance writes, canonical column and backfill included", async () => {

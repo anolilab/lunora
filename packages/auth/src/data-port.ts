@@ -32,7 +32,7 @@ import { getAuthTables } from "better-auth/db";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { AUTH_AUDIT_TABLE } from "./audit";
 import type { CanonicalEmailColumn } from "./canonical-email";
-import { warnDuplicates, withCanonicalEmailValue } from "./canonical-email";
+import { asciiSuffix, CANONICAL_EMAIL_FIELD, canonicalEmail as foldEmail, warnDuplicates, withCanonicalEmailValue } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
 
@@ -333,6 +333,41 @@ const heldCanonical = (
     };
 };
 
+/** better-auth's own names for the canonical column, for a port wired without `authCanonicalEmailColumn`'s answer. */
+const DEFAULT_CANONICAL_EMAIL: CanonicalEmailColumn = { canonical: CANONICAL_EMAIL_FIELD, email: "email", table: "user" };
+
+/**
+ * Whether a `user` row's canonical address is already held by a target row the backfill has not filled. The
+ * unique index cannot see that one: its value is `NULL`. Folded in JS like `canonicalHolders`, over the same
+ * narrowed read.
+ */
+const heldByUnfilledRow = async (
+    sql: AuthSqlReader,
+    row: Row,
+    table: string,
+    column: CanonicalEmailColumn | undefined,
+    known: ReadonlyArray<string>,
+): Promise<boolean> => {
+    const address = column?.table === table ? row[column.canonical] : undefined;
+
+    // A table without the column (a schema that predates it) has no holder to find, and on workerd a bare
+    // unknown column reads as a string literal rather than failing.
+    if (column === undefined || typeof address !== "string" || !known.includes(column.canonical)) {
+        return false;
+    }
+
+    const email = quoteIdentifier(column.email);
+    const suffix = asciiSuffix(address);
+    const unfilled = await sql.all(
+        `SELECT ${email} AS "email" FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(column.canonical)} IS NULL${
+            suffix === "" ? "" : ` AND substr(LOWER(${email}), -length(?)) = LOWER(?)`
+        }`,
+        suffix === "" ? [] : [suffix, suffix],
+    );
+
+    return unfilled.some((holder) => typeof holder["email"] === "string" && foldEmail(holder["email"]) === address);
+};
+
 /**
  * Insert wire-encoded rows, skipping any that collide with an existing key or
  * unique value. Only columns the table has are written, so a row from a newer
@@ -361,13 +396,10 @@ const insertAuthRows = async (
             continue;
         }
 
-        let known = columns.get(table);
+        // eslint-disable-next-line no-await-in-loop -- once per table
+        const known = columns.get(table) ?? (await columnsOf(sql, table));
 
-        if (known === undefined) {
-            // eslint-disable-next-line no-await-in-loop -- once per table
-            known = await columnsOf(sql, table);
-            columns.set(table, known);
-        }
+        columns.set(table, known);
 
         const decodedRow = decodeRow(doc, table, credentialColumns);
 
@@ -378,6 +410,12 @@ const insertAuthRows = async (
 
         const row = seen.without(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail), table);
         const names = Object.keys(row).filter((name) => known.includes(name));
+
+        // eslint-disable-next-line no-await-in-loop -- rows go in order, and a holder may be one this import wrote
+        if (await heldByUnfilledRow(sql, row, table, canonicalEmail, known)) {
+            result.conflicts += 1;
+            continue;
+        }
 
         if (names.length === 0) {
             result.errors.push({ index, message: `no column of the row exists on "${table}"`, table });
@@ -598,13 +636,15 @@ const replaceAuthRows = async (
  * @param credentialTables The live-credential tables a replace clears — {@link authCredentialTableNames}, minus the same.
  * @param credentialColumns The provider-token columns an export nulls and an import drops — {@link authCredentialColumns}.
  * @param canonicalEmail Where `user.emailCanonical` lives — `authCanonicalEmailColumn`; an import and a replace recompute it from `email`.
+ * Defaults to better-auth's own names, so a port wired without it still never trusts a supplied value.
  */
 const createSqlAuthDataPort = (
     executor: SqlExecutor,
     tables: ReadonlyArray<string>,
     credentialTables: ReadonlyArray<string> = [],
     credentialColumns: CredentialColumns = {},
-    canonicalEmail?: CanonicalEmailColumn,
+    // Defaulted, not optional: a port wired without it would write a snapshot's canonical address as given.
+    canonicalEmail: CanonicalEmailColumn = DEFAULT_CANONICAL_EMAIL,
 ): AuthDataPortLike => {
     const { batch } = executor;
 

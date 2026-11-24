@@ -127,9 +127,9 @@ const fieldValidator = (attribute: AuthFieldAttribute): Validator => {
  * Unicode-folded copy of `email`, which the admin plane's duplicate-address check matches
  * on. Because these tables are ordinary schema tables, the admin-token import writes their
  * rows as given, and that includes `emailCanonical`. Such an import is trusted operator
- * input. An empty value is refilled from `email` by the next backfill (Durable Object cold
- * start, `ensureMigrated`). A value that does not match its `email` is kept, and the
- * duplicate check then trusts it. The auth data port's own import recomputes the value instead.
+ * input. A `NULL` value is refilled from `email` by the backfill (Durable Object, `ensureMigrated`),
+ * which reads `IS NULL` only: an empty string is kept, so supply `null` for a missing value. A value
+ * that does not match its `email` is kept too, and the duplicate check then trusts it. The auth data port's own import recomputes the value instead.
  */
 const authTables = (options: LunoraAuthOptions): Record<string, TableDefinition> => {
     // The canonical-email column is Lunora's, not the caller's, so it is declared here

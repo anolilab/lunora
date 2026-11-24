@@ -23,9 +23,11 @@ const CANONICAL_EMAIL_FIELD = "emailCanonical";
 /**
  * Two addresses are the same account when this returns the same string. NFC first, so
  * a precomposed `é` and `e` + combining acute fold together, then full Unicode
- * lowercasing, which SQLite's `LOWER()` does not do.
+ * lowercasing, which SQLite's `LOWER()` does not do, then NFC again: lowercasing can leave
+ * a sequence NFC composes (`J` + caron lowercases to `j` + caron, which is `ǰ`), and the key
+ * must not depend on which spelling came in.
  */
-const canonicalEmail = (email: string): string => email.trim().normalize("NFC").toLowerCase();
+const canonicalEmail = (email: string): string => email.trim().normalize("NFC").toLowerCase().normalize("NFC");
 
 type DatabaseHooks = NonNullable<BetterAuthOptions["databaseHooks"]>;
 type UserHooks = NonNullable<DatabaseHooks["user"]>;
@@ -42,9 +44,12 @@ const replacedData = (result: unknown): Record<string, unknown> | undefined => {
     return typeof data === "object" && data !== null ? (data as Record<string, unknown>) : undefined;
 };
 
-/** The address a hook's write leaves in place: the hook's own when it set the key (even to `undefined`), else the caller's. */
+/**
+ * The address a hook's write leaves in place: the hook's own when it set the key (even to `undefined`), else the
+ * caller's. Own enumerable keys only, as better-auth's spread merges them: an inherited `email` is not written.
+ */
 const writtenEmail = (replaced: Record<string, unknown> | undefined, data: Record<string, unknown>): unknown =>
-    replaced !== undefined && "email" in replaced ? replaced["email"] : data["email"];
+    replaced !== undefined && Object.keys(replaced).includes("email") ? replaced["email"] : data["email"];
 
 /**
  * The data a `before` hook hands back once the caller's own hook has run over `data` and
@@ -67,7 +72,7 @@ const withCanonicalData = (replaced: Record<string, unknown> | undefined, data: 
     return { ...replaced, [CANONICAL_EMAIL_FIELD]: typeof email === "string" ? canonicalEmail(email) : undefined };
 };
 
-type Where = { field: string; operator?: "gt" | "in"; value: string[] | string | null }[];
+type Where = { field: string; mode?: "insensitive"; operator?: "ends_with" | "gt" | "in"; value: string[] | string | null }[];
 
 /**
  * The subset of better-auth's adapter the adapter-driven backfill and {@link canonicalHolders}
@@ -75,7 +80,13 @@ type Where = { field: string; operator?: "gt" | "in"; value: string[] | string |
  */
 interface BackfillAdapter {
     count: (query: { model: string; where: Where }) => Promise<number>;
-    findMany: <T>(query: { limit: number; model: string; sortBy?: { direction: "asc"; field: string }; where: Where }) => Promise<T[]>;
+    findMany: <T>(query: {
+        limit: number;
+        model: string;
+        offset?: number;
+        sortBy?: { direction: "asc" | "desc"; field: string };
+        where?: Where;
+    }) => Promise<T[]>;
     findOne: <T>(query: { model: string; where: Where }) => Promise<T | null>;
     update: <T>(query: { model: string; update: Record<string, unknown>; where: Where }) => Promise<T | null>;
 }
@@ -84,22 +95,42 @@ interface BackfillAdapter {
 const UNFILLED: Where = [{ field: CANONICAL_EMAIL_FIELD, value: null }];
 
 /**
+ * The longest run of printable ASCII `canonical` ends with. A stored address folds to `canonical` only if it
+ * ends with the same characters in some ASCII case: lowercasing and NFC leave printable ASCII as it is (bar
+ * the Kelvin sign, which NFC maps to `K`), and compose only into non-ASCII characters.
+ */
+const asciiSuffix = (canonical: string): string => {
+    let start = canonical.length;
+
+    // Printable ASCII is U+0020 (space) to U+007E (tilde).
+    // A surrogate half reads as 0xD800-0xDFFF, outside the range, so a code unit at a time is enough.
+    for (let code = canonical.codePointAt(start - 1) ?? 0; start > 0 && code >= 0x20 && code <= 0x7e; code = canonical.codePointAt(start - 1) ?? 0) {
+        start -= 1;
+    }
+
+    return canonical.slice(start);
+};
+
+/**
  * Every account that holds `email` once case and Unicode form are ignored: the one whose
  * canonical value it is, and any whose canonical value is still empty (written before the
  * column and not yet backfilled, or a duplicate the backfill leaves) and whose address folds
  * to it. Those cannot be matched in SQL (`LOWER()` folds ASCII only, and nothing in SQLite
- * normalises Unicode form), so they are read and folded here, through the canonical index's
- * `IS NULL` range: a set the backfill only shrinks, so once a table is filled this is one
- * empty count.
+ * normalises Unicode form), so they are folded here; the read is narrowed in SQL first, to
+ * the canonical index's `IS NULL` range and, within it, the addresses that end with the same
+ * printable-ASCII run ({@link asciiSuffix}). Once a table is filled this is one empty count.
  */
 const canonicalHolders = async (adapter: BackfillAdapter, email: string): Promise<{ email?: unknown; id: string }[]> => {
     const canonical = canonicalEmail(email);
+    const suffix = asciiSuffix(canonical);
+    const candidates: Where = suffix === "" ? UNFILLED : [...UNFILLED, { field: "email", mode: "insensitive", operator: "ends_with", value: suffix }];
     const [held, unfilledCount] = await Promise.all([
         adapter.findMany<{ email?: unknown; id: string }>({ limit: 1, model: "user", where: [{ field: CANONICAL_EMAIL_FIELD, value: canonical }] }),
-        adapter.count({ model: "user", where: UNFILLED }),
+        adapter.count({ model: "user", where: candidates }),
     ]);
     // An adapter's `findMany` defaults to a small limit, so the count sets it.
-    const unfilled = unfilledCount > 0 ? await adapter.findMany<{ email?: unknown; id: string }>({ limit: unfilledCount, model: "user", where: UNFILLED }) : [];
+    const unfilled =
+        unfilledCount > 0 ? await adapter.findMany<{ email?: unknown; id: string }>({ limit: unfilledCount, model: "user", where: candidates }) : [];
 
     return [...held, ...unfilled.filter((row) => typeof row.email === "string" && canonicalEmail(row.email) === canonical)];
 };
@@ -313,6 +344,52 @@ const writeBackfillState = function* writeBackfillState(name: string, cursor: un
           };
 };
 
+/**
+ * What a backfill run found, filled in as it goes so a run that fails part-way still reports the pages it
+ * finished: those are behind the saved position, and the retry does not read them again.
+ */
+interface BackfillReport {
+    /** Whether the run reached the end of the table; otherwise its position is saved and the next run resumes. */
+    complete: boolean;
+    duplicates: number;
+}
+
+/** What a backfill's steps record into: methods, so the steps fill in a report their runner owns. */
+interface BackfillTally {
+    done: () => void;
+    duplicate: (count: number) => void;
+}
+
+/** A report and the tally that fills it in. */
+const backfillTally = (): { report: BackfillReport; tally: BackfillTally } => {
+    const report: BackfillReport = { complete: false, duplicates: 0 };
+
+    return {
+        report,
+        tally: {
+            done: () => {
+                report.complete = true;
+            },
+            duplicate: (count) => {
+                report.duplicates += count;
+            },
+        },
+    };
+};
+
+/**
+ * Pages one D1 run fills at most: three queries a page (read, write, position), so a run leaves most of the
+ * per-invocation query limit (50 on the Workers Free plan) to the request it shares it with. The rest of a
+ * larger table fills over later runs.
+ */
+const BACKFILL_MAX_PAGES = 5;
+
+/** The same for a Durable Object: no query limit, but one run is one request's CPU time and one storage commit. */
+const BACKFILL_MAX_PAGES_SYNC = 20;
+
+/** An alias that cannot be the name of the table it is used beside. */
+const aliasBeside = (table: string, name: string): string => quote(`${table}__${name}`);
+
 /** A page's rows to fill as `[rowid, email, canonical]`: the first per canonical value, as two in one statement would both pass `NOT EXISTS`. */
 const pageFills = (rows: Record<string, unknown>[]): Map<string, [unknown, string, string]> => {
     const fills = new Map<string, [unknown, string, string]>();
@@ -343,41 +420,41 @@ const pageFills = (rows: Record<string, unknown>[]): Map<string, [unknown, strin
  * is a range of the canonical column's own index, so a fully backfilled table costs one
  * empty read.
  *
- * Runs to the end of the table. Each page records the last row it read, so a run cut short
- * resumes after it; reaching the end clears that, so the next pass (a later cold start)
+ * At most `maxPages` pages a run. Each page records the last row it read, so the next run (or a
+ * retry of one cut short) resumes after it; reaching the end clears that, so the next pass
  * starts over and fills a duplicate the operator has since resolved.
- * @returns How many rows could not be filled because another row holds their canonical value.
  */
-const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn): BackfillSteps<number> {
+const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxPages: number, tally: BackfillTally): BackfillSteps<void> {
     const table = quote(column.table);
     const canonical = quote(column.canonical);
     const email = quote(column.email);
+    const values = aliasBeside(column.table, "v");
+    const held = aliasBeside(column.table, "held");
     // Keyed on the physical names: another auth configuration's table in the same database has its own rowids.
     const state = `${column.table}.${column.canonical}`;
     const resumed = yield* readBackfillState(state);
     let after = typeof resumed === "number" ? resumed : 0;
-    let duplicates = 0;
 
-    for (;;) {
+    for (let page = 0; page < maxPages; page += 1) {
         const rows = yield {
             params: [after, BACKFILL_PAGE_ROWS],
             sql: `SELECT rowid AS "rid", ${email} AS "email" FROM ${table} WHERE ${canonical} IS NULL AND rowid > ? ORDER BY rowid LIMIT ?`,
         };
         const fills = pageFills(rows);
 
-        duplicates += rows.filter((row) => typeof row["email"] === "string").length - fills.size;
+        tally.duplicate(rows.filter((row) => typeof row["email"] === "string").length - fills.size);
 
         if (fills.size > 0) {
             const filled = yield {
                 params: [JSON.stringify([...fills.values()])],
                 sql:
-                    `UPDATE ${table} SET ${canonical} = "v"."canonical" ` +
-                    `FROM (SELECT json_extract("value", '$[0]') AS "rid", json_extract("value", '$[1]') AS "email", json_extract("value", '$[2]') AS "canonical" FROM json_each(?)) AS "v" ` +
-                    `WHERE ${table}.rowid = "v"."rid" AND ${table}.${email} = "v"."email" AND ${table}.${canonical} IS NULL ` +
-                    `AND NOT EXISTS (SELECT 1 FROM ${table} AS "held" WHERE "held".${canonical} = "v"."canonical") RETURNING rowid`,
+                    `UPDATE ${table} SET ${canonical} = ${values}."canonical" ` +
+                    `FROM (SELECT json_extract("value", '$[0]') AS "rid", json_extract("value", '$[1]') AS "email", json_extract("value", '$[2]') AS "canonical" FROM json_each(?)) AS ${values} ` +
+                    `WHERE ${table}.rowid = ${values}."rid" AND ${table}.${email} = ${values}."email" AND ${table}.${canonical} IS NULL ` +
+                    `AND NOT EXISTS (SELECT 1 FROM ${table} AS ${held} WHERE ${held}.${canonical} = ${values}."canonical") RETURNING rowid`,
             };
 
-            duplicates += fills.size - filled.length;
+            tally.duplicate(fills.size - filled.length);
         }
 
         const last = rows.at(-1)?.["rid"];
@@ -387,7 +464,9 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn): Bac
                 yield* writeBackfillState(state, undefined);
             }
 
-            return duplicates;
+            tally.done();
+
+            return;
         }
 
         after = last;
@@ -438,27 +517,31 @@ const runBackfillSync = <R>(steps: BackfillSteps<R>, exec: (sql: string, params:
 
 /**
  * Fill the canonical column for rows written before it existed, through an async executor
- * (D1), to the end of the table, resuming where a run cut short stopped.
- * @returns How many rows could not be filled because another row holds their canonical value.
+ * (D1), at most {@link BACKFILL_MAX_PAGES} pages, resuming where the last run stopped.
  */
-const backfillCanonicalEmails = async (executor: BackfillExecutor, column: CanonicalEmailColumn): Promise<number> => {
-    const duplicates = await runBackfill(backfillSteps(column), executor);
+const backfillCanonicalEmails = async (executor: BackfillExecutor, column: CanonicalEmailColumn): Promise<BackfillReport> => {
+    const { report, tally } = backfillTally();
 
-    warnDuplicates(duplicates, column);
+    try {
+        await runBackfill(backfillSteps(column, BACKFILL_MAX_PAGES, tally), executor);
+    } finally {
+        warnDuplicates(report.duplicates, column);
+    }
 
-    return duplicates;
+    return report;
 };
 
-/**
- * The same backfill over a synchronous executor (a Durable Object's `storage.sql.exec`).
- * @returns How many rows could not be filled because another row holds their canonical value.
- */
-const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], column: CanonicalEmailColumn): number => {
-    const duplicates = runBackfillSync(backfillSteps(column), exec);
+/** The same backfill over a synchronous executor (a Durable Object's `storage.sql.exec`), at most {@link BACKFILL_MAX_PAGES_SYNC} pages. */
+const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], column: CanonicalEmailColumn): BackfillReport => {
+    const { report, tally } = backfillTally();
 
-    warnDuplicates(duplicates, column);
+    try {
+        runBackfillSync(backfillSteps(column, BACKFILL_MAX_PAGES_SYNC, tally), exec);
+    } finally {
+        warnDuplicates(report.duplicates, column);
+    }
 
-    return duplicates;
+    return report;
 };
 
 /**
@@ -548,9 +631,13 @@ const backfillCanonicalEmailsThroughAdapter = async (adapter: BackfillAdapter): 
     }
 };
 
-export type { BackfillAdapter, BackfillExecutor, BackfillStep, BackfillSteps, CanonicalEmailColumn };
+export type { BackfillAdapter, BackfillExecutor, BackfillReport, BackfillStep, BackfillSteps, CanonicalEmailColumn };
 export {
+    aliasBeside,
+    asciiSuffix,
     authCanonicalEmailColumn,
+    BACKFILL_MAX_PAGES,
+    BACKFILL_MAX_PAGES_SYNC,
     BACKFILL_PAGE_ROWS,
     BACKFILL_STATE_TABLE,
     backfillCanonicalEmails,

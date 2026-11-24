@@ -10,6 +10,8 @@ import { INTERNAL_SECRET_HEADER, LunoraAuthDO, RESOLVE_SESSION_PATH } from "../s
 import type { BackfillAdapter } from "../src/canonical-email";
 import {
     authCanonicalEmailColumn,
+    BACKFILL_MAX_PAGES,
+    BACKFILL_MAX_PAGES_SYNC,
     BACKFILL_PAGE_ROWS,
     backfillCanonicalEmails,
     backfillCanonicalEmailsThroughAdapter,
@@ -21,6 +23,7 @@ import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import type { AuthDataPortLike } from "../src/data-port";
 import { authCredentialColumns, authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "../src/data-port";
 import { authDoSchemaStatements } from "../src/do-schema";
+import { createDoAuthWiring } from "../src/do-wiring";
 import { backfillInvitationEmails, backfillInvitationEmailsSync, invitationEmailColumns } from "../src/invitation-email-backfill";
 import { inviteOnly } from "../src/invite-only";
 import { admin } from "../src/plugins";
@@ -217,11 +220,11 @@ describe("canonical email", () => {
 
         expect(lookups).toStrictEqual([
             `SELECT * FROM "user" WHERE (("emailCanonical" = ?)) LIMIT ?`,
-            `SELECT COUNT(*) AS __count FROM "user" WHERE (("emailCanonical" IS NULL))`,
+            `SELECT COUNT(*) AS __count FROM "user" WHERE (("emailCanonical" IS NULL) AND (substr(LOWER("email"), -length(?)) = LOWER(?)))`,
         ]);
         // The unfilled-row count reads the canonical index's `IS NULL` range, not the table.
-        expect((database.prepare(`EXPLAIN QUERY PLAN ${lookups[1]!}`).all() as { detail: string }[]).map((step) => step.detail).join("\n")).toContain(
-            "USING COVERING INDEX user_emailCanonical_uidx",
+        expect((database.prepare(`EXPLAIN QUERY PLAN ${lookups[1]!}`).all("x", "x") as { detail: string }[]).map((step) => step.detail).join("\n")).toContain(
+            "USING INDEX user_emailCanonical_uidx",
         );
     });
 
@@ -394,6 +397,58 @@ describe("canonical email", () => {
         });
     });
 
+    it("gives both spellings of an address whose lowercase NFC composes the same key", () => {
+        expect.assertions(2);
+
+        // `J` + caron lowercases to `j` + caron, which NFC composes to `ǰ`.
+        expect(canonicalEmail("J̌@example.com")).toBe(canonicalEmail("ǰ@example.com"));
+        expect(canonicalEmail(canonicalEmail("J̌@example.com"))).toBe(canonicalEmail("J̌@example.com"));
+    });
+
+    it("reads only the unfilled rows whose address can fold to the one checked", async () => {
+        expect.assertions(2);
+
+        const insert = database.prepare(
+            `INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (?, 'Legacy', ?, 0, 'x', 'x')`,
+        );
+
+        for (let index = 0; index < 50; index += 1) {
+            insert.run(`legacy${String(index)}`, `Legacy${String(index)}@Example.com`);
+        }
+
+        insert.run("variant", DECOMPOSED);
+
+        const all = vi.spyOn(executor, "all");
+
+        await expect(adminApi.createUser({ email: UPPER, name: "Twin" })).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+
+        const unfilledReads = all.mock.calls.filter(([sql]) => sql.startsWith(`SELECT * FROM "user"`) && sql.includes("IS NULL"));
+
+        // One row: the variant. A read of all 51 unfilled rows would be the whole legacy table.
+        expect(unfilledReads.map(([, parameters]) => parameters.at(-1))).toStrictEqual([1]);
+    });
+
+    it("counts an import of a variant of an address an unfilled target row holds as a conflict", async () => {
+        expect.assertions(2);
+
+        database
+            .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('legacy', 'Legacy', ?, 0, 'x', 'x')`)
+            .run(UPPER);
+
+        await expect(port.importRows([userRow("twin", LOWER)])).resolves.toMatchObject({ conflicts: 1, inserted: 0 });
+        expect(userCount()).toBe(1);
+    });
+
+    it("recomputes the canonical address on a port wired without the column's names", async () => {
+        expect.assertions(1);
+
+        const bare = createSqlAuthDataPort(executor, ["user"]);
+
+        await bare.importRows([{ doc: { ...userRow("forged", UPPER).doc, emailCanonical: "someone-else@example.com" }, table: "user" }]);
+
+        expect(canonicalOf("forged")).toBe(canonicalEmail(UPPER));
+    });
+
     it("never lets an internal-adapter update set or clear the canonical address without changing the address", async () => {
         expect.assertions(2);
 
@@ -490,6 +545,77 @@ describe("canonical email on the schema paths", () => {
         });
     });
 
+    it("ignores an `email` a caller hook's data only inherits, as better-auth's merge does", async () => {
+        expect.assertions(1);
+
+        const resolved = withCanonicalEmail<LunoraAuthOptions>({
+            databaseHooks: {
+                user: {
+                    update: {
+                        before: async () => {
+                            return { data: Object.create({ email: "inherited@example.com" }) as Record<string, unknown> };
+                        },
+                    },
+                },
+            },
+            secret: SECRET,
+        });
+
+        await expect(resolved.databaseHooks?.user?.update?.before?.({ email: UPPER }, null)).resolves.toStrictEqual({
+            data: { emailCanonical: canonicalEmail(UPPER) },
+        });
+    });
+
+    it("backfills a user table whose name is the alias the fill statement used", async () => {
+        expect.assertions(1);
+
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(`CREATE TABLE "v" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
+        database.prepare(`INSERT INTO "v" ("id", "email") VALUES ('u', ?)`).run(UPPER);
+
+        await backfillCanonicalEmails(executorFor(database), { canonical: "emailCanonical", email: "email", table: "v" });
+
+        expect(database.prepare(`SELECT "emailCanonical" FROM "v"`).get()).toEqual({ emailCanonical: canonicalEmail(UPPER) });
+    });
+
+    it("runs a bounded pass on the Durable Object's cold start and continues it on the next request", async () => {
+        expect.assertions(2);
+
+        const database = new DatabaseSync(":memory:");
+
+        for (const statement of authDoSchemaStatements(resolveAuthOptions({ secret: SECRET }))) {
+            database.exec(statement);
+        }
+
+        const insert = database.prepare(
+            `INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (?, 'x', ?, 0, 'x', 'x')`,
+        );
+
+        for (let index = 0; index <= BACKFILL_MAX_PAGES_SYNC * BACKFILL_PAGE_ROWS; index += 1) {
+            insert.run(`u${String(index)}`, `User${String(index)}@Example.com`);
+        }
+
+        const authDo = new LunoraAuthDO(
+            { storage: createDoStorage(database) },
+            () => {
+                return { secret: SECRET };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
+        const request = async (): Promise<Response> =>
+            authDo.fetch(new Request(`https://example.test${RESOLVE_SESSION_PATH}`, { headers: { [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET } }));
+        const unfilled = (): unknown => database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get();
+
+        await request();
+
+        expect(unfilled()).toEqual({ n: 1 });
+
+        await request();
+
+        expect(unfilled()).toEqual({ n: 0 });
+    });
+
     it("installs the hooks once, even when the app declares the field itself, keeping its column name", async () => {
         expect.assertions(4);
 
@@ -558,8 +684,8 @@ describe("canonical email on the schema paths", () => {
         };
     };
 
-    it("fills to the end of the table in one run, however many pages it takes", async () => {
-        expect.assertions(1);
+    it("fills a bounded number of pages a run, and the next run resumes", async () => {
+        expect.assertions(3);
 
         const database = new DatabaseSync(":memory:");
 
@@ -571,13 +697,20 @@ describe("canonical email on the schema paths", () => {
             insert.run(`u${String(index)}`, `User${String(index)}@Example.com`);
         }
 
-        await backfillCanonicalEmails(executorFor(database), { canonical: "emailCanonical", email: "email", table: "user" });
+        const column = { canonical: "emailCanonical", email: "email", table: "user" };
+        const unfilled = (): number => (database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get() as { n: number }).n;
 
-        expect((database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get() as { n: number }).n).toBe(0);
+        // A run shares D1's per-invocation query limit with its request, so it stops after BACKFILL_MAX_PAGES pages.
+        await expect(backfillCanonicalEmails(executorFor(database), column)).resolves.toStrictEqual({ complete: false, duplicates: 0 });
+        expect(unfilled()).toBe(1001 - BACKFILL_MAX_PAGES * BACKFILL_PAGE_ROWS);
+
+        await backfillCanonicalEmails(executorFor(database), column);
+
+        expect(unfilled()).toBe(0);
     });
 
-    it("resumes a run cut short where it stopped, so rows it cannot fill are not read again", async () => {
-        expect.assertions(4);
+    it("resumes a run cut short where it stopped, reporting what the cut-short run found", async () => {
+        expect.assertions(5);
 
         const database = new DatabaseSync(":memory:");
 
@@ -604,11 +737,13 @@ describe("canonical email on the schema paths", () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         await expect(backfillCanonicalEmails({ all: cutShortAfter(database, "user", 3) }, column)).rejects.toThrow("Too many API requests");
+        // Those rows are behind the saved position: a retry would never report them.
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("600 user row(s)"));
 
         const all = vi.fn<SqlExecutor["all"]>(executorFor(database).all);
 
         // The cut-short run read three pages and recorded two; the resumed one reads what is left.
-        await expect(backfillCanonicalEmails({ all }, column)).resolves.toBe(400);
+        await expect(backfillCanonicalEmails({ all }, column)).resolves.toStrictEqual({ complete: true, duplicates: 400 });
         expect(all.mock.calls.find(([sql]) => sql.startsWith(`SELECT rowid AS "rid"`))?.[1]).toStrictEqual([601, BACKFILL_PAGE_ROWS]);
         expect((database.prepare(`SELECT "emailCanonical" FROM "user" WHERE "id" = 'behind'`).get() as { emailCanonical: unknown }).emailCanonical).toBe(
             "behind@example.com",
@@ -787,7 +922,7 @@ describe("invitation addresses stored before canonical form", () => {
             invitationEmailColumns(resolveAuthOptions(inviteOptions))!,
         );
 
-        expect(unchanged).toStrictEqual(["older"]);
+        expect(unchanged).toStrictEqual({ complete: true, unchanged: ["older"] });
         expect(emails(database)).toStrictEqual({
             decomposed: canonicalEmail(DECOMPOSED),
             newer: "\u00E9mile@example.com",
@@ -851,7 +986,7 @@ describe("invitation addresses stored before canonical form", () => {
         const columns = invitationEmailColumns(resolveAuthOptions(inviteOptions))!;
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        await expect(backfillInvitationEmails(executorFor(database), columns)).resolves.toStrictEqual(["older"]);
+        await expect(backfillInvitationEmails(executorFor(database), columns)).resolves.toMatchObject({ unchanged: ["older"] });
 
         database.prepare(`DELETE FROM "signUpInvitation" WHERE "id" = 'newer'`).run();
         await backfillInvitationEmails(executorFor(database), columns);
@@ -884,10 +1019,72 @@ describe("invitation addresses stored before canonical form", () => {
                 (sql, params) => database.prepare(sql).all(...(params as never[])),
                 invitationEmailColumns(resolveAuthOptions(inviteOptions))!,
             ),
-        ).toStrictEqual(["older"]);
+        ).toMatchObject({ unchanged: ["older"] });
         expect(emails(database)["older"]).toBe(DECOMPOSED);
 
         warn.mockRestore();
+    });
+
+    it("reports an invitation whose address an issuer takes between the holder read and the rewrite, naming how to remove it", async () => {
+        expect.assertions(2);
+
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(
+            `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "createdAt" integer NOT NULL, "expiresAt" integer NOT NULL)`,
+        );
+        invitation(database, "legacy", DECOMPOSED, 1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const sqlite = executorFor(database);
+
+        const report = await backfillInvitationEmails(
+            {
+                all: async (sql, parameters) => {
+                    if (sql.startsWith(`UPDATE "signUpInvitation"`)) {
+                        invitation(database, "issued", canonicalEmail(DECOMPOSED), 2);
+                    }
+
+                    return sqlite.all(sql, parameters);
+                },
+            },
+            invitationEmailColumns(resolveAuthOptions(inviteOptions))!,
+        );
+
+        expect(report.unchanged).toStrictEqual(["legacy"]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Delete those rows by id"));
+
+        warn.mockRestore();
+    });
+
+    it("rewrites an invitation a restore writes into a warm Durable Object on its next request", async () => {
+        expect.assertions(1);
+
+        const database = new DatabaseSync(":memory:");
+        const authDo = new LunoraAuthDO(
+            { storage: createDoStorage(database) },
+            () => {
+                return { plugins: [inviteOnly()], secret: SECRET };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
+        const { dataPort } = createDoAuthWiring({
+            internalSecret: INTERNAL_SECRET,
+            namespace: {
+                get: () => {
+                    return { fetch: async (request: Request) => authDo.fetch(request) };
+                },
+                idFromName: (name) => name,
+            },
+        });
+
+        await dataPort!.importRows([]);
+        await dataPort!.importRows([
+            { doc: { createdAt: 1, email: "émile@example.com", expiresAt: Date.now() + 60_000, id: "restored" }, table: "signUpInvitation" },
+        ]);
+        await authDo.fetch(new Request(`https://example.test${RESOLVE_SESSION_PATH}`, { headers: { [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET } }));
+
+        expect(emails(database)).toStrictEqual({ restored: "émile@example.com" });
     });
 
     it("rewrites them on a Durable Object's cold start, including one restored after an earlier pass", async () => {

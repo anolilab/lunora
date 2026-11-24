@@ -125,23 +125,26 @@ NFC-normalised and lowercased, under a unique index. A database hook fills it on
 better-auth write. The admin plane's duplicate-address check is an exact, indexed match on
 it, and sign-up invitations are stored in the same form.
 
-- **Existing rows are backfilled.** This happens on the auth Durable Object's cold start
-  and in `ensureMigrated`, to the end of the table. On D1 the position is saved after every
-  page, so a call cut short (D1's per-invocation query limit on a very large table) rejects
-  and the next call resumes there. Other databases are filled through better-auth's
-  adapter. Invitation addresses stored before the change are rewritten the same way (on
-  the Durable Object and D1). When two rows fold to one address, the backfill leaves the
-  second one alone and logs a warning, because deciding which account or invitation keeps
-  the address is up to you. A duplicate you resolve, or an older snapshot you restore, is
-  brought into canonical form on the next cold start; a restored pair of duplicate users
-  keeps the second one's value empty, as the backfill does. Until a row is filled, the
-  duplicate checks (the admin plane's, and the one on sign-up and email change) fold its
+- **Existing rows are backfilled.** On D1, each `ensureMigrated` call fills a bounded
+  number of pages and saves its position, so it leaves the request most of D1's
+  per-invocation query limit; the generated worker calls it once per isolate, so a large
+  table fills over several cold starts. A pass that fails is logged and never fails the
+  request. The auth Durable Object runs a bounded pass on its cold start and another on
+  each later request until it is done, and again after a restore or a move writes rows.
+  Other databases are filled through better-auth's adapter in one call. Invitation
+  addresses stored before the change are rewritten the same way. When two rows fold to
+  one address, the backfill leaves the second one alone and logs a warning, because
+  deciding which account or invitation keeps the address is up to you; a reported
+  invitation is removed by deleting its row by id, since revoking its address removes the
+  invitation that holds it. Until a row is filled, the duplicate checks (the admin
+  plane's, the one on sign-up and email change, and the auth data port's import) fold its
   address in JS, so they still refuse a variant in any case or Unicode form.
 - **Rows imported through your own `authTables(...)` are trusted operator input.** The
   admin-token import writes tables declared in `lunora/schema.ts` as given, so a user row
-  keeps the `emailCanonical` it carries. An empty value is refilled by the next backfill;
-  a value that does not match its `email` is kept. The auth data port's own import and
-  restore recompute the value from `email`.
+  keeps the `emailCanonical` it carries. A `NULL` value is refilled by the backfill; an
+  empty string is not, so pass `null` for a missing value. A value that does not match its
+  `email` is kept. The auth data port's own import and restore recompute the value from
+  `email`.
 
 ## Read `ctx.auth` in functions
 
