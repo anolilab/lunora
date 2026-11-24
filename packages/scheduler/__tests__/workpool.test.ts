@@ -1022,6 +1022,47 @@ describe("schedulerDO — a pool slot belongs to one scheduling, not to its id",
         await expect(inFlight(scheduler)).resolves.toBe(1);
     });
 
+    it("never re-dispatches a kicked job whose kick marker cannot be written at all, and holds its slot until it completes", async () => {
+        expect.assertions(5);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const { put } = state.storage;
+        let refused = 0;
+
+        // Every write that marks a slot kicked fails, however often it is retried.
+        state.storage.put = async (keyOrEntries: string | Record<string, unknown>, value?: unknown) => {
+            if (keyOrEntries === "pool:p" && (value as { slots?: { kicked?: true }[] } | undefined)?.slots?.some((slot) => slot.kicked === true) === true) {
+                refused += 1;
+
+                throw new Error("storage unavailable");
+            }
+
+            return put(keyOrEntries as string, value);
+        };
+
+        await schedule(scheduler, 1, "reused");
+        await scheduler.alarm();
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(refused).toBeGreaterThan(0);
+        expect(scheduler.dispatched).toHaveLength(1);
+
+        // A new job under the id still queues behind the unmarked slot.
+        await schedule(scheduler, 1, "reused");
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toHaveLength(1);
+        await expect(inFlight(scheduler)).resolves.toBe(1);
+
+        await complete(scheduler, scheduler.dispatched[0]);
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toHaveLength(2);
+    });
+
     it("keeps a declined job's slot when it is cancelled, for the attempt still running to free", async () => {
         expect.assertions(3);
 
