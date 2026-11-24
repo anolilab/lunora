@@ -67,7 +67,7 @@ import { buildAuthJurisdictionMoveRpc } from "./auth-jurisdiction-move-rpc";
 import { buildBackupAdminRoutes } from "./backup-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, withBodyLimit } from "./body-readers";
-import { beginCronRun, endCronRun } from "./cron-runs";
+import { beginCronRun, CRON_LEASE_RENEW_MS, endCronRun } from "./cron-runs";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import { createDeploymentPause, PAUSE_PATH, PAUSED_QUEUE_RETRY_SECONDS } from "./deployment-pause";
 import type { FunctionArgumentDescriptor } from "./describe-args";
@@ -4175,6 +4175,49 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
+     * Renew the pool slot of the attempt `candidate` names while its handler runs, on the cron
+     * lease's cadence (a third of the scheduler's fifteen-minute claim ceiling, so two renewals can
+     * fail before the slot lapses). Without it a job outliving the ceiling loses its slot and another
+     * pooled job runs beside it past `maxConcurrency`. Returns the function that stops it.
+     *
+     * A renewal that fails is only logged: the slot then lapses at the ceiling, as it would have.
+     * `renewed: false` means the slot no longer lists this attempt, so the timer stops.
+     */
+    const keepPoolSlotAlive = (candidate: { attempt?: unknown; dedupKey?: unknown; id?: unknown; instanceName?: unknown; pool?: unknown }): (() => void) => {
+        const { attempt, dedupKey, id, pool } = candidate;
+
+        if (!schedulerDO || typeof pool !== "string" || typeof attempt !== "string" || typeof dedupKey !== "string" || typeof id !== "string") {
+            return () => {};
+        }
+
+        const instanceName = typeof candidate.instanceName === "string" && candidate.instanceName.length > 0 ? candidate.instanceName : "default";
+        const body = JSON.stringify({ attempt, dedupKey, id, pool });
+        const timer: ReturnType<typeof setInterval> = setInterval(() => {
+            resolveShard(schedulerDO, instanceName)
+                .fetch(new Request("https://scheduler.internal/pool/renew", { body, headers: { "content-type": "application/json" }, method: "POST" }))
+                .then(async (response) => {
+                    const answer: { renewed?: unknown } = await response.json();
+
+                    if (answer.renewed === false) {
+                        clearInterval(timer);
+                    }
+
+                    return undefined;
+                })
+                .catch((error: unknown) => {
+                    // eslint-disable-next-line no-console -- the dispatch handler has no request-scoped logger; the host captures console
+                    console.warn(
+                        `[lunora] pooled job "${id}" could not renew its slot in pool "${pool}": ${error instanceof Error ? error.message : String(error)}`,
+                    );
+                });
+        }, CRON_LEASE_RENEW_MS);
+
+        return () => {
+            clearInterval(timer);
+        };
+    };
+
+    /**
      * Release a workpool job's concurrency slot after its action settles, by
      * calling the SAME SchedulerDO instance's `/complete` (routed via the echoed
      * `instanceName`). No-op for non-pooled jobs.
@@ -4183,7 +4226,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * scheduler awaits — but understand what that costs: `reservePoolSlot` holds a
      * durable slot for the scheduling, and without a `/complete` naming it the slot
      * is held until the scheduler's claim ceiling (`DISPATCH_LEASE_MS`, fifteen
-     * minutes from the attempt's start) reclaims it. At the default
+     * minutes from the attempt's start or last renewal) reclaims it. At the default
      * `maxConcurrency: 1` every later job waits that long. Every early return from a dispatch
      * that reserved a slot must reach this call — except a claim decline, whose
      * slot belongs to the attempt still running (see {@link handleSchedulerDispatch}).
@@ -4356,6 +4399,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // The job's due time rides along so the shard can record how late it started;
         // a sender predating the field simply leaves the metric unrecorded.
         const scheduledFor = typeof candidate.scheduledFor === "number" ? candidate.scheduledFor : undefined;
+        const stopRenewing = keepPoolSlotAlive(candidate);
         const response = await dispatchToShard(
             candidate.functionPath,
             args,
@@ -4364,7 +4408,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             identity,
             request.headers.get("traceparent") ?? undefined,
             scheduledFor,
-        );
+        ).finally(stopRenewing);
 
         // A claim decline (the header only the shard's claim path sets) means this record's first
         // attempt is still running: its own dispatch releases the slot when it settles, or the

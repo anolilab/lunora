@@ -1402,6 +1402,58 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         expect(poolRow(state, "p")?.slots.map((slot) => slot.kicked)).toStrictEqual([true]);
     });
 
+    it("keeps the slot of a job its runtime renews past the claim ceiling, and frees it once renewals stop", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const running = await schedule(scheduler);
+        const owner = (state.storageMap.get(`id:${running}`) as ScheduleRecord).dedupKey;
+
+        await scheduler.alarm();
+
+        const renew = async (attempt: string | undefined): Promise<unknown> => {
+            const response = await scheduler.fetch(post("/pool/renew", { attempt, dedupKey: owner, id: running, pool: "p" }));
+
+            return response.json();
+        };
+
+        advance(DISPATCH_LEASE_MS - 60_000);
+
+        await expect(renew(scheduler.attempts[0])).resolves.toStrictEqual({ renewed: true });
+
+        const waiting = await schedule(scheduler);
+
+        advance(120_000);
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        // With no renewal, the slot lapses at the ceiling from its last one, and cannot be revived.
+        advance(DISPATCH_LEASE_MS);
+
+        await expect(renew(scheduler.attempts[0])).resolves.toStrictEqual({ renewed: false });
+
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).toContain(waiting);
+    });
+
+    it("renews nothing for an attempt the slot does not list", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const running = await schedule(scheduler);
+        const owner = (state.storageMap.get(`id:${running}`) as ScheduleRecord).dedupKey;
+
+        await scheduler.alarm();
+
+        const response = await scheduler.fetch(post("/pool/renew", { attempt: "someone-else", dedupKey: owner, id: running, pool: "p" }));
+
+        await expect(response.json()).resolves.toStrictEqual({ renewed: false });
+    });
+
     it("keeps a declined attempt's slot through a cancel when marking it failed, so a job reusing the id waits", async () => {
         expect.assertions(2);
 

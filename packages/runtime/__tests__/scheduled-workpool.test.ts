@@ -1,9 +1,10 @@
 import { encodeWire } from "@lunora/wire";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
+import { CRON_LEASE_RENEW_MS } from "../src/cron-runs";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const ADMIN = "s3cret-admin";
@@ -72,6 +73,56 @@ const dispatch = (worker: ReturnType<typeof createWorker>, body: Record<string, 
         {},
         fakeContext,
     );
+
+describe("createWorker — workpool slot renewal", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("renews the slot while the pooled handler runs, and stops once it settles", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+        const sched = schedulerSpy();
+        let settle: (response: Response) => void = () => {};
+        const reached = Promise.withResolvers<undefined>();
+        const heldShard: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        reached.resolve(undefined);
+
+                        return new Promise<Response>((resolve) => {
+                            settle = resolve;
+                        });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: heldShard });
+        const renewals = () => sched.calls.filter((call) => call.path === "/pool/renew");
+        const running = dispatch(worker, { args: {}, attempt: "attempt-1", dedupKey: "job-1-first", functionPath: "jobs:sweep", id: "job-1", pool: "stripe" });
+
+        await reached.promise;
+        await vi.advanceTimersByTimeAsync(CRON_LEASE_RENEW_MS * 2);
+
+        expect(renewals().map((call) => call.body)).toStrictEqual([
+            { attempt: "attempt-1", dedupKey: "job-1-first", id: "job-1", pool: "stripe" },
+            { attempt: "attempt-1", dedupKey: "job-1-first", id: "job-1", pool: "stripe" },
+        ]);
+
+        settle(Response.json({ result: null }, { status: 200 }));
+        await running;
+        await vi.advanceTimersByTimeAsync(CRON_LEASE_RENEW_MS * 2);
+
+        expect(renewals()).toHaveLength(2);
+        expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
+    });
+});
 
 describe("createWorker — workpool slot release", () => {
     it("releases a pooled job's slot via the routed SchedulerDO /complete", async () => {

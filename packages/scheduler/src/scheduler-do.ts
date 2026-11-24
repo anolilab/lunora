@@ -371,11 +371,10 @@ interface ScheduleRequestBody {
  */
 interface PoolSlot {
     /**
-     * When the newest attempt of this owner that may still be running started. A slot is reclaimed
-     * {@link DISPATCH_LEASE_MS} later, `/complete` or not: every attempt is an `alarm()` fetch, which
-     * the platform tears down at that wall time, and the shard's claim lets a new delivery run over a
-     * handler past the same ceiling, so no attempt is still counted as running by anything after it.
-     * That is the recovery for a lost completion (an isolate that died before `/complete`).
+     * When the newest attempt of this owner that may still be running started, or last renewed it
+     * (`/pool/renew`, sent while its handler runs). A slot is reclaimed {@link DISPATCH_LEASE_MS}
+     * later, `/complete` or not. That is the recovery for a lost completion: an isolate that died
+     * before `/complete` stops renewing too.
      */
     at: number;
 
@@ -842,6 +841,9 @@ class SchedulerDO {
             }
             case "POST /pause": {
                 return this.handleSetPause(request);
+            }
+            case "POST /pool/renew": {
+                return this.handlePoolRenew(request);
             }
             case "POST /schedule": {
                 return this.handleSchedule(request);
@@ -1928,6 +1930,45 @@ class SchedulerDO {
         await this.armAlarmIfEarlier(Date.now());
 
         return SchedulerDO.json({ inFlight: next.inFlight });
+    }
+
+    /**
+     * `POST /pool/renew { pool, id, dedupKey, attempt }` — a pooled attempt still running says so,
+     * which restarts its slot's {@link DISPATCH_LEASE_MS} window. The runtime sends it while the
+     * handler runs (see `keepPoolSlotAlive` in `@lunora/runtime`), so a job outliving the ceiling
+     * keeps its slot; one whose isolate died stops renewing and its slot goes at the ceiling.
+     *
+     * Only a share the slot still lists can renew it: a lapsed slot may already be counted free, and
+     * reviving it would put the pool past its cap.
+     */
+    private async handlePoolRenew(request: Request): Promise<Response> {
+        const body = (await request.json().catch(() => undefined)) as { attempt?: unknown; dedupKey?: unknown; id?: unknown; pool?: unknown } | undefined;
+        const text = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
+        const attempt = text(body?.attempt);
+        const owner = text(body?.dedupKey);
+        const jobId = text(body?.id);
+        const poolName = text(body?.pool);
+
+        if (attempt === undefined || owner === undefined || jobId === undefined || poolName === undefined) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "pool, id, dedupKey and attempt are required");
+        }
+
+        const renewed = await this.withPoolLock(async () => {
+            const pool = await this.loadPool(poolName);
+            const held = pool.slots.find((slot) => SchedulerDO.holds(slot, jobId, owner) && slot.attempts?.includes(attempt) === true);
+
+            if (held === undefined) {
+                return false;
+            }
+
+            const now = Date.now();
+
+            await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot === held ? { ...slot, at: now } : slot)) });
+
+            return true;
+        });
+
+        return SchedulerDO.json({ renewed });
     }
 
     /** `GET /pool?name=` — inspect a pool's slot usage + queued count. */
