@@ -64,7 +64,17 @@ httpClient := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) e
 
 `HandleFrame(raw)` is what you call with each inbound WebSocket message;
 `ResendSubscriptions()` re-subscribes everything after a reconnect — queries and
-shape views alike — carrying each one's resume cursor or checkpoint. A frame
+shape views alike — carrying each one's resume cursor or checkpoint. It sends at most
+three query subscriptions at once (`ResubscribeConcurrency`), in subscribe order, as the
+reference client does, so a reconnect does not land every query on the shard in one burst.
+Each of the rest goes out when `HandleFrame` sees a frame for one already sent, or once one
+has gone unanswered for 10 s (`ResubscribeAckTimeout`): `NextSubscriptionRetryAt()`
+includes that deadline, and `RetryDueSubscriptions(time.Now())` at or after it sends the
+next. Feed every frame to `HandleFrame` and pull `RetryDueSubscriptions` on that deadline
+(a retry hint on a subscription error arms the same one). Shape subscriptions all go out at
+once. A subscription whose args no longer encode makes `ResendSubscriptions` return the
+error before it sends anything; one that stops encoding while it waits its turn is skipped. A
+frame
 that is not shaped like any server frame is ignored without panicking, and a
 cursor that is not an integer never replaces the tracked one. A poke applies
 per shape whole or not at all: a row that will not decode leaves that shape's
@@ -162,6 +172,25 @@ for attempt := 0; ; attempt++ {
 		var closeCode int     // 0 until the socket reports a close
 		var closeReason string // "" with no close frame
 		client.AttachSocket(write, nil)
+		// Frees a re-subscribe slot nobody answered and serves retry hints. Owned by this
+		// socket run and stopped before it detaches, so it never writes to the next socket.
+		// Waking at least every second sees a deadline armed after it went to sleep.
+		stopPacer, pacerDone := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(pacerDone)
+			for {
+				wait := time.Second
+				if due, ok := client.NextSubscriptionRetryAt(); ok {
+					wait = min(wait, max(0, time.Until(due)))
+				}
+				select {
+				case <-stopPacer:
+					return
+				case <-time.After(wait):
+					_, _ = client.RetryDueSubscriptions(time.Now()) // a failed write surfaces in the read loop
+				}
+			}
+		}()
 		if client.Online() && client.ResendSubscriptions() == nil {
 			scheduleFlush(client.FlushOfflineQueue(""), time.Second) // "" is the default shard
 			for {
@@ -182,6 +211,8 @@ for attempt := 0; ; attempt++ {
 		}
 		mu.Unlock()
 		inflight.Wait() // a flush already running must requeue before the next run drains
+		close(stopPacer)
+		<-pacerDone
 		client.DetachSocket(closeCode, closeReason)
 		conn.Close()
 	}
