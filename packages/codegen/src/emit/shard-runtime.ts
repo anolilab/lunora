@@ -766,6 +766,7 @@ const PAYMENT_METHODS = [
     "listSubscriptions",
     "refundPayment",
     "resumeSubscription",
+    "scoped",
     "settlePendingRefund",
     "track",
     "updateSubscription",

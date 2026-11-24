@@ -178,4 +178,21 @@ describe("paymentsFromContext", () => {
             payment.createCheckout({ cancelUrl: "https://x/c", mode: "payment", priceId: "price_1", referenceId: "", successUrl: "https://x/o" }),
         ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
+
+    it("scoped reaches the same adapter under the app's authorize, with no caller", async () => {
+        expect.assertions(3);
+
+        const db = makeDb();
+        const payment = paymentsFromContext({ db }, { adapter: fakeAdapter });
+        const checkout = { cancelUrl: "https://x/c", mode: "payment", priceId: "price_1", successUrl: "https://x/o" } as const;
+
+        // Caller-less: the default rule refuses every reference.
+        await expect(payment.createCheckout({ ...checkout, referenceId: "user_1" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+        const scoped = payment.scoped((referenceId) => referenceId === "user_1");
+
+        await expect(scoped.createCheckout({ ...checkout, referenceId: "user_1" })).resolves.toMatchObject({ id: "cs_1" });
+        // The app's authorize is the whole check: a reference it does not list is still refused.
+        await expect(scoped.createCheckout({ ...checkout, referenceId: "user_2" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
 });

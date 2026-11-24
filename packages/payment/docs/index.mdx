@@ -255,7 +255,8 @@ const dodo = createDodoPaymentsAdapter({
 ## The `ctx.payments` API
 
 Call the facade from an action. Every method authorizes the caller against the
-`referenceId` first.
+`referenceId` first, except `scoped`, which returns a facade authorized by your
+own check.
 
 | Method                                         | Returns            | What it does                                                                                                    |
 | ---------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
@@ -274,6 +275,7 @@ Call the facade from an action. Every method authorizes the caller against the
 | `listBalances(referenceId)`                    | `FeatureBalance[]` | Resolve every configured feature's allowance in one call.                                                       |
 | `track(input)`                                 | `TrackResult`      | Record metered usage (exactly-once by idempotency key).                                                         |
 | `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                                                  |
+| `scoped(authorize)`                            | `LunoraPayment`    | Same adapter and store, authorized by the app's `authorize` instead of the default rule. For caller-less work.  |
 
 `refundPayment` derives the provider's idempotency key from the session, the amount sent and the reason. On a provider whose refund endpoint takes that key (Stripe), a same-amount refund without a caller `idempotencyKey` can therefore be replayed by the provider: no money moves, the call returns the session unchanged and the observer receives a `refund.replayed` event. Pass a distinct `idempotencyKey` for an intentional second refund of the same amount. Polar and Dodo take no refund key, so there a repeated refund is a new refund, bounded only by the local over-refund guard.
 
