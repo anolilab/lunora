@@ -502,6 +502,10 @@ const LIVE_CONTROL_TIMEOUT_MS = 10_000;
 const OWN_CLAIMS_MAX_RETRIES = 5;
 const OWN_CLAIMS_RETRY_BASE_MS = 500;
 
+/** Retries of a declared-session probe that failed on a live connection, and the first delay; each doubles the last. */
+const DECLARED_SESSION_MAX_RETRIES = 5;
+const DECLARED_SESSION_RETRY_BASE_MS = 1000;
+
 /** Longest a supplementary socket waits on a ticket provider before it mints again: a provider that never settles must not stall the channel. */
 const WS_TICKET_MINT_TIMEOUT_MS = 10_000;
 
@@ -1096,13 +1100,25 @@ class LunoraClient {
      * stamped with — see `writeIdentityStamp`. Random per instance, so a
      * write persisted by an earlier page can never claim this page's binding.
      */
-    private readonly provisionalStamp = `${PROVISIONAL_STAMP_PREFIX}${nextId()}`;
+    private provisionalStamp = `${PROVISIONAL_STAMP_PREFIX}${nextId()}`;
+
+    /**
+     * Provisional stamps retired by a session change before anything was bound
+     * — see `retireProvisionalStamp`. A write carrying one was composed under a
+     * session that is gone, so it never replays.
+     */
+    private readonly retiredProvisionalStamps = new Set<string>();
 
     /** The identity this client settled on first, which `provisionalStamp` stands for; `undefined` until then. */
     private provisionalBinding: { identity: string | null } | undefined;
 
     /** Set once this client asks `/get-session` on the page-wide declaration alone — see `resolveDeclaredSession`. */
     private resolvesDeclaredSession = false;
+
+    /** Timed re-asks of a declared-session probe that failed while the connection stayed live, and the pending one. */
+    private declaredSessionFailures = 0;
+
+    private declaredSessionRetryTimer: ReturnType<typeof setTimeout> | undefined;
 
     /**
      * Distinct shard keys with a mutation currently sitting in `offlineQueue`
@@ -1430,6 +1446,8 @@ class LunoraClient {
             // Returns the probe, so a caller of the signal can wait until this
             // client knows who is signed in (`@lunora/auth-ui` does).
             this.releaseSessionChangeListener = onSessionChanged(async () => {
+                this.retireProvisionalStamp();
+
                 if (!this.closed && this.authToken === null) {
                     await this.getCurrentUser().catch(() => undefined);
                 }
@@ -1440,6 +1458,7 @@ class LunoraClient {
             // is asked again once the socket or the polling fallback is live.
             this.statusListeners.add((status) => {
                 if (this.resolvesDeclaredSession && !this.identitySettled && isLiveStatus(status)) {
+                    this.declaredSessionFailures = 0;
                     this.resolveDeclaredSession();
                 }
             });
@@ -1654,7 +1673,11 @@ class LunoraClient {
     public writeIdentityStamp(): string | null {
         const current = this.identityFingerprint();
 
-        return current === null && !this.identitySettled && this.identityUnresolved() ? this.provisionalStamp : current;
+        // Never once bound: a write composed after a bearer named someone and then
+        // signed out is anonymous, and must not inherit that binding.
+        return current === null && this.provisionalBinding === undefined && !this.identitySettled && this.identityUnresolved()
+            ? this.provisionalStamp
+            : current;
     }
 
     /**
@@ -4005,6 +4028,8 @@ class LunoraClient {
         this.replayRetryState.clear();
 
         this.stopOwnClaimsRetry();
+        clearTimeout(this.declaredSessionRetryTimer);
+        this.declaredSessionRetryTimer = undefined;
         this.suspendedFollowerValues.clear();
 
         for (const timer of this.leaderAnswerTimers.values()) {
@@ -8919,13 +8944,30 @@ class LunoraClient {
     }
 
     /**
+     * A session change reported before anything bound the provisional stamp —
+     * a sign-in or sign-out here, or in another tab — means the cookie the
+     * pending writes were composed under is gone. Binding them to the identity
+     * that answers next would run one user's write as another's, so the stamp
+     * is retired (its writes are rejected) and writes from now on get a new one.
+     */
+    private retireProvisionalStamp(): void {
+        if (this.provisionalBinding !== undefined) {
+            return;
+        }
+
+        this.retiredProvisionalStamps.add(this.provisionalStamp);
+        this.provisionalStamp = `${PROVISIONAL_STAMP_PREFIX}${nextId()}`;
+    }
+
+    /**
      * Ask `/get-session` for a client whose only reason to expect a session is
      * the page-wide declaration (`lunoraSessionSync()`). No identity store is
      * attached to ask for it, and a socket that authenticates with a ticket or a
      * token, or none opening at all, never delivers the cookie identity, so
      * without this its early writes were held and its read cache refused for the
      * life of the page. A probe that fails is asked again when the connection is
-     * live again (see the constructor).
+     * live again (see the constructor), or after a short backoff when it failed
+     * while the connection was already live and no transition is coming.
      */
     private resolveDeclaredSession(): void {
         if (this.closed || this.sessionProbesInFlight > 0) {
@@ -8933,7 +8975,37 @@ class LunoraClient {
         }
 
         this.resolvesDeclaredSession = true;
-        this.getCurrentUser().catch(() => undefined);
+        this.askDeclaredSession().catch(() => undefined);
+    }
+
+    /** One declared-session probe, then the retry it may need. */
+    private async askDeclaredSession(): Promise<void> {
+        await this.getCurrentUser().catch(() => undefined);
+        this.retryDeclaredSession();
+    }
+
+    /** Re-ask a declared-session probe that got no answer while the connection stayed live, a bounded number of times. */
+    private retryDeclaredSession(): void {
+        if (
+            this.closed ||
+            this.identitySettled ||
+            this.declaredSessionRetryTimer !== undefined ||
+            this.declaredSessionFailures >= DECLARED_SESSION_MAX_RETRIES ||
+            !isLiveStatus(this.computeStatus())
+        ) {
+            return;
+        }
+
+        const delay = DECLARED_SESSION_RETRY_BASE_MS * 2 ** this.declaredSessionFailures;
+
+        this.declaredSessionFailures += 1;
+        this.declaredSessionRetryTimer = setTimeout(() => {
+            this.declaredSessionRetryTimer = undefined;
+
+            if (!this.identitySettled) {
+                this.resolveDeclaredSession();
+            }
+        }, delay);
     }
 
     /**
@@ -8944,7 +9016,10 @@ class LunoraClient {
      */
     private stampedIdentity(stamp: null | string | undefined): null | string | undefined {
         if (stamp === this.provisionalStamp) {
-            return this.provisionalBinding?.identity;
+            // Unbound once the identity has settled (a 403 named nobody, say):
+            // the anonymous `null` it replaced, which is how it was judged before.
+            // eslint-disable-next-line unicorn/no-null -- the anonymous stamp a provisional one replaces
+            return this.provisionalBinding === undefined ? null : this.provisionalBinding.identity;
         }
 
         // eslint-disable-next-line unicorn/no-null -- the anonymous stamp a provisional one replaces
@@ -9349,6 +9424,12 @@ class LunoraClient {
             if (stamp === from) {
                 this.queuedIdentities.set(id, to);
             }
+        }
+
+        // The binding is a stamp too: left on the token hash, the next refresh
+        // would reject the provisional writes the relabel just kept.
+        if (this.provisionalBinding?.identity === from) {
+            this.provisionalBinding = { identity: to };
         }
 
         this.offlineQueue.restampIdentity(from, to);
@@ -10221,8 +10302,14 @@ class LunoraClient {
             return "unknown";
         }
 
-        // Not bound to anyone yet: the same hold as a `null` about to be named.
-        if (stamp === this.provisionalStamp && this.provisionalBinding === undefined) {
+        if (stamp !== null && stamp !== undefined && this.retiredProvisionalStamps.has(stamp)) {
+            return "mismatch";
+        }
+
+        // Not bound to anyone yet: the same hold as a `null` about to be named —
+        // but only while it may still be named. Settled with nothing bound, it is
+        // judged as the `null` it replaced (see `stampedIdentity`), never held.
+        if (stamp === this.provisionalStamp && this.provisionalBinding === undefined && this.identityUnresolved()) {
             return "unknown";
         }
 

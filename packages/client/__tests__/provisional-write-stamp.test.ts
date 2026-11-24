@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
-import { declareSessionSource } from "../../../shared/session-change";
+import { declareSessionSource, notifySessionChanged } from "../../../shared/session-change";
 import { LunoraClient } from "../src/lunora-client";
 import type { FunctionReference, User } from "../src/types";
 
@@ -194,7 +194,7 @@ describe("a write stamped before the first session answer", () => {
         expect(client.replayIdentityVerdict(stamp).verdict).toBe("mismatch");
     });
 
-    it("stays unbound through a response that names nobody, so the answer after it binds it", async () => {
+    it("is not bound by a response that names nobody, so the answer after it binds it", async () => {
         expect.hasAssertions();
 
         const { client, resolveSession } = cookieClient();
@@ -202,10 +202,56 @@ describe("a write stamped before the first session answer", () => {
 
         // A 403 is as likely a WAF as the auth server: not a verdict on anyone.
         await resolveSession(403);
-
-        expect(client.replayIdentityVerdict(stamp).verdict).toBe("unknown");
-
         await resolveSession(alice);
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
+    });
+
+    it("is retired by a session change before the first answer, never bound to the identity after it", async () => {
+        expect.hasAssertions();
+
+        vi.stubGlobal("document", {});
+
+        const { answerProbe, client } = cookieClient();
+        const early = client.writeIdentityStamp();
+        // A sign-in or sign-out — here, or in another tab — before anyone answered.
+        const change = notifySessionChanged();
+        const later = client.writeIdentityStamp();
+
+        await answerProbe(bob);
+        await change;
+
+        expect(client.replayIdentityVerdict(early).verdict).toBe("mismatch");
+        expect(client.replayIdentityVerdict(later).verdict).toBe("match");
+
+        client.close();
+        vi.unstubAllGlobals();
+    });
+
+    it("is not handed to a write composed after a bearer bound it and then signed out", () => {
+        expect.assertions(2);
+
+        const { client } = cookieClient();
+        const early = client.writeIdentityStamp();
+
+        client.setAuthToken("token-a", "user-a");
+        client.setAuthToken(null);
+
+        // Composed signed out: anonymous, not the early write's stamp bound to user-a.
+        expect(client.writeIdentityStamp()).toBeNull();
+        expect(client.writeIdentityStamp()).not.toBe(early);
+    });
+
+    it("follows a same-credential relabel, so a token refresh keeps it", async () => {
+        expect.hasAssertions();
+
+        const { client, resolveSession } = cookieClient();
+        const stamp = client.writeIdentityStamp();
+
+        // Bound to the token hash, then relabelled to the subject that token resolves to.
+        client.setAuthToken("token-a");
+        await resolveSession(alice);
+        client.setAuthToken("token-b", "user-a");
 
         expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
     });
@@ -249,6 +295,57 @@ describe("a write stamped before the first session answer", () => {
 });
 
 describe("the built-in offline queue", () => {
+    /** Queue one write before the first answer, through `answer`, then open the socket. */
+    const queueAround = async (answer: (session: ReturnType<typeof cookieClient>) => Promise<void>) => {
+        sockets.length = 0;
+
+        const session = cookieClient();
+        const { client, fetchMock } = session;
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const outcome = client.mutation(fnRef("todos.add"), { text: "early click" }).then(
+            () => "committed",
+            (error: unknown) => String((error as { code?: string }).code),
+        );
+
+        await settle();
+        await answer(session);
+        sockets.at(-1)?.open();
+
+        return { client, fetchMock, outcome };
+    };
+
+    it("sends a write queued before a response that names nobody, as nobody, instead of holding it", async () => {
+        expect.hasAssertions();
+
+        const { fetchMock, outcome } = await queueAround(async ({ resolveSession }) => resolveSession(403));
+
+        await expect(outcome).resolves.toBe("committed");
+
+        const replay = fetchMock.mock.calls.find(([url]) => url.endsWith("/_lunora/rpc") || url.endsWith("/_lunora/rpc-batch"));
+
+        expect((replay?.[1].headers as Record<string, string> | undefined)?.[EXPECT_SUBJECT_HEADER]).toBe(encodeExpectedSubjectHeader(null));
+    });
+
+    it("rejects a write queued before a session change, rather than sending it as the user after it", async () => {
+        expect.hasAssertions();
+
+        vi.stubGlobal("document", {});
+
+        const { client, outcome } = await queueAround(async ({ answerProbe }) => {
+            const change = notifySessionChanged();
+
+            await answerProbe(bob);
+            await change;
+        });
+
+        await expect(outcome).resolves.toBe("OFFLINE_IDENTITY_CHANGED");
+
+        client.close();
+        vi.unstubAllGlobals();
+    });
+
     it("replays a write queued before the first session answer as that user, naming them to the worker", async () => {
         expect.hasAssertions();
 
@@ -403,6 +500,51 @@ describe("a page whose session source is declared (`lunoraSessionSync()`)", () =
         await answerProbe(alice);
 
         expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
+    });
+
+    it("asks again after a backoff when its probe fails while the connection is already live", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+        vi.stubGlobal("document", {});
+        declareSessionSource();
+
+        const { client, pendingAnswers } = cookieClient({ declared: true });
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        // Live before the probe starts, so no status transition will follow its failure.
+        const stamp = client.writeIdentityStamp();
+
+        await vi.waitFor(() => {
+            expect(pendingAnswers).toHaveLength(1);
+        });
+
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        try {
+            pendingAnswers.shift()?.(new TypeError("network down"));
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(pendingAnswers).toHaveLength(0);
+
+            await vi.advanceTimersByTimeAsync(1000);
+        } finally {
+            vi.useRealTimers();
+        }
+
+        await vi.waitFor(() => {
+            expect(pendingAnswers).toHaveLength(1);
+        });
+        pendingAnswers.shift()?.(alice);
+        await settle();
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
+
+        client.close();
     });
 
     it("declares nothing off the browser, where one process serves every request", () => {
