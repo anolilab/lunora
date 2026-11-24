@@ -4,70 +4,15 @@ import type { SqlExec } from "../src/ctx-db";
 import { readIdempotent, writeIdempotent } from "../src/ctx-db-idempotency";
 import { runShardMigrations } from "../src/ctx-db-migrations";
 import type { SchemaLike } from "../src/schema-types";
+import type { SpiedSql } from "./_helpers/ctx-db-migration-spy";
+import { buildWideSchema, spySql } from "./_helpers/ctx-db-migration-spy";
 import createSqliteExec from "./_helpers/node-sqlite";
+import runColdStartScenarios from "./_scenarios/ctx-db-migrations.cold-start";
 
-const buildWideSchema = (tableCount: number, indexesPerTable: number): SchemaLike => {
-    const tables: Record<string, unknown> = {};
+runColdStartScenarios(createSqliteExec);
 
-    for (let tableIndex = 0; tableIndex < tableCount; tableIndex += 1) {
-        const shape: Record<string, unknown> = { expiresAt: { kind: "number" } };
-        const indexes: { fields: string[]; name: string; unique?: boolean }[] = [];
-
-        for (let fieldIndex = 0; fieldIndex < indexesPerTable; fieldIndex += 1) {
-            const field = `field${String(fieldIndex)}`;
-
-            shape[field] = { kind: "string" };
-            indexes.push({ fields: [field], name: `by_${field}`, unique: fieldIndex === 0 });
-        }
-
-        tables[`items_${String(tableIndex)}`] = {
-            indexes,
-            shape,
-            ttlPolicy: tableIndex === 0 ? { field: "expiresAt" } : undefined,
-        };
-    }
-
-    return { tables } as SchemaLike;
-};
-
-interface RecordedStats {
-    ftsProbes: number;
-    ftsReadChecks: number;
-    ledgerScans: number;
-    sqliteMasterScans: number;
-    statements: string[];
-}
-
-const spySql = (inner: SqlExec): { sql: SqlExec; stats: RecordedStats } => {
-    const stats: RecordedStats = { ftsProbes: 0, ftsReadChecks: 0, ledgerScans: 0, sqliteMasterScans: 0, statements: [] };
-    const sql: SqlExec = {
-        exec: <Row = Record<string, unknown>>(query: string, ...bindings: unknown[]) => {
-            stats.statements.push(query);
-
-            if (query.includes("sqlite_master")) {
-                stats.sqliteMasterScans += 1;
-            }
-
-            if (query.includes("SELECT") && query.includes("__lunora_framework_indexes")) {
-                stats.ledgerScans += 1;
-            }
-
-            if (query.includes("__lunora_fts_probe")) {
-                stats.ftsProbes += 1;
-            }
-
-            if (query.includes("LIMIT 0") && query.includes("__fts_")) {
-                stats.ftsReadChecks += 1;
-            }
-
-            return inner.exec<Row>(query, ...bindings);
-        },
-    };
-
-    return { sql, stats };
-};
-
-const createSimulatedFtsWrapper = (inner: SqlExec, options: { ftsTable: string; readCheckThrows: boolean }): { sql: SqlExec; stats: RecordedStats } => {
+/** `node:sqlite` has no FTS5 in some builds, so the FTS5 table is simulated: its read check throws or succeeds on demand. */
+const createSimulatedFtsWrapper = (inner: SqlExec, options: { ftsTable: string; readCheckThrows: boolean }): { sql: SqlExec; stats: SpiedSql } => {
     const { sql: spied, stats } = spySql(inner);
     const sql: SqlExec = {
         exec: <Row = Record<string, unknown>>(query: string, ...bindings: unknown[]) => {
@@ -125,31 +70,13 @@ const createSimulatedFtsWrapper = (inner: SqlExec, options: { ftsTable: string; 
 
 let harness: ReturnType<typeof createSqliteExec>;
 
-describe("runShardMigrations single-pass catalog and index ledger", () => {
+describe("runShardMigrations cold start edge cases on node:sqlite", () => {
     beforeEach(() => {
         harness = createSqliteExec();
     });
 
     afterEach(() => {
         harness.close();
-    });
-
-    it("reads sqlite_master and __lunora_framework_indexes exactly once per wake regardless of table or index count", () => {
-        expect.assertions(4);
-
-        const schema = buildWideSchema(5, 5);
-
-        runShardMigrations(harness.sql, schema, { cdc: true });
-
-        // Fresh wrapper handle simulates a post-hibernation wake on the same database.
-        const { sql: wakeSql, stats } = spySql(harness.sql);
-
-        runShardMigrations(wakeSql, schema, { cdc: true });
-
-        expect(stats.sqliteMasterScans).toBe(1);
-        expect(stats.ledgerScans).toBe(1);
-        expect(stats.statements.some((query) => query.includes('INSERT OR IGNORE INTO "__lunora_framework_indexes"'))).toBe(false);
-        expect(stats.statements.some((query) => query.includes("DROP INDEX"))).toBe(false);
     });
 
     it("tracks the default __by_creation index in the catalog so a unique _by_creation index replaces it on first start", () => {

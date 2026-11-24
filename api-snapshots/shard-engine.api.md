@@ -4717,7 +4717,7 @@ const isDevEnvironment: (rawEnv: unknown) => boolean;
 ### `isFtsAvailable` (const)
 
 ```ts
-const isFtsAvailable: (wrapper: SqlExec) => boolean;
+const isFtsAvailable: (wrapper: SqlExec, existingFtsTable?: string) => boolean;
 ```
 
 ### `isInternalTableName` (const)
