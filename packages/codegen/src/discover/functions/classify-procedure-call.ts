@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { isServerSurfaceModule } from "../../module-specifiers";
 import { unwrapExpression } from "../ast";
-import { walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
+import { builderChainSteps, walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
 import { isServerImport, resolveCalleeKind } from "../callee";
 import staticBuilderChain from "./internal/static-builder-chain";
 
@@ -128,6 +128,31 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
 };
 
 /**
+ * The factory call an imported `.use(teamAuthorize)` argument is bound to, in the module that declares it: one hop,
+ * through the import alias to a `const` initializer. `wrappedCallsWhere` only follows same-file constants.
+ */
+const importedUseCall = (argument: Node): CallExpression | undefined => {
+    if (!Node.isIdentifier(argument)) {
+        return undefined;
+    }
+
+    const symbol = argument.getSymbol();
+    const declaration = (symbol?.isAlias() ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
+    const initializer = declaration && Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
+
+    return initializer && Node.isCallExpression(initializer) ? initializer : undefined;
+};
+
+/** Whether a chain's `.use(...)` step names an imported const that is bound to the `<exportName>` factory from `@lunora/server`. */
+const importedUseCarriesMarker = (receiver: Node, exportName: string): boolean =>
+    builderChainSteps(receiver).some((step) => {
+        const argument = step.name === "use" ? step.call.getArguments()[0] : undefined;
+        const call = argument === undefined ? undefined : importedUseCall(argument);
+
+        return call !== undefined && isServerImport(call.getExpression(), exportName);
+    });
+
+/**
  * Whether a chain carries a `.use(<exportName>(...))` step imported from `@lunora/server`, such as
  * `platformAdmin` or `authorize`. Follows a local `const` (or an imported one) ONE hop, as
  * {@link resolveBuilderRootKind} does, so the common shape `const adminMutation = mutation.use(platformAdmin(...))`
@@ -136,6 +161,10 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
  */
 const chainCarriesServerMarker = (receiver: Node, exportName: string, followedLocal = false): boolean => {
     if (wrappedCallsWhere(receiver, "use", (callee) => isServerImport(callee, exportName)).length > 0) {
+        return true;
+    }
+
+    if (importedUseCarriesMarker(receiver, exportName)) {
         return true;
     }
 

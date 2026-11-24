@@ -784,8 +784,8 @@ class AppBuilder<Env extends object> {
  * bundled into the worker, and a runtime import in that file ships with it.
  */
 interface LunoraConfig<Env extends object = object> {
-    /** Codegen's static advisor. `minSeverity` is the lowest level it reports and writes into `_generated/shard.ts`; an `"error"` is never dropped, so the gate that fails codegen stays on. `accept` demotes a reviewed finding to INFO when its rule, file, export and `level` (the level the reviewer saw) all match. A literal, for the same reason as `target`. */
-    advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; level: "error" | "info" | "warn"; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
+    /** Codegen's static advisor. `minSeverity` is the lowest level it reports and writes into `_generated/shard.ts`; an `"error"` is never dropped, so the gate that fails codegen stays on. `accept` demotes a reviewed finding to INFO when its rule, file, export and `level` (the level the reviewer saw, `error` when left out) all match. A literal, for the same reason as `target`. */
+    advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; level?: "error" | "info" | "warn"; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
     /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
     /** Codegen settings. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. `lazyFunctions: true` emits the per-module lazy function registry for every command and bundler plugin that generates or checks `_generated/`. Literals, for the same reason as `target`. */

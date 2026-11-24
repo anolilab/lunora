@@ -14,7 +14,7 @@ type AuthorizeCheck<Context> = (context: Context) => boolean | Promise<boolean>;
  * authenticated, permitted caller may reach:
  *
  * ```ts
- * export const addTeamMember = authMutation.use(authorize((ctx) => ctx.user.canManageTeamMembers === true));
+ * export const addTeamMember = authMutation.use(authorize<{ user: { canManageTeamMembers: boolean } }>((ctx) => ctx.user.canManageTeamMembers));
  * ```
  *
  * It is also the marker the advisor reads. A procedure whose chain carries

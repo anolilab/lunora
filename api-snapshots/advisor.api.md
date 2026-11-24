@@ -572,6 +572,7 @@ interface AdvisorOwnerFieldWrite {
     method: string;
     ownerScoped?: true;
     scope: AdvisorCallSiteScope;
+    trustedInternal?: true;
     visibility?: "internal" | "public";
 }
 ```

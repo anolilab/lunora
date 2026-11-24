@@ -39,6 +39,8 @@ interface FieldShape {
     keys?: Readonly<Record<string, FieldShape>>;
     /** The one boolean the value may be, when a boolean is accepted only as that literal (`rpc: false`, `csp: false`). */
     literal?: boolean;
+    /** For a string, the only values it may be. */
+    oneOf?: ReadonlyArray<string>;
     /** For an object with fixed keys, the ones it must have; the readers refuse an entry without them. */
     required?: ReadonlyArray<string>;
 }
@@ -202,6 +204,19 @@ const unknownKeyProblem = (key: string, path: string, valid: ReadonlyArray<strin
     return `unknown key \`${qualify(key)}\`.${hint} Valid keys${scope}: ${valid.join(", ")}.`;
 };
 
+/** The problem with a string value outside the `oneOf` list its shape allows, or `undefined` when it is in the list or not a string literal. */
+const oneOfProblem = (value: TsNode, field: FieldShape, label: string): string | undefined => {
+    if (field.oneOf === undefined || !(TsNode.isStringLiteral(value) || TsNode.isNoSubstitutionTemplateLiteral(value))) {
+        return undefined;
+    }
+
+    const given = value.getLiteralValue();
+
+    return field.oneOf.includes(given)
+        ? undefined
+        : `\`${label}\` must be one of ${field.oneOf.map((option) => `\`"${option}"\``).join(", ")}, got \`"${given}"\`.`;
+};
+
 /** The problems in one value checked against its shape. */
 const fieldProblems = (node: TsNode | undefined, field: FieldShape, label: string, sourceFile: SourceFile): string[] => {
     const value = resolveValue(node, sourceFile);
@@ -216,6 +231,12 @@ const fieldProblems = (node: TsNode | undefined, field: FieldShape, label: strin
 
     if (!field.accepts.includes(kind)) {
         return [`\`${label}\` must be ${field.expected}, got ${KIND_ARTICLE[kind]} (${shown}).`];
+    }
+
+    const outside = oneOfProblem(value, field, label);
+
+    if (outside !== undefined) {
+        return [outside];
     }
 
     if (field.literal !== undefined && kind === "boolean" && staticBooleanOf(value) !== field.literal) {

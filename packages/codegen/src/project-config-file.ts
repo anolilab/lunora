@@ -286,11 +286,20 @@ const ACCEPT_KEYS = ["exportName", "file", "level", "reason", "rule"] as const;
 /** The `level` an entry accepts, spelled as `minSeverity` spells it, and the advisor level it names. */
 const ACCEPT_LEVELS: Readonly<Record<string, Level>> = { error: "ERROR", info: "INFO", warn: "WARN" };
 
+/** An entry without a `level` accepts an ERROR, the only finding the earlier contract could accept, so existing entries keep their meaning. */
+const DEFAULT_ACCEPT_LEVEL: Level = "ERROR";
+
+/** The advisor level a `level` spelling names, or `undefined` for a spelling that is not one of the three. */
+const levelOf = (level: string): Level | undefined => (Object.hasOwn(ACCEPT_LEVELS, level) ? ACCEPT_LEVELS[level] : undefined);
+
+/** A `level` is one of the three spellings, and any other value is refused at validation with the allowed ones named. */
+const ACCEPT_LEVEL_SHAPE: FieldShape = { accepts: ["string"], expected: "a string", oneOf: Object.keys(ACCEPT_LEVELS) };
+
 /**
- * One `advisor.accept` entry as five non-empty string literals, or `undefined`
- * for anything else — an extra key, a computed value, a blank reason, a `level`
- * that is not `"error"`, `"warn"` or `"info"`. A typo in a key would otherwise
- * match nothing and fail silently, so only the five are read.
+ * One `advisor.accept` entry as non-empty string literals, or `undefined` for
+ * anything else — an extra key, a computed value, a blank reason. `level` may be
+ * left out, and then means an ERROR. A typo in a key would otherwise match
+ * nothing and fail silently, so only the listed keys are read.
  */
 const readAcceptedEntry = (entry: TsNode): AcceptedFinding | undefined => {
     const value = unwrapLiteral(entry);
@@ -321,7 +330,7 @@ const readAcceptedEntry = (entry: TsNode): AcceptedFinding | undefined => {
     }
 
     const { exportName, file, level, reason, rule } = fields;
-    const reviewedLevel = level !== undefined && Object.hasOwn(ACCEPT_LEVELS, level) ? ACCEPT_LEVELS[level] : undefined;
+    const reviewedLevel = level === undefined ? DEFAULT_ACCEPT_LEVEL : levelOf(level);
 
     return exportName?.trim() && file?.trim() && reason?.trim() && rule?.trim() && reviewedLevel !== undefined
         ? { exportName, file, level: reviewedLevel, reason, rule }
@@ -632,7 +641,10 @@ const SECTIONS: ReadonlyMap<string, ConfigSection> = new Map<string, ConfigSecti
                 accept: {
                     ...STRING_ARRAY,
                     expected: "an array of objects",
-                    items: objectOf(Object.fromEntries(ACCEPT_KEYS.map((key) => [key, STRING])), ACCEPT_KEYS),
+                    items: objectOf(
+                        { ...Object.fromEntries(ACCEPT_KEYS.map((key) => [key, STRING])), level: ACCEPT_LEVEL_SHAPE },
+                        ACCEPT_KEYS.filter((key) => key !== "level"),
+                    ),
                 },
                 minSeverity: STRING,
             }),

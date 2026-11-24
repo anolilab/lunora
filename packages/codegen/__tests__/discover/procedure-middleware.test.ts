@@ -548,6 +548,22 @@ const SHARED_AUTHORIZED_USER = `import { teamMutation } from "./crpc";
     });
 `;
 
+/** A permission gate bound to a `const` and exported, so another module attaches it with `.use(teamAuthorize)`. */
+const AUTHORIZE_VALUE_GUARD = `import { authorize } from "@lunora/server";
+
+export const teamAuthorize = authorize(() => true);
+`;
+
+/** A procedure that attaches the imported gate value with `.use(teamAuthorize)`, the form a project reuses across files. */
+const IMPORTED_AUTHORIZE_VALUE_USER = `import { teamAuthorize } from "./guards";
+${PREAMBLE}
+    export const addTeamMember = c.mutation
+        .use(teamAuthorize)
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
 /** A local `authorize` that shares the marker's name but is not imported from `@lunora/server`: no permission gate is proven. */
 const LOCAL_AUTHORIZE_MEMBER_ADD = `${PREAMBLE}
     declare const authorize: (check: () => boolean) => (options: { ctx: unknown }) => unknown;
@@ -1119,6 +1135,17 @@ describe("discoverProcedureMiddleware", () => {
 
         writeFileSync(join(workdir, "lunora", "crpc.ts"), SHARED_AUTHORIZED_BUILDER, "utf8");
         writeFileSync(join(workdir, "lunora", "members.ts"), SHARED_AUTHORIZED_USER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found.find((procedure) => procedure.exportName === "addTeamMember")).toMatchObject({ usesAuthorize: true, usesCaptcha: false });
+    });
+
+    it("records a permission gate bound to an imported const and attached with .use(...)", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "guards.ts"), AUTHORIZE_VALUE_GUARD, "utf8");
+        writeFileSync(join(workdir, "lunora", "members.ts"), IMPORTED_AUTHORIZE_VALUE_USER, "utf8");
 
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 

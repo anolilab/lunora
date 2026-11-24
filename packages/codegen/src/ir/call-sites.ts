@@ -458,6 +458,12 @@ export interface OwnerFieldWriteIR {
     scope: CallSiteScope;
 
     /**
+     * Set when every caller is an `internal*` procedure. A lifecycle or channel registration is `internal` too, but a
+     * connected client triggers it with its own payload, so it does not carry this trust.
+     */
+    trustedInternal?: true;
+
+    /**
      * Visibility of the enclosing procedure. `internal` procedures are not
      * reachable by a caller, so the lint's premise ("any caller can write rows
      * owned by another user") does not hold there — see

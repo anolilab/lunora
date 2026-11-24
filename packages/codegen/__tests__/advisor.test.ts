@@ -529,10 +529,6 @@ export const schema = defineSchema({
             ["an empty reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: "" }`],
             ["a computed reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: ["x"].join("") }`],
             ["a spread entry", `{ ...base }`],
-            [
-                "a level that is not error, warn or info",
-                `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "critical", reason: "x" }`,
-            ],
         ])("ignores the whole list for %s and keeps every ERROR", (_label, entry) => {
             expect.assertions(3);
 
@@ -549,17 +545,35 @@ export const schema = defineSchema({
             expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
         });
 
-        // Without a `level` the entry cannot say which finding it reviewed, so the config is refused rather than read as a match-any entry.
-        it("stops codegen on an entry without a level", () => {
+        // An entry without a `level` means an ERROR, so an existing acceptance keeps its meaning after the level was added.
+        it("accepts an ERROR for an entry without a level", () => {
+            expect.assertions(2);
+
+            seedAllLevels();
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(advisories.find((advisory) => advisory.name === "shape_unknown_table")?.level).toBe("INFO");
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
+        });
+
+        // A level outside the three spellings is refused at validation, so a typo never silently drops every acceptance.
+        it("stops codegen on a level that is not error, warn or info", () => {
             expect.assertions(1);
 
             writeFileSync(
                 join(workdir, "lunora.config.ts"),
-                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "x" }] } };\n`,
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "ERROR", reason: "x" }] } };\n`,
                 "utf8",
             );
 
-            expect(() => runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/`advisor\.accept\[0\]` is missing `level`/u);
+            expect(() => runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/must be one of/u);
         });
 
         // The parse refuses it before the advisor runs, so a misspelt key never reads as an entry that matched nothing.

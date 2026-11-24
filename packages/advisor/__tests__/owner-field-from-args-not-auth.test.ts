@@ -109,7 +109,15 @@ describe("owner_field_from_args_not_auth", () => {
         // from `args` is the correct shape there; its declared visibility is what
         // the lint trusts. The public write beside it is untouched and still blocks.
         const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
-            { scope: { kind: "export", name: "saveMemory" }, field: "userId", file: "memory", line: 12, method: "insert", visibility: "internal" },
+            {
+                scope: { kind: "export", name: "saveMemory" },
+                field: "userId",
+                file: "memory",
+                line: 12,
+                method: "insert",
+                trustedInternal: true,
+                visibility: "internal",
+            },
             { scope: { kind: "export", name: "createPin" }, field: "userId", file: "pins", line: 20, method: "insert", visibility: "public" },
         ];
         const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
@@ -117,6 +125,19 @@ describe("owner_field_from_args_not_auth", () => {
         expect(findings).toHaveLength(1);
         expect(findings[0]).toMatchObject({ level: "ERROR", metadata: { exportName: "createPin", visibility: "public" } });
         expect(findings[0]?.detail).toContain("any caller can write rows owned by another user/tenant");
+    });
+
+    // A socket, channel or lifecycle handler is `internal` in the registry, but a connected client supplies its payload.
+    it("keeps an untrusted internal write, such as a socket handler's, at INFO rather than dropping it", () => {
+        expect.assertions(2);
+
+        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
+            { scope: { kind: "export", name: "onRoomMessage" }, field: "ownerId", file: "room", line: 8, method: "insert", visibility: "internal" },
+        ];
+        const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ level: "INFO", metadata: { visibility: "internal" } });
     });
 
     it("keeps ERROR when the feeder could not attribute a visibility", () => {

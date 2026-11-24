@@ -27,7 +27,7 @@ interface AcceptedFinding {
 /** The WARN for an entry that matched no ERROR. */
 const staleAcceptance = (entry: AcceptedFinding): Finding => {
     return {
-        cacheKey: `advisor_accept_unused:${entry.rule}:${entry.file}:${entry.exportName}`,
+        cacheKey: `advisor_accept_unused:${entry.rule}:${entry.level}:${entry.file}:${entry.exportName}`,
         categories: ["SCHEMA"],
         description: "`advisor.accept` in `lunora.config.*` accepts a finding the advisor does not report.",
         detail: `No ${entry.level} \`${entry.rule}\` in \`${entry.file}\` for \`${entry.exportName}\` — the acceptance no longer applies.`,

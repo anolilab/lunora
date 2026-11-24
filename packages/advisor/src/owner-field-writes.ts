@@ -62,6 +62,12 @@ export interface AdvisorOwnerFieldWrite {
     scope: AdvisorCallSiteScope;
 
     /**
+     * Set when every caller is an `internal*` procedure, the only `internal` writes the lint trusts. A lifecycle or
+     * channel registration is `internal` too, but a connected client triggers it with its own payload.
+     */
+    trustedInternal?: true;
+
+    /**
      * Visibility of the enclosing procedure. `internal` procedures are not
      * reachable by a caller, so the "any caller can act as any user" premise
      * does not hold there and the lint reports nothing for the write. `undefined` when the

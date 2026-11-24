@@ -162,7 +162,11 @@ describe("lunora.config validation", () => {
 
     it.each([
         ["services: { api: {} }", "`services.api` is missing `dir`."],
-        ["advisor: { accept: [{ rule: 'unauthenticated-query' }] }", "`advisor.accept[0]` is missing `exportName`, `file`, `level`, `reason`."],
+        ["advisor: { accept: [{ rule: 'unauthenticated-query' }] }", "`advisor.accept[0]` is missing `exportName`, `file`, `reason`."],
+        [
+            "advisor: { accept: [{ exportName: 'a', file: 'a.ts', level: 'ERROR', reason: 'r', rule: 'x' }] }",
+            '`advisor.accept[0].level` must be one of `"error"`, `"info"`, `"warn"`, got `"ERROR"`.',
+        ],
     ])("refuses an entry without the fields the readers need: %s", (member, problem) => {
         expect.assertions(1);
 
@@ -194,7 +198,7 @@ describe("lunora.config validation", () => {
 
         expect(projectConfigProblems(configPath)).toStrictEqual([
             "unknown key `advisor.accept[0].rules`. Did you mean `advisor.accept[0].rule`? Valid keys of `advisor.accept[0]`: exportName, file, level, reason, rule.",
-            "`advisor.accept[0]` is missing `level`, `rule`.",
+            "`advisor.accept[0]` is missing `rule`.",
         ]);
     });
 

@@ -3139,6 +3139,7 @@ interface OwnerFieldWriteIR {
     method: string;
     ownerScoped?: true;
     scope: CallSiteScope;
+    trustedInternal?: true;
     visibility?: "internal" | "public";
 }
 ```

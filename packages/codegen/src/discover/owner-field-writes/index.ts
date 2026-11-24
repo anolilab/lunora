@@ -385,12 +385,24 @@ const discoverOwnerFieldWrites = (
     // A write is admin-only when every procedure that reaches it carries platformAdmin.
     const adminByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.adminOnly === true]));
 
+    // A lifecycle or channel registration is `internal` in the registry, but a connected client triggers it with its own
+    // payload, so only callers that are plain `internal*` procedures earn the trust that drops the finding.
+    const functionByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry]));
+    const isPlainInternalCaller = (caller: (typeof functions)[number] | undefined): boolean =>
+        caller?.visibility === "internal" && caller.lifecycle === undefined && caller.channel === undefined;
+
     return withCallerVisibility(writes, functions).map((row) => {
         // Admin-only only when every named caller is a platform-admin procedure AND no untracked code reaches it.
         const callers = completeCallersOf(row.scope);
         const adminOnly = callers?.every((exportName) => adminByKey.get(`${row.file}:${exportName}`) === true) === true;
+        const trustedInternal =
+            row.visibility === "internal" && callers?.every((exportName) => isPlainInternalCaller(functionByKey.get(`${row.file}:${exportName}`))) === true;
 
-        return adminOnly ? { ...row, adminOnly: true as const } : row;
+        return {
+            ...row,
+            ...(adminOnly ? { adminOnly: true as const } : {}),
+            ...(trustedInternal ? { trustedInternal: true as const } : {}),
+        };
     });
 };
 

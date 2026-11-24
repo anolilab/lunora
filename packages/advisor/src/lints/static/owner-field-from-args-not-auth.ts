@@ -49,12 +49,10 @@ const ownerFieldFromArgsNotAuth: Lint = {
                 return [];
             }
 
-            // An `internal*` procedure is not reachable by a caller, so the subject
-            // taken from `args` is the trusted caller passing it along. Its
-            // declared visibility is the declaration this lint trusts, so nothing is
-            // reported. A public procedure that forwards raw `args` into one is not
-            // seen here: it writes no owner field itself.
-            if (write.visibility === "internal") {
+            // Every caller is an `internal*` procedure, which no caller reaches directly, so the subject taken from
+            // `args` is the trusted caller passing it along. A public procedure that forwards raw `args` into one is
+            // not seen here: it writes no owner field itself.
+            if (write.trustedInternal === true) {
                 return [];
             }
 
@@ -74,6 +72,20 @@ const ownerFieldFromArgsNotAuth: Lint = {
                     emit(ownerFieldFromArgsNotAuth, {
                         cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
                         detail: `${where} sets the ownership field \`${write.field}\` from \`args\`. Expected for a platform-admin procedure: only an admin can reach it, and the admin gate is the trust boundary, not the subject field.`,
+                        facing: "INTERNAL",
+                        level: "INFO",
+                        metadata,
+                    }),
+                ];
+            }
+
+            // A lifecycle or channel registration is `internal` in the registry, but a connected client triggers it with its
+            // own payload, so an `args` subject there is a real vector. The breadcrumb stays at INFO rather than being dropped.
+            if (write.visibility === "internal") {
+                return [
+                    emit(ownerFieldFromArgsNotAuth, {
+                        cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
+                        detail: `${where} sets the ownership field \`${write.field}\` from \`args\` in a socket, channel or lifecycle handler. A connected client supplies that payload, so stamp \`${write.field}\` from the server-trusted identity.`,
                         facing: "INTERNAL",
                         level: "INFO",
                         metadata,

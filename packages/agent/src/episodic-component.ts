@@ -59,6 +59,7 @@ const episodeTables: Record<"episodes", TableDefinition> = {
         /** The thread the episode came from (provenance; not used for recall scope). */
         threadKey: v.optional(v.string()),
     })
+        .externallyManaged()
         // Recency recall — prefix-scan the owner, ordered by createdAt.
         .index("byOwnerCreatedAt", ["owner", "createdAt"])
         // Idempotent upsert — one row per (owner, run).
