@@ -643,8 +643,7 @@ describe("schedulerDO dispatch lease — claiming an already-leased record", () 
         // Another job now holds the only slot (the lost attempt's has been released), so the
         // re-claim meets a saturated pool and is re-armed as backpressure without dispatching.
         // The stale lease key must not survive that either.
-        // `other` reserved its slot just now, so it is inside the claim ceiling and still holds it.
-        state.storageMap.set("pool:p", { heldAt: { other: at + DISPATCH_LEASE_MS }, inFlight: 1, inFlightIds: ["other"], maxConcurrency: 1 });
+        state.storageMap.set("pool:p", { inFlight: 1, inFlightIds: ["other"], maxConcurrency: 1 });
         advanceTo(at + DISPATCH_LEASE_MS + 1);
 
         await successor.alarm();

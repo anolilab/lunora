@@ -87,10 +87,6 @@ const HEADER_PREFIX = "id:";
 const RETRY_PREFIX = "retry:";
 const DEAD_PREFIX = "dead:";
 const POOL_PREFIX = "pool:";
-// A kick that went through whose `kickedIds` marker could not be written. Replayed by the next alarm,
-// so the holder is marked kicked and its slot is released by its own completion, not reclaimed.
-const KICK_PREFIX = "kick:";
-const KICK_MARKER_ATTEMPTS = 3;
 // `pq:<encoded pool>:<id>` — one row per pending pooled job, written and removed
 // in the SAME storage call as its `id:` header, so `/pool` counts one pool by
 // listing its own prefix instead of walking every header. The pool name is
@@ -370,12 +366,6 @@ interface ScheduleRequestBody {
 
 /** Durable per-pool state stored under `pool:<name>`. */
 interface PoolState {
-    /**
-     * When each un-kicked holder reserved its slot (epoch ms). A slot still held past
-     * {@link DISPATCH_LEASE_MS} with no dispatch live on this instance is presumed settled and reclaimed.
-     */
-    heldAt?: Record<string, number>;
-
     /** Jobs currently dispatched-but-not-yet-completed. The concurrency semaphore. */
     inFlight: number;
 
@@ -627,19 +617,6 @@ class SchedulerDO {
      * pool. Pools persisted before `inFlightIds` existed fall back to a clamped
      * counter decrement.
      */
-
-    /**
-     * Un-kicked holders whose slot has outlived the claim ceiling with no dispatch live here: the
-     * attempt that kept the slot is presumed settled, so nothing else should be blocked by it.
-     * A row predating `heldAt` counts as stale. A kicked holder is not one of these: its
-     * `/complete` releases it.
-     */
-    private static staleHolders(pool: PoolState, now: number, live: ReadonlyMap<string, unknown>): string[] {
-        return (pool.inFlightIds ?? []).filter(
-            (id) => pool.kickedIds?.includes(id) !== true && !live.has(id) && (pool.heldAt?.[id] ?? 0) + DISPATCH_LEASE_MS <= now,
-        );
-    }
-
     private static releaseSlot(pool: PoolState, jobId: string): PoolState {
         if (pool.inFlightIds === undefined) {
             // Legacy row (no id set): best-effort clamped decrement.
@@ -648,9 +625,8 @@ class SchedulerDO {
 
         const next = pool.inFlightIds.filter((id) => id !== jobId);
         const kickedIds = pool.kickedIds?.filter((id) => id !== jobId);
-        const heldAt = pool.heldAt === undefined ? undefined : Object.fromEntries(Object.entries(pool.heldAt).filter(([id]) => id !== jobId));
 
-        return { ...pool, heldAt, inFlight: next.length, inFlightIds: next, kickedIds };
+        return { ...pool, inFlight: next.length, inFlightIds: next, kickedIds };
     }
 
     /**
@@ -845,8 +821,6 @@ class SchedulerDO {
         // BEFORE the due slice is read, so a job recovered here fires in this
         // very pass rather than waiting for the next one.
         await this.reindexOrphanedRecords();
-        // A kick whose marker write failed must be marked before any reservation can see its id as free.
-        await this.replayKickMarkers();
 
         // Paused: hold every job exactly where it is — header, index and attempt
         // count untouched — and stop the clock. Deleting the alarm rather than
@@ -1418,7 +1392,14 @@ class SchedulerDO {
         if (ok && poolName !== undefined) {
             // Before the header goes: once it does, the id is free for a new job, which must not
             // mistake this slot for one its own re-fire may re-enter.
-            await this.recordKicked(poolName, record.id);
+            // Swallowed: a kicked job must never re-fire, and a throw from here would re-claim it.
+            await this.withPoolLock(async () => {
+                const pool = await this.loadPool(poolName);
+
+                if (pool.inFlightIds?.includes(record.id) === true && pool.kickedIds?.includes(record.id) !== true) {
+                    await this.savePool(poolName, { ...pool, kickedIds: [...(pool.kickedIds ?? []), record.id] });
+                }
+            }).catch(() => undefined);
         }
 
         if (!ok && !declined && !keptSlot && poolName !== undefined) {
@@ -1519,19 +1500,7 @@ class SchedulerDO {
         }
 
         const reserved = await this.withPoolLock(async () => {
-            // Reclaimed before the re-entry check, so a re-fire whose own slot has outlived the
-            // claim ceiling takes a fresh one under the cap rather than re-entering it.
-            const loaded = await this.loadPool(poolName);
-            const stale = SchedulerDO.staleHolders(loaded, Date.now(), this.activeLeases);
-            let pool = loaded;
-
-            for (const id of stale) {
-                pool = SchedulerDO.releaseSlot(pool, id);
-            }
-
-            if (stale.length > 0) {
-                await this.savePool(poolName, pool);
-            }
+            const pool = await this.loadPool(poolName);
 
             // Re-entry before the cap: a record still holding its slot (an earlier attempt was
             // declined in-progress or lost with its instance, and that slot is kept until the
@@ -1557,7 +1526,6 @@ class SchedulerDO {
             ids.push(record.id);
             pool.inFlightIds = ids;
             pool.inFlight = ids.length;
-            pool.heldAt = { ...pool.heldAt, [record.id]: Date.now() };
             await this.savePool(poolName, pool);
 
             return "reserved" as const;
@@ -1805,8 +1773,11 @@ class SchedulerDO {
      * schedulable time (see {@link isIndexableTime}).
      */
     private async parkDead(record: ScheduleRecord, attempts: number, reason: string): Promise<void> {
-        // A slot the record still holds is not freed here: the attempt that kept it may still be
-        // running, so the claim ceiling in `staleHolders` reclaims it instead.
+        // A parked job never re-fires, so a slot it kept through failed re-fires is freed here —
+        // first, so a failed release leaves the job pending and re-fireable rather than parked
+        // with the slot stranded.
+        await this.releaseHeldSlot(record);
+
         const completedAt = Date.now();
 
         // Indexed in `dt:` like any other outcome, so `/history` lists the failure
@@ -1826,50 +1797,24 @@ class SchedulerDO {
     }
 
     /**
-     * Mark `id` kicked in its pool. A failed write is retried, then left as a recovery key the next
-     * alarm replays (see {@link replayKickMarkers}). Never throws: the kick already ran, so the
-     * caller must still clear the header rather than re-fire the job.
+     * Release `record`'s slot if it holds one. Only the id set can say so: a row persisted before
+     * `inFlightIds` existed is left alone, since a blind decrement there could free another job's slot.
      */
-    private async recordKicked(poolName: string, id: string): Promise<void> {
-        for (let attempt = 0; attempt < KICK_MARKER_ATTEMPTS; attempt += 1) {
-            try {
-                // eslint-disable-next-line no-await-in-loop -- each retry must finish before the next, against the same pool row
-                await this.markKicked(poolName, id);
+    private async releaseHeldSlot(record: ScheduleRecord): Promise<void> {
+        const poolName = record.pool;
 
-                return;
-            } catch {
-                // Retried.
-            }
+        if (poolName === undefined) {
+            return;
         }
 
-        await this.state.storage.put(`${KICK_PREFIX}${id}`, poolName).catch(() => undefined);
-    }
-
-    /** Add `id` to the pool's `kickedIds` if it holds an un-kicked slot. Idempotent. */
-    private async markKicked(poolName: string, id: string): Promise<void> {
         await this.withPoolLock(async () => {
             const pool = await this.loadPool(poolName);
 
-            if (pool.inFlightIds?.includes(id) === true && pool.kickedIds?.includes(id) !== true) {
-                await this.savePool(poolName, { ...pool, kickedIds: [...(pool.kickedIds ?? []), id] });
+            // A kicked id's holder is a job that already ran under this id, not this record.
+            if (pool.inFlightIds?.includes(record.id) === true && pool.kickedIds?.includes(record.id) !== true) {
+                await this.savePool(poolName, SchedulerDO.releaseSlot(pool, record.id));
             }
         });
-    }
-
-    /** Apply the kick markers a failed write left behind; each key is dropped once its marker is durable. */
-    private async replayKickMarkers(): Promise<void> {
-        const pending = await this.state.storage.list<string>({ prefix: KICK_PREFIX }).catch(() => new Map<string, string>());
-
-        for (const [key, poolName] of pending.entries()) {
-            try {
-                // eslint-disable-next-line no-await-in-loop -- one pool row at a time, so each marker lands before its key is dropped
-                await this.markKicked(poolName, key.slice(KICK_PREFIX.length));
-                // eslint-disable-next-line no-await-in-loop -- dropped only after its marker is durable
-                await this.state.storage.delete(key);
-            } catch {
-                // Still pending: the next alarm retries it.
-            }
-        }
     }
 
     /** Read the durable `pool:<name>` row, defaulting to a fresh `inFlight: 0` pool. */
@@ -1882,13 +1827,7 @@ class SchedulerDO {
             if (Array.isArray(stored.inFlightIds)) {
                 const kickedIds = stored.kickedIds?.filter((id) => stored.inFlightIds?.includes(id) === true);
 
-                return {
-                    heldAt: stored.heldAt,
-                    inFlight: stored.inFlightIds.length,
-                    inFlightIds: [...stored.inFlightIds],
-                    kickedIds,
-                    maxConcurrency: stored.maxConcurrency,
-                };
+                return { inFlight: stored.inFlightIds.length, inFlightIds: [...stored.inFlightIds], kickedIds, maxConcurrency: stored.maxConcurrency };
             }
 
             return { inFlight: Math.max(0, stored.inFlight), maxConcurrency: stored.maxConcurrency };
@@ -2045,7 +1984,6 @@ class SchedulerDO {
             // later /complete over-release).
             ...(current.inFlightIds === undefined ? {} : { inFlightIds: current.inFlightIds }),
             ...(current.kickedIds === undefined ? {} : { kickedIds: current.kickedIds }),
-            ...(current.heldAt === undefined ? {} : { heldAt: current.heldAt }),
             maxConcurrency: SchedulerDO.normalizeConcurrency(requestedMaxConcurrency, current.maxConcurrency),
         });
     }
@@ -2070,43 +2008,12 @@ class SchedulerDO {
      * is an operator action taken minutes or days after the schedule, so nothing
      * at schedule time would ever have surfaced the collision.
      */
-
-    /**
-     * Whether a pool still holds an un-kicked slot for `id` that may belong to a running attempt: the
-     * attempt has a dispatch live here, or its slot is younger than the claim ceiling. Such an id is
-     * refused, since a new job under it would be mistaken for a re-fire and admitted past the cap.
-     */
-    private async holdsUnsettledSlot(id: string): Promise<boolean> {
-        const now = Date.now();
-        let held = false;
-
-        await this.forEachPage<PoolState>(POOL_PREFIX, (pool) => {
-            if (pool.inFlightIds?.includes(id) !== true || pool.kickedIds?.includes(id) === true) {
-                return;
-            }
-
-            if (this.activeLeases.has(id) || (pool.heldAt?.[id] ?? 0) + DISPATCH_LEASE_MS > now) {
-                held = true;
-            }
-        });
-
-        return held;
-    }
-
     private async idConflict(id: string): Promise<Response | undefined> {
         if ((await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`)) !== undefined) {
             return SchedulerDO.error(
                 409,
                 "DUPLICATE_SCHEDULE_ID",
                 `a job with id "${id}" is already scheduled — cancel it first, or schedule under a different id`,
-            );
-        }
-
-        if (await this.holdsUnsettledSlot(id)) {
-            return SchedulerDO.error(
-                409,
-                "DUPLICATE_SCHEDULE_ID",
-                `id "${id}" still holds a pool slot for an earlier attempt that may be running — schedule under a different id`,
             );
         }
 
@@ -2276,8 +2183,19 @@ class SchedulerDO {
             return SchedulerDO.json({ cancelled: false });
         }
 
-        // A slot the record still holds is not released here: the attempt that kept it may still be
-        // running. The claim ceiling in `staleHolders` reclaims it.
+        // Read before removeRecord(), which does not touch the lease map but marks the record cancelled.
+        const inFlightHere = this.activeLeases.has(record.id);
+
+        // A pending record can still hold a slot: one kept after an in-progress decline, whose
+        // next re-fire was going to be its release. Cancelled, it never re-fires, so release it
+        // here — before the record goes, so a failed release leaves it for a retried cancel instead
+        // of stranding the slot with nothing left to free it. A record whose dispatch is in flight
+        // on this instance is left to drainRecord(), which sees the outcome: a kick that went
+        // through keeps the slot until /complete.
+        if (!inFlightHere) {
+            await this.releaseHeldSlot(record);
+        }
+
         await this.removeRecord(record);
         // The cancel already took effect; a failed outcome write costs only the history row.
         await this.writeTerminal(record, "canceled").catch(() => undefined);
