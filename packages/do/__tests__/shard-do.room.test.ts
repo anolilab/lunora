@@ -148,8 +148,16 @@ describe("shardDO room authorisation and teardown", () => {
             };
         });
         const a = new FakeSocket({ connectionId: "conn-1", subs: {}, userId: "member", whispers: ["room:chat", "room:two"] });
+        const secondLeave = Promise.withResolvers<undefined>();
         const shard = makeShard([a], { "room:chat": "rooms:chat", "room:two": "rooms:two" }, [], {
             "rooms:chat": (event) => (event["kind"] === "leave" ? firstGate : undefined),
+            "rooms:two": (event) => {
+                if (event["kind"] === "leave") {
+                    secondLeave.resolve(undefined);
+                }
+
+                return undefined;
+            },
         });
 
         const closed = shard.webSocketClose(a as unknown as WebSocket, 1000, "", true);
@@ -157,9 +165,8 @@ describe("shardDO room authorisation and teardown", () => {
         // Cleanup clears the attachment while the first leave is still held.
         await closed;
         releaseFirst();
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 10);
-        });
+        // The second leave queues behind the first, so it runs only once that one is released.
+        await secondLeave.promise;
 
         const leaves = shard.calls.filter((call) => call.args["kind"] === "leave").map((call) => call.args["socket"] as Record<string, unknown>);
 
@@ -183,14 +190,10 @@ describe("shardDO room authorisation and teardown", () => {
         });
 
         const closed = shard.webSocketClose(a as unknown as WebSocket, 1000, "", true).then(() => "closed");
-        const outcome = await Promise.race([
-            closed,
-            new Promise<string>((resolve) => {
-                setTimeout(resolve, 50, "blocked");
-            }),
-        ]);
+        // Teardown finishes while onLeave is still pending: nothing releases the
+        // leave before this settles, so a close held behind it never would.
+        const outcome = await closed;
 
-        // Teardown finished while onLeave is still pending.
         expect(outcome).toBe("closed");
 
         releaseLeave();
@@ -458,6 +461,7 @@ describe("shardDO rooms", () => {
         const firstJoinGate = new Promise<void>((resolve) => {
             releaseFirstJoin = resolve;
         });
+        const joinEntered = Promise.withResolvers<undefined>();
         let joins = 0;
         const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
             "rooms:chat": async (args) => {
@@ -465,6 +469,7 @@ describe("shardDO rooms", () => {
                     joins += 1;
 
                     if (joins === 1) {
+                        joinEntered.resolve(undefined);
                         await firstJoinGate;
                         throw new Error("first join refused");
                     }
@@ -476,10 +481,8 @@ describe("shardDO rooms", () => {
 
         // Join, leave and rejoin while the first join's handler is still in flight.
         const first = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
-        // Let the first join record its membership; its handler stays in flight at the gate.
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 0);
-        });
+        // The first join has recorded its membership; its handler stays in flight at the gate.
+        await joinEntered.promise;
         const left = send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" });
         const rejoined = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
 
@@ -516,19 +519,28 @@ describe("shardDO rooms", () => {
     });
 
     it("does not deliver a room broadcast to a socket whose join is still settling", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const member = new FakeSocket({ subs: {}, userId: "member" });
+        // A committed member besides the sender, so the broadcast provably reaches the room.
+        const observer = new FakeSocket({ subs: {}, userId: "observer" });
         const joining = new FakeSocket({ subs: {}, userId: "user-a" });
         let releaseJoin: () => void = () => undefined;
         const gate = new Promise<void>((resolve) => {
             releaseJoin = resolve;
         });
-        const shard = makeShard([member, joining], { "room:chat": "rooms:chat" }, [], {
+        const joinEntered = Promise.withResolvers<undefined>();
+        const shard = makeShard([member, observer, joining], { "room:chat": "rooms:chat" }, [], {
             "rooms:chat": async (args) => {
                 if (args["kind"] === "join" && (args["socket"] as { userId: string }).userId === "user-a") {
+                    joinEntered.resolve(undefined);
                     await gate;
                     throw new Error("join refused");
+                }
+
+                // A verdict replaces the shard's default echo, so the message is broadcast here.
+                if (args["kind"] === "message") {
+                    (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ echo: args["message"] });
                 }
 
                 return undefined;
@@ -536,10 +548,9 @@ describe("shardDO rooms", () => {
         });
 
         await send(shard, member, { topic: "room:chat", type: "whisper_subscribe" });
+        await send(shard, observer, { topic: "room:chat", type: "whisper_subscribe" });
         const pendingJoin = send(shard, joining, { topic: "room:chat", type: "whisper_subscribe" });
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 0);
-        });
+        await joinEntered.promise;
 
         // The member's message is echoed to the room while the other join is still settling.
         await send(shard, member, { data: { hi: 1 }, topic: "room:chat", type: "whisper" });
@@ -547,6 +558,7 @@ describe("shardDO rooms", () => {
         releaseJoin();
         await pendingJoin;
 
+        expect(observer.frames.filter((frame) => frame.type === "whisper").map((frame) => frame.data)).toStrictEqual([{ echo: { hi: 1 } }]);
         expect(joining.frames.filter((frame) => frame.type === "whisper")).toEqual([]);
     });
 
@@ -558,9 +570,11 @@ describe("shardDO rooms", () => {
         const gate = new Promise<void>((resolve) => {
             releaseJoin = resolve;
         });
+        const joinEntered = Promise.withResolvers<undefined>();
         const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
             "rooms:chat": async (args) => {
                 if (args["kind"] === "join") {
+                    joinEntered.resolve(undefined);
                     await gate;
                     throw new Error("join refused");
                 }
@@ -570,9 +584,7 @@ describe("shardDO rooms", () => {
         });
 
         const join = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 0);
-        });
+        await joinEntered.promise;
         const leave = send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" });
 
         releaseJoin();
@@ -590,6 +602,7 @@ describe("shardDO rooms", () => {
         const firstJoinGate = new Promise<void>((resolve) => {
             releaseFirstJoin = resolve;
         });
+        const joinEntered = Promise.withResolvers<undefined>();
         let joins = 0;
         const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
             "rooms:chat": async (args) => {
@@ -597,6 +610,7 @@ describe("shardDO rooms", () => {
                     joins += 1;
 
                     if (joins === 1) {
+                        joinEntered.resolve(undefined);
                         await firstJoinGate;
                     }
                 }
@@ -604,17 +618,26 @@ describe("shardDO rooms", () => {
                 return undefined;
             },
         });
-        const settle = async (): Promise<void> => {
-            await new Promise<void>((resolve) => {
-                setTimeout(resolve, 0);
-            });
+        // The message's membership epoch is read as it is queued; the leave must come after that.
+        const internals = shard as unknown as { dispatchRoomEvent: (ws: unknown, topic: string, kind: string, ...rest: unknown[]) => Promise<boolean> };
+        const dispatchRoomEvent = internals.dispatchRoomEvent.bind(shard);
+        const messageQueued = Promise.withResolvers<undefined>();
+
+        internals.dispatchRoomEvent = (ws, topic, kind, ...rest) => {
+            const queued = dispatchRoomEvent(ws, topic, kind, ...rest);
+
+            if (kind === "message") {
+                messageQueued.resolve(undefined);
+            }
+
+            return queued;
         };
 
         const firstJoin = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
-        await settle();
+        await joinEntered.promise;
         // Sent under the first membership, queued behind the still-running join.
         const message = send(shard, a, { data: { n: 1 }, topic: "room:chat", type: "whisper" });
-        await settle();
+        await messageQueued.promise;
         const leave = send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" });
         const rejoin = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
 
@@ -657,9 +680,11 @@ describe("shardDO rooms", () => {
         const gate = new Promise<void>((resolve) => {
             releaseJoin = resolve;
         });
+        const joinEntered = Promise.withResolvers<undefined>();
         const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
             "rooms:chat": async (args) => {
                 if (args["kind"] === "join") {
+                    joinEntered.resolve(undefined);
                     await gate;
                 }
 
@@ -671,9 +696,7 @@ describe("shardDO rooms", () => {
         (shard as unknown as { allowWhisper: () => boolean }).allowWhisper = () => true;
 
         const pending = [send(shard, a, { topic: "room:chat", type: "whisper_subscribe" })];
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 0);
-        });
+        await joinEntered.promise;
 
         // Seventy messages behind the slow join: only what fits the queue runs.
         for (let index = 0; index < 70; index += 1) {
@@ -723,38 +746,69 @@ describe("shardDO rooms", () => {
     });
 
     it("still runs onLeave for a leave that arrives while the queue is full", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const a = new FakeSocket({ subs: {}, userId: "user-a" });
         let releaseJoin: () => void = () => undefined;
         const gate = new Promise<void>((resolve) => {
             releaseJoin = resolve;
         });
+        const joinEntered = Promise.withResolvers<undefined>();
         const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
             "rooms:chat": async (args) => {
                 if (args["kind"] === "join") {
+                    joinEntered.resolve(undefined);
                     await gate;
                 }
 
                 return undefined;
             },
         });
-        (shard as unknown as { allowWhisper: () => boolean }).allowWhisper = () => true;
+        const internals = shard as unknown as {
+            allowWhisper: () => boolean;
+            dispatchRoomEvent: (ws: unknown, topic: string, kind: string, ...rest: unknown[]) => Promise<boolean>;
+            logs: { entries: () => { message: string }[] };
+        };
+
+        internals.allowWhisper = () => true;
+
+        // A message reaches the room queue (or its cap) a few awaits later than a leave drops
+        // membership, so a leave sent alongside them overtakes them and the queue never fills.
+        // It is sent only once all seventy messages have been queued or refused.
+        const dispatchRoomEvent = internals.dispatchRoomEvent.bind(shard);
+        const messagesDispatched = Promise.withResolvers<undefined>();
+        let messages = 0;
+
+        internals.dispatchRoomEvent = (ws, topic, kind, ...rest) => {
+            const queued = dispatchRoomEvent(ws, topic, kind, ...rest);
+
+            if (kind === "message") {
+                messages += 1;
+
+                if (messages === 70) {
+                    messagesDispatched.resolve(undefined);
+                }
+            }
+
+            return queued;
+        };
 
         const pending = [send(shard, a, { topic: "room:chat", type: "whisper_subscribe" })];
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 0);
-        });
+        await joinEntered.promise;
 
         // Fill the queue behind the slow join, then leave.
         for (let index = 0; index < 70; index += 1) {
             pending.push(send(shard, a, { data: index, topic: "room:chat", type: "whisper" }));
         }
+
+        await messagesDispatched.promise;
         pending.push(send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" }));
 
         releaseJoin();
         await Promise.all(pending);
 
+        // The queue really was full: the messages past the cap were refused.
+        expect(internals.logs.entries().some((entry) => entry.message.startsWith("room event refused"))).toBe(true);
         // The leave is queued even at the cap, so the room's onLeave runs.
         expect(roomCalls(shard).at(-1)?.args["kind"]).toBe("leave");
     });

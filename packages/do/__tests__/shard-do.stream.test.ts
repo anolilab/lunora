@@ -7,12 +7,14 @@ import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identi
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
+import waitForFrames from "./_helpers/wait-for-frames";
 
 interface FakeWebSocket {
     attachment: SocketAttachment | undefined;
     closeCalled: boolean;
     deserializeAttachment: () => unknown;
     send: (data: string) => void;
+    sendListeners: Set<() => void>;
     sent: string[];
     serializeAttachment: (value: unknown) => void;
 }
@@ -26,7 +28,12 @@ const createFakeWebSocket = (): FakeWebSocket => {
         },
         send(data: string) {
             this.sent.push(data);
+
+            for (const listener of this.sendListeners) {
+                listener();
+            }
         },
+        sendListeners: new Set(),
         sent: [],
         serializeAttachment(value: unknown) {
             this.attachment = value as SocketAttachment | undefined;
@@ -46,24 +53,12 @@ const createDeferred = (): { promise: Promise<void>; resolve: () => void } => {
 };
 
 /**
- * Drive the runtime forward until either a terminating frame (`complete` /
- * `error`) lands on the socket or the deadline fires. The DO handler is
- * fire-and-forget (it returns from `webSocketMessage` before the iterator
- * drains), so tests need an explicit join point.
+ * Resolves once a terminating frame (`complete` / `error`) lands on the socket.
+ * The DO handler is fire-and-forget (it returns from `webSocketMessage` before
+ * the iterator drains), so tests need an explicit join point.
  */
-const waitForTerminator = async (ws: FakeWebSocket, deadlineMs = 200): Promise<void> => {
-    const start = Date.now();
-
-    while (Date.now() - start < deadlineMs) {
-        if (parseFrames(ws).some((f) => f.type === "complete" || f.type === "error")) {
-            return;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- polling loop must wait between frame checks
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 1);
-        });
-    }
+const waitForTerminator = async (ws: FakeWebSocket): Promise<void> => {
+    await waitForFrames(ws, (frames) => frames.some((f) => f.type === "complete" || f.type === "error"));
 };
 
 /**
@@ -280,20 +275,25 @@ describe("shardDO streaming queries", () => {
 
         const shard = new StreamShard(state, {});
         const yielded: number[] = [];
+        const stopped = createDeferred();
 
         shard.registered.set("metrics:loop", async function* loopGen(_args, signal) {
-            for (let index = 0; index < 100; index += 1) {
-                if (signal.aborted) {
-                    return;
-                }
+            try {
+                for (let index = 0; index < 100; index += 1) {
+                    if (signal.aborted) {
+                        return;
+                    }
 
-                yielded.push(index);
-                yield index;
-                // Yield to the event loop so the cancel message can interleave.
-                // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
-                await new Promise<void>((resolve) => {
-                    setTimeout(resolve, 0);
-                });
+                    yielded.push(index);
+                    yield index;
+                    // Yield to the event loop so the cancel message can interleave.
+                    // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
+                    await new Promise<void>((resolve) => {
+                        setImmediate(resolve);
+                    });
+                }
+            } finally {
+                stopped.resolve();
             }
         });
 
@@ -302,16 +302,12 @@ describe("shardDO streaming queries", () => {
         shard.registerSocket(ws, { subs: {} });
         await shard.driveMessage(ws, { id: "stream_2", query: { functionPath: "metrics:loop" }, type: "stream" });
 
-        // Wait for a couple of chunks to land before cancelling.
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 5);
-        });
+        // A couple of chunks land before cancelling.
+        await waitForFrames(ws, (frames) => frames.filter((f) => f.type === "chunk").length >= 2);
         await shard.driveMessage(ws, { id: "stream_2", type: "unsubscribe" });
 
-        // Give the iterator a few ticks to honor the abort.
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 20);
-        });
+        // The iterator has honored the abort and returned.
+        await stopped.promise;
 
         const types = parseFrames(ws).map((f) => f.type);
 
@@ -613,10 +609,8 @@ describe("shardDO streaming queries", () => {
         shard.registerSocket(ws, { subs: {} });
         const driving = shard.driveMessage(ws, { id: "stream_5", query: { functionPath: "metrics:hang" }, type: "stream" });
 
-        // Give the iterator a turn so its first yield lands and it's parked on the abort promise.
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 5);
-        });
+        // Its first yield has landed, so it is parked on the abort promise.
+        await waitForFrames(ws, (frames) => frames.some((f) => f.type === "chunk"));
         await shard.driveClose(ws);
         await driving;
 
@@ -837,29 +831,47 @@ describe("shardDO streaming queries", () => {
     it("tears a long-running stream down when the socket's credential lapses mid-run", async () => {
         expect.assertions(3);
 
+        // Only `Date`: the credential check reads `Date.now()`, and the pump's own turns stay real.
+        vi.useFakeTimers({ now: 1_000_000, toFake: ["Date"] });
+
         const shard = new StreamShard(state, {});
+        const expiresAt = Date.now() + 25;
         let yielded = 0;
+        const stopped = createDeferred();
 
         shard.registered.set("metrics:tick", async function* tickGen(_args, signal) {
-            for (let index = 0; index < 200 && !signal.aborted; index += 1) {
-                yielded += 1;
-                yield index;
-                // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
-                await new Promise<void>((resolve) => {
-                    setTimeout(resolve, 1);
-                });
+            try {
+                for (let index = 0; index < 200 && !signal.aborted; index += 1) {
+                    yielded += 1;
+                    yield index;
+
+                    // Live for the first few chunks, lapsed from then on.
+                    if (index === 2) {
+                        vi.setSystemTime(expiresAt);
+                    }
+
+                    // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
+                    await new Promise<void>((resolve) => {
+                        setImmediate(resolve);
+                    });
+                }
+            } finally {
+                stopped.resolve();
             }
         });
 
         const ws = createFakeWebSocket();
 
-        // Live at the inbound check that started the stream, lapsed a few chunks
-        // in — the window the one-shot inbound check structurally cannot see.
-        shard.registerSocket(ws, { expiresAt: Date.now() + 25, subs: {} });
-        await shard.driveMessage(ws, { id: "tick", query: { functionPath: "metrics:tick" }, type: "stream" });
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 150);
-        });
+        try {
+            // Live at the inbound check that started the stream, lapsed a few chunks
+            // in — the window the one-shot inbound check structurally cannot see.
+            shard.registerSocket(ws, { expiresAt, subs: {} });
+            await shard.driveMessage(ws, { id: "tick", query: { functionPath: "metrics:tick" }, type: "stream" });
+            await waitForFrames(ws, (sent) => sent.some((f) => f.code === "TOKEN_EXPIRED"));
+            await stopped.promise;
+        } finally {
+            vi.useRealTimers();
+        }
 
         const frames = parseFrames(ws);
 
@@ -943,12 +955,14 @@ describe("shardDO streaming queries", () => {
         const shard = new StreamShard(state, {});
         let started = 0;
         let aborted = 0;
+        const firstAborted = createDeferred();
 
         shard.registered.set("metrics:hold", async function* holdGen(_args, signal) {
             started += 1;
             yield { open: true };
             await parkUntilAborted(signal);
             aborted += 1;
+            firstAborted.resolve();
         });
 
         const ws = createFakeWebSocket();
@@ -972,9 +986,7 @@ describe("shardDO streaming queries", () => {
         // The other half of the same bug: a second `set` under one id orphaned the
         // incumbent controller, so `unsubscribe` reached only the newest pump.
         await shard.driveMessage(ws, { id: "same", type: "unsubscribe" });
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, 10);
-        });
+        await firstAborted.promise;
 
         expect(aborted).toBe(1);
     });

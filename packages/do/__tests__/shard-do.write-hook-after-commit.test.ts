@@ -17,7 +17,8 @@ const schema: SchemaLike = {
 
 let database: ReturnType<typeof createSqliteExec>;
 
-const makeState = (): ShardDOState => {
+/** `onCommit` runs right after each `COMMIT`, while the transaction's caller still holds the gate. */
+const makeState = (onCommit?: () => void): ShardDOState => {
     // The single-writer gate, for real. Without it nothing here can observe the
     // window this suite cares about: the gate is what admits the NEXT mutation
     // the moment this one commits, and post-commit work that runs loose of it is
@@ -57,6 +58,7 @@ const makeState = (): ShardDOState => {
                     const value = await closure();
 
                     database.raw("COMMIT");
+                    onCommit?.();
 
                     return value;
                 } catch (error) {
@@ -211,7 +213,18 @@ describe("shardDO.runInTransaction — external write hooks", () => {
     it("lands post-commit hooks in commit order when a slow one overlaps the next commit", async () => {
         expect.assertions(2);
 
-        const shard = new WriteHookShard(makeState());
+        let commits = 0;
+        const secondCommitted = Promise.withResolvers<undefined>();
+        const shard = new WriteHookShard(
+            makeState(() => {
+                commits += 1;
+
+                // The `"v0"` insert, `"v1"`, then `"v2"`.
+                if (commits === 3) {
+                    secondCommitted.resolve(undefined);
+                }
+            }),
+        );
         const db = shard.writer();
         const id = await shard.run(async () => db.insert("notes", { body: "v0" }));
 
@@ -233,10 +246,12 @@ describe("shardDO.runInTransaction — external write hooks", () => {
         const first = shard.run(async () => db.patch("notes", id, { body: "v1" }));
         const second = shard.run(async () => db.patch("notes", id, { body: "v2" }));
 
-        // Long enough for the second transaction to commit and, if nothing held
-        // it, to run its hook to completion while the first is still in flight.
+        // The second transaction has committed while the first's hook is still
+        // in flight. A fast hook left loose of the chain finishes on microtasks
+        // alone, so one macrotask turn is enough for it to have landed.
+        await secondCommitted.promise;
         await new Promise((resolve) => {
-            setTimeout(resolve, 20);
+            setImmediate(resolve);
         });
 
         // Nothing may overtake the stalled hook: landing `"v2"` here would leave

@@ -259,18 +259,24 @@ describe("ctx.trace", () => {
 
         const seen: SpanEvent[] = [];
         const trace = tracerInto(seen);
-        const sleep = async (ms: number): Promise<void> => {
-            await new Promise((resolve) => {
-                setTimeout(resolve, ms);
-            });
-        };
 
         // The case an ambient "currently open span" stack cannot express: `slow`
         // is still open when `fast` starts, so a stack would record `fast` as a
         // CHILD of `slow` rather than its sibling. Parallel fan-out is a mainline
         // use of a tracer, so this has to be right.
         await trace("outer", async (child) => {
-            await Promise.all([child("slow", () => sleep(20)), child("fast", () => sleep(1))]);
+            const slowOpen = Promise.withResolvers<undefined>();
+            const fastDone = Promise.withResolvers<undefined>();
+            const slowRun = child("slow", async () => {
+                slowOpen.resolve(undefined);
+                await fastDone.promise;
+            });
+
+            // `fast` opens and closes entirely inside `slow`'s span.
+            await slowOpen.promise;
+            await child("fast", () => undefined);
+            fastDone.resolve(undefined);
+            await slowRun;
         });
 
         const outer = seen.find((event) => event.name === "outer");
