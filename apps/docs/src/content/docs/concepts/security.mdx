@@ -398,7 +398,7 @@ lints run on every `lunora dev` save and on deploy.
 | `mask_uncovered_pii_column`              | warn  | Add `.use(mask(...))` so the public read redacts the same columns as elsewhere.                    |
 | `auth_api_call_without_headers`          | warn  | Pass `headers` to `ctx.authApi.<method>(...)` so better-auth authorizes the session.               |
 | `public_mutation_without_ratelimit`      | warn  | Wrap the public write with `protectPublic({ rateLimit })` or attach `rateLimit(...)`.              |
-| `user_creating_mutation_without_captcha` | warn  | Add `verifyTurnstile` / `protectPublic({ captcha })` to the user-creating procedure.               |
+| `user_creating_mutation_without_captcha` | warn  | Add `verifyTurnstileMiddleware` / `protectPublic({ captcha })`, or gate it with `authorize(...)`.  |
 | `public_arg_uses_any`                    | warn  | Replace the `v.any()` argument with a concrete validator.                                          |
 | `admin_route_without_guard`              | warn  | Reference an auth/admin guard in the privileged `httpRoute` handler.                               |
 | `unbounded_string_arg`                   | info  | Add a max-length `.check` to the public string argument.                                           |

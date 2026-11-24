@@ -339,6 +339,73 @@ ${DECLARED_GUARD}`,
         expect(rowAt(found, 2)).toMatchObject({ field: "userId", adminOnly: true });
     });
 
+    it("trusts an internal write reached only through an internal* procedure", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `export const saveMemory = internalMutation(async ({ args, ctx }) => {
+  await ctx.db.insert("posts", { userId: args.userId });
+});`,
+            "mutators.ts",
+            undefined,
+            [{ args: {}, exportName: "saveMemory", filePath: "mutators", kind: "mutation", returnType: "unknown", visibility: "internal" }],
+        );
+
+        expect(rowAt(found, 2)).toMatchObject({ field: "userId", visibility: "internal", trustedInternal: true });
+    });
+
+    // A socket or channel handler is registered `internal`, but a connected client triggers it with its own payload.
+    it("does not trust an internal write reached through a lifecycle registration", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `export const onRoomMessage = onConnect(async ({ args, ctx }) => {
+  await ctx.db.insert("posts", { userId: args.userId });
+});`,
+            "mutators.ts",
+            undefined,
+            [
+                {
+                    args: {},
+                    exportName: "onRoomMessage",
+                    filePath: "mutators",
+                    kind: "mutation",
+                    lifecycle: "connect",
+                    returnType: "unknown",
+                    visibility: "internal",
+                },
+            ],
+        );
+
+        expect(rowAt(found, 2)).not.toHaveProperty("trustedInternal");
+    });
+
+    // A reactor hook runs on the server after a write flush, so no client supplies its `args`.
+    it("trusts an internal write reached through a server-dispatched reactor", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `export const onReport = onQueryChange(async ({ args, ctx }) => {
+  await ctx.db.insert("posts", { userId: args.userId });
+});`,
+            "mutators.ts",
+            undefined,
+            [
+                {
+                    args: {},
+                    exportName: "onReport",
+                    filePath: "mutators",
+                    kind: "mutation",
+                    lifecycle: "reactor",
+                    returnType: "unknown",
+                    visibility: "internal",
+                },
+            ],
+        );
+
+        expect(rowAt(found, 2)).toMatchObject({ trustedInternal: true });
+    });
+
     it("does not stamp adminOnly on a write reached through an ordinary procedure", () => {
         expect.assertions(1);
 

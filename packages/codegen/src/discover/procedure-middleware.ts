@@ -10,7 +10,7 @@ import { builderChainSteps, resolveUseArgumentCall } from "./builder-chain";
 import { calleeName } from "./callee";
 import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
 import { isDatabaseAccessor } from "./database-calls";
-import { classifyProcedureCall } from "./functions/classify-procedure-call";
+import { chainCarriesServerMarker, classifyProcedureCall } from "./functions/classify-procedure-call";
 import { facadeWriteOf } from "./write-target";
 
 /**
@@ -112,6 +112,7 @@ const declaresEmailArgument = (call: CallExpression, receiver: TsNode | undefine
 
 /** The set of protections a builder chain carries. */
 interface Protections {
+    usesAuthorize: boolean;
     usesCaptcha: boolean;
     usesEmailGate: boolean;
     usesMask: boolean;
@@ -143,7 +144,7 @@ const protectPublicFlags = (call: CallExpression): { usesCaptcha: boolean; usesR
 };
 
 /** The protections a single `.use(...)` step installs (all `false` when it matches none). */
-const NO_PROTECTIONS: Protections = { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
+const NO_PROTECTIONS: Protections = { usesAuthorize: false, usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
 
 /**
  * The protections a single `.use(arg)` step installs. `arg` is resolved to its
@@ -874,9 +875,11 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         return undefined;
     }
 
+    // `authorize` is read at chain level, so a shared builder imported from another module counts. It is matched by
+    // import origin, not name: a local helper with the same name must not clear the CAPTCHA lint.
     const protections = classified.receiver
-        ? protectionsInChain(classified.receiver)
-        : { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
+        ? { ...protectionsInChain(classified.receiver), usesAuthorize: chainCarriesServerMarker(classified.receiver, "authorize") }
+        : NO_PROTECTIONS;
 
     const behaviourRoot = analyzableBehaviourRoot(declaration, initializer);
 

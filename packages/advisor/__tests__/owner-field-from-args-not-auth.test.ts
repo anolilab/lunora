@@ -11,8 +11,7 @@ const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: 
 describe("owner_field_from_args_not_auth", () => {
     // The declaration already enforces it: `applyOwnerScope` requires a verified
     // identity, rejects a disagreeing client value, and stamps the column before
-    // `server` runs. Not even INFO — unlike the `internal` case, there is no
-    // forwarding caller to chase.
+    // `server` runs. Not even INFO: there is no forwarding caller to chase.
     it("reports nothing for an owner-scoped write", () => {
         expect.assertions(1);
 
@@ -103,30 +102,42 @@ describe("owner_field_from_args_not_auth", () => {
         expect(findings[1]?.cacheKey).toBe("owner_field_from_args_not_auth:posts:9:tenantId");
     });
 
-    it("drops an internal procedure's write to INFO and redirects it at the public callers", () => {
-        expect.assertions(5);
+    it("reports nothing for an internal procedure's write, and still reports the public one", () => {
+        expect.assertions(3);
 
-        // The first large port had 9 of these and all 9 were
-        // `internalMutation`. An internal procedure is not reachable by a caller
-        // — that is the entire point of the visibility split — so "any caller can
-        // act as any user" is false there, and taking the subject from `args` is
-        // the correct shape. At ERROR the rule had zero signal; under #35 it
-        // would have blocked the build on nine correct functions.
+        // An `internalMutation` is not reachable by a caller, so the subject taken
+        // from `args` is the correct shape there; its declared visibility is what
+        // the lint trusts. The public write beside it is untouched and still blocks.
         const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
-            { scope: { kind: "export", name: "saveMemory" }, field: "userId", file: "memory", line: 12, method: "insert", visibility: "internal" },
+            {
+                scope: { kind: "export", name: "saveMemory" },
+                field: "userId",
+                file: "memory",
+                line: 12,
+                method: "insert",
+                trustedInternal: true,
+                visibility: "internal",
+            },
             { scope: { kind: "export", name: "createPin" }, field: "userId", file: "pins", line: 20, method: "insert", visibility: "public" },
         ];
         const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
 
-        expect(findings[0]).toMatchObject({ level: "INFO", metadata: { visibility: "internal" } });
-        // Not silent: the public procedure forwarding raw args into it IS the
-        // vector, so the finding stays as the breadcrumb pointing there.
-        expect(findings[0]?.detail).toContain("Audit the PUBLIC procedures");
-        expect(findings[0]?.detail).toContain("expected for an `internal` procedure");
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ level: "ERROR", metadata: { exportName: "createPin", visibility: "public" } });
+        expect(findings[0]?.detail).toContain("any caller can write rows owned by another user/tenant");
+    });
 
-        // The public-facing case is untouched and still blocks.
-        expect(findings[1]).toMatchObject({ level: "ERROR", metadata: { visibility: "public" } });
-        expect(findings[1]?.detail).toContain("any caller can write rows owned by another user/tenant");
+    // A socket, channel or lifecycle handler is `internal` in the registry, but a connected client supplies its payload.
+    it("keeps an untrusted internal write, such as a socket handler's, at INFO rather than dropping it", () => {
+        expect.assertions(2);
+
+        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
+            { scope: { kind: "export", name: "onRoomMessage" }, field: "ownerId", file: "room", line: 8, method: "insert", visibility: "internal" },
+        ];
+        const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ level: "INFO", metadata: { visibility: "internal" } });
     });
 
     it("keeps ERROR when the feeder could not attribute a visibility", () => {

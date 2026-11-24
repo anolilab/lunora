@@ -61,6 +61,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `AuthorizeCheck` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `CachePurge` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1346,6 +1350,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `assertShapesDeclareReadPolicies` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `authorize` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5713,6 +5721,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `AuthorizeCheck` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `CachePurge` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6998,6 +7010,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `assertShapesDeclareReadPolicies` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `authorize` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

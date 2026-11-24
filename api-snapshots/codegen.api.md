@@ -2035,6 +2035,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 interface AcceptedFinding {
     exportName: string;
     file: string;
+    level: Level;
     reason: string;
     rule: string;
 }
@@ -3138,6 +3139,7 @@ interface OwnerFieldWriteIR {
     method: string;
     ownerScoped?: true;
     scope: CallSiteScope;
+    trustedInternal?: true;
     visibility?: "internal" | "public";
 }
 ```
@@ -3187,6 +3189,7 @@ interface ProcedureMiddlewareIR {
     runsAiGeneration?: boolean;
     throwsBareError?: boolean;
     unboundedAiGeneration?: boolean;
+    usesAuthorize: boolean;
     usesCaptcha: boolean;
     usesEmailGate: boolean;
     usesInsertManyUnsafe?: boolean;

@@ -13,6 +13,7 @@
       "writesUserTable": false,
       "exempt": false,
       "exemptReason": "",
+      "usesAuthorize": false,
       "usesCaptcha": false,
       "usesEmailGate": false,
       "usesMask": false,

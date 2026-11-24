@@ -191,6 +191,7 @@ interface AdvisorProcedure {
     runsAiGeneration?: boolean;
     throwsBareError?: boolean;
     unboundedAiGeneration?: boolean;
+    usesAuthorize?: boolean;
     usesCaptcha: boolean;
     usesEmailGate: boolean;
     usesInsertManyUnsafe?: boolean;

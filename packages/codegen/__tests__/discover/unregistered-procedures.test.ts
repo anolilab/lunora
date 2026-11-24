@@ -776,7 +776,7 @@ export const viaFactory = makeQuery();
         load("reexport.ts");
 
         const findings = applyAcceptedFindings(run(discoverFunctions(project, join(workdir, "lunora"))), [
-            { exportName: "gate", file: "lunora/reexport.ts", reason: "reviewed", rule: "procedure_not_registered" },
+            { exportName: "gate", file: "lunora/reexport.ts", level: "ERROR", reason: "reviewed", rule: "procedure_not_registered" },
         ]);
 
         expect(findings.filter((finding) => finding.name === "procedure_not_registered").map((finding) => finding.level)).toStrictEqual(["INFO"]);

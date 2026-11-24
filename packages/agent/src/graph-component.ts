@@ -44,6 +44,8 @@ const graphTables: Record<typeof EDGES_BARE_TABLE | typeof ENTITIES_BARE_TABLE, 
         updatedAt: v.number(),
         weight: v.optional(v.number()),
     })
+        // Written by this component's own functions through `context.db`, which the installing app's advisor does not scan.
+        .externallyManaged()
         // Upsert dedup AND seed enumeration (prefix-scan on `owner`).
         .index("byOwnerName", ["owner", "name"], { unique: true })
         // Bounds seed enumeration to the most-recently-touched N entities
@@ -68,6 +70,7 @@ const graphTables: Record<typeof EDGES_BARE_TABLE | typeof ENTITIES_BARE_TABLE, 
         updatedAt: v.number(),
         weight: v.optional(v.number()),
     })
+        .externallyManaged()
         // Outgoing traversal.
         .index("byOwnerSrc", ["owner", "srcName"])
         // Incoming traversal (BFS is bidirectional).
