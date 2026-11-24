@@ -7,17 +7,25 @@ interface Context {
     user: { canManageTeamMembers: boolean };
 }
 
-const callAuthorized = (canManage: boolean, handler: () => string) =>
-    authorize<Context>((ctx) => ctx.user.canManageTeamMembers)({
-        ctx: { user: { canManageTeamMembers: canManage } },
-        next: () => handler(),
+/** Runs the gate, with a `next` that records the handler ran and resolves to the context, as the builder's `next` does. */
+const runGate = (canManage: boolean, onNext: () => void = () => undefined) => {
+    const ctx: Context = { user: { canManageTeamMembers: canManage } };
+
+    return authorize<Context>((context) => context.user.canManageTeamMembers)({
+        ctx,
+        next: () => {
+            onNext();
+
+            return Promise.resolve(ctx);
+        },
     });
+};
 
 describe("authorize", () => {
     it("runs the handler when the permission check passes", async () => {
         expect.assertions(1);
 
-        await expect(callAuthorized(true, () => "ran")).resolves.toBe("ran");
+        await expect(runGate(true)).resolves.toMatchObject({ user: { canManageTeamMembers: true } });
     });
 
     it("throws FORBIDDEN without running the handler when the permission check fails", async () => {
@@ -26,25 +34,24 @@ describe("authorize", () => {
         let handlerRan = false;
 
         await expect(
-            callAuthorized(false, () => {
+            runGate(false, () => {
                 handlerRan = true;
-
-                return "ran";
             }),
         ).rejects.toBeInstanceOf(LunoraError);
-        await expect(callAuthorized(false, () => "ran")).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(runGate(false)).rejects.toMatchObject({ code: "FORBIDDEN" });
         expect(handlerRan).toBe(false);
     });
 
     it("awaits an async permission check before deciding", async () => {
         expect.assertions(1);
 
-        const gate = authorize<Context>(async (ctx) => {
+        const ctx: Context = { user: { canManageTeamMembers: true } };
+        const gate = authorize<Context>(async (context) => {
             await Promise.resolve();
 
-            return ctx.user.canManageTeamMembers;
+            return context.user.canManageTeamMembers;
         });
 
-        await expect(gate({ ctx: { user: { canManageTeamMembers: true } }, next: () => "ran" })).resolves.toBe("ran");
+        await expect(gate({ ctx, next: () => Promise.resolve(ctx) })).resolves.toBe(ctx);
     });
 });
