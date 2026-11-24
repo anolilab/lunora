@@ -380,6 +380,32 @@ ${DECLARED_GUARD}`,
         expect(rowAt(found, 2)).not.toHaveProperty("trustedInternal");
     });
 
+    // A reactor hook runs on the server after a write flush, so no client supplies its `args`.
+    it("trusts an internal write reached through a server-dispatched reactor", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `export const onReport = onQueryChange(async ({ args, ctx }) => {
+  await ctx.db.insert("posts", { userId: args.userId });
+});`,
+            "mutators.ts",
+            undefined,
+            [
+                {
+                    args: {},
+                    exportName: "onReport",
+                    filePath: "mutators",
+                    kind: "mutation",
+                    lifecycle: "reactor",
+                    returnType: "unknown",
+                    visibility: "internal",
+                },
+            ],
+        );
+
+        expect(rowAt(found, 2)).toMatchObject({ trustedInternal: true });
+    });
+
     it("does not stamp adminOnly on a write reached through an ordinary procedure", () => {
         expect.assertions(1);
 

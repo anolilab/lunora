@@ -65,7 +65,7 @@ const applyAcceptedFindings = (advisories: ReadonlyArray<Finding>, accepted: Rea
             ...advisory,
             detail: `Accepted: ${entry.reason}. ${advisory.detail}`,
             level: "INFO",
-            metadata: { ...advisory.metadata, accepted: entry.reason },
+            metadata: { ...advisory.metadata, accepted: entry.reason, acceptedFrom: advisory.level },
         };
     });
 
@@ -89,9 +89,13 @@ const unreadableAcceptance = (): Finding => {
     };
 };
 
-/** Whether a finding is an acceptance outcome: a reviewed finding demoted to INFO, or a warning about the `accept` list itself. The floor never drops these. */
+/**
+ * Whether the `minSeverity` floor must keep a finding whatever its level: a reviewed ERROR, which stays visible as the
+ * finding it was, or a warning about the `accept` list itself. A reviewed WARN or INFO is not kept this way, so an
+ * acceptance cannot bring back a finding the floor hides.
+ */
 const isAcceptanceOutcome = (advisory: Finding): boolean =>
-    advisory.metadata["accepted"] !== undefined || advisory.name === "advisor_accept_unused" || advisory.name === "advisor_accept_invalid";
+    advisory.metadata["acceptedFrom"] === "ERROR" || advisory.name === "advisor_accept_unused" || advisory.name === "advisor_accept_invalid";
 
 export { applyAcceptedFindings, isAcceptanceOutcome, unreadableAcceptance };
 export type { AcceptedFinding };

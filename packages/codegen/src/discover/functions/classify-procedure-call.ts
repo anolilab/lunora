@@ -2,7 +2,7 @@ import type { CallExpression, Identifier, PropertyAccessExpression, ts } from "t
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isServerSurfaceModule } from "../../module-specifiers";
-import { unwrapExpression } from "../ast";
+import { isConstDeclaration, unwrapExpression } from "../ast";
 import { builderChainSteps, walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
 import { isServerImport, resolveCalleeKind } from "../callee";
 import staticBuilderChain from "./internal/static-builder-chain";
@@ -138,7 +138,13 @@ const importedUseCall = (argument: Node): CallExpression | undefined => {
 
     const symbol = argument.getSymbol();
     const declaration = (symbol?.isAlias() ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
-    const initializer = declaration && Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
+
+    // A `let` or `var` can be rebound after its initializer ran, so its initializer does not describe the middleware that runs.
+    if (!isConstDeclaration(declaration)) {
+        return undefined;
+    }
+
+    const initializer = unwrapExpression(declaration.getInitializer());
 
     return initializer && Node.isCallExpression(initializer) ? initializer : undefined;
 };

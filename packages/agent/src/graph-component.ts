@@ -70,8 +70,8 @@ const graphTables: Record<typeof EDGES_BARE_TABLE | typeof ENTITIES_BARE_TABLE, 
         updatedAt: v.number(),
         weight: v.optional(v.number()),
     })
-        // Outgoing traversal.
         .externallyManaged()
+        // Outgoing traversal.
         .index("byOwnerSrc", ["owner", "srcName"])
         // Incoming traversal (BFS is bidirectional).
         .index("byOwnerDst", ["owner", "dstName"])

@@ -1152,6 +1152,18 @@ describe("discoverProcedureMiddleware", () => {
         expect(found.find((procedure) => procedure.exportName === "addTeamMember")).toMatchObject({ usesAuthorize: true, usesCaptcha: false });
     });
 
+    // An exported `let` can be rebound to middleware that checks nothing, so its initializer is not the gate that runs.
+    it("does not record a permission gate bound to an imported let, which can be rebound", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "guards.ts"), AUTHORIZE_VALUE_GUARD.replace("export const", "export let"), "utf8");
+        writeFileSync(join(workdir, "lunora", "members.ts"), IMPORTED_AUTHORIZE_VALUE_USER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found.find((procedure) => procedure.exportName === "addTeamMember")).toMatchObject({ usesAuthorize: false });
+    });
+
     it("does not record a locally declared `authorize` as a permission gate", () => {
         expect.assertions(1);
 

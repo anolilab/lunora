@@ -2,7 +2,7 @@ import type { Finding } from "@lunora/advisor";
 import { describe, expect, it } from "vitest";
 
 import type { AcceptedFinding } from "../src/advisor-accept";
-import { applyAcceptedFindings, unreadableAcceptance } from "../src/advisor-accept";
+import { applyAcceptedFindings, isAcceptanceOutcome, unreadableAcceptance } from "../src/advisor-accept";
 
 const finding = (overrides: Partial<Finding> & { metadata?: Record<string, unknown> }): Finding => {
     return {
@@ -68,6 +68,18 @@ describe("applyAcceptedFindings", () => {
         expect(result.map((advisory) => advisory.name)).toStrictEqual(["owner_field_from_args_not_auth"]);
         expect(result[0]?.level).toBe("INFO");
         expect(result[0]?.metadata["accepted"]).toBe("org admin gate");
+    });
+
+    // The floor keeps an accepted ERROR, but not an accepted WARN or INFO, so an acceptance cannot bring back a finding the floor hides.
+    it("keeps the floor's exemption for an accepted ERROR only", () => {
+        expect.assertions(3);
+
+        const [acceptedError] = applyAcceptedFindings([finding({})], [entry]);
+        const [acceptedWarn] = applyAcceptedFindings([finding({ level: "WARN" })], [{ ...entry, level: "WARN" }]);
+
+        expect(isAcceptanceOutcome(acceptedError as Finding)).toBe(true);
+        expect(isAcceptanceOutcome(acceptedWarn as Finding)).toBe(false);
+        expect(acceptedWarn?.metadata["acceptedFrom"]).toBe("WARN");
     });
 
     // An acceptance written for a WARN must not silently cover the same export once it is an ERROR.
