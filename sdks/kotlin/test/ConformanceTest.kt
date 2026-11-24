@@ -1443,13 +1443,18 @@ private fun concurrentSubscribeAndHandleFrame() {
     workers.forEach { it.join() }
     reader.join()
 
-    // Attached only now; the count is the attach's connect frame plus one subscribe per call.
-    val resent = java.util.concurrent.atomic.AtomicInteger()
+    // Attached only now, counting subscribe frames alone. The resend is paced, so each re-sent
+    // subscription is answered to let the next one out.
+    val resent = mutableListOf<Any?>()
 
-    client.attachSocket { resent.incrementAndGet() }
+    client.attachSocket { if (it["type"] == "subscribe") resent.add(it["id"]) }
     client.resendSubscriptions()
 
-    check(resent.get() == threads * perThread + 1, "every concurrent subscribe survived with a distinct id")
+    var answered = 0
+
+    while (answered < resent.size) client.handleFrame("""{"id":"${resent[answered++]}","type":"ack"}""")
+
+    check(resent.toSet().size == threads * perThread, "every concurrent subscribe survived with a distinct id")
 }
 
 /** A frame fixture delivered as the raw text a socket read loop hands [Client.handleFrame]. */
@@ -1837,6 +1842,10 @@ fun main() {
     // The subscription-retry cases (the live-query retry hint), in their own file for the same
     // reason.
     runSubscriptionRetryCases()
+
+    // The re-subscribe pacing cases (a reconnect re-sends a window of query subscriptions at a
+    // time), in their own file for the same reason.
+    runResubscribePacingCases()
 
     assertManifestCovered()
 

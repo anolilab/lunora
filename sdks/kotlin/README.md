@@ -51,7 +51,14 @@ with `OkHttpClient.Builder().followRedirects(false)`.
 
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
 `client.resendSubscriptions()` re-subscribes everything after a reconnect —
-queries and shapes alike — carrying each one's resume cursor or checkpoint.
+queries and shapes alike — carrying each one's resume cursor or checkpoint. It sends at most
+three query subscriptions at once (`RESUBSCRIBE_CONCURRENCY`), in subscribe order, as the
+reference client does, so a reconnect does not land every query on the shard in one burst. Each
+of the rest goes out when `handleFrame` sees a frame for one already sent, or once one has gone
+unanswered for 10 s (`RESUBSCRIBE_ACK_TIMEOUT_NANOS`): `nextSubscriptionRetryAtNanos()` includes
+that deadline, and `retryDueSubscriptions()` at or after it sends the next. Feed every frame to
+`handleFrame` and pull `retryDueSubscriptions()` on that deadline (a retry hint on a subscription
+error arms the same one). Shape subscriptions all go out at once.
 `handleFrame` never throws for a frame's shape: one that is not JSON, not an
 object, or carries a mistyped `id`/`pokeId`/`cursor` is ignored (a cursor that is
 not an integer never replaces the tracked one). A poke is applied whole or not at
@@ -77,11 +84,22 @@ while (isActive) {
     try {
         coroutineScope {
             var retry: Job? = null
+            var pacer: Job? = null
             try {
                 connect().use { socket -> // your socket library
                     // attachSocket sends connect before it attaches the sender, so a subscribe on another coroutine cannot write ahead of it
                     client.attachSocket { frame -> socket.send(Json.write(frame)) }
                     client.resendSubscriptions()
+                    // frees a re-subscribe slot nobody answered and serves retry hints; cancelled with the
+                    // socket run, so it never writes to the next socket. Waking at least every second sees a
+                    // deadline armed after it went to sleep.
+                    pacer = launch {
+                        while (true) {
+                            val due = client.nextSubscriptionRetryAtNanos()
+                            delay(if (due == null) 1_000L else ((due - System.nanoTime()) / 1_000_000L).coerceIn(0L, 1_000L))
+                            runInterruptible(Dispatchers.IO) { client.retryDueSubscriptions() }
+                        }
+                    }
                     // blocking HTTP replay: off the read loop's dispatcher, and cancel can interrupt it
                     val report = runInterruptible(Dispatchers.IO) { client.flushOfflineQueue(shard) }
                     if (report.requeued.isNotEmpty() || report.retryAfterMs != null) {
@@ -109,6 +127,7 @@ while (isActive) {
                 }
             } finally {
                 retry?.cancel() // the socket run ended: stop the retry timer
+                pacer?.cancel()
             }
         }
     } catch (e: CancellationException) {
