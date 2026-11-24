@@ -640,15 +640,23 @@ class ScheduleOutboxRunner {
             return "missing";
         }
 
-        // The operator wants the job after all: an attempt still carrying an earlier drop must
-        // not cancel it or delete the requeued row when it lands.
+        // An attempt still in the air must not write its failure over the reset.
         for (const attempt of this.scheduleOutboxAttempts.get(id) ?? []) {
             attempt.stale = true;
         }
 
-        this.scheduleOutboxDroppedThrough.delete(id);
-        this.scheduleOutboxCancelledThrough.delete(id);
         this.unconfirmedScheduleOutboxDrops.delete(id);
+
+        // The operator wants the requeued job after all, so a drop that covers it no longer applies.
+        // A recording made after that drop is not covered, though, and the drop still has to make an
+        // attempt for an older recording cancel its job when it lands: only a covered row lifts it.
+        const through = this.scheduleOutboxDroppedThrough.get(id);
+        const requeued = readScheduleOutboxState(this.host.sql(), id);
+
+        if (through !== undefined && requeued !== undefined && requeued.createdAt <= through) {
+            this.scheduleOutboxDroppedThrough.delete(id);
+            this.scheduleOutboxCancelledThrough.delete(id);
+        }
 
         return "retried";
     }

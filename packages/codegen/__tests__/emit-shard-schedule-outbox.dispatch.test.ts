@@ -1649,6 +1649,50 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.logs("scheduler:outbox").filter((line) => line.level === "error")).toStrictEqual([]);
     });
 
+    it("keeps a drop covering an older recording when Retry now requeues the newer one", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        harness.setReachable(true);
+
+        // Recording A's attempt is in the air when the operator drops it.
+        const handOff = harness.hold();
+
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await handOff.entered;
+        await harness.drop("dup-id");
+
+        // Recording B replaces A under the same id; its hand-off waits out the deadline behind A's attempt.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        try {
+            const replacement = harness.shard.handleRpc("outbox:sameId", {});
+
+            await vi.advanceTimersByTimeAsync(60_000);
+            await replacement;
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // Retry now on B: B was never dropped, but A still is.
+        await expect(harness.shard.requeue("dup-id").then(async (response) => response.json())).resolves.toStrictEqual({ result: { retried: true } });
+
+        handOff.release();
+        await attempt;
+
+        // A landed and, still covered by the drop, took its job back out.
+        expect(harness.cancelled).toStrictEqual(["dup-id", "dup-id"]);
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
+    });
+
     it("polls a fenced due entry again after a retry interval, not at once", async () => {
         expect.assertions(4);
 
