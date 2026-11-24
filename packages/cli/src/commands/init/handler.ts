@@ -1,19 +1,4 @@
-import {
-    closeSync,
-    copyFileSync,
-    existsSync,
-    fstatSync,
-    linkSync,
-    lstatSync,
-    mkdirSync,
-    mkdtempSync,
-    openSync,
-    readdirSync,
-    readFileSync,
-    renameSync,
-    rmSync,
-    writeFileSync,
-} from "node:fs";
+import { copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { applyLintIgnores, BADGES, detectLintTools, isInteractive, readProjectDependencies, readProjectManifest } from "@lunora/config";
@@ -1133,47 +1118,31 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
     return { code: 0, files: [viteConfigPath], target: cwd };
 };
 
+/** `link` errors that mean the filesystem cannot hard-link, rather than that `path` is taken. */
+const HARD_LINK_UNSUPPORTED = new Set(["ENOSYS", "ENOTSUP", "EPERM", "EXDEV"]);
+
 /**
- * Move the complete `temporaryPath` to `path` unless something already sits there, including a dangling
- * link, and fail with EEXIST if it does. A hard link creates `path` atomically, so a file created after
- * the caller's absence check is never replaced; a filesystem without hard links falls back to an
- * exclusive create.
+ * Publish the complete `temporaryPath` at `path` with a hard link, which fails with EEXIST if anything
+ * sits there (a dangling link included), so a file created after the caller's absence check is never
+ * replaced. Only the temp file is ever removed. Without hard links there is no publish that is both
+ * exclusive and complete, so it fails rather than risk the destination.
  */
 const publishExclusively = (temporaryPath: string, path: string): void => {
     try {
         linkSync(temporaryPath, path);
-        rmSync(temporaryPath, { force: true });
-
-        return;
     } catch (error) {
         const { code } = error as NodeJS.ErrnoException;
 
-        if (code !== "EPERM" && code !== "ENOTSUP" && code !== "ENOSYS") {
-            throw error;
-        }
-    }
-
-    // `wx` fails with EEXIST on anything created meanwhile. Writing through the descriptor is not atomic,
-    // so a write that fails part-way removes `path` only while it is still the file this run created.
-    const content = readFileSync(temporaryPath);
-    const descriptor = openSync(path, "wx");
-
-    try {
-        writeFileSync(descriptor, content);
-    } catch (error) {
-        const created = fstatSync(descriptor);
-        const current = lstatSync(path, { throwIfNoEntry: false });
-
-        if (current?.dev === created.dev && current.ino === created.ino) {
-            rmSync(path, { force: true });
+        if (code !== undefined && HARD_LINK_UNSUPPORTED.has(code)) {
+            throw new Error(`this filesystem does not support hard links (${code}), which publishing ${path} without replacing another file needs`, {
+                cause: error,
+            });
         }
 
         throw error;
     } finally {
-        closeSync(descriptor);
+        rmSync(temporaryPath, { force: true });
     }
-
-    rmSync(temporaryPath, { force: true });
 };
 
 /**

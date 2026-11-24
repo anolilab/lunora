@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,7 +13,6 @@ const writeFailure = vi.hoisted(() => {
     return {
         beforePublish: undefined as ((path: string) => void) | undefined,
         beforeWrite: undefined as ((path: string) => void) | undefined,
-        copyFails: false,
         noHardLinks: false,
         pathPart: undefined as string | undefined,
     };
@@ -36,34 +35,15 @@ vi.mock(import("node:fs"), async (importOriginal) => {
             actual.writeFileSync(path, data, options);
         }) as typeof actual.writeFileSync,
         // A filesystem without hard links, and a hook for another process acting just before publication.
-        copyFileSync: ((source: string, destination: string, mode?: number) => {
-            writeFailure.beforePublish?.(destination);
-
-            if (writeFailure.copyFails) {
-                throw Object.assign(new Error("EACCES: permission denied, copyfile"), { code: "EACCES" });
-            }
-
-            actual.copyFileSync(source, destination, mode);
-        }) as typeof actual.copyFileSync,
-        openSync: ((path: string, ...rest: unknown[]) => {
-            writeFailure.beforePublish?.(path);
-
-            return (actual.openSync as (...args: unknown[]) => number)(path, ...rest);
-        }) as typeof actual.openSync,
         linkSync: ((existing: string, created: string) => {
+            writeFailure.beforePublish?.(created);
+
             if (writeFailure.noHardLinks) {
                 throw Object.assign(new Error("EPERM: operation not permitted, link"), { code: "EPERM" });
             }
 
             actual.linkSync(existing, created);
         }) as typeof actual.linkSync,
-        lstatSync: ((path: string, options?: Parameters<typeof actual.lstatSync>[1]) => {
-            const result = actual.lstatSync(path, options);
-
-            writeFailure.beforePublish?.(path);
-
-            return result;
-        }) as typeof actual.lstatSync,
     };
 });
 
@@ -445,62 +425,38 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
         expect(readFileSync(schemaPath, "utf8")).toBe("user\n");
     });
 
-    it("does not replace a schema.ts created just before publication where hard links are unsupported", async () => {
-        expect.assertions(2);
+    it("fails clearly where hard links are unsupported, leaving the destination and no temp file", async () => {
+        expect.assertions(4);
 
         writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
 
-        const schemaPath = join(workdir, "lunora", "schema.ts");
+        const lunoraDirectory = join(workdir, "lunora");
+        // messages.ts is published first, and its failure ends the scaffold.
+        const destination = join(lunoraDirectory, "messages.ts");
+        const logger = capturingLogger();
 
         writeFailure.noHardLinks = true;
+        // Another process creates the file just before publication; it must survive the failed publish.
         writeFailure.beforePublish = (path) => {
-            if (path === schemaPath) {
+            if (path === destination) {
                 writeFailure.beforePublish = undefined;
-                writeFileSync(schemaPath, "user\n", "utf8");
+                writeFileSync(destination, "user\n", "utf8");
             }
         };
 
         let result: Awaited<ReturnType<typeof runInitCommand>>;
 
         try {
-            result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+            result = await runInitCommand({ cwd: workdir, inPlace: true, logger });
         } finally {
             writeFailure.noHardLinks = false;
             writeFailure.beforePublish = undefined;
         }
 
         expect(result.code).toBe(1);
-        expect(readFileSync(schemaPath, "utf8")).toBe("user\n");
-    });
-
-    it("a publication that fails where hard links are unsupported never deletes a file another process created", async () => {
-        expect.assertions(2);
-
-        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
-
-        const schemaPath = join(workdir, "lunora", "schema.ts");
-
-        writeFailure.noHardLinks = true;
-        writeFailure.copyFails = true;
-        writeFailure.beforePublish = (path) => {
-            if (path === schemaPath) {
-                writeFailure.beforePublish = undefined;
-                writeFileSync(schemaPath, "user\n", "utf8");
-            }
-        };
-
-        let result: Awaited<ReturnType<typeof runInitCommand>>;
-
-        try {
-            result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
-        } finally {
-            writeFailure.noHardLinks = false;
-            writeFailure.copyFails = false;
-            writeFailure.beforePublish = undefined;
-        }
-
-        expect(result.code).toBe(1);
-        expect(readFileSync(schemaPath, "utf8")).toBe("user\n");
+        expect(logger.lines.join("\n")).toContain("does not support hard links");
+        expect(readFileSync(destination, "utf8")).toBe("user\n");
+        expect(readdirSync(lunoraDirectory).filter((name) => name.includes(".lunora-"))).toStrictEqual([]);
     });
 
     it("does not follow a link planted at the scaffold's temp file", async () => {
