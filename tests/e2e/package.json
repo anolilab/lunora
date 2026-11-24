@@ -23,6 +23,6 @@
         "typescript": "catalog:tsc"
     },
     "engines": {
-        "node": "^22.15.0 || >=24.11.0"
+        "node": "^22.18.0 || >=24.11.0"
     }
 }

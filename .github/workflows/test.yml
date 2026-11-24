@@ -819,14 +819,28 @@
                       }
                   '
 
+    # Three legs instead of one job running every suite in turn: each suite boots its own
+    # backend and runs on one worker (`workers: 1`, see playwright.config.ts), so the only
+    # way to run them side by side is separate runners. The playground suite splits by
+    # browser; the examples and SaaS kit suites are Chromium-only and short enough to share.
     "e2e":
-        "name": "E2E (Playwright + Miniflare)"
+        "name": "E2E (${{ matrix.leg }}, ${{ matrix.browser }})"
         "if": "needs.files-changed.outputs.e2e == 'true' && github.event_name != 'merge_group'"
         "needs": ["files-changed", "build-dev"]
         "runs-on": "ubuntu-latest"
-        # 30 covered the playground and examples suites; the saas kit adds a cold boot of
-        # up to 4 minutes and a 3-minute test budget with two retries.
-        "timeout-minutes": 45
+        # The kits leg pays the saas kit's cold boot of up to 4 minutes and a 3-minute
+        # test budget with two retries.
+        "timeout-minutes": 30
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "include":
+                    - "leg": "playground"
+                      "browser": "chromium"
+                    - "leg": "playground"
+                      "browser": "firefox"
+                    - "leg": "kits"
+                      "browser": "chromium"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
@@ -864,18 +878,47 @@
               "run": |
                   tar -xf "${RUNNER_TEMP}/packages-dist-dev.tar"
 
+            # Keyed on the resolved runner version: its browser builds change with it and
+            # nothing else, so a lockfile change elsewhere keeps the cache.
+            - "name": "Resolve the Playwright version"
+              "id": "playwright"
+              "run": |
+                  echo "version=$(pnpm --filter @lunora/e2e exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+            - "name": "Restore Playwright browsers"
+              "id": "browsers"
+              "uses": "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
+              "with":
+                  "path": "~/.cache/ms-playwright"
+                  "key": "playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-${{ matrix.browser }}"
+
             - "name": "Install Playwright browsers"
-              "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
+              "if": "steps.browsers.outputs.cache-hit != 'true'"
+              "env":
+                  "BROWSER": "${{ matrix.browser }}"
+              "run": |
+                  pnpm --filter @lunora/e2e exec playwright install "$BROWSER"
+
+            - "name": "Save Playwright browsers"
+              "if": "steps.browsers.outputs.cache-hit != 'true'"
+              "uses": "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" # v6.1.0
+              "with":
+                  "path": "~/.cache/ms-playwright"
+                  "key": "${{ steps.browsers.outputs.cache-primary-key }}"
 
             - "name": "Run E2E suite"
+              "if": "matrix.leg == 'playground'"
               "env":
+                  "BROWSER": "${{ matrix.browser }}"
                   "CI": "true"
                   "LUNORA_E2E": "true"
-              "run": "pnpm e2e"
+              "run": |
+                  pnpm --filter @lunora/e2e exec playwright test --project "$BROWSER"
 
             # The showcase examples in a real browser: separate config and report,
             # reusing the packages and Chromium this job already provisioned.
             - "name": "Run examples E2E suite"
+              "if": "matrix.leg == 'kits'"
               "env":
                   "CI": "true"
               "run": "pnpm run e2e:examples"
@@ -886,6 +929,7 @@
             # it needs nothing beyond the build and Chromium above — no secrets: the spec
             # never reaches billing, and the Stripe client is only built on first use.
             - "name": "Run SaaS kit E2E suite"
+              "if": "matrix.leg == 'kits'"
               "env":
                   "CI": "true"
               "run": "pnpm run e2e:saas"
@@ -894,11 +938,12 @@
               "if": "failure()"
               "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
               "with":
-                  "name": "playwright-report"
+                  "name": "playwright-report-${{ matrix.leg }}-${{ matrix.browser }}"
                   "path": |
                       tests/e2e/playwright-report
                       tests/e2e/playwright-report-examples
                       tests/e2e/playwright-report-saas
+                  "if-no-files-found": "ignore"
                   "retention-days": 7
 
     # The development build the workerd legs and E2E consume, built once per run instead of

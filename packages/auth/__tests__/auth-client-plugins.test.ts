@@ -1,7 +1,7 @@
 import type { BetterAuthClientPlugin } from "better-auth/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { onSessionChanged } from "../../../shared/session-change";
+import { onSessionChanged, sessionSourceDeclared } from "../../../shared/session-change";
 import { createLunoraAuthClient, lunoraAuthPlugins, lunoraSessionSync, notifyLunoraSessionChange } from "../src/auth-client-plugins";
 
 // Deterministic plugin identity for the order assertion — better-auth's real
@@ -213,6 +213,20 @@ describe("lunoraSessionSync", () => {
         release();
 
         expect(heard).toStrictEqual(["changed", "changed"]);
+    });
+
+    it("declares the page's session source as soon as it is built, before any auth request", () => {
+        expect.assertions(2);
+
+        vi.stubGlobal("document", {});
+
+        expect(sessionSourceDeclared()).toBe(false);
+
+        lunoraSessionSync();
+
+        expect(sessionSourceDeclared()).toBe(true);
+
+        vi.unstubAllGlobals();
     });
 
     it("is a better-auth client plugin", () => {

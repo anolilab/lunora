@@ -141,6 +141,7 @@ const makeClient = (options?: { baseline?: number; identity?: string | null; mut
             return { verdict: identity === null ? ("unknown" as const) : ("mismatch" as const) };
         },
         subscribe: vi.fn<() => () => void>(() => () => undefined),
+        writeIdentityStamp: () => identity,
     };
 
     const setBaseline = (next: number | undefined): void => {
@@ -786,6 +787,28 @@ describe("durable outbox lifecycle (unified outbox)", () => {
         await vi.waitFor(() => {
             expect(database.pendingCount()).toBe(0);
         });
+
+        expect(onWriteRejected).not.toHaveBeenCalled();
+    });
+
+    it("stamps an action with the client's write stamp, so a write composed before the session resolves still replays", { timeout: 10_000 }, async () => {
+        // On page load `currentIdentity()` is the provisional `null` the first
+        // `/get-session` answer is about to name; stamping that `null` made the
+        // user's own write read as anonymous and the replay dropped it.
+        const { client, mutation } = makeClient({ identity: "prov:this-page" });
+        const onWriteRejected = vi.fn<() => void>();
+        const database = buildWritableReload({ ...(client as object), currentIdentity: () => null } as never, { onWriteRejected });
+
+        await database.executor.waitForInit();
+
+        database.actions.temp({ text: "early click" });
+
+        await vi.waitFor(
+            () => {
+                expect(mutation).toHaveBeenCalledTimes(1);
+            },
+            { timeout: 8000 },
+        );
 
         expect(onWriteRejected).not.toHaveBeenCalled();
     });

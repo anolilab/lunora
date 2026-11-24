@@ -43,7 +43,7 @@ import {
     usernameClient,
 } from "better-auth/client/plugins";
 
-import { notifySessionChanged } from "../../../shared/session-change";
+import { declareSessionSource, notifySessionChanged } from "../../../shared/session-change";
 
 /**
  * Which client plugins to include. Each defaults to `false`.
@@ -182,6 +182,11 @@ const notifyLunoraSessionChange = async (): Promise<void> => notifySessionChange
  * ```
  */
 const lunoraSessionSync = (): LunoraSessionSyncPlugin => {
+    // Now, not on the first auth request: the page has a session to resolve from
+    // the moment this plugin exists, and a write composed before anyone asks must
+    // not be stamped as anonymous.
+    declareSessionSource();
+
     return {
         fetchPlugins: [
             {

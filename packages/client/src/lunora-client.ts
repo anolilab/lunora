@@ -6,7 +6,7 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
-import { onSessionChanged } from "../../../shared/session-change";
+import { onSessionChanged, sessionSourceDeclared } from "../../../shared/session-change";
 import { CLAIMS_FINGERPRINT_PATH, IDENTITY_CHANGED_CLOSE_REASON, IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import type { AdminHost } from "./admin/host";
@@ -441,6 +441,12 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     signal?: AbortSignal;
 }
 
+/**
+ * Namespace of {@link LunoraClient.writeIdentityStamp}'s provisional stamp,
+ * distinct from a token hash (`<len>:<hash>`) and a subject (`subj:<id>`).
+ */
+const PROVISIONAL_STAMP_PREFIX = "prov:";
+
 declare const replayCredentialBrand: unique symbol;
 
 /**
@@ -495,6 +501,22 @@ const LIVE_CONTROL_TIMEOUT_MS = 10_000;
 /** Retries of a failed claims request while frames wait on it, and the first delay; each doubles the last. */
 const OWN_CLAIMS_MAX_RETRIES = 5;
 const OWN_CLAIMS_RETRY_BASE_MS = 500;
+
+/**
+ * Delay before re-asking a declared-session probe that failed on a live connection: the
+ * first, doubling up to the cap. Capped rather than counted — early writes wait on the
+ * answer, so the client keeps asking until the endpoint recovers.
+ */
+const DECLARED_SESSION_RETRY_BASE_MS = 1000;
+const DECLARED_SESSION_RETRY_MAX_MS = 30_000;
+
+/**
+ * How long a `/get-session` probe may take, request and body together. Every identity
+ * gate holds while one is outstanding, and `fetch` has no deadline of its own: a stalled
+ * proxy or a dead keep-alive would otherwise hold early writes and cached reads for the
+ * life of the page.
+ */
+const SESSION_PROBE_TIMEOUT_MS = 10_000;
 
 /** Longest a supplementary socket waits on a ticket provider before it mints again: a provider that never settles must not stall the channel. */
 const WS_TICKET_MINT_TIMEOUT_MS = 10_000;
@@ -1058,9 +1080,10 @@ class LunoraClient {
      * settled forever and shared with nobody — from a cookie app that simply
      * has not asked yet. Nothing in the client's own configuration says which
      * it is (`authBasePath` has a default), so the answer is declared: a
-     * `getCurrentUser()` call, or `@lunora/client/auth`'s identity store
-     * attaching itself, is what makes `null` provisional. An app that does
-     * neither keeps its read cache and its offline queue exactly as before.
+     * `getCurrentUser()` call, `@lunora/client/auth`'s identity store attaching
+     * itself, or — page-wide — `lunoraSessionSync()` being built is what makes
+     * `null` provisional. An app that does none of these keeps its read cache
+     * and its offline queue exactly as before.
      */
     private identityResolutionExpected = false;
 
@@ -1083,6 +1106,38 @@ class LunoraClient {
      * See `identityFingerprint` for the fingerprint shape.
      */
     private readonly queuedIdentities = new Map<string, string | null>();
+
+    /**
+     * What a write composed before this client's identity first settled is
+     * stamped with — see `writeIdentityStamp`. Random per instance, so a
+     * write persisted by an earlier page can never claim this page's binding.
+     */
+    private provisionalStamp = `${PROVISIONAL_STAMP_PREFIX}${nextId()}`;
+
+    /**
+     * Provisional stamps retired by a session change before anything was bound
+     * — see `retireProvisionalStamp`. A write carrying one was composed under a
+     * session that is gone, so it never replays.
+     */
+    private readonly retiredProvisionalStamps = new Set<string>();
+
+    /**
+     * The `identityQuestions` count when the current provisional stamp was minted. An
+     * answer to a question asked before then — a socket upgraded under the session a
+     * change replaced — describes that session, so it may not bind the stamp.
+     */
+    private provisionalStampQuestion = 0;
+
+    /** The identity this client settled on first, which `provisionalStamp` stands for; `undefined` until then. */
+    private provisionalBinding: { identity: string | null } | undefined;
+
+    /** Set once this client asks `/get-session` on the page-wide declaration alone — see `resolveDeclaredSession`. */
+    private resolvesDeclaredSession = false;
+
+    /** Timed re-asks of a declared-session probe that failed while the connection stayed live, and the pending one. */
+    private declaredSessionFailures = 0;
+
+    private declaredSessionRetryTimer: ReturnType<typeof setTimeout> | undefined;
 
     /**
      * Distinct shard keys with a mutation currently sitting in `offlineQueue`
@@ -1410,8 +1465,20 @@ class LunoraClient {
             // Returns the probe, so a caller of the signal can wait until this
             // client knows who is signed in (`@lunora/auth-ui` does).
             this.releaseSessionChangeListener = onSessionChanged(async () => {
+                this.retireProvisionalStamp();
+
                 if (!this.closed && this.authToken === null) {
                     await this.getCurrentUser().catch(() => undefined);
+                }
+            });
+
+            // The identity store's recovery, for a client that resolves the
+            // declared session itself: a probe that could not reach the endpoint
+            // is asked again once the socket or the polling fallback is live.
+            this.statusListeners.add((status) => {
+                if (this.resolvesDeclaredSession && !this.identitySettled && isLiveStatus(status)) {
+                    this.declaredSessionFailures = 0;
+                    this.resolveDeclaredSession();
                 }
             });
         }
@@ -1486,6 +1553,10 @@ class LunoraClient {
         this.applySubject(token, subject);
 
         const newIdentity = this.identityFingerprint();
+
+        // Before any verdict below, so the flush this call ends with judges the
+        // stamp by the identity it stands for.
+        this.bindBearerProvisionalStamp(token, newIdentity);
 
         // "The same credential" needs a credential. `!tokenChanged` proves one
         // only when there IS a token: on a cookie app every identity — the
@@ -1589,14 +1660,38 @@ class LunoraClient {
     }
 
     /**
-     * The current identity fingerprint (the same stamp queued offline writes
-     * carry). Exposed so a durable {@link OutboxSink}'s replay handler — which
-     * owns its own at-least-once replay outside the built-in `OfflineQueue` —
-     * can drop a persisted write whose captured `identity` no longer matches the
-     * signed-in user, the guard the queue path applies in `flushOfflineQueue`.
+     * The current identity fingerprint: a `subj:` label, a token hash, or `null`
+     * for nobody. Key per-identity state on it. To stamp a durable write for a
+     * later {@link replayIdentityVerdict}, use {@link writeIdentityStamp}, which
+     * differs from this before the identity first settles.
      */
     public currentIdentity(): string | null {
         return this.identityFingerprint();
+    }
+
+    /**
+     * The identity stamp for a write composed now: what a durable
+     * {@link OutboxSink} stores beside the write and later hands to
+     * {@link replayIdentityVerdict}.
+     *
+     * The same as {@link currentIdentity}, except before this client's identity
+     * first settles. There the fingerprint is a provisional `null` that the
+     * session resolve in progress is about to name, and a `null` stamp reads as
+     * anonymous: once the user's own session answered, the replay judged `null`
+     * against `subj:<id>` as a different user and dropped the write, so a click
+     * on page load, before `/get-session` returned, was lost. The provisional
+     * stamp stands for whichever identity this client settles on first. Any
+     * other client (a reload) reads it as the `null` it replaces, because it
+     * cannot know which session minted it.
+     */
+    public writeIdentityStamp(): string | null {
+        const current = this.identityFingerprint();
+
+        // Never once bound: a write composed after a bearer named someone and then
+        // signed out is anonymous, and must not inherit that binding.
+        return current === null && this.provisionalBinding === undefined && !this.identitySettled && this.identityUnresolved()
+            ? this.provisionalStamp
+            : current;
     }
 
     /**
@@ -1693,7 +1788,8 @@ class LunoraClient {
 
         const credential = Object.freeze({}) as ReplayCredential;
 
-        this.replayCredentials.set(credential, { authToken: this.authToken, stamp: stamped });
+        // Resolved, so the worker's `expectSubject` check names the user a provisional stamp stands for.
+        this.replayCredentials.set(credential, { authToken: this.authToken, stamp: this.stampedIdentity(stamped) });
 
         return { credential, verdict };
     }
@@ -1902,6 +1998,7 @@ class LunoraClient {
             // No transport to ask over, and none is coming: this is as settled
             // as the answer gets, so the gates must not hold on it forever.
             this.identitySettled = true;
+            this.bindProvisionalStamp(this.identityFingerprint());
 
             // eslint-disable-next-line unicorn/no-null -- signed-out / unavailable sentinel matches the User | null contract
             return null;
@@ -1925,16 +2022,31 @@ class LunoraClient {
         this.sessionProbeGeneration = this.identityQuestions;
 
         const requestGeneration = this.sessionProbeGeneration;
+        // A probe past its deadline is a probe that got no answer: aborted, and rejected
+        // like an unreachable endpoint. Nothing awaits it afterwards, so a late response
+        // is never adopted.
+        const abort = new AbortController();
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<never>((_resolve, reject) => {
+            deadlineTimer = setTimeout(() => {
+                abort.abort();
+                reject(new Error(`session probe timed out after ${String(SESSION_PROBE_TIMEOUT_MS)}ms`));
+            }, SESSION_PROBE_TIMEOUT_MS);
+        });
 
         try {
             // Deliberately un-caught: a rejection here means the endpoint was
             // unreachable, and nothing about the session is known — including for
             // `adoptResolvedSubject`, which must not run on a non-answer.
-            const response = await this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
-                credentials: "include",
-                headers,
-                method: "GET",
-            });
+            const response = await Promise.race([
+                this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
+                    credentials: "include",
+                    headers,
+                    method: "GET",
+                    signal: abort.signal,
+                }),
+                deadline,
+            ]);
 
             if (!response.ok) {
                 // A response, and therefore an answer — see `identitySettled`.
@@ -1958,7 +2070,7 @@ class LunoraClient {
 
             // better-auth returns `{ user, session }` when authenticated and
             // `null` (or an empty body) when not. Narrow defensively.
-            const body: { user?: User } | null = await response.json();
+            const body = (await Promise.race([response.json(), deadline])) as { user?: User } | null;
             // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
             const user = body?.user ?? null;
 
@@ -1970,6 +2082,7 @@ class LunoraClient {
 
             return user;
         } finally {
+            clearTimeout(deadlineTimer);
             this.releaseSessionProbe();
         }
     }
@@ -3945,6 +4058,8 @@ class LunoraClient {
         this.replayRetryState.clear();
 
         this.stopOwnClaimsRetry();
+        clearTimeout(this.declaredSessionRetryTimer);
+        this.declaredSessionRetryTimer = undefined;
         this.suspendedFollowerValues.clear();
 
         for (const timer of this.leaderAnswerTimers.values()) {
@@ -4934,7 +5049,7 @@ class LunoraClient {
         // under the same identity (see flushOfflineQueue). A durable replay going
         // back into the queue keeps the identity its verdict judged: whoever signed
         // in since must not inherit it as their own.
-        const issuingIdentity = replayStamp === undefined ? this.identityFingerprint() : replayStamp;
+        const issuingIdentity = replayStamp === undefined ? this.writeIdentityStamp() : replayStamp;
 
         if (
             this.outbox &&
@@ -8849,6 +8964,110 @@ class LunoraClient {
     }
 
     /**
+     * Fix what `provisionalStamp` stands for, once: the first identity this
+     * client establishes. Only an identity actually established may bind it — a
+     * response that names nobody (a 403, a superseded probe) binds nothing, or a
+     * real answer after it could not rebind the stamp and would drop the write.
+     */
+    private bindProvisionalStamp(identity: string | null): void {
+        this.provisionalBinding ??= { identity };
+    }
+
+    /**
+     * Bind the provisional stamp to a bearer identity the app set itself. Bearer only:
+     * a cookie answer arrives as `setAuthToken(null, subject)` and binds in
+     * `adoptCookieSubject`, which can tell a stale answer from a current one; and
+     * `null` names nobody, which only an adopted "no session" answer may bind.
+     */
+    private bindBearerProvisionalStamp(token: string | null, identity: string | null): void {
+        if (token !== null && identity !== null) {
+            this.bindProvisionalStamp(identity);
+        }
+    }
+
+    /**
+     * A session change reported before anything bound the provisional stamp —
+     * a sign-in or sign-out here, or in another tab — means the cookie the
+     * pending writes were composed under is gone. Binding them to the identity
+     * that answers next would run one user's write as another's, so the stamp
+     * is retired (its writes are rejected) and writes from now on get a new one.
+     */
+    private retireProvisionalStamp(): void {
+        if (this.provisionalBinding !== undefined) {
+            return;
+        }
+
+        this.retiredProvisionalStamps.add(this.provisionalStamp);
+        this.provisionalStamp = `${PROVISIONAL_STAMP_PREFIX}${nextId()}`;
+        this.provisionalStampQuestion = this.identityQuestions;
+    }
+
+    /**
+     * Ask `/get-session` for a client whose only reason to expect a session is
+     * the page-wide declaration (`lunoraSessionSync()`). No identity store is
+     * attached to ask for it, and a socket that authenticates with a ticket or a
+     * token, or none opening at all, never delivers the cookie identity, so
+     * without this its early writes were held and its read cache refused for the
+     * life of the page. A probe that fails is asked again when the connection is
+     * live again (see the constructor), or after a capped backoff for as long as it
+     * keeps failing while the connection stays live and no transition is coming.
+     */
+    private resolveDeclaredSession(): void {
+        if (this.closed || this.sessionProbesInFlight > 0) {
+            return;
+        }
+
+        this.resolvesDeclaredSession = true;
+        this.askDeclaredSession().catch(() => undefined);
+    }
+
+    /** One declared-session probe, then the retry it may need. */
+    private async askDeclaredSession(): Promise<void> {
+        await this.getCurrentUser().catch(() => undefined);
+        this.retryDeclaredSession();
+    }
+
+    /** Re-ask a declared-session probe that got no answer while the connection stayed live, at a capped backoff. */
+    private retryDeclaredSession(): void {
+        if (this.closed || this.identitySettled || this.declaredSessionRetryTimer !== undefined || !isLiveStatus(this.computeStatus())) {
+            return;
+        }
+
+        const delay = Math.min(DECLARED_SESSION_RETRY_BASE_MS * 2 ** this.declaredSessionFailures, DECLARED_SESSION_RETRY_MAX_MS);
+
+        // Stops growing once the delay is capped, so the exponent stays small.
+        if (delay < DECLARED_SESSION_RETRY_MAX_MS) {
+            this.declaredSessionFailures += 1;
+        }
+
+        this.declaredSessionRetryTimer = setTimeout(() => {
+            this.declaredSessionRetryTimer = undefined;
+
+            if (!this.identitySettled) {
+                this.resolveDeclaredSession();
+            }
+        }, delay);
+    }
+
+    /**
+     * The identity a write stamp stands for. This client's provisional stamp is
+     * the identity it settled on first (`undefined` until then); another
+     * client's reads as the `null` it replaced, since this one cannot know which
+     * session minted it; any other stamp is itself.
+     */
+    private stampedIdentity(stamp: null | string | undefined): null | string | undefined {
+        if (stamp === this.provisionalStamp) {
+            // Unbound once the identity has settled (a 403 named nobody, say):
+            // the anonymous `null` it replaced, which is how it was judged before.
+            // eslint-disable-next-line unicorn/no-null -- the anonymous stamp a provisional one replaces
+            return this.provisionalBinding === undefined ? null : this.provisionalBinding.identity;
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- the anonymous stamp a provisional one replaces
+        return stamp?.startsWith(PROVISIONAL_STAMP_PREFIX) === true ? null : stamp;
+    }
+
+    /**
      * Release one {@link sessionProbesInFlight} hold and re-flush the writes
      * that hold alone was holding.
      *
@@ -8898,13 +9117,19 @@ class LunoraClient {
             return true;
         }
 
+        if (!this.identityResolutionExpected && !this.identitySettled && sessionSourceDeclared()) {
+            this.resolveDeclaredSession();
+        }
+
         // Outside the request itself the question is settlement, not traffic: a
         // client that resolves an identity but has not been ANSWERED yet holds
         // a `null` that may still become `subj:<id>` — before its first probe
         // starts, and after one failed to answer. A client that resolves no
         // identity at all never enters this branch, so its `null` stays the
         // stable, unshared identity it has always been.
-        return this.identityResolutionExpected && !this.identitySettled;
+        // `lunoraSessionSync()` declares the same thing page-wide, for an app that
+        // reads its session through better-auth and never attaches the store.
+        return (this.identityResolutionExpected || sessionSourceDeclared()) && !this.identitySettled;
     }
 
     /**
@@ -8967,10 +9192,25 @@ class LunoraClient {
             return false;
         }
 
+        const firstAnswer = this.provisionalBinding === undefined;
+
         this.identityAnsweredAt = question;
         this.identitySettled = true;
+        // The answer's own fingerprint, bound before `setAuthToken` flushes — unless the
+        // question predates the stamp: then it describes the session a change retired.
+        if (question > this.provisionalStampQuestion) {
+            // eslint-disable-next-line unicorn/no-null -- `null` is the fingerprint of nobody
+            this.bindProvisionalStamp(subject === null ? null : `subj:${subject}`);
+        }
         // eslint-disable-next-line unicorn/no-null -- a cookie session holds no token
         this.setAuthToken(null, subject);
+
+        // Writes held for the first answer are replayable now. An answer of
+        // nobody changes no identity, so `setAuthToken` did not re-flush them, and
+        // a socket's `identity` frame is not a probe `releaseSessionProbe` would.
+        if (firstAnswer && subject === null && this.offlineQueue.size > 0 && isLiveStatus(this.computeStatus())) {
+            this.flushAllOfflineQueues();
+        }
 
         return true;
     }
@@ -9228,6 +9468,12 @@ class LunoraClient {
             if (stamp === from) {
                 this.queuedIdentities.set(id, to);
             }
+        }
+
+        // The binding is a stamp too: left on the token hash, the next refresh
+        // would reject the provisional writes the relabel just kept.
+        if (this.provisionalBinding?.identity === from) {
+            this.provisionalBinding = { identity: to };
         }
 
         this.offlineQueue.restampIdentity(from, to);
@@ -10095,11 +10341,23 @@ class LunoraClient {
      * The three-way comparison behind {@link replayIdentityVerdict} (documented
      * there), without a credential: the built-in queue sends with its own pinned token.
      */
-    private identityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown" {
+    private identityVerdict(stamp: null | string | undefined): "match" | "mismatch" | "unknown" {
         if (this.subjectAwaitingReconfirm()) {
             return "unknown";
         }
 
+        if (stamp !== null && stamp !== undefined && this.retiredProvisionalStamps.has(stamp)) {
+            return "mismatch";
+        }
+
+        // Not bound to anyone yet: the same hold as a `null` about to be named —
+        // but only while it may still be named. Settled with nothing bound, it is
+        // judged as the `null` it replaced (see `stampedIdentity`), never held.
+        if (stamp === this.provisionalStamp && this.provisionalBinding === undefined && this.identityUnresolved()) {
+            return "unknown";
+        }
+
+        const stamped = this.stampedIdentity(stamp);
         const current = this.identityFingerprint();
 
         // A `null` fingerprint that is about to become `subj:<id>` is not an
@@ -10486,7 +10744,7 @@ class LunoraClient {
                     // The id that queued the write, not the live session's — see the
                     // `clientId` stamp in `enqueueOfflineMutation`.
                     clientId: item.clientId ?? this.clientId,
-                    ...replayExpectation(item.identity, authToken),
+                    ...replayExpectation(this.stampedIdentity(item.identity), authToken),
                     mutationId: item.id,
                     onCommitCursor: (cursor) => {
                         commitCursor = cursor;
@@ -10604,7 +10862,7 @@ class LunoraClient {
                     headers: this.rpcRequestHeaders({
                         attachBookmark: true,
                         authToken,
-                        ...replayExpectation(items.find((item) => item.identity !== undefined)?.identity, authToken),
+                        ...replayExpectation(this.stampedIdentity(items.find((item) => item.identity !== undefined)?.identity), authToken),
                     }),
                     method: "POST",
                     signal,
