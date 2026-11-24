@@ -47,6 +47,13 @@ interface ControlCall {
 const setup = (controlStatus?: (body: ControlCall) => number) => {
     const streams: FakeStream[] = [];
     const controls: ControlCall[] = [];
+    const controlWaiters: { match: (call: ControlCall) => boolean; resolve: () => void }[] = [];
+
+    /** Resolves once a control call matching `match` has been sent. */
+    const untilControl = (match: (call: ControlCall) => boolean): Promise<void> =>
+        new Promise((resolve) => {
+            controlWaiters.push({ match, resolve });
+        });
 
     const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         let url: string;
@@ -73,10 +80,15 @@ const setup = (controlStatus?: (body: ControlCall) => number) => {
 
         controls.push(call);
 
+        for (const waiter of controlWaiters.filter((entry) => entry.match(call))) {
+            controlWaiters.splice(controlWaiters.indexOf(waiter), 1);
+            waiter.resolve();
+        }
+
         return Promise.resolve(Response.json({ ok: true }, { status: controlStatus?.(call) ?? 200 }));
     };
 
-    return { controls, fetchImpl, streams };
+    return { controls, fetchImpl, streams, untilControl };
 };
 
 const liveFrame = (topic: string, payload: unknown): string => `event: live\ndata: ${JSON.stringify({ data: encodeWire(payload), topic })}\n\n`;
@@ -151,7 +163,7 @@ describe("connectLiveStream", () => {
     it("reconnects and re-registers active subscriptions on the new connection", async () => {
         expect.assertions(2);
 
-        const { controls, fetchImpl, streams } = setup();
+        const { controls, fetchImpl, streams, untilControl } = setup();
         const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl, maxDelayMs: 5, retryDelay: 5 });
 
         await live.ready;
@@ -160,13 +172,12 @@ describe("connectLiveStream", () => {
 
         await flush();
 
+        const reRegistered = untilControl((call) => call.action === "subscribe" && call.connectionId === "c2");
+
         // Drop the stream; the transport must reconnect and resubscribe.
         streams[0]?.end();
 
-        await new Promise((resolve) => {
-            setTimeout(resolve, 40);
-        });
-        await flush();
+        await reRegistered;
 
         expect(live.connectionId).toBe("c2");
         expect(controls.filter((call) => call.action === "subscribe")).toEqual([
@@ -523,10 +534,13 @@ describe("connectLiveStream", () => {
     });
 
     it("does not send a subscribe on the dropped connection while the reconnect is in flight", async () => {
-        expect.assertions(1);
+        expect.assertions(3);
 
         const streams: FakeStream[] = [];
         const heldConnects: ((response: Response) => void)[] = [];
+        const controls: ControlCall[] = [];
+        const reconnecting = Promise.withResolvers<undefined>();
+        const reRegistered = Promise.withResolvers<undefined>();
         let connects = 0;
 
         const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -549,11 +563,18 @@ describe("connectLiveStream", () => {
                         reject(new DOMException("aborted", "AbortError"));
                     });
                     heldConnects.push(resolve);
+                    reconnecting.resolve(undefined);
                 });
             }
 
             const body = init?.body;
             const call = (typeof body === "string" ? JSON.parse(body) : {}) as ControlCall;
+
+            controls.push(call);
+
+            if (call.connectionId === "c2") {
+                reRegistered.resolve(undefined);
+            }
 
             // The shard no longer knows the dropped connection.
             return Promise.resolve(Response.json({ ok: true }, { status: call.connectionId === "c1" ? 404 : 200 }));
@@ -565,31 +586,34 @@ describe("connectLiveStream", () => {
 
         streams[0]?.end();
 
-        await vi.waitFor(() => {
-            if (heldConnects.length === 0) {
-                throw new Error("reconnect not started");
-            }
-        });
+        await reconnecting.promise;
 
         live.subscribe({ id: "s1", topic: "feed" });
 
-        // Give a stale control reply time to arrive and, with the bug, to abort the reconnect.
-        await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-        });
+        // A control call goes out within a few microtasks of `subscribe`; one naming c1 would be
+        // refused, and the refusal would abort the held reconnect.
+        await flush();
+
+        expect(controls).toStrictEqual([]);
+
+        // The reconnect lands: the subscribe it held back registers on the new connection.
+        heldConnects[0]?.(new FakeStream("c2").response);
+        await reRegistered.promise;
 
         expect(connects).toBe(2);
+        expect(controls).toStrictEqual([{ action: "subscribe", connectionId: "c2", subscriptionId: "s1", topic: "feed" }]);
 
-        heldConnects[0]?.(new FakeStream("c2").response);
         live.close();
     });
 
     it("does not let a stale subscribe reply drop the connection after its subscription was released", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const streams: FakeStream[] = [];
         const controls: ControlCall[] = [];
-        let holdFirstReply: ((response: Response) => void) | undefined;
+        const connectSignals: (AbortSignal | undefined)[] = [];
+        const firstReplyHeld = Promise.withResolvers<(response: Response) => void>();
+        const reSubscribed = Promise.withResolvers<undefined>();
 
         const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
             const url = input instanceof Request ? input.url : String(input);
@@ -598,6 +622,7 @@ describe("connectLiveStream", () => {
                 const stream = new FakeStream(`c${String(streams.length + 1)}`);
 
                 streams.push(stream);
+                connectSignals.push(init?.signal ?? undefined);
 
                 // A real fetch errors the body when its signal aborts; closing the stream stands in for that.
                 init?.signal?.addEventListener("abort", () => {
@@ -615,8 +640,13 @@ describe("connectLiveStream", () => {
             // The first subscribe's reply is held, so it lands after the id has been released and re-used.
             if (controls.length === 1) {
                 return new Promise<Response>((resolve) => {
-                    holdFirstReply = resolve;
+                    firstReplyHeld.resolve(resolve);
                 });
+            }
+
+            // The re-subscribe, queued behind the held reply and the release, goes last.
+            if (controls.length === 3) {
+                reSubscribed.resolve(undefined);
             }
 
             return Promise.resolve(Response.json({ ok: true }, { status: 200 }));
@@ -632,18 +662,14 @@ describe("connectLiveStream", () => {
         live.subscribe({ id: "s1", topic: "feed" });
 
         // The release and the re-subscribe queue behind the held reply, so only that reply is on the wire now.
-        await vi.waitFor(() => {
-            if (holdFirstReply === undefined) {
-                throw new Error("first subscribe not sent yet");
-            }
-        });
+        const holdFirstReply = await firstReplyHeld.promise;
 
-        holdFirstReply?.(Response.json({ ok: false }, { status: 404 }));
+        holdFirstReply(Response.json({ ok: false }, { status: 404 }));
+        // The chain behind the stale reply has run, so the reply has been handled.
+        await reSubscribed.promise;
 
-        await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-        });
-
+        // Handled as a refusal, it would have aborted the connection and sent the client reconnecting.
+        expect(connectSignals[0]?.aborted).toBe(false);
         expect(streams).toHaveLength(1);
 
         live.close();
@@ -653,6 +679,7 @@ describe("connectLiveStream", () => {
         expect.assertions(1);
 
         const controls: ControlCall[] = [];
+        const subscribeSent = Promise.withResolvers<undefined>();
 
         const fetchImpl = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
             const url = input instanceof Request ? input.url : String(input);
@@ -664,6 +691,7 @@ describe("connectLiveStream", () => {
             const body = init?.body;
 
             controls.push((typeof body === "string" ? JSON.parse(body) : {}) as ControlCall);
+            subscribeSent.resolve(undefined);
 
             // Held until the signal aborts, as a real fetch is.
             return new Promise<Response>((_resolve, reject) => {
@@ -679,19 +707,14 @@ describe("connectLiveStream", () => {
 
         const release = live.subscribe({ id: "s1", topic: "feed" });
 
-        await vi.waitFor(() => {
-            if (controls.length === 0) {
-                throw new Error("subscribe not sent yet");
-            }
-        });
+        await subscribeSent.promise;
 
         // The unsubscribe queues behind the stalled subscribe; close() cancels that subscribe.
         release();
         live.close();
 
-        await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-        });
+        // The cancelled subscribe settles, and the chain behind it runs, within a few microtasks.
+        await flush();
 
         expect(controls.map((call) => call.action)).toEqual(["subscribe"]);
     });

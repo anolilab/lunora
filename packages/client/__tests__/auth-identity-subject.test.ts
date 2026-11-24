@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getIdentityStore } from "../src/auth";
+import { QUERY_CACHE_DEBOUNCE_MS } from "../src/client-tuning";
 import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
 import { createInMemoryQueryCache, queryCacheKey } from "../src/query-cache";
-import type { FunctionReference } from "../src/types";
+import type { FunctionReference, PersistenceAdapter } from "../src/types";
 
 /**
  * The identity SUBJECT, end to end through the code adapters actually run.
@@ -24,16 +26,33 @@ const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
 };
 
-const flushMicrotasks = (): Promise<void> =>
-    new Promise((resolve) => {
-        setTimeout(resolve, 0);
-    });
+/** Spy on the session probe the identity store runs, so a test can wait for its answer. */
+const watchSessionProbe = (client: LunoraClient): MockInstance<LunoraClient["getCurrentUser"]> => vi.spyOn(client, "getCurrentUser");
 
-const settle = async (): Promise<void> => {
-    for (let index = 0; index < 5; index += 1) {
-        // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of promise ticks
-        await flushMicrotasks();
+/**
+ * The session answer the identity store asked for last, once the client has adopted it. The store
+ * asks synchronously from `setAuthToken` and from its first subscriber, so the latest call is the
+ * answer in question, and the client adopts the subject before that call resolves.
+ */
+const sessionAnswered = async (probe: MockInstance<LunoraClient["getCurrentUser"]>): Promise<void> => {
+    const latest = probe.mock.results.at(-1);
+
+    if (latest === undefined) {
+        throw new Error("the identity store never asked for the session");
     }
+
+    await latest.value;
+};
+
+/** Spy on the durable outbox's `append`, so a test can wait for the queued write to land. */
+const appended = async (append: MockInstance<PersistenceAdapter["append"]>): Promise<void> => {
+    const latest = append.mock.results.at(-1);
+
+    if (latest === undefined) {
+        throw new Error("nothing was appended to the outbox");
+    }
+
+    await latest.value;
 };
 
 const jsonResponse = (body: unknown): Response => Response.json(body, { headers: { "content-type": "application/json" }, status: 200 });
@@ -116,11 +135,16 @@ const rpcCalls = (fetchMock: ReturnType<typeof createFetchMock>): string[] =>
     fetchMock.mock.calls.filter(([url]) => !urlOf(url).includes("get-session")).map(([, init]) => (init as { body?: string }).body ?? "");
 
 describe("auth identity subject", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("keys the offline identity on the resolved user id, through the identity store every adapter uses", async () => {
         expect.assertions(2);
 
         const fetchMock = createFetchMock({ "jwt-1": "user-1" });
         const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+        const probe = watchSessionProbe(client);
 
         getIdentityStore(client).subscribe(() => undefined);
 
@@ -130,7 +154,7 @@ describe("auth identity subject", () => {
         // Before the session resolves the identity can only be the token hash.
         expect(client.currentIdentity()).not.toBe("subj:user-1");
 
-        await settle();
+        await sessionAnswered(probe);
 
         expect(client.currentIdentity()).toBe("subj:user-1");
 
@@ -149,17 +173,19 @@ describe("auth identity subject", () => {
             url: "https://app.example",
             WebSocket: createMockWebSocket(),
         });
+        const probe = watchSessionProbe(client);
+        const append = vi.spyOn(persistence, "append");
 
         getIdentityStore(client).subscribe(() => undefined);
         client.setAuthToken("jwt-1");
-        await settle();
+        await sessionAnswered(probe);
 
         const settled: string[] = [];
 
         client.onMutationSettled((event) => settled.push(event.status));
 
         client.mutation(fnRef("posts:create"), { title: "mine" }).catch(() => undefined);
-        await settle();
+        await appended(append);
 
         const queued = await persistence.load();
 
@@ -168,7 +194,8 @@ describe("auth identity subject", () => {
         // The app rotates its JWT — same user, new bytes. This is the call every
         // adapter makes, and the one that used to reject the queue wholesale.
         client.setAuthToken("jwt-2");
-        await settle();
+        // The relabel decision is made synchronously as the answer is adopted.
+        await sessionAnswered(probe);
 
         expect(settled).toEqual([]);
         expect(client.currentIdentity()).toBe("subj:user-1");
@@ -189,17 +216,19 @@ describe("auth identity subject", () => {
             url: "https://app.example",
             WebSocket: createMockWebSocket(),
         });
+        const probe = watchSessionProbe(client);
+        const append = vi.spyOn(persistence, "append");
 
         getIdentityStore(client).subscribe(() => undefined);
         client.setAuthToken("jwt-1");
-        await settle();
+        await sessionAnswered(probe);
 
         const settled: string[] = [];
 
         client.onMutationSettled((event) => settled.push(event.status));
 
         client.mutation(fnRef("posts:create"), { title: "user-1's" }).catch(() => undefined);
-        await settle();
+        await appended(append);
 
         // Straight to the other account, no sign-out in between. The sticky
         // subject still says user-1 until the session resolve says otherwise —
@@ -208,7 +237,7 @@ describe("auth identity subject", () => {
 
         expect(rpcCalls(fetchMock)).toEqual([]);
 
-        await settle();
+        await sessionAnswered(probe);
 
         expect(client.currentIdentity()).toBe("subj:user-2");
         expect(settled).toEqual(["rejected"]);
@@ -222,10 +251,11 @@ describe("auth identity subject", () => {
 
         const fetchMock = createFetchMock({ "jwt-1": "user-1" });
         const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+        const probe = watchSessionProbe(client);
 
         getIdentityStore(client).subscribe(() => undefined);
         client.setAuthToken("jwt-1");
-        await settle();
+        await sessionAnswered(probe);
 
         client.setAuthToken(null);
 
@@ -265,18 +295,22 @@ describe("auth identity subject", () => {
     });
 
     it("files reads cached after a late subject resolve under the subject, not the socket's boot-time token hash", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         sockets.length = 0;
+        // The read cache writes on a debounce timer; the test moves past it rather than waiting it out.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
         const fetchMock = createFetchMock({ "jwt-1": "user-1" });
         const queryCache = createInMemoryQueryCache();
+        const put = vi.spyOn(queryCache, "put");
         const client = new LunoraClient({
             fetch: fetchMock,
             queryCache,
             url: "https://app.example",
             WebSocket: createMockWebSocket(),
         });
+        const probe = watchSessionProbe(client);
 
         getIdentityStore(client).subscribe(() => undefined);
         client.setAuthToken("jwt-1");
@@ -284,17 +318,18 @@ describe("auth identity subject", () => {
         // The socket opens on the token hash — the session resolve lands after.
         client.subscribe(fnRef("messages:list"), {}, () => undefined);
         sockets.at(-1)?.open();
-        await settle();
+        await sessionAnswered(probe);
 
         const socket = sockets.at(-1);
         const subscribeFrame = socket?.sent.map((raw) => JSON.parse(raw) as { id?: string; type: string }).find((frame) => frame.type === "subscribe");
 
         socket?.receive({ cursor: 1, data: [{ _id: "m1" }], id: subscribeFrame?.id, type: "data" });
 
-        // Past the read-cache write debounce.
-        await new Promise((resolve) => {
-            setTimeout(resolve, 400);
-        });
+        await vi.advanceTimersByTimeAsync(QUERY_CACHE_DEBOUNCE_MS);
+
+        expect(put).toHaveBeenCalledTimes(1);
+
+        await put.mock.results[0]?.value;
 
         // Next session establishes `subj:user-1` before any socket opens; a stale
         // token-hash stamp here means every cached read is discarded, silently.

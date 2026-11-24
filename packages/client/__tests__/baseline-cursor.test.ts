@@ -14,17 +14,6 @@ import type { FunctionReference } from "../src/types";
  * every stale write would look fresh and clobber exactly as before.
  */
 
-const flushMicrotasks = (): Promise<void> =>
-    new Promise((resolve) => {
-        setTimeout(resolve, 0);
-    });
-
-/** Real-time wait, long enough for the (deliberately tiny) reconnect backoff below to fire. */
-const settle = (ms = 25): Promise<void> =>
-    new Promise((resolve) => {
-        setTimeout(resolve, ms);
-    });
-
 interface MockSocket {
     open: () => void;
     receive: (payload: unknown) => void;
@@ -33,6 +22,13 @@ interface MockSocket {
 }
 
 const sockets: MockSocket[] = [];
+const socketWaiters: ((socket: MockSocket) => void)[] = [];
+
+/** The next socket the client constructs — the milestone of a reconnect firing. */
+const nextSocket = (): Promise<MockSocket> =>
+    new Promise((resolve) => {
+        socketWaiters.push(resolve);
+    });
 
 const createMockWebSocket = (): typeof WebSocket => {
     class WS {
@@ -44,6 +40,7 @@ const createMockWebSocket = (): typeof WebSocket => {
 
         public constructor(public readonly url: string) {
             sockets.push(this);
+            socketWaiters.shift()?.(this);
         }
 
         public addEventListener(type: string, listener: (event?: unknown) => void): void {
@@ -166,6 +163,7 @@ const subscribeId = (socket: MockSocket): string => {
 describe("lunoraClient CDC baseline", () => {
     beforeEach(() => {
         sockets.length = 0;
+        socketWaiters.length = 0;
     });
 
     afterEach(() => {
@@ -219,8 +217,8 @@ describe("lunoraClient CDC baseline", () => {
         const client = new LunoraClient({
             fetch: fetchMock,
             persistence: createInMemoryPersistence(),
-            // A tiny, jitter-free backoff so the reconnect below lands inside the
-            // test's real-time wait instead of its default quarter-second.
+            // A tiny, jitter-free backoff so the reconnect below fires at once
+            // instead of after its default quarter-second.
             reconnect: { initialDelayMs: 1, jitter: false, maxDelayMs: 1 },
             url: "https://app.example",
             WebSocket: createMockWebSocket(),
@@ -237,27 +235,24 @@ describe("lunoraClient CDC baseline", () => {
         socket?.receive({ cursor: 10, data: [], id, type: "data" });
 
         // Go offline and compose a write against cursor 10.
+        const reconnecting = nextSocket();
+
         socket?.triggerClose();
 
         const queued = client.mutation(fnRef("documents:rename"), { title: "mine" });
+        const reconnected = await reconnecting;
 
-        await flushMicrotasks();
-
+        // Still offline: the reconnect has a socket, not an open one.
         expect(fetchMock).not.toHaveBeenCalled();
 
         // Reconnect. The client catches up to a much newer cursor BEFORE the queue
         // drains — the exact window that makes re-deriving the baseline wrong.
-        await settle();
+        reconnected.open();
 
-        const reconnected = sockets.at(-1);
+        const resumedId = subscribeId(reconnected);
 
-        reconnected?.open();
+        reconnected.receive({ cursor: 99, data: [], id: resumedId, type: "data" });
 
-        const resumedId = subscribeId(reconnected!);
-
-        reconnected?.receive({ cursor: 99, data: [], id: resumedId, type: "data" });
-
-        await settle();
         await queued;
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -342,29 +337,26 @@ describe("lunoraClient CDC baseline", () => {
         const id = subscribeId(socket!);
 
         socket?.receive({ cursor: 10, data: [], id, type: "data" });
+
+        const reconnecting = nextSocket();
+
         socket?.triggerClose();
 
         // TWO writes, so the flush takes the batch path. Both are composed while
         // offline at cursor 10.
         const first = client.mutation(fnRef("documents:rename"), { title: "one" });
         const second = client.mutation(fnRef("documents:rename"), { title: "two" });
-
-        await flushMicrotasks();
+        const reconnected = await reconnecting;
 
         expect(fetchMock).not.toHaveBeenCalled();
 
-        await settle();
+        reconnected.open();
 
-        const reconnected = sockets.at(-1);
-
-        reconnected?.open();
-
-        const resumedId = subscribeId(reconnected!);
+        const resumedId = subscribeId(reconnected);
 
         // Catch up well past the composed cursor BEFORE the queue drains.
-        reconnected?.receive({ cursor: 99, data: [], id: resumedId, type: "data" });
+        reconnected.receive({ cursor: 99, data: [], id: resumedId, type: "data" });
 
-        await settle();
         await Promise.allSettled([first, second]);
 
         const batches = batchCallIndexes(fetchMock);
@@ -387,12 +379,14 @@ describe("lunoraClient CDC baseline", () => {
         // the write under test would park on its own request and never settle.
         let releaseFlush: (() => void) | undefined;
         let parked = false;
+        const flushParked = Promise.withResolvers<undefined>();
         const fetchMock = vi.fn<typeof fetch>(async () => {
             if (parked) {
                 return jsonResponse({ result: null });
             }
 
             parked = true;
+            flushParked.resolve(undefined);
 
             return await new Promise<Response>((resolve) => {
                 releaseFlush = () => {
@@ -420,33 +414,28 @@ describe("lunoraClient CDC baseline", () => {
 
         // Queue a write, then reconnect so its replay is in flight and parked on
         // the fetch above — this is the `offlineFlushes` entry the next call awaits.
+        const reconnecting = nextSocket();
+
         socket?.triggerClose();
 
         const queued = client.mutation(fnRef("documents:rename"), { title: "queued" });
+        const reconnected = await reconnecting;
 
-        await flushMicrotasks();
-        await settle();
+        reconnected.open();
 
-        const reconnected = sockets.at(-1);
+        const resumedId = subscribeId(reconnected);
 
-        reconnected?.open();
-
-        const resumedId = subscribeId(reconnected!);
-
-        reconnected?.receive({ cursor: 10, data: [], id: resumedId, type: "data" });
-        await settle();
+        reconnected.receive({ cursor: 10, data: [], id: resumedId, type: "data" });
+        await flushParked.promise;
 
         // Composed NOW, against cursor 10 — but it parks on the barrier.
         const behindBarrier = client.mutation(fnRef("documents:rename"), { title: "behind" });
 
-        await flushMicrotasks();
-
         // Frames land while it waits. A baseline read after the wait would say 99.
-        reconnected?.receive({ cursor: 99, data: [], id: resumedId, type: "data" });
+        reconnected.receive({ cursor: 99, data: [], id: resumedId, type: "data" });
 
         releaseFlush?.();
 
-        await settle();
         await Promise.allSettled([queued, behindBarrier]);
 
         expect(baseSeqOfWrite(fetchMock, "behind")).toBe("10");

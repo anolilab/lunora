@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import type { MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { QUERY_CACHE_DEBOUNCE_MS } from "../src/client-tuning";
 import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryQueryCache } from "../src/query-cache";
 import type { FunctionReference, QueryCacheAdapter } from "../src/types";
@@ -22,13 +24,10 @@ const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
 };
 
-const settle = async (): Promise<void> => {
-    for (let index = 0; index < 8; index += 1) {
-        // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of promise ticks
-        await new Promise((resolve) => {
-            setTimeout(resolve, 40);
-        });
-    }
+/** Run the read cache's write debounce and wait for whatever it writes to land. Needs fake timers. */
+const flushReadCache = async (put: MockInstance<QueryCacheAdapter["put"]>): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(QUERY_CACHE_DEBOUNCE_MS);
+    await Promise.all(put.mock.results.map(async (result) => result.value));
 };
 
 interface MockSocket {
@@ -107,6 +106,7 @@ const makeClient = (queryCache: QueryCacheAdapter): LunoraClient =>
 const writeCache = async (queryCache: QueryCacheAdapter, token: string): Promise<void> => {
     sockets.length = 0;
 
+    const put = vi.spyOn(queryCache, "put");
     const client = makeClient(queryCache);
 
     await client.whenReady();
@@ -123,12 +123,21 @@ const writeCache = async (queryCache: QueryCacheAdapter, token: string): Promise
     client.setAuthToken(token, "user-1");
     socket?.receive({ cursor: 7, data: [{ _id: "t1", text: "cached row" }], id: subscribeId, type: "data" });
 
-    await settle();
+    await flushReadCache(put);
 
     client.close();
 };
 
 describe("durable read cache on a bearer-token reload", () => {
+    // The read cache writes on a debounce timer; every case moves past it rather than waiting it out.
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("seeds a subscription from an entry stamped with the resolved subject when only the token is known", async () => {
         expect.hasAssertions();
 
@@ -402,6 +411,15 @@ describe("durable read cache on a bearer-token reload", () => {
  * a bearer token.
  */
 describe("durable read cache on a cookie-session cold start", () => {
+    // The read cache writes on a debounce timer; every case moves past it rather than waiting it out.
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it("refuses to seed when nothing on this client can evidence the cached identity", async () => {
         expect.hasAssertions();
 
@@ -411,6 +429,7 @@ describe("durable read cache on a cookie-session cold start", () => {
         // subject arrived from `/get-session`.
         sockets.length = 0;
 
+        const put = vi.spyOn(queryCache, "put");
         const writer = makeClient(queryCache);
 
         await writer.whenReady();
@@ -425,7 +444,7 @@ describe("durable read cache on a cookie-session cold start", () => {
         writer.setAuthToken(null, "user-1");
         writeSocket?.receive({ cursor: 7, data: [{ _id: "t1", text: "cached row" }], id: subscribeId, type: "data" });
 
-        await settle();
+        await flushReadCache(put);
 
         writer.close();
 

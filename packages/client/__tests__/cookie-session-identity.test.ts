@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getIdentityStore } from "../src/auth";
+import { QUERY_CACHE_DEBOUNCE_MS } from "../src/client-tuning";
 import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
 import { createInMemoryQueryCache } from "../src/query-cache";
-import type { FunctionReference, QueryCacheAdapter } from "../src/types";
+import type { FunctionReference, PersistenceAdapter, QueryCacheAdapter } from "../src/types";
 
 /**
  * Cookie sessions, and the three identity gates that were disarmed by never
@@ -24,14 +26,54 @@ const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
 };
 
-/** Long enough to clear the read cache's 250ms write debounce. */
-const settle = async (): Promise<void> => {
-    for (let index = 0; index < 8; index += 1) {
-        // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of promise ticks
-        await new Promise((resolve) => {
-            setTimeout(resolve, 60);
-        });
+/** Spy on the session probe the identity store runs, so a test can wait for its answer. */
+const watchSessionProbe = (client: LunoraClient): MockInstance<LunoraClient["getCurrentUser"]> => vi.spyOn(client, "getCurrentUser");
+
+/**
+ * The session answer the identity store asked for last, once the client has adopted it. The store
+ * asks synchronously from its first subscriber, and the client adopts the subject before that call
+ * resolves.
+ */
+const sessionAnswered = async (probe: MockInstance<LunoraClient["getCurrentUser"]>): Promise<void> => {
+    const latest = probe.mock.results.at(-1);
+
+    if (latest === undefined) {
+        throw new Error("the identity store never asked for the session");
     }
+
+    await latest.value;
+};
+
+/** Resolves once the client's offline queue holds `count` writes — a restored or a newly queued one. */
+const pendingIs = async (client: LunoraClient, count: number): Promise<void> => {
+    const { promise, resolve } = Promise.withResolvers<undefined>();
+    const unsubscribe = client.onPendingChange((pending) => {
+        if (pending === count) {
+            resolve(undefined);
+        }
+    });
+
+    await promise;
+    unsubscribe();
+};
+
+/** Resolves once the durable outbox drops a record: the write was replayed, or purged unsent. */
+const nextRemoval = (persistence: PersistenceAdapter): Promise<void> => {
+    const { promise, resolve } = Promise.withResolvers<undefined>();
+    const { remove } = persistence;
+
+    vi.spyOn(persistence, "remove").mockImplementation(async (id) => {
+        await remove(id);
+        resolve(undefined);
+    });
+
+    return promise;
+};
+
+/** Run the read cache's write debounce and wait for whatever it writes to land. */
+const flushReadCache = async (put: MockInstance<QueryCacheAdapter["put"]>): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(QUERY_CACHE_DEBOUNCE_MS);
+    await Promise.all(put.mock.results.map(async (result) => result.value));
 };
 
 interface MockSocket {
@@ -123,10 +165,11 @@ describe("c4 — a cookie session resolves an identity", () => {
         const fetchImpl = cookieSessionFetch({ email: "a@b.co", id: "user-a" });
         // The shape `examples/auth-playground` ships: a url, and nothing else.
         const client = new LunoraClient({ fetch: fetchImpl, heartbeatIntervalMs: 0, url: "http://app.test", WebSocket: createMockWebSocket() });
+        const probe = watchSessionProbe(client);
         const store = getIdentityStore(client);
 
         store.subscribe(() => undefined);
-        await settle();
+        await sessionAnswered(probe);
 
         expect(store.getStatus()).toBe("authenticated");
         expect(store.getUser()).toStrictEqual({ email: "a@b.co", id: "user-a" });
@@ -136,8 +179,8 @@ describe("c4 — a cookie session resolves an identity", () => {
         // One probe, not one per subscriber.
         const probes = fetchImpl.mock.calls.filter((call) => isProbe(call)).length;
 
+        // A probe goes out synchronously from `subscribe` when it goes out at all.
         store.subscribe(() => undefined);
-        await settle();
 
         expect(fetchImpl.mock.calls.filter((call) => isProbe(call))).toHaveLength(probes);
 
@@ -155,6 +198,7 @@ describe("c4 — a cookie session resolves an identity", () => {
             url: "http://app.test",
             WebSocket: createMockWebSocket(),
         });
+        const probe = watchSessionProbe(client);
         const store = getIdentityStore(client);
         const seen: string[] = [];
 
@@ -162,8 +206,9 @@ describe("c4 — a cookie session resolves an identity", () => {
 
         expect(store.getStatus()).toBe("loading");
 
-        await settle();
+        await sessionAnswered(probe);
 
+        expect(seen.at(-1)).toBe("authenticated");
         expect(seen).not.toContain("unauthenticated");
 
         client.close();
@@ -180,10 +225,11 @@ describe("c4 — a cookie session resolves an identity", () => {
             url: "http://app.test",
             WebSocket: createMockWebSocket(),
         });
+        const probe = watchSessionProbe(client);
         const store = getIdentityStore(client);
 
         store.subscribe(() => undefined);
-        await settle();
+        await sessionAnswered(probe);
 
         expect(store.getStatus()).toBe("unauthenticated");
         expect(client.currentIdentity()).toBeNull();
@@ -210,6 +256,7 @@ describe("c1 — an offline write queued under no identity", () => {
         });
 
         // A signs out, B signs in, the page reloads.
+        const purged = nextRemoval(persistence);
         const fetchImpl = cookieSessionFetch({ email: "b@b.co", id: "user-b" });
         const client = new LunoraClient({
             fetch: fetchImpl,
@@ -220,12 +267,16 @@ describe("c1 — an offline write queued under no identity", () => {
             WebSocket: createMockWebSocket(),
         });
 
+        const probe = watchSessionProbe(client);
+
         getIdentityStore(client).subscribe(() => undefined);
         client.subscribe(fnRef("todos.list"), {}, () => {});
-        await settle();
+        // The reload's starting point: B's session named, A's write restored from disk.
+        await Promise.all([sessionAnswered(probe), pendingIs(client, 1)]);
 
         sockets.at(-1)?.open();
-        await settle();
+        // The replay gate's verdict on the record, whichever it is, ends in its removal.
+        await purged;
 
         const replays = fetchImpl.mock.calls.filter((call) => JSON.stringify(call[1] ?? "").includes("todos.add"));
 
@@ -258,6 +309,7 @@ describe("c1 — an offline write queued under no identity", () => {
         const probed = new Promise<void>((resolve) => {
             answerProbe = resolve;
         });
+        const replayed = nextRemoval(persistence);
         const fetchImpl = vi.fn<typeof fetch>(async (input: unknown) => {
             if (String(input).includes("get-session")) {
                 await probed;
@@ -278,10 +330,13 @@ describe("c1 — an offline write queued under no identity", () => {
 
         getIdentityStore(client).subscribe(() => undefined);
         client.subscribe(fnRef("todos.list"), {}, () => {});
-        await settle();
+        await pendingIs(client, 1);
 
         sockets.at(-1)?.open();
-        await settle();
+        // One I/O turn: an unheld open flush has sent the write by now.
+        await new Promise((resolve) => {
+            setImmediate(resolve);
+        });
 
         const replays = (): unknown[] => fetchImpl.mock.calls.filter((call) => JSON.stringify(call[1] ?? "").includes("todos.add"));
 
@@ -292,7 +347,7 @@ describe("c1 — an offline write queued under no identity", () => {
         // The server answers "no session". `null` is a settled identity now, the
         // write is this client's own, and the hold ends without a reconnect.
         answerProbe();
-        await settle();
+        await replayed;
 
         expect(replays()).toHaveLength(1);
         await expect(persistence.load()).resolves.toStrictEqual([]);
@@ -302,6 +357,15 @@ describe("c1 — an offline write queued under no identity", () => {
 });
 
 describe("c2 — the durable read cache under no identity", () => {
+    // The read cache writes on a debounce timer; these move past it rather than waiting it out.
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     /**
      * Write one real cache entry through a signed-in client (so the key is the
      * client's own, not a guess), then re-stamp it `identity: null` — the shape
@@ -310,6 +374,7 @@ describe("c2 — the durable read cache under no identity", () => {
     const seedCache = async (queryCache: QueryCacheAdapter): Promise<void> => {
         sockets.length = 0;
 
+        const put = vi.spyOn(queryCache, "put");
         const writer = new LunoraClient({
             fetch: cookieSessionFetch({ email: "a@b.co", id: "user-a" }),
             heartbeatIntervalMs: 0,
@@ -331,7 +396,7 @@ describe("c2 — the durable read cache under no identity", () => {
         const subscribeId = socket?.sent.find((message) => message.type === "subscribe")?.id;
 
         socket?.receive({ cursor: 5, data: [{ _id: "t1", text: "A's private message" }], id: subscribeId, type: "data" });
-        await settle();
+        await flushReadCache(put);
         writer.close();
 
         const stored = await queryCache.load();
@@ -365,6 +430,7 @@ describe("c2 — the durable read cache under no identity", () => {
             url: "http://app.test",
             WebSocket: createMockWebSocket(),
         });
+        const probe = watchSessionProbe(client);
 
         await client.whenReady();
         // What every adapter's auth gate does on mount, and what puts the
@@ -379,7 +445,8 @@ describe("c2 — the durable read cache under no identity", () => {
 
         expect(seeded).toBeUndefined();
 
-        await settle();
+        // B's session is named here, and the hydrated cache reseeds against it.
+        await sessionAnswered(probe);
 
         expect(seeded).toBeUndefined();
 
@@ -392,6 +459,7 @@ describe("c2 — the durable read cache under no identity", () => {
         sockets.length = 0;
 
         const queryCache = createInMemoryQueryCache();
+        const put = vi.spyOn(queryCache, "put");
         // `/get-session` hangs, so the frame lands while the identity is still
         // one round trip from `subj:<id>`.
         const client = new LunoraClient({
@@ -421,7 +489,7 @@ describe("c2 — the durable read cache under no identity", () => {
         const subscribeId = socket?.sent.find((message) => message.type === "subscribe")?.id;
 
         socket?.receive({ cursor: 3, data: [{ _id: "t1", text: "A's private message" }], id: subscribeId, type: "data" });
-        await settle();
+        await flushReadCache(put);
 
         await expect(queryCache.load()).resolves.toStrictEqual([]);
 
@@ -437,6 +505,7 @@ describe("c2 — the durable read cache under no identity", () => {
         // app with no auth at all has a `null` fingerprint nobody else shares,
         // and its offline read cache must keep working.
         const queryCache = createInMemoryQueryCache();
+        const put = vi.spyOn(queryCache, "put");
         const client = new LunoraClient({
             fetch: async () => Response.json({}),
             heartbeatIntervalMs: 0,
@@ -457,7 +526,7 @@ describe("c2 — the durable read cache under no identity", () => {
         const subscribeId = socket?.sent.find((message) => message.type === "subscribe")?.id;
 
         socket?.receive({ cursor: 3, data: [{ _id: "t1", text: "a public row" }], id: subscribeId, type: "data" });
-        await settle();
+        await flushReadCache(put);
 
         await expect(queryCache.load()).resolves.toHaveLength(1);
 
@@ -505,14 +574,13 @@ describe("c3 — an account switch", () => {
             () => "rejected",
         );
 
-        await settle();
+        await pendingIs(client, 1);
 
         // A signs out and B signs in — same origin, same cookie jar, no token on
         // either side of the switch. `!tokenChanged` is true here and says
         // nothing whatever about who this is.
         sessionUser = { email: "b@b.co", id: "user-b" };
         await client.getCurrentUser();
-        await settle();
 
         expect(client.currentIdentity()).toBe("subj:user-b");
         await expect(outcome).resolves.toBe("rejected");
@@ -551,7 +619,6 @@ describe("c3 — an account switch", () => {
         const subscribeId = socket?.sent.find((message) => message.type === "subscribe")?.id;
 
         socket?.receive({ cursor: 4, data: [{ _id: "t1", text: "A's private row" }], id: subscribeId, type: "data" });
-        await settle();
 
         expect(seen.at(-1)).toStrictEqual([{ _id: "t1", text: "A's private row" }]);
 

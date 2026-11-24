@@ -32,42 +32,6 @@
         "reason": "a real-clock timeout sentinel in a race, pending conversion"
     },
     {
-        "file": "packages/client/__tests__/auth-identity-subject.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/client/__tests__/baseline-cursor.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/client/__tests__/cookie-session-identity.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/client/__tests__/cross-tab-session-change.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/client/__tests__/cross-tab.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/client/__tests__/http-stream.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/client/__tests__/identity-gate-windows.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/client/__tests__/live-stream.test.ts",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/client/__tests__/read-cache-bearer-seed.test.ts",
-        "reason": "pending conversion"
-    },
-    {
         "file": "packages/container/__tests__/client-exec.test.ts",
         "reason": "pending conversion"
     },
