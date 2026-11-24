@@ -57,6 +57,20 @@ const SCHEDULE_OUTBOX_UNCONFIRMED_DROPS = 1024;
  */
 const SCHEDULE_OUTBOX_FENCE_WAIT_MS = 2000;
 
+/** Run `wait` with one {@link SCHEDULE_OUTBOX_FENCE_WAIT_MS} deadline to race against, and clear its timer after. */
+const withFenceDeadline = async <T>(wait: (deadline: Promise<false>) => Promise<T>): Promise<T> => {
+    const deadline = Promise.withResolvers<false>();
+    const timer = setTimeout(() => {
+        deadline.resolve(false);
+    }, SCHEDULE_OUTBOX_FENCE_WAIT_MS);
+
+    try {
+        return await wait(deadline.promise);
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
 /**
  * How many times a deferred schedule is re-offered to the scheduler before the
  * entry is parked. Together with {@link SCHEDULE_OUTBOX_BACKOFF_MS} this spans a
@@ -834,23 +848,16 @@ class ScheduleOutboxRunner {
      * @returns `false` when the deadline came first
      */
     private async awaitScheduleOutboxFences(id: string): Promise<boolean> {
-        const deadline = Promise.withResolvers<false>();
-        const timer = setTimeout(() => {
-            deadline.resolve(false);
-        }, SCHEDULE_OUTBOX_FENCE_WAIT_MS);
-
-        try {
+        return withFenceDeadline(async (deadline) => {
             for (let fences = this.scheduleOutboxFences(id); fences.length > 0; fences = this.scheduleOutboxFences(id)) {
                 // eslint-disable-next-line no-await-in-loop -- a fence that starts while waiting must be waited for too
-                if (!(await Promise.race([Promise.all(fences).then(() => true), deadline.promise]))) {
+                if (!(await Promise.race([Promise.all(fences).then(() => true), deadline]))) {
                     return false;
                 }
             }
 
             return true;
-        } finally {
-            clearTimeout(timer);
-        }
+        });
     }
 
     private async handOffRecordedScheduleOutboxCall(id: string, run: () => Promise<unknown>, token: number | undefined): Promise<void> {
@@ -1026,7 +1033,9 @@ class ScheduleOutboxRunner {
 
     /**
      * Whether a drop's cancel already took the job of the recording `token` names out of the
-     * scheduler. A drop still awaiting its answer may be the one that did, so those are waited for.
+     * scheduler. A drop still awaiting its answer may be the one that did, so those are waited for,
+     * up to {@link SCHEDULE_OUTBOX_FENCE_WAIT_MS}: a mutation's reply can be waiting on this. Past it
+     * the answer is "no", and the row is parked for the drop to finish.
      */
     private async wasScheduleOutboxCancelConfirmed(id: string, token: number | undefined, earlierCancels: ReadonlyArray<Promise<void>>): Promise<boolean> {
         const confirmed = (): boolean => token !== undefined && token <= (this.scheduleOutboxCancelledThrough.get(id) ?? Number.NEGATIVE_INFINITY);
@@ -1035,7 +1044,7 @@ class ScheduleOutboxRunner {
             return confirmed();
         }
 
-        await Promise.all(earlierCancels);
+        await withFenceDeadline(async (deadline) => Promise.race([Promise.all(earlierCancels), deadline]));
 
         return confirmed();
     }

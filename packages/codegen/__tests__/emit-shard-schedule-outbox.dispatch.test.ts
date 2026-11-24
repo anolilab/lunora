@@ -1736,6 +1736,44 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         pending.resolve(undefined);
     });
 
+    it("answers a mutation within the deadline when the drop whose cancel it waits on is stuck", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        harness.removeOnCancel();
+
+        // The mutation's first call is stored at the scheduler; its answer is in flight.
+        const reply = harness.holdReply();
+        const first = harness.shard.handleRpc("outbox:sameId", {});
+
+        await reply.entered;
+
+        // The drop's cancel removes the job, but its answer does not come back.
+        const cancelReply = harness.holdCancelReply();
+        const drop = harness.drop("dup-id");
+
+        await cancelReply.entered;
+
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        try {
+            // The call lands, its own cancel finds nothing, and it waits on the drop only up to the deadline.
+            reply.release();
+            await vi.advanceTimersByTimeAsync(60_000);
+
+            await expect(first).resolves.toStrictEqual({ ok: true });
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // The call gave up before hearing the drop's answer and parked the row, so the drop reports
+        // it as not finished; dropping again completes it.
+        cancelReply.release();
+
+        await expect(drop).rejects.toThrow(/drop it again/u);
+    });
+
     it("polls a fenced due entry again after a retry interval, not at once", async () => {
         expect.assertions(4);
 
