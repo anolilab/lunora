@@ -1,3 +1,7 @@
+## @lunora/db [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.286...@lunora/db@1.0.0-alpha.287) (2026-11-24)
+
+- fix(client): keep writes composed before the session resolves (#1689)
+
 ## @lunora/db [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/db@1.0.0-alpha.285...@lunora/db@1.0.0-alpha.286) (2026-11-23)
 
 - fix(db): stop the offline outbox losing or repeating writes (#1654)
