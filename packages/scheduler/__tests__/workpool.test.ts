@@ -1496,6 +1496,30 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         expect(dispatchedIds(scheduler)).toContain(waiting);
     });
 
+    it("scans the pool rows only until one instance has carried them over", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+
+        state.storageMap.set("pool:p", { inFlight: 1, inFlightIds: ["old"], maxConcurrency: 1 });
+        await schedule(new ScriptedScheduler(state, origin));
+
+        expect(poolRow(state, "p")?.slots.map((slot) => slot.id)).toStrictEqual(["old"]);
+
+        const { list } = state.storage;
+        const scanned: string[] = [];
+
+        state.storage.list = async (options) => {
+            scanned.push(String(options?.prefix));
+
+            return list(options);
+        };
+        // A fresh instance over the same store, after the deploy that carried the rows over.
+        await schedule(new ScriptedScheduler(state, origin));
+
+        expect(scanned).not.toContain("pool:");
+    });
+
     it.each([
         ["listed ids", { inFlight: 1, inFlightIds: ["old"], maxConcurrency: 1 }],
         ["a bare count", { inFlight: 1, maxConcurrency: 1 }],

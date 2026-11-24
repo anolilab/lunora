@@ -154,6 +154,13 @@ const poolQueuePrefix = (pool: string): string => `${POOL_QUEUE_PREFIX}${encodeP
 const CLEAN_KEY = "meta:clean";
 
 /**
+ * Present once every pool row in this store has the slot shape, so a fresh instance skips the scan
+ * in {@link SchedulerDO.migrateLegacyPools}. Written only after the converted rows are, so a
+ * migration cut off part way runs again.
+ */
+const POOLS_MIGRATED_KEY = "meta:pools-migrated";
+
+/**
  * The deployment pause flag ({@link DeploymentPauseState}). Held here because
  * this is the one durable object every app that schedules or crons anything
  * has, and the alarm that must hold jobs reads it without a hop; the worker's
@@ -3092,6 +3099,10 @@ class SchedulerDO {
      * ceiling or the operator's `/pool/release` frees.
      */
     private async migrateLegacyPools(): Promise<void> {
+        if ((await this.state.storage.get(POOLS_MIGRATED_KEY)) !== undefined) {
+            return;
+        }
+
         const migrated: [string, PoolState][] = [];
         const now = Date.now();
 
@@ -3115,6 +3126,8 @@ class SchedulerDO {
             // eslint-disable-next-line no-await-in-loop -- one write per old-shape row, of which a store has a handful at most; a batched put caps at 128 keys
             await this.state.storage.put(key, row);
         }
+
+        await this.state.storage.put(POOLS_MIGRATED_KEY, true);
     }
 
     /** The full orphan walk — see {@link reindexOrphanedRecords}. */

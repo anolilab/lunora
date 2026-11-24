@@ -4270,7 +4270,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             );
         } catch {
             // Swallowed so a release failure can't fail the dispatch the scheduler
-            // awaits. Nothing reconciles it (see above): this leaks the slot.
+            // awaits; the slot is then held until the scheduler's claim ceiling (see above).
         }
     };
 
