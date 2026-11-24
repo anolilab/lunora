@@ -117,6 +117,40 @@ Practical notes:
   switch. `lunoraAuthAdapter(store)` over a custom store registers no check either: an
   `AuthStore` is opaque CRUD with nothing to introspect.
 
+## Duplicate addresses and `user.emailCanonical`
+
+`user.email` keeps an address as it was written, and SQLite's `LOWER()` folds ASCII only.
+So `@lunora/auth` adds a `user.emailCanonical` column: the address trimmed,
+NFC-normalised and lowercased, under a unique index. A database hook fills it on every
+better-auth write. The admin plane's duplicate-address check is an exact, indexed match on
+it, and sign-up invitations are stored in the same form.
+
+- **Existing rows are backfilled.** On D1, each `ensureMigrated` call fills a bounded
+  number of pages and saves its position, so it leaves the request most of D1's
+  per-invocation query limit; the generated worker calls it once per isolate, so a large
+  table fills over several cold starts. A pass that fails is logged and never fails the
+  request. The auth Durable Object runs a bounded pass on its cold start and another on
+  each later request until it is done, and again after a restore or a move writes rows.
+  Other databases are filled through better-auth's adapter in one call. Invitation
+  addresses stored before the change are rewritten the same way. When two rows fold to
+  one address, the backfill leaves the second one alone and logs a warning, because
+  deciding which account or invitation keeps the address is up to you; a reported
+  invitation is removed by deleting its row by id, since revoking its address removes the
+  invitation that holds it. Until a row is filled, the duplicate checks (the admin
+  plane's, the one on sign-up and email change, and the auth data port's import) fold its
+  address in JS, so they still refuse a variant in any case or Unicode form.
+- **A plugin's update hook must not add or rewrite `email`.** better-auth passes every
+  `databaseHooks.user.update.before` the caller's original patch, so the canonical key is
+  derived from the address in that patch. A plugin hook that sets `email` would leave the
+  stored key describing the old address. Change addresses through the patch itself (your
+  own `databaseHooks` may rewrite it; that result is seen).
+- **Rows imported through your own `authTables(...)` are trusted operator input.** The
+  admin-token import writes tables declared in `lunora/schema.ts` as given, so a user row
+  keeps the `emailCanonical` it carries. A `NULL` value is refilled by the backfill; an
+  empty string is not, so pass `null` for a missing value. A value that does not match its
+  `email` is kept. The auth data port's own import and restore recompute the value from
+  `email`.
+
 ## Read `ctx.auth` in functions
 
 The runtime resolves the inbound session and populates `ctx.auth` on every

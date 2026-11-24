@@ -3,10 +3,11 @@ import { getAuthTables } from "better-auth/db";
 
 import { SENSITIVE_FIELDS } from "../../../shared/identity-claims";
 import { apiKeyStorage } from "./api-key-storage";
+import { CANONICAL_EMAIL_FIELD, canonicalEmail, canonicalHolders } from "./canonical-email";
 import type { LunoraAuth } from "./create-auth";
 // Aliased: this module exposes methods of the same names, and a method body
 // calling an identically-named import is a needless double-take.
-import { createSignUpInvitation as issueSignUpInvitation, INVITATION_MODEL, normalizeEmail } from "./invite-only";
+import { createSignUpInvitation as issueSignUpInvitation, INVITATION_MODEL } from "./invite-only";
 
 /**
  * A timestamp as it leaves the admin API: epoch-ms (better-auth stores `Date`s,
@@ -777,16 +778,13 @@ const deleteOrganizationTeamMemberships = async (context_: Awaited<LunoraAuth["$
 };
 
 /**
- * Refuse `email` (already lowercased) when an account other than `exceptUserId` holds it in any casing.
+ * Refuse `email` when an account other than `exceptUserId` holds it in any casing or Unicode form.
  * better-auth's `findUserByEmail` matches the stored address exactly, so an account written before addresses
- * were lowercased, or imported as it was, would slip past it.
+ * were lowercased, or imported as it was, would slip past it; {@link canonicalHolders} matches on the
+ * canonical column, and folds the addresses of rows that do not have a value in it yet.
  */
 const assertEmailFree = async (context_: AuthContext, email: string, exceptUserId: string | undefined): Promise<void> => {
-    const holders = await context_.adapter.findMany<{ id: string }>({
-        limit: 2,
-        model: "user",
-        where: [{ field: "email", mode: "insensitive", value: email }],
-    });
+    const holders = await canonicalHolders(context_.adapter, email);
 
     if (holders.some((holder) => holder.id !== exceptUserId)) {
         throw new LunoraAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");
@@ -1485,13 +1483,13 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 }),
             ),
 
-        // Matches on the stored form of the address, through the same normaliser the invite-only plugin writes with.
+        // Addresses are stored in canonical form, so the delete matches on the same form.
         revokeSignUpInvitation: ({ email }) =>
             withContext(async (context_) => {
                 await deleteExisting(
                     context_,
                     INVITATION_MODEL,
-                    [{ field: "email", value: normalizeEmail(email) }],
+                    [{ field: "email", value: canonicalEmail(email) }],
                     ["sign-up invitation not found", "SIGN_UP_INVITATION_NOT_FOUND"],
                 );
             }),
@@ -1734,8 +1732,11 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     await assertEmailFree(context_, normalizedEmail, userId);
                 }
 
+                // The canonical address is derived from `email` by a database hook; one supplied without
+                // an address change would be written as given and could shadow another account's.
+                const patch = Object.fromEntries(Object.entries(data).filter(([field]) => field !== CANONICAL_EMAIL_FIELD));
                 const user = await writeClaimingEmail(context_, normalizedEmail, userId, async () =>
-                    context_.internalAdapter.updateUser(userId, normalizedEmail === undefined ? data : { ...data, email: normalizedEmail }),
+                    context_.internalAdapter.updateUser(userId, normalizedEmail === undefined ? patch : { ...patch, email: normalizedEmail }),
                 );
 
                 return toUser(user as Record<string, unknown>);

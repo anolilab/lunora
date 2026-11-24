@@ -6,6 +6,8 @@ import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 import { describe, expect, it, vi } from "vitest";
 
+import { resolveAuthOptions } from "../src/create-auth";
+import { inviteOnly } from "../src/invite-only";
 import { compileMigrationsSql, createMigrationAuth, ensureMigrated } from "../src/migrate";
 
 vi.mock(import("better-auth/db/migration"), () => {
@@ -16,6 +18,18 @@ const mockGetMigrations = vi.mocked(getMigrations);
 
 const makeMigrations = (runMigrations = vi.fn<() => Promise<void>>(async () => {})) => {
     return { compileMigrations: vi.fn<() => Promise<string>>(async () => "SQL"), runMigrations };
+};
+
+/**
+ * A non-D1 database for the paths that only need `ensureMigrated` to finish: `node:sqlite`, which
+ * better-auth's Kysely adapter drives, holding the `user` table the (mocked) migrator would create.
+ */
+const sqliteWithUsers = (): DatabaseSync => {
+    const database = new DatabaseSync(":memory:");
+
+    database.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
+
+    return database;
 };
 
 /** A better-auth adapter factory — a function, which is precisely what the Kysely migrator cannot drive. */
@@ -39,6 +53,8 @@ const fakeD1 = (setup: (database: DatabaseSync) => void = () => {}) => {
     const database = new DatabaseSync(":memory:");
 
     setup(database);
+    // What the (mocked) migrator leaves for the canonical-email backfill when a test seeds no `user` table.
+    database.exec(`CREATE TABLE IF NOT EXISTS "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
 
     const statement = (query: string, values: unknown[] = []) => {
         return {
@@ -102,7 +118,7 @@ describe("ensureMigrated", () => {
         mockGetMigrations.mockReset();
         mockGetMigrations.mockResolvedValue(makeMigrations(runMigrations) as never);
 
-        const options = { database: { db: {} } };
+        const options = { database: sqliteWithUsers() };
 
         await Promise.all([ensureMigrated({ options }), ensureMigrated({ options })]);
 
@@ -117,7 +133,7 @@ describe("ensureMigrated", () => {
         mockGetMigrations.mockRejectedValueOnce(new Error("boom"));
         mockGetMigrations.mockResolvedValue(makeMigrations() as never);
 
-        const options = { database: { db: {} } };
+        const options = { database: sqliteWithUsers() };
 
         await expect(ensureMigrated({ options })).rejects.toThrow("boom");
 
@@ -138,10 +154,10 @@ describe("ensureMigrated", () => {
         mockGetMigrations.mockReset();
         mockGetMigrations.mockResolvedValue(makeMigrations(runMigrations) as never);
 
-        const database = {};
+        const database = sqliteWithUsers();
 
-        await ensureMigrated({ options: { database: { db: database } } });
-        await ensureMigrated({ options: { database: { db: database } } });
+        await ensureMigrated({ options: { database } });
+        await ensureMigrated({ options: { database } });
 
         expect(mockGetMigrations).toHaveBeenCalledTimes(2);
     });
@@ -154,7 +170,12 @@ describe("ensureMigrated", () => {
         mockGetMigrations.mockReset();
         mockGetMigrations.mockResolvedValue(makeMigrations(runMigrations) as never);
 
-        const auth = createMigrationAuth({ database: { db: {} } as never, secret: "s".repeat(32) });
+        // A raw non-D1 database, with the `user` table the (mocked) migrator would have left for the backfill to read.
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
+
+        const auth = createMigrationAuth({ database: database as never, secret: "s".repeat(32) });
 
         await ensureMigrated(auth);
 
@@ -294,6 +315,211 @@ describe("ensureMigrated", () => {
         await expect(ensureMigrated({ options: { database } })).resolves.toBeUndefined();
     });
 
+    it("fills `user.emailCanonical` on rows the migrator added the column to, leaving a pre-existing duplicate empty", async () => {
+        // The migrator adds the column and its unique index like any field; the value needs
+        // Unicode lowercasing SQLite lacks, so ensureMigrated computes it. Two rows that the old
+        // byte-exact index let in cannot both get it: which account keeps the address is not a
+        // migration's call.
+        expect.assertions(2);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1((sqlite) => {
+            // What the migrator leaves behind: the column added, nullable, under a unique index.
+            sqlite.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text)`);
+            sqlite.exec(`CREATE UNIQUE INDEX "user_emailCanonical_uidx" ON "user" ("emailCanonical")`);
+            sqlite.exec(
+                `INSERT INTO "user" ("id", "email") VALUES ('first', 'ÉLISE@example.com'), ('twin', 'élise@example.com'), ('other', 'Other@Example.com')`,
+            );
+        });
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await ensureMigrated({ options: resolveAuthOptions({ database, secret: "x".repeat(32) }) });
+
+        const rows = await database.prepare(`SELECT "id", "emailCanonical" FROM "user" ORDER BY "id"`).all();
+
+        expect(
+            rows.results.map((row) => {
+                return { ...(row as object) };
+            }),
+        ).toStrictEqual([
+            { emailCanonical: "élise@example.com", id: "first" },
+            { emailCanonical: "other@example.com", id: "other" },
+            { emailCanonical: null, id: "twin" },
+        ]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"));
+
+        warn.mockRestore();
+    });
+
+    it("runs a bounded backfill pass per call that never rejects it, each call resuming where the last stopped", async () => {
+        // The generated worker awaits this ahead of every route, sharing D1's per-invocation query limit.
+        expect.assertions(4);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1((sqlite) => {
+            sqlite.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
+
+            const insert = sqlite.prepare(`INSERT INTO "user" ("id", "email") VALUES (?, ?)`);
+
+            for (let index = 0; index < 1001; index += 1) {
+                insert.run(`u${String(index)}`, `User${String(index)}@Example.com`);
+            }
+        });
+        const options = resolveAuthOptions({ database, secret: "x".repeat(32) });
+        const unfilled = async (): Promise<unknown> => {
+            const { results } = await database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).all();
+
+            return { ...(results[0] as object) };
+        };
+        const { prepare } = database;
+        let reads = 0;
+
+        database.prepare = (query: string) => {
+            const page = query.startsWith(`SELECT rowid AS "rid"`);
+
+            reads += page ? 1 : 0;
+
+            if (page && reads === 3) {
+                throw new Error("Too many API requests by single worker invocation.");
+            }
+
+            return prepare(query);
+        };
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        // Cut short on its third page: the request still gets its auth, and the two pages it wrote stay written.
+        await expect(ensureMigrated({ options })).resolves.toBeUndefined();
+        await expect(unfilled()).resolves.toStrictEqual({ n: 601 });
+
+        // One bounded pass a call.
+        await ensureMigrated({ options });
+
+        await expect(unfilled()).resolves.toStrictEqual({ n: 0 });
+
+        const later = vi.spyOn(database, "prepare");
+
+        await ensureMigrated({ options });
+
+        expect(later).not.toHaveBeenCalled();
+
+        error.mockRestore();
+    });
+
+    it("rewrites decomposed invitation addresses through better-auth's adapter on a database that is not D1", async () => {
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = sqliteWithUsers();
+
+        database.exec(
+            `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "tokenHash" text, "invitedBy" text, "acceptedAt" date, "createdAt" date NOT NULL, "expiresAt" date NOT NULL)`,
+        );
+        database
+            .prepare(`INSERT INTO "signUpInvitation" ("id", "email", "createdAt", "expiresAt") VALUES ('i', ?, '2026-01-01', '2099-01-01')`)
+            .run("élise@example.com");
+
+        await ensureMigrated({ options: resolveAuthOptions({ database: database as never, plugins: [inviteOnly()], secret: "x".repeat(32) }) });
+
+        expect(
+            database
+                .prepare(`SELECT "email" FROM "signUpInvitation"`)
+                .all()
+                .map((row) => (row as { email: string }).email),
+        ).toStrictEqual(["élise@example.com"]);
+    });
+
+    it("migrates raw options to the schema an instance writes, canonical column and backfill included", async () => {
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1((sqlite) => {
+            sqlite.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
+            sqlite.exec(`INSERT INTO "user" ("id", "email") VALUES ('legacy', 'Legacy@Example.com')`);
+        });
+
+        // Not through `resolveAuthOptions`: `{ options }` is a supported call shape.
+        await ensureMigrated({ options: { database, secret: "x".repeat(32) } });
+
+        const { results } = await database.prepare(`SELECT "emailCanonical" FROM "user"`).all();
+
+        expect(results.map((row) => (row as { emailCanonical: unknown }).emailCanonical)).toStrictEqual(["legacy@example.com"]);
+    });
+
+    it("fills `user.emailCanonical` through better-auth's adapter on a database that is not D1", async () => {
+        expect.assertions(2);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        // `node:sqlite` stands in for any Kysely dialect: it has no `batch`, so it is not taken for D1.
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(
+            `CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "name" text NOT NULL, "email" text NOT NULL UNIQUE, "emailVerified" integer NOT NULL, "image" text, "createdAt" date NOT NULL, "updatedAt" date NOT NULL, "emailCanonical" text UNIQUE)`,
+        );
+
+        const insert = database.prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (?, ?, ?, 0, 'x', 'x')`);
+
+        for (const [id, email] of [
+            ["first", "ÉLISE@example.com"],
+            ["twin", "élise@example.com"],
+            ["other", "Other@Example.com"],
+        ] as const) {
+            insert.run(id, id, email);
+        }
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await ensureMigrated({ options: resolveAuthOptions({ database: database as never, secret: "x".repeat(32) }) });
+
+        expect(
+            database
+                .prepare(`SELECT "id", "emailCanonical" FROM "user" ORDER BY "id"`)
+                .all()
+                .map((row) => {
+                    return { ...row };
+                }),
+        ).toStrictEqual([
+            { emailCanonical: "élise@example.com", id: "first" },
+            { emailCanonical: "other@example.com", id: "other" },
+            { emailCanonical: null, id: "twin" },
+        ]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"));
+
+        warn.mockRestore();
+    });
+
+    it("rewrites sign-up invitation addresses stored before they were NFC-normalised", async () => {
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const database = fakeD1((sqlite) => {
+            sqlite.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text UNIQUE)`);
+            sqlite.exec(
+                `CREATE TABLE "signUpInvitation" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "createdAt" integer NOT NULL, "expiresAt" integer NOT NULL)`,
+            );
+            // `é` as `e` + combining acute: trimmed and lowercased, as invitations were stored before.
+            sqlite.exec(`INSERT INTO "signUpInvitation" VALUES ('i', 'e' || char(769) || 'lise@example.com', 1, 2)`);
+        });
+
+        await ensureMigrated({ options: resolveAuthOptions({ database, plugins: [inviteOnly()], secret: "x".repeat(32) }) });
+
+        const rows = await database.prepare(`SELECT "email" FROM "signUpInvitation"`).all();
+
+        expect(rows.results.map((row) => (row as { email: string }).email)).toStrictEqual(["\u00E9lise@example.com"]);
+    });
+
     it("invalidates a schema verdict cached for this database, so the migration's fix is seen", async () => {
         // `lunoraD1Adapter` caches its verdict per database — a mismatch is kept and
         // rethrown without asking the store again. `ensureMigrated` is the thing that
@@ -335,7 +561,7 @@ describe("ensureMigrated", () => {
 
         mockGetMigrations.mockResolvedValue(makeMigrations(runMigrations) as never);
 
-        await ensureMigrated({ options: { database: { db: {} } } });
+        await ensureMigrated({ options: { database: sqliteWithUsers() } });
 
         expect(runMigrations).toHaveBeenCalledTimes(1);
     });

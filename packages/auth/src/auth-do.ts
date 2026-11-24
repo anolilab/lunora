@@ -33,6 +33,8 @@ import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
 import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
 import { AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable } from "./audit";
+import type { CanonicalEmailColumn } from "./canonical-email";
+import { authCanonicalEmailColumn, backfillCanonicalEmailsSync } from "./canonical-email";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
 import type { CredentialColumns } from "./data-port";
@@ -42,6 +44,8 @@ import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor } from "./do-store";
 import { handleAuthRequest } from "./handler";
+import type { InvitationEmailColumns } from "./invitation-email-backfill";
+import { backfillInvitationEmailsSync, invitationEmailColumns } from "./invitation-email-backfill";
 import type { MoveOrder } from "./jurisdiction-move";
 import { handleMoveRequest, MOVE_PATH } from "./jurisdiction-move";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
@@ -174,6 +178,15 @@ class LunoraAuthDO {
     /** Physical names of the live-credential tables, renamed models included, known once `#ensureReady` has run. */
     #credentialTables: string[] = [];
 
+    /** Where `signUpInvitation.email` lives physically, known once `#ensureReady` has run; `undefined` without `inviteOnly()`. */
+    #invitationColumns: InvitationEmailColumns | undefined;
+
+    /** Whether the canonical-email backfill has rows left: it runs a bounded pass on each request until it has none. */
+    #backfillPending = false;
+
+    /** Where `user.emailCanonical` lives physically, known once `#ensureReady` has run. */
+    #canonicalEmail: CanonicalEmailColumn | undefined;
+
     /**
      * @param state The Durable Object state — its `storage` becomes better-auth's database.
      * @param optionsFactory Builds the better-auth options. Called once, lazily, on the first request.
@@ -195,6 +208,10 @@ class LunoraAuthDO {
      */
     #ensureReady(): LunoraAuth {
         if (this.#auth !== undefined) {
+            if (this.#backfillPending) {
+                this.#backfill();
+            }
+
             return this.#auth;
         }
 
@@ -210,6 +227,7 @@ class LunoraAuthDO {
 
         this.#credentialTables = authCredentialTableNames(resolved);
         this.#credentialColumns = authCredentialColumns(resolved);
+        this.#canonicalEmail = authCanonicalEmailColumn(resolved);
 
         // The copy into a pinned object (and the data port's export) goes parents
         // first — every table after the tables it references — and the unbounded
@@ -232,19 +250,27 @@ class LunoraAuthDO {
             // better-auth's migrator is kysely-only and this storage is not a kysely
             // dialect, so the schema is derived from better-auth's own resolved
             // tables instead. Every statement is IF NOT EXISTS.
-            for (const statement of authDoSchemaStatements(resolved)) {
-                // The cursor is lazy in workerd — iterating is what runs the statement.
-                [...this.#storage.sql.exec(statement)];
-            }
-
             // `CREATE TABLE IF NOT EXISTS` covers a table that did not exist; it says
             // nothing about a table that exists with FEWER columns than the current
             // plugin set needs. Adding `admin()` to a deployed app is exactly that
             // case (`role` / `banned` / `banExpires` land on `user`), so the missing
             // columns are added rather than left to fail on the next write.
+            //
+            // Added BEFORE the schema statements: those create every index, and an index
+            // on a new column (`user.emailCanonical`'s unique one) fails with `no such
+            // column` on a table that does not have it yet. A table that does not exist
+            // reports no columns and gets no ALTER; the statements below create it.
             for (const statement of authDoColumnAdditions(resolved, (table) => this.#columnNames(table))) {
+                // The cursor is lazy in workerd — iterating is what runs the statement.
                 [...this.#storage.sql.exec(statement)];
             }
+
+            for (const statement of authDoSchemaStatements(resolved)) {
+                [...this.#storage.sql.exec(statement)];
+            }
+
+            this.#invitationColumns = invitationEmailColumns(resolved);
+            this.#backfill();
 
             // The mirror image, and the only column this ever removes. See
             // `legacy-issuer.ts` for what better-auth 1.7.0 added and 1.7.3 reverted.
@@ -256,6 +282,29 @@ class LunoraAuthDO {
         this.#auth = createAuth({ ...options, database: lunoraDoAdapter(this.#storage) });
 
         return this.#auth;
+    }
+
+    /**
+     * One bounded pass of the canonical-email backfill: rows written before `user.emailCanonical`
+     * existed get it from their address, and invitations issued before their addresses were stored
+     * in canonical form are rewritten. Bounded because the writes of one request commit together,
+     * so a pass over a whole large table could outrun the request's CPU limit and lose every page;
+     * the rest continues on later requests, and until then the duplicate checks fold the rows it
+     * has not reached. A failed pass is logged, not thrown, for the same reason.
+     */
+    #backfill(): void {
+        const exec = (query: string, parameters: unknown[]): Record<string, unknown>[] => [...this.#storage.sql.exec(query, ...parameters)];
+
+        try {
+            const users = this.#canonicalEmail === undefined ? undefined : backfillCanonicalEmailsSync(exec, this.#canonicalEmail);
+            const invited = this.#invitationColumns === undefined ? undefined : backfillInvitationEmailsSync(exec, this.#invitationColumns);
+
+            this.#backfillPending = !(users?.complete ?? true) || !(invited?.complete ?? true);
+        } catch (error) {
+            this.#backfillPending = true;
+            // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+            console.error("@lunora/auth: the canonical-email backfill stopped; the next request resumes it.", error);
+        }
     }
 
     /**
@@ -388,7 +437,9 @@ class LunoraAuthDO {
 
         try {
             const body: Record<string, unknown> = await request.json();
+
             const result = await handleMoveRequest(this.#storage, body, {
+                canonicalEmail: () => this.#canonicalEmail,
                 credentialColumns: () => this.#credentialColumns,
                 credentialTables: () => this.#credentialTables,
                 // The tables are gone: materialise them again on the next request rather
@@ -406,6 +457,13 @@ class LunoraAuthDO {
                 },
                 userTable: () => this.#moveOrder.first[0] ?? "user",
             });
+
+            // A restore writes a snapshot's invitations as they come; the next request brings them into canonical
+            // form. After the op, whose own `prepare` would otherwise run that pass before the rows land. Not a
+            // move's `write`: the move compares each copied row with its source, and a rewrite would read as a collision.
+            if (body["op"] === "import" || body["op"] === "replace") {
+                this.#backfillPending = true;
+            }
 
             return Response.json(result);
         } catch (error) {

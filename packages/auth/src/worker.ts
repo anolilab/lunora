@@ -5,6 +5,7 @@
 export { lunoraD1Adapter } from "./adapter";
 export { createAuthAdmin } from "./admin";
 export { createAuthAuditReader, createAuthAuditWriter } from "./audit";
+export { authCanonicalEmailColumn } from "./canonical-email";
 export { effectiveCookieCache } from "./cookie-cache";
 export { createAuth } from "./create-auth";
 export { authCredentialColumns, authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "./data-port";
