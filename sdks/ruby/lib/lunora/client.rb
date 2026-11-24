@@ -656,8 +656,7 @@ module Lunora
           @subscriptions.delete(id)
           @pending_retries.delete(id)
           # Its frame will never be answered now, so the slot it holds goes to the next one.
-          released = @resubscribe_slots.delete(id) && @send
-          [@send, @attach_generation, released ? take_resubscribes(Lunora.monotonic_now) : []]
+          release_resubscribe_slot(id) || [@send, @attach_generation, []]
         end
         next if sender.nil?
 
@@ -1044,7 +1043,9 @@ module Lunora
         next [] unless @attach_generation == generation
 
         @resubscribe_slots.delete_if { |_id, deadline| deadline <= now }
-        take_resubscribes(now)
+        # Dated from now, not the deadline a late timer was armed for, or the new
+        # slots would already be (nearly) expired and the window would not pace anything.
+        take_resubscribes([now, Lunora.monotonic_now].max)
       end
       send_resubscribes(sender, generation, paced, raise_errors: true)
       sent + paced.size

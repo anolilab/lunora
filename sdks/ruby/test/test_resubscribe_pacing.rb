@@ -113,6 +113,20 @@ class TestResubscribePacing < Minitest::Test
     assert_equal 6, subscribes(sent).size
   end
 
+  def test_a_late_retry_dates_the_next_window_from_now
+    client, = reconnected
+    # A timer armed for an hour-old deadline that only fires now passes that deadline.
+    armed_for = Lunora.monotonic_now - 3600
+    slots = client.instance_variable_get(:@resubscribe_slots)
+    slots.each_key { |id| slots[id] = armed_for }
+    before = Lunora.monotonic_now
+
+    assert_equal Lunora::RESUBSCRIBE_CONCURRENCY, client.retry_due_subscriptions(armed_for),
+                 "the expired slots let the next window out"
+    assert_operator client.next_subscription_retry_at, :>=, before + Lunora::RESUBSCRIBE_ACK_TIMEOUT,
+                    "the new window's slots hold for the ack timeout from now"
+  end
+
   def test_a_reconnect_mid_drain_starts_a_fresh_window
     client, sent = reconnected
     client.detach_socket

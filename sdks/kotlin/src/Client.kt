@@ -993,15 +993,12 @@ class Client(
         socket?.invoke(buildSubscribeFrame(id, functionPath, args))
 
         return {
-            var batch: List<Resubscribe> = emptyList()
-            val (current, generation) = synchronized(lock) {
+            val (current, generation, batch) = synchronized(lock) {
                 subscriptions.remove(id)
                 pendingRetries.remove(id)
 
                 // Its frame will never be answered now, so the slot it holds goes to the next one.
-                if (resubscribeSlots.remove(id) != null && send != null) batch = takeResubscribes(System.nanoTime())
-
-                send to attachGeneration
+                Triple(send, attachGeneration, releaseResubscribeSlot(id))
             }
 
             if (current != null) {
@@ -1184,6 +1181,16 @@ class Client(
     }
 
     /**
+     * Frees the slot [id]'s re-subscribe holds and claims the queued re-subscribes that now fit,
+     * while a socket is attached to send them on. Runs with the lock held.
+     */
+    private fun releaseResubscribeSlot(id: String): List<Resubscribe> {
+        if (resubscribeSlots.remove(id) == null || send == null) return emptyList()
+
+        return takeResubscribes(System.nanoTime())
+    }
+
+    /**
      * Builds the queued re-subscribes that fit in the free slots and claims a slot for each. Runs
      * with the lock held.
      *
@@ -1333,7 +1340,10 @@ class Client(
         val paced = synchronized(lock) {
             if (attachGeneration == generation && !closed) {
                 resubscribeSlots.values.removeIf { it - nowNanos <= 0 }
-                takeResubscribes(nowNanos)
+                // Dated from now, not the deadline a late timer was armed for, or the new slots
+                // would already be (nearly) expired and the window would not pace anything.
+                val current = System.nanoTime()
+                takeResubscribes(if (current - nowNanos > 0) current else nowNanos)
             } else {
                 emptyList()
             }
@@ -1396,11 +1406,8 @@ class Client(
         // an `ack`, but equally the `error` that refuses it or a `data` that overtakes its ack.
         // Releasing here rather than per type keeps an unanticipated frame, or a case that returns
         // early, from stalling the drain.
-        var paced: List<Resubscribe> = emptyList()
-        val (pacedSocket, pacedGeneration) = synchronized(lock) {
-            if (resubscribeSlots.remove(id) != null && send != null) paced = takeResubscribes(System.nanoTime())
-
-            send to attachGeneration
+        val (pacedSocket, pacedGeneration, paced) = synchronized(lock) {
+            Triple(send, attachGeneration, releaseResubscribeSlot(id))
         }
 
         if (pacedSocket != null) sendResubscribes(pacedSocket, pacedGeneration, paced, raiseErrors = false)

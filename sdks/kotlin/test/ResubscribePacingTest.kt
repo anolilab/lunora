@@ -116,6 +116,26 @@ private fun unansweredOneStopsHoldingItsSlotAfterTheTimeout() {
     check(subscribeIds(sent).size == 6, "the next window must have gone out")
 }
 
+private fun lateRetryDatesTheNextWindowFromNow() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    val client = reconnected(PACED_SUBSCRIPTIONS, sent)
+    // A timer armed for an hour-old deadline that only fires now passes that deadline.
+    val armedFor = System.nanoTime() - 3_600_000_000_000L
+
+    @Suppress("UNCHECKED_CAST")
+    val slots = Client::class.java.getDeclaredField("resubscribeSlots").apply { isAccessible = true }.get(client) as MutableMap<String, Long>
+
+    slots.replaceAll { _, _ -> armedFor }
+
+    val before = System.nanoTime()
+
+    check(client.retryDueSubscriptions(armedFor) == RESUBSCRIBE_CONCURRENCY, "the expired slots must let the next window out")
+
+    val deadline = checkNotNull(client.nextSubscriptionRetryAtNanos()) { "the new window must report its deadline" }
+
+    check(deadline - (before + RESUBSCRIBE_ACK_TIMEOUT_NANOS) >= 0, "the new window's slots must hold for the ack timeout from now")
+}
+
 private fun reconnectMidDrainStartsAFreshWindow() {
     val sent = mutableListOf<Map<String, Any?>>()
     val client = reconnected(PACED_SUBSCRIPTIONS, sent)
@@ -283,6 +303,7 @@ internal fun runResubscribePacingCases() {
     everySubscriptionGoesOutExactlyOnceInSubscribeOrder()
     unsubscribeSkipsAQueuedOneAndFreesAnOutstandingOne()
     unansweredOneStopsHoldingItsSlotAfterTheTimeout()
+    lateRetryDatesTheNextWindowFromNow()
     reconnectMidDrainStartsAFreshWindow()
     queuedOneCarriesTheCursorItHasWhenItGoesOut()
     failedPacedSendFromAFrameDoesNotThrow()

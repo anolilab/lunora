@@ -222,6 +222,32 @@ func TestResubscribePacingAnUnansweredOneStopsHoldingItsSlotAfterTheTimeout(t *t
 	}
 }
 
+func TestResubscribePacingALateRetryDatesTheNextWindowFromNow(t *testing.T) {
+	var sent []map[string]any
+
+	client := reconnected(t, pacedSubscriptions, &sent)
+
+	// A timer armed for an hour-old deadline that only fires now passes that deadline.
+	armedFor := time.Now().Add(-time.Hour)
+
+	client.mu.Lock()
+	for id := range client.resubscribeSlots {
+		client.resubscribeSlots[id] = armedFor
+	}
+	client.mu.Unlock()
+
+	before := time.Now()
+
+	if n, err := client.RetryDueSubscriptions(armedFor); err != nil || n != ResubscribeConcurrency {
+		t.Fatalf("the expired slots let the next window out: n=%d err=%v", n, err)
+	}
+
+	deadline, ok := client.NextSubscriptionRetryAt()
+	if !ok || deadline.Before(before.Add(ResubscribeAckTimeout)) {
+		t.Fatalf("the new window's slots hold for the ack timeout from now, got %v", deadline)
+	}
+}
+
 func TestResubscribePacingAReconnectMidDrainStartsAFreshWindow(t *testing.T) {
 	var sent []map[string]any
 

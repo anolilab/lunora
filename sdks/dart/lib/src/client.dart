@@ -120,10 +120,10 @@ class _Subscription implements OptimisticTarget {
   void deliver(Object? value) => onData?.call(value);
 }
 
-/// A Lunora deployment client.
 /// A queued re-subscribe built for sending, with the freeze its send lifted.
 typedef _Resubscribe = ({String id, _Subscription entry, Map<String, Object?> frame, bool wasPoisoned});
 
+/// A Lunora deployment client.
 class LunoraClient {
   LunoraClient({required String url, LunoraHttpPoster? post, String? authToken, String? authSubject, String? clientId, OfflineQueue? offlineQueue})
       : transport = LunoraTransport(url: url, post: post, authToken: authToken, authSubject: authSubject, clientId: clientId),
@@ -783,7 +783,7 @@ class LunoraClient {
 
       final generation = _attachGeneration;
       // Its frame will never be answered now, so the slot it holds goes to the next one.
-      final batch = _resubscribeSlots.remove(id) != null ? _takeResubscribes(_retryClock.elapsedMilliseconds) : const <_Resubscribe>[];
+      final batch = _releaseResubscribeSlot(id);
 
       try {
         sender(buildUnsubscribeFrame(id));
@@ -898,6 +898,11 @@ class LunoraClient {
     _resubscribeQueue.clear();
     _resubscribeSlots.clear();
   }
+
+  /// Frees the slot [id]'s re-subscribe holds and claims the queued re-subscribes that now fit,
+  /// while a socket is attached to send them on.
+  List<_Resubscribe> _releaseResubscribeSlot(String id) =>
+      _resubscribeSlots.remove(id) != null && _send != null ? _takeResubscribes(_retryClock.elapsedMilliseconds) : const <_Resubscribe>[];
 
   /// Builds the queued re-subscribes that fit in the free slots and claims a slot for each.
   ///
@@ -1073,7 +1078,10 @@ class LunoraClient {
 
     _resubscribeSlots.removeWhere((_, deadline) => deadline <= now);
 
-    final paced = _takeResubscribes(now);
+    // Dated from now, not the deadline a late timer was armed for, or the new slots would already be
+    // (nearly) expired and the window would not pace anything.
+    final current = _retryClock.elapsedMilliseconds;
+    final paced = _takeResubscribes(now > current ? now : current);
 
     _sendResubscribes(sender, generation, paced, raiseErrors: true);
 
@@ -1208,8 +1216,8 @@ class LunoraClient {
     // stalling the drain.
     final pacedSender = _send;
 
-    if (id != null && _resubscribeSlots.remove(id) != null && pacedSender != null) {
-      _sendResubscribes(pacedSender, _attachGeneration, _takeResubscribes(_retryClock.elapsedMilliseconds), raiseErrors: false);
+    if (id != null && pacedSender != null) {
+      _sendResubscribes(pacedSender, _attachGeneration, _releaseResubscribeSlot(id), raiseErrors: false);
     }
 
     switch (kind) {

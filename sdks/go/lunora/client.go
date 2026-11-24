@@ -1268,18 +1268,8 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 		delete(c.pendingRetries, id)
 		sender := c.send
 		generation := c.attachGeneration
-
-		var paced []resubscribe
-
 		// Its frame will never be answered now, so the slot it holds goes to the next one.
-		if _, held := c.resubscribeSlots[id]; held {
-			delete(c.resubscribeSlots, id)
-
-			if sender != nil {
-				paced = c.takeResubscribesLocked(time.Now())
-			}
-		}
-
+		paced := c.releaseResubscribeSlotLocked(id)
 		c.mu.Unlock()
 
 		if sender != nil {
@@ -1533,6 +1523,23 @@ func (c *Client) clearResubscribesLocked() {
 	clear(c.resubscribeSlots)
 }
 
+// releaseResubscribeSlotLocked frees the slot id's re-subscribe holds and claims
+// the queued re-subscribes that now fit, while a socket is attached to send them
+// on; call with mu held.
+func (c *Client) releaseResubscribeSlotLocked(id string) []resubscribe {
+	if _, held := c.resubscribeSlots[id]; !held {
+		return nil
+	}
+
+	delete(c.resubscribeSlots, id)
+
+	if c.send == nil {
+		return nil
+	}
+
+	return c.takeResubscribesLocked(time.Now())
+}
+
 // takeResubscribesLocked builds the queued re-subscribes that fit in the free
 // slots and claims a slot for each; call with mu held.
 //
@@ -1757,7 +1764,14 @@ func (c *Client) RetryDueSubscriptions(now time.Time) (int, error) {
 			}
 		}
 
-		paced = c.takeResubscribesLocked(now)
+		// Dated from now, not the deadline a late timer was armed for, or the new slots
+		// would already be (nearly) expired and the window would not pace anything.
+		claimedAt := time.Now()
+		if now.After(claimedAt) {
+			claimedAt = now
+		}
+
+		paced = c.takeResubscribesLocked(claimedAt)
 	}
 
 	c.mu.Unlock()
@@ -1839,17 +1853,7 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 	// returns early, from stalling the drain.
 	pacedSend := c.send
 	pacedGeneration := c.attachGeneration
-
-	var paced []resubscribe
-
-	if _, held := c.resubscribeSlots[id]; held {
-		delete(c.resubscribeSlots, id)
-
-		if pacedSend != nil {
-			paced = c.takeResubscribesLocked(time.Now())
-		}
-	}
-
+	paced := c.releaseResubscribeSlotLocked(id)
 	c.mu.Unlock()
 
 	// Not this frame's error: returning it would end the caller's read loop, and the
