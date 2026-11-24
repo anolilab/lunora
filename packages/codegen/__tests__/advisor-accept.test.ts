@@ -70,6 +70,27 @@ describe("applyAcceptedFindings", () => {
         expect(result[0]?.metadata["accepted"]).toBe("org admin gate");
     });
 
+    // A schema finding carries its table, not an export, so an entry names the table it accepts.
+    it("accepts a schema finding that names a table rather than an export", () => {
+        expect.assertions(3);
+
+        const tableEntry = {
+            exportName: "users",
+            file: "lunora/schema.ts",
+            level: "INFO" as const,
+            reason: "seeded by a migration",
+            rule: "table_without_insert",
+        };
+        const result = applyAcceptedFindings(
+            [finding({ name: "table_without_insert", level: "INFO", metadata: { file: "lunora/schema.ts", table: "users" } })],
+            [tableEntry],
+        );
+
+        expect(result.map((advisory) => advisory.name)).toStrictEqual(["table_without_insert"]);
+        expect(result[0]?.metadata["accepted"]).toBe("seeded by a migration");
+        expect(result[0]?.level).toBe("INFO");
+    });
+
     // The floor keeps an accepted ERROR, but not an accepted WARN or INFO, so an acceptance cannot bring back a finding the floor hides.
     it("keeps the floor's exemption for an accepted ERROR only", () => {
         expect.assertions(3);

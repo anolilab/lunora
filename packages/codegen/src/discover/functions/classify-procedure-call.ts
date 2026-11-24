@@ -182,7 +182,13 @@ const chainCarriesServerMarker = (receiver: Node, exportName: string, followedLo
     // declaration in the module that defines it. Without this, a builder shared across modules never marks.
     const symbol = builderChainRoot(receiver)?.getSymbol();
     const declaration = (symbol?.isAlias() ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
-    const initializer = declaration && Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
+
+    // A `let` or `var` builder can be rebound after its initializer ran, so its marker does not describe the chain that runs.
+    if (!isConstDeclaration(declaration)) {
+        return false;
+    }
+
+    const initializer = unwrapExpression(declaration.getInitializer());
 
     return initializer !== undefined && chainCarriesServerMarker(initializer, exportName, true);
 };

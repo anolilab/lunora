@@ -1,7 +1,7 @@
 /**
  * `advisor.accept` in `lunora.config.*`: advisor findings the project has
  * reviewed and accepted as by design, each named by the rule, the file and the
- * export it fires on.
+ * subject it fires on: an export, a table, or a shared helper.
  *
  * An accepted finding carries its reason in the detail and is reported as INFO,
  * so an accepted ERROR stops failing `lunora codegen`, `deploy` and `vite build`,
@@ -14,8 +14,15 @@
  */
 import type { Finding, Level } from "@lunora/advisor";
 
+/**
+ * The subject a finding fires on: the export it is in, the table a schema finding is about, or the helper a call-site
+ * finding sits in. Only one of them is set on a given finding, so the entry names whichever the finding carries.
+ */
+const subjectOf = (advisory: Finding): unknown => advisory.metadata["exportName"] ?? advisory.metadata["table"] ?? advisory.metadata["helper"];
+
 /** One reviewed finding to accept. `reason` says why it is by design; it is shown with the finding. */
 interface AcceptedFinding {
+    /** The export, table or helper the finding fires on, as the finding names it. */
     exportName: string;
     file: string;
     /** The level the reviewer saw. The entry matches only a finding at this level. */
@@ -52,7 +59,7 @@ const applyAcceptedFindings = (advisories: ReadonlyArray<Finding>, accepted: Rea
                 candidate.rule === advisory.name &&
                 candidate.level === advisory.level &&
                 candidate.file === advisory.metadata["file"] &&
-                candidate.exportName === advisory.metadata["exportName"],
+                candidate.exportName === subjectOf(advisory),
         );
 
         if (entry === undefined) {

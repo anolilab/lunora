@@ -554,6 +554,17 @@ const AUTHORIZE_VALUE_GUARD = `import { authorize } from "@lunora/server";
 export const teamAuthorize = authorize(() => true);
 `;
 
+/** A `let` builder carrying `authorize()`, rebound to an unguarded builder before the procedure is built on it. */
+const REBOUND_LET_BUILDER = `import { authorize } from "@lunora/server";
+${PREAMBLE}
+    let teamBuilder = c.mutation.use(authorize(() => true));
+    teamBuilder = c.mutation;
+
+    export const addTeamMember = teamBuilder.mutation(async ({ ctx }) => {
+        await ctx.db.insert("users", {});
+    });
+`;
+
 /** A procedure that attaches the imported gate value with `.use(teamAuthorize)`, the form a project reuses across files. */
 const IMPORTED_AUTHORIZE_VALUE_USER = `import { teamAuthorize } from "./guards";
 ${PREAMBLE}
@@ -1158,6 +1169,17 @@ describe("discoverProcedureMiddleware", () => {
 
         writeFileSync(join(workdir, "lunora", "guards.ts"), AUTHORIZE_VALUE_GUARD.replace("export const", "export let"), "utf8");
         writeFileSync(join(workdir, "lunora", "members.ts"), IMPORTED_AUTHORIZE_VALUE_USER, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found.find((procedure) => procedure.exportName === "addTeamMember")).toMatchObject({ usesAuthorize: false });
+    });
+
+    // A `let` builder can be rebound after its `authorize()` step, so the chain that runs may not carry the gate.
+    it("does not record a permission gate carried by a let builder that was rebound", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "members.ts"), REBOUND_LET_BUILDER, "utf8");
 
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
