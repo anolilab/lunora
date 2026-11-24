@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-import type { Middleware } from "./builder/types";
+import type { MiddlewareNext } from "./builder/types";
 
 /**
  * Whether the caller holds the permission a procedure needs. It reads the
@@ -23,9 +23,11 @@ type AuthorizeCheck<Context> = (context: Context) => boolean | Promise<boolean>;
  * permitted caller takes. The advisor trusts the declaration, not the check, so the
  * check itself must be the permission test.
  */
+// Generic over the context the builder hands in, so `.use()` keeps every field of it: a gate that
+// reads only `user` must not narrow the context the handler sees to `{ user }`.
 const authorize =
-    <Context extends object>(check: AuthorizeCheck<Context>): Middleware<Context, Context> =>
-    async ({ ctx, next }) => {
+    <Context extends object>(check: AuthorizeCheck<Context>) =>
+    async <Current extends Context>({ ctx, next }: { ctx: Current; next: MiddlewareNext<Current> }): Promise<Current> => {
         if (!(await check(ctx))) {
             throw new LunoraError("FORBIDDEN", "Permission required");
         }

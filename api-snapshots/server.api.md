@@ -3573,7 +3573,10 @@ const assertShapesDeclareReadPolicies: (shapes: Readonly<Record<string, ShapeGua
 ### `authorize` (const)
 
 ```ts
-const authorize: <Context extends object>(check: AuthorizeCheck<Context>) => Middleware<Context, Context>;
+const authorize: <Context extends object>(check: AuthorizeCheck<Context>) => <Current extends Context>({ ctx, next }: {
+    ctx: Current;
+    next: MiddlewareNext<Current>;
+}) => Promise<Current>;
 ```
 
 ### `beginDeferredDeletes` (const)
