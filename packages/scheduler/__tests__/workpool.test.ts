@@ -1332,6 +1332,37 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         expect(dispatchedIds(scheduler)).toContain(waiting);
     });
 
+    it("frees the slot once a re-fire the shard accepted completes, though the attempt before it never did", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const refired = await schedule(scheduler);
+        const owner = (state.storageMap.get(`id:${refired}`) as ScheduleRecord).dedupKey;
+
+        // The earlier attempt was lost: its /complete never comes.
+        heldByEarlierAttempt(state, refired);
+        scheduler.outcomes = ["hold"];
+
+        const kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        const drain = scheduler.alarm();
+
+        await kicked;
+        scheduler.onKick = undefined;
+        // The receiver reports the re-fire's completion before it answers the dispatch.
+        await scheduler.fetch(post("/complete", { attempt: scheduler.attempts[0], dedupKey: owner, id: refired, pool: "p" }));
+        scheduler.settleHeld?.(true);
+        await drain;
+
+        const waiting = await schedule(scheduler);
+
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).toContain(waiting);
+    });
+
     it("keeps a declined attempt's slot through a cancel when marking it failed, so a job reusing the id waits", async () => {
         expect.assertions(2);
 

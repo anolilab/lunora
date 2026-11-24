@@ -1428,18 +1428,24 @@ class SchedulerDO {
         };
 
         if (poolName !== undefined && outcome !== false) {
-            // A kick that went through (its /complete frees this attempt's share), or a decline for
-            // an attempt still running, whose claim, and so the attempt, the shard ends within the
-            // ceiling from now. A declined re-fire started nothing, so it gives up its own share, and
-            // the slot goes if the attempt before it settled meanwhile. A declined first dispatch
-            // keeps its share standing in for the attempt the shard says is running, whose token
-            // this slot never had: the ceiling frees it.
+            // A kick that went through: the shard took this delivery, so no attempt before it is
+            // still running there, and only this attempt's share is left, for its /complete (which
+            // the receiver sends before answering, so the slot goes if it already landed). Or a
+            // decline for an attempt still running, whose claim, and so the attempt, the shard ends
+            // within the ceiling from now. A declined re-fire started nothing, so it gives up its own
+            // share, and the slot goes if the attempt before it settled meanwhile. A declined first
+            // dispatch keeps its share standing in for the attempt the shard says is running, whose
+            // token this slot never had: the ceiling frees it.
             // Swallowed: a kicked job must never re-fire, and a throw from here would re-claim it.
             // Unmarked, the slot is still held by its owner, which is the safe side.
             await this.updateSlot(poolName, record, (slot) => {
                 const change = { at: now, kicked: true } as const;
 
-                return outcome === "in-progress" && reenteredFrom !== undefined ? withoutOwnAttempt(slot, change) : { ...slot, ...change };
+                if (outcome === true) {
+                    return attempt !== undefined && slot.attempts?.includes(attempt) === true ? { ...slot, ...change, attempts: [attempt] } : undefined;
+                }
+
+                return reenteredFrom === undefined ? { ...slot, ...change } : withoutOwnAttempt(slot, change);
             }).catch((error: unknown) => {
                 // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; a slot left unmarked cannot be freed by `/pool/release { id }`
                 console.warn(`@lunora/scheduler: job "${record.id}" kept its slot in pool "${poolName}" unmarked`, error);
