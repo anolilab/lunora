@@ -1454,7 +1454,7 @@ class SchedulerDO {
             // The kick failed and started nothing: this attempt's share goes. A re-fire puts back
             // the earlier attempt's start, so a retry.forever job failing every re-fire cannot keep
             // the slot past the ceiling from that start.
-            await this.updateSlot(poolName, record, (slot) => withoutOwnAttempt(slot, reenteredFrom === undefined ? {} : { at: reenteredFrom }));
+            await this.updateSlot(poolName, record, (slot) => withoutOwnAttempt(slot, reenteredFrom ?? {}));
         }
 
         // Cancelled mid-attempt: `/cancel` already removed this job's rows, and
@@ -1515,7 +1515,7 @@ class SchedulerDO {
      * Concurrency gate for a pooled record. Returns `false` (and re-arms the
      * job via {@link requeuePooled}) when the pool is at `maxConcurrency`;
      * otherwise the token naming this attempt's share of the slot, plus `reenteredFrom` (the start
-     * the slot had) when the record already holds a slot an earlier attempt kept. Non-pooled
+     * and kick mark the slot had) when the record already holds a slot an earlier attempt kept. Non-pooled
      * records get `{}` without touching any pool state.
      *
      * The pool row is read FRESH from storage on every call — never cached
@@ -1528,14 +1528,14 @@ class SchedulerDO {
      * both believing a slot was free — without it the pool oversubscribes past
      * `maxConcurrency` and one holder is dropped from `slots`.
      */
-    private async reservePoolSlot(record: ScheduleRecord): Promise<false | { attempt?: string; reenteredFrom?: number }> {
+    private async reservePoolSlot(record: ScheduleRecord): Promise<false | { attempt?: string; reenteredFrom?: Pick<PoolSlot, "at" | "kicked"> }> {
         const poolName = record.pool;
 
         if (poolName === undefined) {
             return {};
         }
 
-        const reserved = await this.withPoolLock(async (): Promise<false | { attempt: string; reenteredFrom?: number }> => {
+        const reserved = await this.withPoolLock(async (): Promise<false | { attempt: string; reenteredFrom?: Pick<PoolSlot, "at" | "kicked"> }> => {
             const pool = await this.loadPool(poolName);
             const owner = SchedulerDO.dedupKey(record);
             const now = Date.now();
@@ -1548,14 +1548,14 @@ class SchedulerDO {
             // backpressure its own re-fire forever. By owner and id: a new job under a reused id, or
             // another job sharing a fixed key, is another scheduling and queues for a slot of its own.
             if (held !== undefined) {
-                // Counted as running while this re-fire is in flight; drainRecord() puts the earlier
-                // start back if the kick fails.
-                await this.savePool(poolName, {
-                    ...pool,
-                    slots: pool.slots.map((slot) => (slot === held ? { ...slot, at: now, attempts: [...(slot.attempts ?? []), attempt] } : slot)),
-                });
+                // Counted as running while this re-fire is in flight, and unmarked, so the operator's
+                // `/pool/release { id }` leaves it to this dispatch; drainRecord() marks it again once
+                // the kick reached the origin, or puts the earlier start and mark back if it failed.
+                const refired: PoolSlot = { at: now, attempts: [...(held.attempts ?? []), attempt], id: held.id, owner: held.owner };
 
-                return { attempt, reenteredFrom: held.at };
+                await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot === held ? refired : slot)) });
+
+                return { attempt, reenteredFrom: held.kicked === true ? { at: held.at, kicked: true } : { at: held.at } };
             }
 
             if (pool.slots.length >= pool.maxConcurrency) {

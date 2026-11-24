@@ -1363,6 +1363,45 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         expect(dispatchedIds(scheduler)).toContain(waiting);
     });
 
+    it("keeps a re-fire's slot through an operator release by id, and puts the earlier mark back when the re-fire fails", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const refired = await schedule(scheduler);
+        const owner = (state.storageMap.get(`id:${refired}`) as ScheduleRecord).dedupKey ?? refired;
+
+        // An earlier attempt reached the origin (declined in progress) and still holds the slot.
+        state.storageMap.set("pool:p", {
+            inFlight: 1,
+            maxConcurrency: 1,
+            slots: [{ at: Date.now(), attempts: ["earlier"], id: refired, kicked: true, owner }],
+        });
+        scheduler.outcomes = ["hold"];
+
+        const kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        const drain = scheduler.alarm();
+
+        await kicked;
+        scheduler.onKick = undefined;
+        // `POST /pool/release { pool, id }` while the re-fire's dispatch is still settling.
+        await scheduler.fetch(post("/complete", { id: refired, pool: "p" }));
+
+        const waiting = await schedule(scheduler);
+
+        afterBackpressure();
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+
+        scheduler.settleHeld?.(false);
+        await drain;
+
+        expect(poolRow(state, "p")?.slots.map((slot) => slot.kicked)).toStrictEqual([true]);
+    });
+
     it("keeps a declined attempt's slot through a cancel when marking it failed, so a job reusing the id waits", async () => {
         expect.assertions(2);
 
