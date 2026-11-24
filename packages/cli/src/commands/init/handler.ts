@@ -1,11 +1,13 @@
 import {
-    constants as fsConstants,
+    closeSync,
     copyFileSync,
     existsSync,
+    fstatSync,
     linkSync,
     lstatSync,
     mkdirSync,
     mkdtempSync,
+    openSync,
     readdirSync,
     readFileSync,
     renameSync,
@@ -1135,7 +1137,7 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
  * Move the complete `temporaryPath` to `path` unless something already sits there, including a dangling
  * link, and fail with EEXIST if it does. A hard link creates `path` atomically, so a file created after
  * the caller's absence check is never replaced; a filesystem without hard links falls back to an
- * exclusive copy.
+ * exclusive create.
  */
 const publishExclusively = (temporaryPath: string, path: string): void => {
     try {
@@ -1151,16 +1153,24 @@ const publishExclusively = (temporaryPath: string, path: string): void => {
         }
     }
 
-    // An exclusive copy still fails with EEXIST on anything created meanwhile. It is not atomic, so a
-    // copy that fails part-way removes the file it created, which nothing else can have written.
+    // `wx` fails with EEXIST on anything created meanwhile. Writing through the descriptor is not atomic,
+    // so a write that fails part-way removes `path` only while it is still the file this run created.
+    const content = readFileSync(temporaryPath);
+    const descriptor = openSync(path, "wx");
+
     try {
-        copyFileSync(temporaryPath, path, fsConstants.COPYFILE_EXCL);
+        writeFileSync(descriptor, content);
     } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        const created = fstatSync(descriptor);
+        const current = lstatSync(path, { throwIfNoEntry: false });
+
+        if (current?.dev === created.dev && current.ino === created.ino) {
             rmSync(path, { force: true });
         }
 
         throw error;
+    } finally {
+        closeSync(descriptor);
     }
 
     rmSync(temporaryPath, { force: true });
