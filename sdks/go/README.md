@@ -50,8 +50,8 @@ messages, err := client.Query("messages:list", map[string]any{"channel": "genera
 _, err = client.Mutation("messages:send", map[string]any{"channel": "general", "text": "hi"}, "", "")
 _, err = client.Mutation("ledger:add", map[string]any{"amount": lunora.BigInt{Value: big.NewInt(1000)}}, "", "")
 
-// Live subscription: attach your socket (it sends connect first), then feed it frames.
-client.AttachSocket(func(frame map[string]any) error { return conn.WriteJSON(frame) }, nil)
+// Live subscription: attach your socket (it sends connect first), then feed its frames to handle.
+handle := client.AttachSocket(func(frame map[string]any) error { return conn.WriteJSON(frame) }, nil)
 unsubscribe := client.Subscribe("messages:list", args, onData, onError, "")
 ```
 
@@ -62,17 +62,19 @@ redirect would replay your bearer token to another host. With `net/http`:
 httpClient := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 ```
 
-`HandleFrame(raw)` is what you call with each inbound WebSocket message;
+The `FrameHandler` that `AttachSocket` returns is what you call with each inbound WebSocket
+message; once that socket is detached or replaced it ignores the frames a read loop still
+drains from it. `HandleFrame(raw)` applies a frame that came from no socket.
 `ResendSubscriptions()` re-subscribes everything after a reconnect — queries and
 shape views alike — carrying each one's resume cursor or checkpoint. It sends at most
 three query subscriptions at once (`ResubscribeConcurrency`), in subscribe order, as the
 reference client does, so a reconnect does not land every query on the shard in one burst.
-Each of the rest goes out when `HandleFrame` sees a frame for one already sent, or once one
+Each of the rest goes out when the handler sees a frame for one already sent, or once one
 has gone unanswered for 10 s (`ResubscribeAckTimeout`): `NextSubscriptionRetryAt()`
 includes that deadline, and `RetryDueSubscriptions(time.Now())` at or after it sends the
-next. Feed every frame to `HandleFrame` and pull `RetryDueSubscriptions` on that deadline
-(a retry hint on a subscription error arms the same one). Shape subscriptions all go out at
-once. A subscription whose args no longer encode makes `ResendSubscriptions` return the
+next, one at a time and in order. Feed every frame to the handler and pull
+`RetryDueSubscriptions` on that deadline (a retry hint on a subscription error arms the
+same one). Shape subscriptions all go out at once. A subscription whose args no longer encode makes `ResendSubscriptions` return the
 error before it sends anything; one that stops encoding while it waits its turn is skipped. A
 frame
 that is not shaped like any server frame is ignored without panicking, and a
@@ -112,7 +114,7 @@ never queued. `ConnectRoom(name, listener)` joins `room:<name>` and returns a `*
 `Send` and `Close`. A room join is never acknowledged, so there is nothing to wait for.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
-(`HandleFrame` returns the frame's type). Each new socket attaches (which sends `connect`
+(the handler returns the frame's type). Each new socket attaches (which sends `connect`
 first), then resubscribes and flushes that shard's offline queue; if the attach or the
 resend fails, the socket is dropped and the loop backs off. A flush that requeues writes
 (or returns `RetryAfterMs`) must schedule its own retry, or those writes wait for the next
@@ -171,7 +173,7 @@ for attempt := 0; ; attempt++ {
 		// on another goroutine cannot write ahead of connect.
 		var closeCode int     // 0 until the socket reports a close
 		var closeReason string // "" with no close frame
-		client.AttachSocket(write, nil)
+		handle := client.AttachSocket(write, nil)
 		// Frees a re-subscribe slot nobody answered and serves retry hints. Owned by this
 		// socket run and stopped before it detaches, so it never writes to the next socket.
 		// Waking at least every second sees a deadline armed after it went to sleep.
@@ -199,7 +201,7 @@ for attempt := 0; ; attempt++ {
 					closeCode, closeReason = closeFrameOf(err) // your library's close code and reason
 					break
 				}
-				if t, _ := client.HandleFrame(raw); t == "ack" {
+				if t, _ := handle(raw); t == "ack" {
 					attempt = 0
 				}
 			}

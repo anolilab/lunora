@@ -537,3 +537,131 @@ func TestResubscribePacingShapeSubscriptionsAreNotPaced(t *testing.T) {
 		t.Fatalf("every shape subscription goes out at once, got %d", shapes)
 	}
 }
+
+func TestResubscribePacingAQueuedOneStaysFrozenWhileAnEarlierOneIsWritten(t *testing.T) {
+	var (
+		client      *Client
+		frozenAtOne []bool
+	)
+
+	client, _ = pacedClient(pacedSubscriptions, func(frame map[string]any) error {
+		if frame["type"] == "subscribe" && frame["id"] == "sub_1" {
+			frozenAtOne = append(frozenAtOne, client.subscriptions["sub_2"].poisoned)
+		}
+
+		return nil
+	})
+
+	client.mu.Lock()
+	client.subscriptions["sub_2"].poisoned = true
+	client.mu.Unlock()
+
+	if err := client.ResendSubscriptions(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(frozenAtOne) != 1 || !frozenAtOne[0] {
+		t.Fatalf("a subscription stays frozen until its own frame goes out: %v", frozenAtOne)
+	}
+
+	if client.subscriptions["sub_2"].poisoned {
+		t.Fatal("its own frame lifts the freeze")
+	}
+}
+
+func TestResubscribePacingAReplyDuringTheFirstWindowDoesNotJumpTheQueue(t *testing.T) {
+	var (
+		client *Client
+		sent   []map[string]any
+	)
+
+	client, _ = pacedClient(pacedSubscriptions, func(frame map[string]any) error {
+		sent = append(sent, frame)
+
+		// The read loop answers sub_1 while the resend is still writing it.
+		if frame["type"] == "subscribe" && frame["id"] == "sub_1" {
+			handle(t, client, ackFrame("sub_1"))
+		}
+
+		return nil
+	})
+	sent = nil
+
+	if err := client.ResendSubscriptions(); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"sub_1", "sub_2", "sub_3", "sub_4"}
+	if got := subscribeIDs(sent); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("the freed slot's query goes out after the window, in subscribe order: got %v, want %v", got, want)
+	}
+}
+
+func TestResubscribePacingASocketReplacedMidWindowGetsNoMoreOfIt(t *testing.T) {
+	var (
+		client *Client
+		onOld  []map[string]any
+		onNew  []map[string]any
+	)
+
+	client, _ = pacedClient(pacedSubscriptions, func(frame map[string]any) error {
+		onOld = append(onOld, frame)
+
+		if frame["type"] == "subscribe" && frame["id"] == "sub_1" {
+			client.AttachSocket(recordTo(&onNew), nil)
+		}
+
+		return nil
+	})
+	onOld = nil
+
+	if err := client.ResendSubscriptions(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := subscribeIDs(onOld); len(got) != 1 {
+		t.Fatalf("nothing more of the window goes to the replaced socket: got %v", got)
+	}
+
+	if got := subscribeIDs(onNew); len(got) != 0 {
+		t.Fatalf("the new socket's own resend sends its queries, not the old run: got %v", got)
+	}
+}
+
+func TestResubscribePacingAReplacedSocketsLateFrameIsIgnored(t *testing.T) {
+	var sent []map[string]any
+
+	client, _ := pacedClient(pacedSubscriptions, func(map[string]any) error { return nil })
+	old := client.AttachSocket(func(map[string]any) error { return nil }, nil)
+
+	if err := client.ResendSubscriptions(); err != nil {
+		t.Fatal(err)
+	}
+
+	current := client.AttachSocket(recordTo(&sent), nil)
+	sent = nil
+
+	if err := client.ResendSubscriptions(); err != nil {
+		t.Fatal(err)
+	}
+
+	if kind, err := old([]byte(`{"cursor":9,"data":[],"id":"sub_1","type":"data"}`)); err != nil || kind != "" {
+		t.Fatalf("the replaced socket's frame is ignored: kind=%q err=%v", kind, err)
+	}
+
+	if client.subscriptions["sub_1"].cursor != nil {
+		t.Fatal("the replaced socket's frame does not move the cursor")
+	}
+
+	if got := len(subscribeIDs(sent)); got != ResubscribeConcurrency {
+		t.Fatalf("the replaced socket's frame frees no slot: got %d subscribes", got)
+	}
+
+	if kind, err := current(ackFrame("sub_1")); err != nil || kind != "ack" {
+		t.Fatalf("the current socket's frame is applied: kind=%q err=%v", kind, err)
+	}
+
+	if got := len(subscribeIDs(sent)); got != ResubscribeConcurrency+1 {
+		t.Fatalf("the current socket's reply frees its slot: got %d subscribes", got)
+	}
+}
