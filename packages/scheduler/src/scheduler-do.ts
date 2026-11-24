@@ -1422,7 +1422,7 @@ class SchedulerDO {
         const ok = outcome === true;
         const poolName = record.pool;
         const now = Date.now();
-        const { attempt, reenteredFrom } = reserved;
+        const { attempt, reenteredAt, reenteredFrom } = reserved;
         const withoutOwnAttempt = (slot: PoolSlot, change: Partial<PoolSlot>): PoolSlot | undefined => {
             const attempts = (slot.attempts ?? []).filter((token) => token !== attempt);
 
@@ -1456,7 +1456,11 @@ class SchedulerDO {
             // The kick failed and started nothing: this attempt's share goes. A re-fire puts back
             // the earlier attempt's start, so a retry.forever job failing every re-fire cannot keep
             // the slot past the ceiling from that start.
-            await this.updateSlot(poolName, record, (slot) => withoutOwnAttempt(slot, reenteredFrom ?? {}));
+            // Only while the start is still the one this re-fire wrote: a renewal since then is the
+            // earlier attempt saying it still runs, and putting the old start back would expire it.
+            await this.updateSlot(poolName, record, (slot) =>
+                withoutOwnAttempt(slot, reenteredFrom === undefined ? {} : { ...reenteredFrom, at: slot.at === reenteredAt ? reenteredFrom.at : slot.at }),
+            );
         }
 
         // Cancelled mid-attempt: `/cancel` already removed this job's rows, and
@@ -1517,7 +1521,8 @@ class SchedulerDO {
      * Concurrency gate for a pooled record. Returns `false` (and re-arms the
      * job via {@link requeuePooled}) when the pool is at `maxConcurrency`;
      * otherwise the token naming this attempt's share of the slot, plus `reenteredFrom` (the start
-     * and kick mark the slot had) when the record already holds a slot an earlier attempt kept. Non-pooled
+     * and kick mark the slot had) and `reenteredAt` (the start this re-fire wrote) when the record
+     * already holds a slot an earlier attempt kept. Non-pooled
      * records get `{}` without touching any pool state.
      *
      * The pool row is read FRESH from storage on every call — never cached
@@ -1530,49 +1535,53 @@ class SchedulerDO {
      * both believing a slot was free — without it the pool oversubscribes past
      * `maxConcurrency` and one holder is dropped from `slots`.
      */
-    private async reservePoolSlot(record: ScheduleRecord): Promise<false | { attempt?: string; reenteredFrom?: Pick<PoolSlot, "at" | "kicked"> }> {
+    private async reservePoolSlot(
+        record: ScheduleRecord,
+    ): Promise<false | { attempt?: string; reenteredAt?: number; reenteredFrom?: Pick<PoolSlot, "at" | "kicked"> }> {
         const poolName = record.pool;
 
         if (poolName === undefined) {
             return {};
         }
 
-        const reserved = await this.withPoolLock(async (): Promise<false | { attempt: string; reenteredFrom?: Pick<PoolSlot, "at" | "kicked"> }> => {
-            const pool = await this.loadPool(poolName);
-            const owner = SchedulerDO.dedupKey(record);
-            const now = Date.now();
-            const attempt = crypto.randomUUID();
-            const held = pool.slots.find((slot) => SchedulerDO.holds(slot, record.id, owner));
+        const reserved = await this.withPoolLock(
+            async (): Promise<false | { attempt: string; reenteredAt?: number; reenteredFrom?: Pick<PoolSlot, "at" | "kicked"> }> => {
+                const pool = await this.loadPool(poolName);
+                const owner = SchedulerDO.dedupKey(record);
+                const now = Date.now();
+                const attempt = crypto.randomUUID();
+                const held = pool.slots.find((slot) => SchedulerDO.holds(slot, record.id, owner));
 
-            // Re-entry before the cap: a record still holding its slot (an earlier attempt was
-            // declined in-progress or lost with its instance, and that slot is kept until the
-            // attempt settles) counts against the cap itself, so checking the cap first would
-            // backpressure its own re-fire forever. By owner and id: a new job under a reused id, or
-            // another job sharing a fixed key, is another scheduling and queues for a slot of its own.
-            if (held !== undefined) {
-                // Counted as running while this re-fire is in flight, and unmarked, so the operator's
-                // `/pool/release { id }` leaves it to this dispatch; drainRecord() marks it again once
-                // the kick reached the origin, or puts the earlier start and mark back if it failed.
-                const refired: PoolSlot = { at: now, attempts: [...(held.attempts ?? []), attempt], id: held.id, owner: held.owner };
+                // Re-entry before the cap: a record still holding its slot (an earlier attempt was
+                // declined in-progress or lost with its instance, and that slot is kept until the
+                // attempt settles) counts against the cap itself, so checking the cap first would
+                // backpressure its own re-fire forever. By owner and id: a new job under a reused id, or
+                // another job sharing a fixed key, is another scheduling and queues for a slot of its own.
+                if (held !== undefined) {
+                    // Counted as running while this re-fire is in flight, and unmarked, so the operator's
+                    // `/pool/release { id }` leaves it to this dispatch; drainRecord() marks it again once
+                    // the kick reached the origin, or puts the earlier start and mark back if it failed.
+                    const refired: PoolSlot = { at: now, attempts: [...(held.attempts ?? []), attempt], id: held.id, owner: held.owner };
 
-                await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot === held ? refired : slot)) });
+                    await this.savePool(poolName, { ...pool, slots: pool.slots.map((slot) => (slot === held ? refired : slot)) });
 
-                return { attempt, reenteredFrom: held.kicked === true ? { at: held.at, kicked: true } : { at: held.at } };
-            }
+                    return { attempt, reenteredAt: now, reenteredFrom: held.kicked === true ? { at: held.at, kicked: true } : { at: held.at } };
+                }
 
-            if (pool.slots.length >= pool.maxConcurrency) {
-                return false;
-            }
+                if (pool.slots.length >= pool.maxConcurrency) {
+                    return false;
+                }
 
-            // Reserve a slot durably BEFORE dispatching so neither a concurrent
-            // alarm nor a sibling lane in this same pass can oversubscribe the
-            // pool.
-            const slots = [...pool.slots, { at: now, attempts: [attempt], id: record.id, owner }];
+                // Reserve a slot durably BEFORE dispatching so neither a concurrent
+                // alarm nor a sibling lane in this same pass can oversubscribe the
+                // pool.
+                const slots = [...pool.slots, { at: now, attempts: [attempt], id: record.id, owner }];
 
-            await this.savePool(poolName, { ...pool, inFlight: slots.length, slots });
+                await this.savePool(poolName, { ...pool, inFlight: slots.length, slots });
 
-            return { attempt };
-        });
+                return { attempt };
+            },
+        );
 
         if (reserved === false) {
             // Backpressure, not failure: re-arm outside the lock — it writes only

@@ -1439,6 +1439,56 @@ describe("schedulerDO — a slot whose attempt may still be running", () => {
         expect(dispatchedIds(scheduler)).toContain(waiting);
     });
 
+    it("keeps a renewal the running attempt made while a re-fire beside it failed", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new ScriptedScheduler(state, origin);
+        const refired = await schedule(scheduler, { retry: { baseMs: DISPATCH_LEASE_MS, maxAttempts: 5 } });
+        const owner = (state.storageMap.get(`id:${refired}`) as ScheduleRecord).dedupKey;
+
+        heldByEarlierAttempt(state, refired);
+        advance(600_000);
+        scheduler.outcomes = ["hold"];
+
+        const kicked = new Promise<void>((resolve) => {
+            scheduler.onKick = resolve;
+        });
+        const drain = scheduler.alarm();
+
+        await kicked;
+        scheduler.onKick = undefined;
+        advance(60_000);
+        // The attempt the slot was held for is still running, and says so.
+        await scheduler.fetch(post("/pool/renew", { attempt: "earlier", dedupKey: owner, id: refired, pool: "p" }));
+        scheduler.settleHeld?.(false);
+        await drain;
+
+        const waiting = await schedule(scheduler);
+
+        // Past the ceiling from the slot's first start, inside the one from its renewal.
+        advance(DISPATCH_LEASE_MS - 600_000);
+        await scheduler.alarm();
+
+        expect(dispatchedIds(scheduler)).not.toContain(waiting);
+    });
+
+    it.each([
+        ["a body that is not JSON", "{"],
+        ["a body without an attempt", JSON.stringify({ dedupKey: "key", id: "job", pool: "p" })],
+        ["an id that is not a string", JSON.stringify({ attempt: "a", dedupKey: "key", id: 7, pool: "p" })],
+    ])("refuses a renewal with %s", async (_case, body) => {
+        expect.assertions(2);
+
+        const scheduler = new ScriptedScheduler(createFakeState(), origin);
+        const response = await scheduler.fetch(
+            new Request("https://scheduler.internal/pool/renew", { body, headers: { "content-type": "application/json" }, method: "POST" }),
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "INVALID_INPUT" } });
+    });
+
     it("renews nothing for an attempt the slot does not list", async () => {
         expect.assertions(1);
 
