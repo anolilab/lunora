@@ -3,6 +3,8 @@
 **Baseline:** `94de493ad` (`origin/alpha`, 2026-11-24). First written against `4a7c48bfd` (2026-11-11).
 **Status:** workstream 0 DONE (design below). Workstream 1 on `refactor/shard-do-split-design`
 (PR #1691), one commit per step: steps 1, 2, 3 and 5 DONE; steps 4 and 6-10 STOPPED by R6 (§6).
+The per-frame-type split of `handleWebSocketMessage` is DONE. The conflict replay (§7) showed that no
+further split of this file buys meaningfully fewer merge conflicts, so the work ends here.
 `shard-do.ts`: 21,278 → 19,573 lines.
 **Priority / effort / risk:** P3 / L / MED. **Category:** tech-debt.
 
@@ -144,8 +146,8 @@ These stay in `shard-do.ts` for good: the entry points (Cloudflare calls them on
 subclass hooks, the request scope, the transaction, mutation-bookkeeping and dispatch core,
 `ctx.db`, telemetry, and the admin dispatch table. Module-level helpers move with the cluster that
 uses them (the schedule-outbox helpers at the top of the file went with step 5). The original
-estimate, 10-12k lines after step 10, assumed the reactive engine could move. It cannot under R6
-(§6), so the file stays around 19.5k until the redesign in §6 is planned.
+estimate, 10-12k lines after step 10, assumed the reactive engine could move one cluster at a time.
+It cannot (§6), and moving it whole is not worth it (§7), so the file stays around 19.5k lines.
 
 ## 4. How a moved cluster gets its state (D2)
 
@@ -267,19 +269,62 @@ measured, now measured cluster by cluster. Moving the attachment cache alone wou
 0), but it rewrites 64 call sites across the file for about 100 lines and shrinks the other hosts by
 only 2 entries. That is more conflict surface, the opposite of the goal.
 
-**What it would take.** The reactive engine needs a new seam, not a move: a per-socket object that
-owns the attachment, its delivery permit and its frame sending, which the subscription, shape, live
-and room paths would take as a parameter instead of reaching back into `ShardDO`. That changes how
-those paths are structured, so it is a redesign with its own plan and benches, not a pure move. Step
-4 (alarm admission) is also not worth revisiting on its own: the breaker logic already lives in its
-modules, and what is left on the class is mostly the telemetry calls.
+**Moved together, the reactive engine passes R6, but it is not worth moving.** Subscriptions,
+shapes, global poll, the change accumulator and delivery authorization as one module, with every
+protected member left on the class so subclass overrides keep running (`broadcastDelta`,
+`matchesSubscription` and `readShapeCdcKeys` are overridden in tests): 119 members removed, 40
+added, a 63-entry host. Live and rooms together: 59 removed, 27 added, 27 host entries. §7 shows
+why that is still the wrong trade. A per-socket object (attachment, delivery permit, frame sending)
+would cut each host by only about 5 entries, so it does not change the verdict. Step 4 (alarm
+admission) is not worth revisiting either: the breaker logic already lives in its modules, and what
+is left on the class is mostly the telemetry calls.
 
-## 7. Platform parity
+## 7. Where the conflicts actually come from
+
+Measured, not assumed. **Replay:** each of the 121 non-release commits to `shard-do.ts` in the 90
+days before the baseline is applied (`patch --fuzz=0`, 3 lines of context) to the parent of each of
+the 1-3 commits before it, as if the two had been written concurrently. 97 of the 357 pairs (27%)
+fail. Where the failing hunks land:
+
+| Region               | Failing hunks | Notes                                                                                                               |
+| -------------------- | ------------: | ------------------------------------------------------------------------------------------------------------------- |
+| method bodies        |           226 | `handleFetchCloudflare` 19, `handleWebSocketMessage` 16, then the reactive methods (~40) and the outbox (14, moved) |
+| class field block    |            19 | (and ~19 more attributed to the first class member, which is the field block)                                       |
+| import block         |            16 |                                                                                                                     |
+| module-level helpers |            16 |                                                                                                                     |
+
+**Only 12 of the 97 conflicting pairs conflict only in the shared regions** (imports, module-level
+code, fields). Those are the only conflicts that moving code into its own module removes, since the
+moved code takes its imports and fields with it. Another 29 pairs have a shared-region hunk as
+well as a method-body hunk. The other 56 conflict only inside method bodies: two commits changing the
+same logic. Git conflicts on textual proximity, so neither a new file nor a new method boundary
+separates them, because the moved lines keep their neighbours.
+
+By cluster: the code that stays on the class (entry points, dispatch, admin, hooks, request scope,
+telemetry) is touched by 109 of the 121 commits. The reactive engine is touched by 48, but only 5
+commits touched it alone. Moving it would take about 6% of commits off `shard-do.ts`, and every one
+of its method-body conflicts would happen in the new module instead.
+
+**Conclusion.** The four extractions (steps 1, 2, 3, 5) were worth their cost. They were cheap, they
+took self-contained subsystems with their imports and fields out of the shared regions, and each one
+gave a collaborator that tests can drive directly. Further splitting is not justified by conflicts.
+The remaining conflict rate is concurrent work on the same dispatch, socket and subscription logic,
+and that is a scheduling question (stack or sequence the PRs that touch those paths), not a file
+layout one.
+
+**The per-frame-type split** of `handleWebSocketMessage` is kept for what it does buy: one method per
+frame type to read and review, and complexity disables scoped to the two handlers that need them.
+It is not a conflict fix, for the reason above. `handleFetchCloudflare` is not split. Its `try`,
+`catch` and `finally` share `let` state across the whole dispatch lifecycle (`dispatchError`,
+`dispatchServerFault`, `heldClaim`, `dispatchScope`, `sensitive`), it is the most security-sensitive
+path in the class, and splitting it would buy no conflict relief.
+
+## 8. Platform parity
 
 Not applicable: no `ctx.*` surface, binding, host contract or wire change. Every collaborator reaches
 the platform only through what `ShardDO` already holds (`ShardHost`, `SocketHost`, `env`).
 
-## 8. Risks and STOP conditions
+## 9. Risks and STOP conditions
 
 - **Callback bag** (the #522 failure): R6 stops a step if it adds as many members as it removes.
 - **Hidden ordering:** a collaborator's thunk reads its value at call time, as the method did
@@ -289,10 +334,11 @@ the platform only through what `ShardDO` already holds (`ShardHost`, `SocketHost
 - **Perf:** one extra property hop and thunk call per host access. Negligible off the hot path
   (registration runs past the response). For steps 2 and 7-10, the benches are a gate.
 
-## 9. Open questions
+## 10. Open questions
 
 1. `create-worker.ts` is handled separately by plan 622 (spike done, PR #1646), so it is out of scope here.
 2. R7 relaxes the earlier "tests unchanged" gate to "assertions unchanged; cast-reach access paths
    may be retargeted". The maintainer asked for every step on one branch; step 2 applied R7 to three
    lines, listed in its commit. Confirm it in review.
-3. Whether the per-socket seam for the reactive engine (§6) is worth a plan of its own.
+3. None left for this plan. If the conflict rate on the dispatch and subscription paths keeps hurting,
+   the lever is PR sequencing on those paths (§7), not another split.
