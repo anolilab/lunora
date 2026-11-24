@@ -97,10 +97,8 @@ describe("agent-loop tool telemetry", () => {
             step: journal,
         });
 
-        await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-        });
-
+        // The loop's run-end flush POSTs synchronously and the stubbed fetch reads
+        // the body before it returns, so the resolved run is the milestone.
         expect(toolRuns).toBe(1);
         expect(names).toStrictEqual(["execute_tool getWeather"]);
 
@@ -147,10 +145,7 @@ describe("agent-loop tool telemetry", () => {
                 step: journal,
             });
 
-            await new Promise((resolve) => {
-                setTimeout(resolve, 20);
-            });
-
+            // Resolved only after the run-end flush has POSTed what it buffered.
             vi.unstubAllGlobals();
 
             return names;
@@ -284,14 +279,16 @@ describe("traceToolExecution — the wrapper cannot decide the tool's outcome", 
     it("executes the tool exactly once when the wrapper starts it without awaiting", async () => {
         expect.assertions(2);
 
+        const started = Promise.withResolvers<undefined>();
+        const release = Promise.withResolvers<undefined>();
         const execute = vi.fn<() => Promise<string>>(async () => {
-            await new Promise((resolve) => {
-                setTimeout(resolve, 5);
-            });
+            started.resolve(undefined);
+            // Held open, so the tool is still running when the wrapper returns.
+            await release.promise;
 
             return "real";
         });
-        const output = await traceToolExecution(
+        const pending = traceToolExecution(
             telemetryWith(((options: { execute: () => Promise<unknown> }) => {
                 // Started, deliberately not awaited — the memoized promise is what
                 // keeps this from running the tool a second time.
@@ -302,6 +299,11 @@ describe("traceToolExecution — the wrapper cannot decide the tool's outcome", 
             call,
             execute,
         );
+
+        await started.promise;
+        release.resolve(undefined);
+
+        const output = await pending;
 
         expect(execute).toHaveBeenCalledTimes(1);
         expect(output).toBe("real");

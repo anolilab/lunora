@@ -4,10 +4,6 @@
         "reason": "kept: `streamingModel` spaces its parts `gapMs` apart in real time. No test waits on it; it is the elapsed time the braintrust/otlp/sentry streamed cases floor the span duration at, and it keeps the shared-integration abort cases' two runs interleaved."
     },
     {
-        "file": "packages/agent/__tests__/telemetry/tool-execution.test.ts",
-        "reason": "pending conversion"
-    },
-    {
         "file": "packages/ai/__tests__/lazy-gateway.test.ts",
         "reason": "pending conversion"
     },
