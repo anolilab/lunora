@@ -48,7 +48,7 @@ const seedDue = async (stub: DurableObjectStub<TestSchedulerDO>, count: number, 
         }
 
         if (typeof extra.pool === "string") {
-            await state.storage.put(`pool:${extra.pool}`, { inFlight: 0, inFlightIds: [], maxConcurrency: extra.maxConcurrency ?? 1 });
+            await state.storage.put(`pool:${extra.pool}`, { inFlight: 0, maxConcurrency: extra.maxConcurrency ?? 1, slots: [] });
         }
     });
 };
@@ -199,9 +199,9 @@ describe("schedulerDO (workerd)", () => {
             expect(instance.peakInFlight).toBe(3);
             expect(instance.dispatched).toHaveLength(3);
 
-            const pool = await state.storage.get<{ inFlight: number; inFlightIds: string[] }>("pool:p");
+            const pool = await state.storage.get<{ inFlight: number; slots: unknown[] }>("pool:p");
 
-            expect(pool?.inFlightIds).toHaveLength(3);
+            expect(pool?.slots).toHaveLength(3);
 
             // The two over the cap were re-armed as backpressure and still hold
             // both of their rows.

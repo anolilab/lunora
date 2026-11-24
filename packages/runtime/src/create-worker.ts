@@ -3242,6 +3242,9 @@ const assertX402Configurable = (options: WorkerOptions): void => {
     }
 };
 
+/** A decline from the shard's claim path: the header only that path sets, so a handler's own 409 is not one. */
+const isClaimDecline = (response: Response): boolean => response.status === 409 && response.headers.get(DISPATCH_DECLINED_HEADER) === "1";
+
 /**
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
  * be re-exported directly as `export default createWorker(...)`.
@@ -4178,15 +4181,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      *
      * Best-effort in the sense that a failure must not fail the dispatch the
      * scheduler awaits — but understand what that costs: there is NO
-     * reconciliation and NO lease. `reservePoolSlot` increments a durable counter
-     * and only a matching `/complete` decrements it, so a swallowed release leaks
+     * reconciliation and NO lease. `reservePoolSlot` holds a durable slot for the
+     * scheduling and only a `/complete` naming it frees it, so a swallowed release leaks
      * that slot for the lifetime of the pool. At the default `maxConcurrency: 1`
      * one leak wedges the pool permanently, with every later job re-arming the
      * alarm every 1000 ms and never running. Every early return from a dispatch
      * that reserved a slot must reach this call — except a claim decline, whose
      * slot belongs to the attempt still running (see {@link handleSchedulerDispatch}).
      */
-    const releasePoolSlot = async (candidate: { id?: unknown; instanceName?: unknown; pool?: unknown }): Promise<void> => {
+    const releasePoolSlot = async (candidate: { dedupKey?: unknown; id?: unknown; instanceName?: unknown; pool?: unknown }): Promise<void> => {
         const pool = typeof candidate.pool === "string" && candidate.pool.length > 0 ? candidate.pool : undefined;
 
         if (!pool || !schedulerDO || typeof candidate.id !== "string") {
@@ -4198,7 +4201,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         try {
             await resolveShard(schedulerDO, instanceName).fetch(
                 new Request("https://scheduler.internal/complete", {
-                    body: JSON.stringify({ id: candidate.id, pool }),
+                    // The key names the scheduling that owns the slot; the id alone may since belong
+                    // to a new job holding a slot of its own. Both callers run after the dispatch
+                    // handler checked the key.
+                    body: JSON.stringify({ dedupKey: candidate.dedupKey, id: candidate.id, pool }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
                 }),
@@ -4281,7 +4287,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // record id is the fallback for a body that carries no key. Derived BEFORE the workflow
         // branch below, which returns: that branch is exactly the one the scheduler's retry loop
         // re-fires, and leaving it without an id let one scheduled workflow run its whole
-        // pipeline once per retry attempt. `candidate.id` itself stays the pool-slot identity.
+        // pipeline once per retry attempt. The key also names the pool slot this job owns.
         const recordId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
         // A supplied key the SchedulerDO would have refused is a forged or hand-built body: refuse
         // it here, or a header-illegal character makes the shard forward's `new Request` throw.
@@ -4357,7 +4363,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // attempt is still running: its own dispatch releases the slot when it settles, or the
         // scheduler's next re-fire of the record does if that one was cut off. Releasing here
         // would let another pooled job run beside it past `maxConcurrency`.
-        if (response.status === 409 && response.headers.get(DISPATCH_DECLINED_HEADER) === "1") {
+        if (isClaimDecline(response)) {
             return response;
         }
 

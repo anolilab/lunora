@@ -144,7 +144,9 @@ const buildScheduledAdminRoutes = (deps: ScheduledAdminRouteDeps): Record<string
      * `id` is OPTIONAL on purpose: `/status` reports slot counts, not the ids
      * holding them, so an operator staring at a wedged pool usually cannot name
      * the leaked job. Omitting it takes the DO's best-effort "drop one held slot"
-     * path, which is precisely the recovery wanted here.
+     * path, which is precisely the recovery wanted here. With an id, the DO frees
+     * every slot a job under that id holds once its kick went through; a job
+     * under that id whose dispatch is still settling keeps its slot.
      */
     const handlePoolRelease = async (request: Request): Promise<Response> => {
         if (request.method !== "POST") {

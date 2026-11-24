@@ -80,11 +80,12 @@ describe("createWorker — workpool slot release", () => {
         const sched = schedulerSpy();
         const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
 
-        await dispatch(worker, { args: {}, functionPath: "jobs:sweep", id: "job-1", instanceName: "tenant-a", pool: "stripe" });
+        await dispatch(worker, { args: {}, dedupKey: "job-1-first", functionPath: "jobs:sweep", id: "job-1", instanceName: "tenant-a", pool: "stripe" });
 
         const complete = sched.calls.find((call) => call.path === "/complete");
 
-        expect(complete?.body).toStrictEqual({ id: "job-1", pool: "stripe" });
+        // The key names the scheduling that owns the slot: a later job under the same id owns another.
+        expect(complete?.body).toStrictEqual({ dedupKey: "job-1-first", id: "job-1", pool: "stripe" });
         expect(complete?.instance).toBe("tenant-a");
         expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
     });
@@ -469,7 +470,7 @@ describe("createWorker — scheduled dispatch idempotency key", () => {
 });
 
 describe("createWorker — scheduled dispatch per-record dedup key", () => {
-    it("spends the scheduler's dedupKey as the shard mutation id and still releases the slot by record id", async () => {
+    it("spends the scheduler's dedupKey as the shard mutation id and releases the slot it owns", async () => {
         expect.assertions(2);
 
         const seen: Headers[] = [];
@@ -494,7 +495,11 @@ describe("createWorker — scheduled dispatch per-record dedup key", () => {
 
         // A reused id's previous job left its dedup row under the bare id; the key is per scheduling.
         expect(seen[0]?.get("x-lunora-mutation-id")).toBe("sync-user-1700000000000");
-        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({ id: "sync-user", pool: "sync" });
+        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({
+            dedupKey: "sync-user-1700000000000",
+            id: "sync-user",
+            pool: "sync",
+        });
     });
 
     it("refuses a dedupKey the SchedulerDO would not have written with 400 INVALID_INPUT, never reaching the shard", async () => {
@@ -545,7 +550,7 @@ describe("createWorker — scheduled dispatch per-record dedup key", () => {
         await dispatchWithEnv(worker, { args: {}, dedupKey: "digest-1700000000000", id: "digest", pool: "digests", workflow: "AGENT_SUPPORT" }, env);
 
         expect(created).toStrictEqual([{ id: "digest-1700000000000", params: {} }]);
-        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({ id: "digest", pool: "digests" });
+        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({ dedupKey: "digest-1700000000000", id: "digest", pool: "digests" });
     });
 });
 

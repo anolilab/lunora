@@ -643,7 +643,7 @@ describe("schedulerDO dispatch lease — claiming an already-leased record", () 
         // Another job now holds the only slot (the lost attempt's has been released), so the
         // re-claim meets a saturated pool and is re-armed as backpressure without dispatching.
         // The stale lease key must not survive that either.
-        state.storageMap.set("pool:p", { inFlight: 1, inFlightIds: ["other"], maxConcurrency: 1 });
+        state.storageMap.set("pool:p", { inFlight: 1, maxConcurrency: 1, slots: [{ id: "other", kicked: true, owner: "other-key" }] });
         advanceTo(at + DISPATCH_LEASE_MS + 1);
 
         await successor.alarm();
@@ -670,7 +670,7 @@ describe("schedulerDO dispatch lease — claiming an already-leased record", () 
 
         expect(successor.started).toStrictEqual(["job-0"]);
         expect(indexKeysFor(state.storageMap, "job-0")).toHaveLength(1);
-        expect((state.storageMap.get("pool:p") as { inFlightIds: string[] }).inFlightIds).toStrictEqual(["job-0"]);
+        expect((state.storageMap.get("pool:p") as { slots: { id: string }[] }).slots.map((slot) => slot.id)).toStrictEqual(["job-0"]);
 
         successor.releaseAll();
         await redrain;
