@@ -908,6 +908,11 @@ class LunoraClient {
     _pumpResubscribes(sender, generation, raiseErrors: true);
 
     for (final frame in shapeFrames) {
+      // A query write above may have replaced the socket, whose own resend sends these.
+      if (_closed || generation != _attachGeneration) {
+        return;
+      }
+
       sender(frame);
     }
   }
@@ -1248,7 +1253,28 @@ class LunoraClient {
       return null;
     }
 
-    return parsed is Map<String, Object?> ? _dispatch(parsed) : null;
+    if (parsed is! Map<String, Object?>) {
+      return null;
+    }
+
+    // ANY frame bearing a re-sent subscription's id proves the server has taken it off its plate: an
+    // `ack`, but equally the `error` that refuses it or a `data` that overtakes its ack. Releasing
+    // here rather than per type keeps an unanticipated frame, or a case that returns early, from
+    // stalling the drain.
+    final id = parsed['id'];
+    final pacedSender = _send;
+    final pacedGeneration = _attachGeneration;
+    final released = id is String && _releaseResubscribeSlot(id);
+
+    try {
+      return _dispatch(parsed);
+    } finally {
+      // Pumped once this frame is applied, whichever case returns: a write the pump makes can replace
+      // the socket, and a frame read before that must not land after the new socket's.
+      if (released && pacedSender != null) {
+        _pumpResubscribes(pacedSender, pacedGeneration, raiseErrors: false);
+      }
+    }
   }
 
   String? _dispatch(Map<String, Object?> frame) {
@@ -1261,16 +1287,6 @@ class LunoraClient {
     // carrying no hint, which the error case decides.
     if (id != null && kind == 'ack') {
       _pendingRetries.remove(id);
-    }
-
-    // ANY frame bearing a re-sent subscription's id proves the server has taken it off its plate: an
-    // `ack`, but equally the `error` that refuses it or a `data` that overtakes its ack. Releasing
-    // here rather than per type keeps an unanticipated frame, or a case that returns early, from
-    // stalling the drain.
-    final pacedSender = _send;
-
-    if (id != null && _releaseResubscribeSlot(id) && pacedSender != null) {
-      _pumpResubscribes(pacedSender, _attachGeneration, raiseErrors: false);
     }
 
     switch (kind) {

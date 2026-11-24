@@ -796,7 +796,12 @@ module Lunora
       return if sender.nil?
 
       pump_resubscribes(sender, generation, raise_errors: true)
-      shapes.each { |frame| sender.call(frame) }
+      shapes.each do |frame|
+        # A query write above may have replaced the socket, whose own resend sends these.
+        break unless @mutex.synchronize { @attach_generation == generation }
+
+        sender.call(frame)
+      end
     end
 
     # Apply one server frame and return its type. Unknown types are ignored,

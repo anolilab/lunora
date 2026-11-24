@@ -1187,7 +1187,12 @@ class Client(
 
         pumpResubscribes(sender, generation, null, raiseErrors = true)
 
-        for (frame in shapeFrames) sender(frame)
+        for (frame in shapeFrames) {
+            // A query write above may have replaced the socket, whose own resend sends these.
+            if (synchronized(lock) { attachGeneration != generation || closed }) return
+
+            sender(frame)
+        }
     }
 
     /** A queued re-subscribe built for sending, with the freeze its send lifted. */
@@ -1462,8 +1467,17 @@ class Client(
             Triple(send, attachGeneration, releaseResubscribeSlot(id))
         }
 
-        if (released && pacedSocket != null) pumpResubscribes(pacedSocket, pacedGeneration, null, raiseErrors = false)
+        // Pumped once this frame is applied, whichever branch returns: a write the pump makes can replace
+        // the socket, and a frame read before that must not land after the new socket's.
+        try {
+            return dispatchFrame(frame, kind, id)
+        } finally {
+            if (released && pacedSocket != null) pumpResubscribes(pacedSocket, pacedGeneration, null, raiseErrors = false)
+        }
+    }
 
+    /** Applies a frame [handleFrame] has accepted, and returns its type. */
+    private fun dispatchFrame(frame: Map<*, *>, kind: String, id: String): String? {
         // The server answered this subscription, so a retry it was waiting on is moot. A `data`,
         // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
         // applied answers nothing, and the retry's snapshot is what unfreezes the subscription.

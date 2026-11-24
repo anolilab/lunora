@@ -346,4 +346,21 @@ class TestResubscribePacing < Minitest::Test
     assert_equal "ack", current.call(ack("sub_1")), "the current socket's frame is applied"
     assert_equal Lunora::RESUBSCRIBE_CONCURRENCY + 1, subscribes(sent).size, "the current socket's reply frees its slot"
   end
+
+  def test_shapes_do_not_follow_a_query_write_that_replaced_the_socket
+    client = new_client
+    client.attach_socket(->(_frame) {})
+    subscribe_channel(client, 0)
+    client.subscribe_shape("roomMessages", { "room" => "r0" }, ->(_rows) {})
+    on_old = []
+    client.attach_socket(lambda { |frame|
+      on_old << frame
+      client.attach_socket(->(_frame) {}) if frame["type"] == "subscribe"
+    })
+    on_old.clear
+    client.resend_subscriptions
+
+    assert(on_old.none? { |frame| frame["type"] == "shape_subscribe" },
+           "the replaced socket gets no shape subscription; the new socket's resend sends it")
+  end
 end

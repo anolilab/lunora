@@ -99,7 +99,13 @@ while (isActive) {
                         while (true) {
                             val due = client.nextSubscriptionRetryAtNanos()
                             delay(if (due == null) 1_000L else ((due - System.nanoTime()) / 1_000_000L).coerceIn(0L, 1_000L))
-                            runInterruptible(Dispatchers.IO) { client.retryDueSubscriptions() }
+                            try {
+                                runInterruptible(Dispatchers.IO) { client.retryDueSubscriptions() }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // a write to a dying socket: the read loop below sees it end, and the pacer keeps going
+                            }
                         }
                     }
                     // blocking HTTP replay: off the read loop's dispatcher, and cancel can interrupt it

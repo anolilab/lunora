@@ -665,3 +665,72 @@ func TestResubscribePacingAReplacedSocketsLateFrameIsIgnored(t *testing.T) {
 		t.Fatalf("the current socket's reply frees its slot: got %d subscribes", got)
 	}
 }
+
+func TestResubscribePacingAFrameIsAppliedBeforeThePumpItFreedCanReplaceTheSocket(t *testing.T) {
+	var (
+		client *Client
+		newer  FrameHandler
+	)
+
+	client, _ = pacedClient(pacedSubscriptions, func(map[string]any) error { return nil })
+	old := client.AttachSocket(func(frame map[string]any) error {
+		// The pump the frame below starts writes sub_4, and the socket is replaced meanwhile;
+		// the new socket's frame for sub_1 is the newer one.
+		if frame["type"] == "subscribe" && frame["id"] == "sub_4" {
+			newer = client.AttachSocket(func(map[string]any) error { return nil }, nil)
+			if _, err := newer([]byte(`{"cursor":20,"data":[],"id":"sub_1","type":"data"}`)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		return nil
+	}, nil)
+
+	if err := client.ResendSubscriptions(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := old([]byte(`{"cursor":9,"data":[],"id":"sub_1","type":"data"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	if newer == nil {
+		t.Fatal("the frame's freed slot sent sub_4")
+	}
+
+	if got := fmt.Sprint(client.subscriptions["sub_1"].cursor); got != "20" {
+		t.Fatalf("the old socket's frame lands before the new socket's, got cursor %s", got)
+	}
+}
+
+func TestResubscribePacingShapesDoNotFollowAQueryWriteThatReplacedTheSocket(t *testing.T) {
+	var (
+		client *Client
+		onOld  []map[string]any
+	)
+
+	client = NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
+	subscribeChannel(client, 0)
+	client.SubscribeShape("roomMessages", map[string]any{"room": "r0"}, func([]any) {}, nil)
+	client.AttachSocket(func(frame map[string]any) error {
+		onOld = append(onOld, frame)
+
+		if frame["type"] == "subscribe" {
+			client.AttachSocket(func(map[string]any) error { return nil }, nil)
+		}
+
+		return nil
+	}, nil)
+	onOld = nil
+
+	if err := client.ResendSubscriptions(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, frame := range onOld {
+		if frame["type"] == "shape_subscribe" {
+			t.Fatal("the replaced socket gets no shape subscription; the new socket's resend sends it")
+		}
+	}
+}

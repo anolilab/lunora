@@ -369,6 +369,47 @@ private fun aReplacedSocketsLateFrameIsIgnored() {
     check(subscribeIds(sent).size == RESUBSCRIBE_CONCURRENCY + 1, "the current socket's reply must free its slot, got ${subscribeIds(sent)}")
 }
 
+private fun aFrameIsAppliedBeforeThePumpItFreedCanReplaceTheSocket() {
+    val (client, _) = pacedClient(PACED_SUBSCRIPTIONS) {}
+    var newer: FrameHandler? = null
+    val old = client.attachSocket { frame ->
+        // The pump the frame below starts writes sub_4, and the socket is replaced meanwhile; the new
+        // socket's frame for sub_1 is the newer one.
+        if (frame["type"] == "subscribe" && frame["id"] == "sub_4") {
+            val handle = client.attachSocket {}
+
+            newer = handle
+            handle("""{"cursor":20,"data":[],"id":"sub_1","type":"data"}""")
+        }
+    }
+
+    client.resendSubscriptions()
+    old("""{"cursor":9,"data":[],"id":"sub_1","type":"data"}""")
+
+    check(newer != null, "the frame's freed slot must have sent sub_4")
+
+    val cursor = checkNotNull(client.subscriptions["sub_1"]).cursor
+
+    check(cursor == 20.0, "the old socket's frame must land before the new socket's, got cursor $cursor")
+}
+
+private fun shapesDoNotFollowAQueryWriteThatReplacedTheSocket() {
+    val onOld = mutableListOf<Map<String, Any?>>()
+    val client = Client("https://app.example", null)
+
+    client.attachSocket {}
+    subscribeChannel(client, 0)
+    client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("r0"))), {})
+    client.attachSocket { frame ->
+        onOld.add(frame)
+        if (frame["type"] == "subscribe") client.attachSocket {}
+    }
+    onOld.clear()
+    client.resendSubscriptions()
+
+    check(onOld.none { it["type"] == "shape_subscribe" }, "the replaced socket must get no shape subscription, got $onOld")
+}
+
 internal fun runResubscribePacingCases() {
     onlyTheWindowGoesOutUntilAReplyArrives()
     anyFrameBearingTheIdLetsTheNextOneOut()
@@ -387,4 +428,6 @@ internal fun runResubscribePacingCases() {
     aReplyDuringTheFirstWindowDoesNotJumpTheQueue()
     aSocketReplacedMidWindowGetsNoMoreOfIt()
     aReplacedSocketsLateFrameIsIgnored()
+    aFrameIsAppliedBeforeThePumpItFreedCanReplaceTheSocket()
+    shapesDoNotFollowAQueryWriteThatReplacedTheSocket()
 }

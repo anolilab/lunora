@@ -1521,6 +1521,15 @@ func (c *Client) ResendSubscriptions() error {
 	}
 
 	for _, frame := range shapeFrames {
+		// A query write above may have replaced the socket, whose own resend sends these.
+		c.mu.Lock()
+		current := c.attachGeneration == generation
+		c.mu.Unlock()
+
+		if !current {
+			return nil
+		}
+
 		if err := send(frame); err != nil {
 			return err
 		}
@@ -1918,10 +1927,12 @@ func (c *Client) handleFrame(raw []byte, generation int, scoped bool) (string, e
 	released := c.releaseResubscribeSlotLocked(id)
 	c.mu.Unlock()
 
-	// Not this frame's error: returning it would end the caller's read loop, and the
-	// dead socket's detach starts the next resend anyway.
+	// Pumped once this frame is applied, whichever case returns: a write the pump makes can
+	// replace the socket, and a frame read before that must not land after the new socket's.
+	// Not this frame's error: returning it would end the caller's read loop, and the dead
+	// socket's detach starts the next resend anyway.
 	if released && pacedSend != nil {
-		_, _ = c.pumpResubscribes(pacedSend, pacedGeneration, time.Time{})
+		defer func() { _, _ = c.pumpResubscribes(pacedSend, pacedGeneration, time.Time{}) }()
 	}
 
 	switch kind {

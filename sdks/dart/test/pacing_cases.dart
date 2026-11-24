@@ -487,3 +487,48 @@ void casePacingAReplacedSocketsLateFrameIsIgnored() {
   equals(current(_ack('sub_1')), 'ack', "the current socket's frame is applied");
   equals(_subscribes(sent).length, resubscribeConcurrency + 1, "the current socket's reply frees its slot");
 }
+
+void casePacingAFrameIsAppliedBeforeThePumpItFreedCanReplaceTheSocket() {
+  final seen = <Object?>[];
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+
+  for (var index = 0; index < _subscriptions; index++) {
+    client.subscribe('messages:list', args: <String, Object?>{'channel': 'c$index'}, onData: index == 0 ? seen.add : null);
+  }
+
+  var replaced = false;
+  final old = client.attachSocket((frame) {
+    // The pump the frame below starts writes sub_4, and the socket is replaced meanwhile; the new
+    // socket's frame for sub_1 is the newer one.
+    if (frame['type'] == 'subscribe' && frame['id'] == 'sub_4') {
+      replaced = true;
+      client.attachSocket((_) {})(jsonEncode(<String, Object?>{'cursor': 20, 'data': 'new', 'id': 'sub_1', 'type': 'data'}));
+    }
+  });
+
+  client.resendSubscriptions();
+  old(jsonEncode(<String, Object?>{'cursor': 9, 'data': 'old', 'id': 'sub_1', 'type': 'data'}));
+
+  check(replaced, "the frame's freed slot must have sent sub_4");
+  equals(seen.isEmpty ? null : seen.last, 'new', "the old socket's frame lands before the new socket's");
+}
+
+void casePacingShapesDoNotFollowAQueryWriteThatReplacedTheSocket() {
+  final onOld = <Map<String, Object?>>[];
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+
+  _subscribeChannel(client, 0);
+  client
+    ..subscribeShape('roomMessages', args: <String, Object?>{'room': 'r0'}, onRows: (_) {})
+    ..attachSocket((frame) {
+      onOld.add(frame);
+
+      if (frame['type'] == 'subscribe') {
+        client.attachSocket((_) {});
+      }
+    });
+  onOld.clear();
+  client.resendSubscriptions();
+
+  check(onOld.every((frame) => frame['type'] != 'shape_subscribe'), 'the replaced socket gets no shape subscription, got $onOld');
+}
