@@ -139,6 +139,11 @@ it, and sign-up invitations are stored in the same form.
   invitation that holds it. Until a row is filled, the duplicate checks (the admin
   plane's, the one on sign-up and email change, and the auth data port's import) fold its
   address in JS, so they still refuse a variant in any case or Unicode form.
+- **A plugin's update hook must not add or rewrite `email`.** better-auth passes every
+  `databaseHooks.user.update.before` the caller's original patch, so the canonical key is
+  derived from the address in that patch. A plugin hook that sets `email` would leave the
+  stored key describing the old address. Change addresses through the patch itself (your
+  own `databaseHooks` may rewrite it; that result is seen).
 - **Rows imported through your own `authTables(...)` are trusted operator input.** The
   admin-token import writes tables declared in `lunora/schema.ts` as given, so a user row
   keeps the `emailCanonical` it carries. A `NULL` value is refilled by the backfill; an

@@ -62,6 +62,10 @@ const writtenEmail = (replaced: Record<string, unknown> | undefined, data: Recor
  * dropping the key from ours would not drop it from theirs, and any `updateUser` caller
  * could otherwise point a user at another account's canonical address or clear its own.
  *
+ * The update hook sees the caller's patch and its own caller hook's result, not what a plugin's
+ * update hook merges in: better-auth hands every `update.before` the original patch. So a plugin's
+ * update hook must not add or rewrite `email`; the key would describe the address before it.
+ *
  * A hook that sets `email` to `undefined` withholds the address from the write, so the
  * presence of the key decides, not its value: deriving from the caller's `email` then would
  * store a canonical value for an address that was never written.
