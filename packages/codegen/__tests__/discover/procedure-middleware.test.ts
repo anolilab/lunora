@@ -534,6 +534,16 @@ ${PREAMBLE}
         });
 `;
 
+/** `.use(platformAdmin(...))` from `@lunora/server`: only a platform admin reaches the write, so it is a permission gate too. */
+const PLATFORM_ADMIN_MEMBER_ADD = `import { platformAdmin } from "@lunora/server";
+${PREAMBLE}
+    export const addTeamMember = c.mutation
+        .use(platformAdmin(() => true))
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
 /** A shared builder carrying `.use(authorize(...))`, declared in one module: the team-builder shape a project reuses across files. */
 const SHARED_AUTHORIZED_BUILDER = `import { authorize } from "@lunora/server";
 ${PREAMBLE}
@@ -738,7 +748,7 @@ describe("discoverProcedureMiddleware", () => {
         mkdirSync(join(workdir, "node_modules", "@lunora", "server"), { recursive: true });
         writeFileSync(
             join(workdir, "node_modules", "@lunora", "server", "index.d.ts"),
-            "export declare const authorize: (check: unknown) => unknown;\n",
+            "export declare const authorize: (check: unknown) => unknown;\nexport declare const platformAdmin: (check: unknown) => unknown;\n",
             "utf8",
         );
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
@@ -1135,6 +1145,16 @@ describe("discoverProcedureMiddleware", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "members.ts"), AUTHORIZED_MEMBER_ADD, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "addTeamMember", usesAuthorize: true, usesCaptcha: false });
+    });
+
+    it("records a `.use(platformAdmin(...))` imported from @lunora/server as a permission gate", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "members.ts"), PLATFORM_ADMIN_MEMBER_ADD, "utf8");
 
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 

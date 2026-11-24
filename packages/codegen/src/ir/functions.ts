@@ -366,7 +366,7 @@ export interface ProcedureMiddlewareIR {
     throwsBareError?: boolean;
     /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. `undefined` when `analyzableBody` is `false`. */
     unboundedAiGeneration?: boolean;
-    /** `true` when the chain carries `.use(authorize(...))` from `@lunora/server`. Feeds the `user_creating_mutation_without_captcha` lint, which skips a procedure behind a permission check. */
+    /** `true` when the chain carries `.use(authorize(...))` or `.use(platformAdmin(...))` from `@lunora/server`. Feeds the `user_creating_mutation_without_captcha` lint, which skips a procedure behind a permission check. */
     usesAuthorize: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */
     usesCaptcha: boolean;

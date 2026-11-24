@@ -281,7 +281,10 @@ const readPlainMember = (declared: TsNode | undefined, sourceFile: SourceFile, k
     return literal === undefined ? { unreadable: true } : { literal };
 };
 
-const ACCEPT_KEYS = ["exportName", "file", "level", "reason", "rule"] as const;
+const ACCEPT_KEYS = ["exportName", "file", "level", "reason", "rule", "table"] as const;
+
+/** The keys an entry may leave out: `level` defaults to an ERROR, and `table` is only for a finding about a procedure's table. */
+const OPTIONAL_ACCEPT_KEYS: ReadonlySet<string> = new Set(["level", "table"]);
 
 /** The `level` an entry accepts, spelled as `minSeverity` spells it, and the advisor level it names. */
 const ACCEPT_LEVELS: Readonly<Record<string, Level>> = { error: "ERROR", info: "INFO", warn: "WARN" };
@@ -298,7 +301,7 @@ const ACCEPT_LEVEL_SHAPE: FieldShape = { accepts: ["string"], expected: "a strin
 /**
  * One `advisor.accept` entry as non-empty string literals, or `undefined` for
  * anything else — an extra key, a computed value, a blank reason. `level` may be
- * left out, and then means an ERROR. A typo in a key would otherwise match
+ * left out, and then means an ERROR; `table` may be left out, but not blank. A typo in a key would otherwise match
  * nothing and fail silently, so only the listed keys are read.
  */
 const readAcceptedEntry = (entry: TsNode): AcceptedFinding | undefined => {
@@ -329,11 +332,15 @@ const readAcceptedEntry = (entry: TsNode): AcceptedFinding | undefined => {
         fields[key as (typeof ACCEPT_KEYS)[number]] = initializer.getLiteralValue();
     }
 
-    const { exportName, file, level, reason, rule } = fields;
+    const { exportName, file, level, reason, rule, table } = fields;
     const reviewedLevel = level === undefined ? DEFAULT_ACCEPT_LEVEL : levelOf(level);
 
+    if (table?.trim() === "") {
+        return undefined;
+    }
+
     return exportName?.trim() && file?.trim() && reason?.trim() && rule?.trim() && reviewedLevel !== undefined
-        ? { exportName, file, level: reviewedLevel, reason, rule }
+        ? { exportName, file, level: reviewedLevel, reason, rule, ...(table === undefined ? {} : { table }) }
         : undefined;
 };
 
@@ -643,7 +650,7 @@ const SECTIONS: ReadonlyMap<string, ConfigSection> = new Map<string, ConfigSecti
                     expected: "an array of objects",
                     items: objectOf(
                         { ...Object.fromEntries(ACCEPT_KEYS.map((key) => [key, STRING])), level: ACCEPT_LEVEL_SHAPE },
-                        ACCEPT_KEYS.filter((key) => key !== "level"),
+                        ACCEPT_KEYS.filter((key) => !OPTIONAL_ACCEPT_KEYS.has(key)),
                     ),
                 },
                 minSeverity: STRING,

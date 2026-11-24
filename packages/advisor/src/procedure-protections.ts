@@ -89,8 +89,8 @@ export interface AdvisorProcedureProtection {
     unboundedAiGeneration?: boolean;
 
     /**
-     * `true` when the chain carries `.use(authorize(...))` from `@lunora/server`: the procedure is behind a
-     * permission check, so a CAPTCHA is not expected. `undefined` from a feeder predating this field, which
+     * `true` when the chain carries `.use(authorize(...))` or `.use(platformAdmin(...))` from `@lunora/server`: the
+     * procedure is behind a permission check, so a CAPTCHA is not expected. `undefined` from a feeder predating this field, which
      * leaves the CAPTCHA lint firing.
      */
     usesAuthorize?: boolean;

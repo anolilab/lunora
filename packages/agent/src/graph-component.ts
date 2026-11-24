@@ -70,6 +70,7 @@ const graphTables: Record<typeof EDGES_BARE_TABLE | typeof ENTITIES_BARE_TABLE, 
         updatedAt: v.number(),
         weight: v.optional(v.number()),
     })
+        // Written by this component's own functions, like the entities table above.
         .externallyManaged()
         // Outgoing traversal.
         .index("byOwnerSrc", ["owner", "srcName"])

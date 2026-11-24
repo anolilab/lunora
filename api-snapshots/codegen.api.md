@@ -2038,6 +2038,7 @@ interface AcceptedFinding {
     level: Level;
     reason: string;
     rule: string;
+    table?: string;
 }
 ```
 

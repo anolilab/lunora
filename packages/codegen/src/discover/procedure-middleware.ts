@@ -876,9 +876,13 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
     }
 
     // `authorize` is read at chain level, so a shared builder imported from another module counts. It is matched by
-    // import origin, not name: a local helper with the same name must not clear the CAPTCHA lint.
+    // import origin, not name: a local helper with the same name must not clear the CAPTCHA lint. `platformAdmin` is a
+    // permission gate too, and `adminOnly` already carries the same import-origin match for it.
     const protections = classified.receiver
-        ? { ...protectionsInChain(classified.receiver), usesAuthorize: chainCarriesServerMarker(classified.receiver, "authorize") }
+        ? {
+              ...protectionsInChain(classified.receiver),
+              usesAuthorize: classified.adminOnly === true || chainCarriesServerMarker(classified.receiver, "authorize"),
+          }
         : NO_PROTECTIONS;
 
     const behaviourRoot = analyzableBehaviourRoot(declaration, initializer);

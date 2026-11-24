@@ -504,6 +504,24 @@ export const schema = defineSchema({
             expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
         });
 
+        it("reads an entry's table and matches it against the table the finding names", () => {
+            expect.assertions(2);
+
+            seedAllLevels();
+
+            const accept = (table: string): string =>
+                `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: "reviewed fixture", table: "${table}" }`;
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { advisor: { accept: [${accept("mesages")}, ${accept("users")}] } };\n`, "utf8");
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(advisories.find((advisory) => advisory.name === "shape_unknown_table")?.level).toBe("INFO");
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused").map((advisory) => advisory.metadata["table"])).toStrictEqual([
+                "users",
+            ]);
+        });
+
         it("warns about an accept entry that matches no finding and leaves every ERROR in place", () => {
             expect.assertions(3);
 
@@ -528,6 +546,7 @@ export const schema = defineSchema({
         it.each([
             ["an empty reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: "" }`],
             ["a computed reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: ["x"].join("") }`],
+            ["a blank table", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: "r", table: " " }`],
             ["a spread entry", `{ ...base }`],
         ])("ignores the whole list for %s and keeps every ERROR", (_label, entry) => {
             expect.assertions(3);

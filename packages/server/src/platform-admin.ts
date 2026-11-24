@@ -18,8 +18,8 @@ type PlatformAdminCheck<Context> = (context: Context) => boolean | Promise<boole
  *
  * It is also the marker the advisor reads. A procedure whose chain carries
  * `.use(platformAdmin(...))` is reachable only by an admin, so the ownership lint
- * treats the arguments it takes as the admin's choice rather than an IDOR. The
- * marker is the import, not the name of the variable that holds the chain. The
+ * treats the arguments it takes as the admin's choice rather than an IDOR, and the
+ * CAPTCHA lint does not ask for a bot check in front of it. The marker is the import, not the name of the variable that holds the chain. The
  * advisor trusts the declaration, not the check: any `platformAdmin(...)` step marks
  * the procedure, whatever `check` returns, so the check itself must be the admin test.
  */
