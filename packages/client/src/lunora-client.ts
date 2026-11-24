@@ -1101,6 +1101,9 @@ class LunoraClient {
     /** The identity this client settled on first, which `provisionalStamp` stands for; `undefined` until then. */
     private provisionalBinding: { identity: string | null } | undefined;
 
+    /** Set once this client asks `/get-session` on the page-wide declaration alone — see `resolveDeclaredSession`. */
+    private resolvesDeclaredSession = false;
+
     /**
      * Distinct shard keys with a mutation currently sitting in `offlineQueue`
      * — fresh writes queued this session (`enqueueOfflineMutation`) or writes
@@ -1431,6 +1434,15 @@ class LunoraClient {
                     await this.getCurrentUser().catch(() => undefined);
                 }
             });
+
+            // The identity store's recovery, for a client that resolves the
+            // declared session itself: a probe that could not reach the endpoint
+            // is asked again once the socket or the polling fallback is live.
+            this.statusListeners.add((status) => {
+                if (this.resolvesDeclaredSession && !this.identitySettled && isLiveStatus(status)) {
+                    this.resolveDeclaredSession();
+                }
+            });
         }
     }
 
@@ -1504,9 +1516,14 @@ class LunoraClient {
 
         const newIdentity = this.identityFingerprint();
 
-        // Before any verdict below, so the flush this call ends with judges a
-        // provisional stamp by the identity it stands for.
-        this.bindProvisionalStamp();
+        // The first identity established binds a provisional stamp, whichever
+        // route names it: an adopted answer, or a bearer the app set itself.
+        // Before any verdict below, so the flush this call ends with judges the
+        // stamp by the identity it stands for. `null` names nobody here — an
+        // adopted "no session" answer binds it in `adoptCookieSubject`.
+        if (newIdentity !== null) {
+            this.bindProvisionalStamp(newIdentity);
+        }
 
         // "The same credential" needs a credential. `!tokenChanged` proves one
         // only when there IS a token: on a cookie app every identity — the
@@ -1944,7 +1961,7 @@ class LunoraClient {
             // No transport to ask over, and none is coming: this is as settled
             // as the answer gets, so the gates must not hold on it forever.
             this.identitySettled = true;
-            this.bindProvisionalStamp();
+            this.bindProvisionalStamp(this.identityFingerprint());
 
             // eslint-disable-next-line unicorn/no-null -- signed-out / unavailable sentinel matches the User | null contract
             return null;
@@ -1995,8 +2012,6 @@ class LunoraClient {
                     this.adoptResolvedSubject(requestToken, null, requestGeneration);
                 }
 
-                this.bindProvisionalStamp();
-
                 // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
                 return null;
             }
@@ -2012,7 +2027,6 @@ class LunoraClient {
             this.identitySettled = true;
 
             this.adoptResolvedSubject(requestToken, user, requestGeneration);
-            this.bindProvisionalStamp();
 
             return user;
         } finally {
@@ -8894,11 +8908,32 @@ class LunoraClient {
         return token === null ? false : this.hashToken(token) === stamped;
     }
 
-    /** Fix what `provisionalStamp` stands for, once: the identity this client settles on first. */
-    private bindProvisionalStamp(): void {
-        if (this.provisionalBinding === undefined && this.identitySettled) {
-            this.provisionalBinding = { identity: this.identityFingerprint() };
+    /**
+     * Fix what `provisionalStamp` stands for, once: the first identity this
+     * client establishes. Only an identity actually established may bind it — a
+     * response that names nobody (a 403, a superseded probe) binds nothing, or a
+     * real answer after it could not rebind the stamp and would drop the write.
+     */
+    private bindProvisionalStamp(identity: string | null): void {
+        this.provisionalBinding ??= { identity };
+    }
+
+    /**
+     * Ask `/get-session` for a client whose only reason to expect a session is
+     * the page-wide declaration (`lunoraSessionSync()`). No identity store is
+     * attached to ask for it, and a socket that authenticates with a ticket or a
+     * token, or none opening at all, never delivers the cookie identity, so
+     * without this its early writes were held and its read cache refused for the
+     * life of the page. A probe that fails is asked again when the connection is
+     * live again (see the constructor).
+     */
+    private resolveDeclaredSession(): void {
+        if (this.closed || this.sessionProbesInFlight > 0) {
+            return;
         }
+
+        this.resolvesDeclaredSession = true;
+        this.getCurrentUser().catch(() => undefined);
     }
 
     /**
@@ -8964,6 +8999,10 @@ class LunoraClient {
     private identityUnresolved(): boolean {
         if (this.sessionProbesInFlight > 0) {
             return true;
+        }
+
+        if (!this.identityResolutionExpected && !this.identitySettled && sessionSourceDeclared()) {
+            this.resolveDeclaredSession();
         }
 
         // Outside the request itself the question is settlement, not traffic: a
@@ -9037,10 +9076,13 @@ class LunoraClient {
             return false;
         }
 
-        const firstAnswer = !this.identitySettled;
+        const firstAnswer = this.provisionalBinding === undefined;
 
         this.identityAnsweredAt = question;
         this.identitySettled = true;
+        // The answer's own fingerprint, bound before `setAuthToken` flushes.
+        // eslint-disable-next-line unicorn/no-null -- `null` is the fingerprint of nobody
+        this.bindProvisionalStamp(subject === null ? null : `subj:${subject}`);
         // eslint-disable-next-line unicorn/no-null -- a cookie session holds no token
         this.setAuthToken(null, subject);
 

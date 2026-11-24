@@ -76,20 +76,31 @@ const json = (body: unknown): Response => Response.json(body, { headers: { "cont
 
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
+/** A `/get-session` answer: a user, nobody, a bare HTTP status, or a transport failure. */
+type Answer = Error | number | User | null;
+
 /**
  * A cookie-session client whose `/get-session` probes each wait for the test to
  * answer them. `declared` leaves resolution undeclared on the client itself, as
  * an app that reads its session through better-auth and `lunoraSessionSync()`.
  */
 const cookieClient = (options: { declared?: boolean } = {}) => {
-    const pendingAnswers: ((user: User | null) => void)[] = [];
+    const pendingAnswers: ((answer: Answer) => void)[] = [];
     const fetchMock = vi.fn<Fetch>(async (url, init) => {
         if (url.endsWith("/get-session")) {
-            const user = await new Promise<User | null>((resolve) => {
+            const answer = await new Promise<Answer>((resolve) => {
                 pendingAnswers.push(resolve);
             });
 
-            return json(user === null ? null : { session: {}, user });
+            if (answer instanceof Error) {
+                throw answer;
+            }
+
+            if (typeof answer === "number") {
+                return new Response("", { status: answer });
+            }
+
+            return json(answer === null ? null : { session: {}, user: answer });
         }
 
         const { calls } = JSON.parse(init.body as string) as { calls?: { id: number }[] };
@@ -115,19 +126,25 @@ const cookieClient = (options: { declared?: boolean } = {}) => {
         client.expectIdentityResolution();
     }
 
-    /** Ask who is signed in, and answer `user`. */
-    const resolveSession = async (user: User | null): Promise<void> => {
-        const probe = client.getCurrentUser();
-
+    /** Answer the probe already waiting — one the client started itself. */
+    const answerProbe = async (answer: Answer): Promise<void> => {
         await vi.waitFor(() => {
             expect(pendingAnswers).toHaveLength(1);
         });
 
-        pendingAnswers.shift()?.(user);
+        pendingAnswers.shift()?.(answer);
+        await settle();
+    };
+
+    /** Ask who is signed in, and answer `answer`. */
+    const resolveSession = async (answer: Answer): Promise<void> => {
+        const probe = client.getCurrentUser();
+
+        await answerProbe(answer);
         await probe;
     };
 
-    return { client, fetchMock, resolveSession };
+    return { answerProbe, client, fetchMock, pendingAnswers, resolveSession };
 };
 
 const alice = { email: "alice@example.test", id: "user-a" } as User;
@@ -175,6 +192,33 @@ describe("a write stamped before the first session answer", () => {
         await resolveSession(alice);
 
         expect(client.replayIdentityVerdict(stamp).verdict).toBe("mismatch");
+    });
+
+    it("stays unbound through a response that names nobody, so the answer after it binds it", async () => {
+        expect.hasAssertions();
+
+        const { client, resolveSession } = cookieClient();
+        const stamp = client.writeIdentityStamp();
+
+        // A 403 is as likely a WAF as the auth server: not a verdict on anyone.
+        await resolveSession(403);
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("unknown");
+
+        await resolveSession(alice);
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
+    });
+
+    it("is bound by a bearer the app sets itself, rather than held with no answer coming", () => {
+        expect.assertions(1);
+
+        const { client } = cookieClient();
+        const stamp = client.writeIdentityStamp();
+
+        client.setAuthToken("token-a", "user-a");
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
     });
 
     it("reads as anonymous on another client, as a persisted `null` stamp did", async () => {
@@ -251,13 +295,23 @@ describe("a page whose session source is declared (`lunoraSessionSync()`)", () =
         vi.unstubAllGlobals();
     });
 
-    /** Queue one write before anything has answered, open the socket, and hand it `subject` as its first identity frame. */
-    const queueThenAnswer = async (subject: null | string) => {
+    /**
+     * Queue one write before anything has answered, open the socket, and hand it
+     * `subject` as its first identity frame.
+     *
+     * `declared: false` is the identity store's declaration instead, with no
+     * probe running — the store's own probe failed — so the frame is the only
+     * answer the client gets.
+     */
+    const queueThenAnswer = async (subject: null | string, { declared = true }: { declared?: boolean } = {}) => {
         sockets.length = 0;
-        vi.stubGlobal("document", {});
-        declareSessionSource();
 
-        const { client, fetchMock } = cookieClient({ declared: true });
+        if (declared) {
+            vi.stubGlobal("document", {});
+            declareSessionSource();
+        }
+
+        const { client, fetchMock } = cookieClient({ declared });
 
         client.subscribe(fnRef("todos.list"), {}, () => {});
 
@@ -298,10 +352,12 @@ describe("a page whose session source is declared (`lunoraSessionSync()`)", () =
         expect(headers?.[EXPECT_SUBJECT_HEADER]).toBe(encodeExpectedSubjectHeader("user-a"));
     });
 
-    it("replays a held write once the first identity frame answers nobody, which changes no identity", async () => {
+    it("replays a held write once the first identity frame answers nobody, with no probe running", async () => {
         expect.hasAssertions();
 
-        const { outcome, replay } = await queueThenAnswer(null);
+        // Nobody changes no identity, so `setAuthToken` re-flushes nothing, and
+        // with no probe in flight `releaseSessionProbe` never runs either.
+        const { outcome, replay } = await queueThenAnswer(null, { declared: false });
 
         await expect(outcome).resolves.toBe("committed");
 
@@ -309,6 +365,44 @@ describe("a page whose session source is declared (`lunoraSessionSync()`)", () =
         const headers = await replay();
 
         expect(headers?.[EXPECT_SUBJECT_HEADER]).toBe(encodeExpectedSubjectHeader(null));
+    });
+
+    it("asks who is signed in itself when the declaration is all it has, so no socket answer is needed", async () => {
+        expect.hasAssertions();
+
+        vi.stubGlobal("document", {});
+        declareSessionSource();
+
+        const { answerProbe, client } = cookieClient({ declared: true });
+        // No socket ever opens: a ticketed upgrade, or WebSockets blocked outright.
+        const stamp = client.writeIdentityStamp();
+
+        await answerProbe(alice);
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
+        expect(client.currentIdentity()).toBe("subj:user-a");
+    });
+
+    it("asks again once the connection is live, when its own probe could not reach the endpoint", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+        vi.stubGlobal("document", {});
+        declareSessionSource();
+
+        const { answerProbe, client } = cookieClient({ declared: true });
+        const stamp = client.writeIdentityStamp();
+
+        await answerProbe(new TypeError("network down"));
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("unknown");
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        await settle();
+        sockets.at(-1)?.open();
+        await answerProbe(alice);
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
     });
 
     it("declares nothing off the browser, where one process serves every request", () => {
