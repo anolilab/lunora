@@ -505,6 +505,12 @@ catalogs:
     # a caret range would not track. Its defaults differ from Playwright's — one
     # browser context reused per worker, no animation waits before a click — and
     # act fast enough to land in windows stock Playwright's pacing never reached.
+    #
+    # It is one publisher's fork, and it runs on every e2e CI runner, so it stays
+    # confined to tests/e2e: no developer script resolves it (studio-shots.mjs uses
+    # the stock copy). A bump is reviewed like a code change: read the fork's diff
+    # against the upstream tag it is based on, check the three tarballs' publisher
+    # and provenance on npm, and run the full e2e suite before merging.
     "@playwright/test": npm:flashwright-test@1.64.1-flashwright.12
     playwright: npm:flashwright@1.64.1-flashwright.12
   flags:

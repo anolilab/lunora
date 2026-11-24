@@ -4,17 +4,23 @@
  * Drives a running Studio dev server with Playwright, switches it to dark mode,
  * visits each view via the sidebar, and writes PNGs to src/assets/studio/dark/.
  *
- * Playwright isn't a dependency of apps/docs, so we resolve it from tests/e2e,
- * which carries the repo's Playwright (the Flashwright fork, aliased).
+ * Playwright isn't a dependency of apps/docs, so we resolve it straight out of
+ * the pnpm store (it ships with @lunora/testing + @lunora/browser).
  *
  * Usage:
  *   STUDIO_URL=http://localhost:5174/__lunora node scripts/studio-shots.mjs
  */
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
-const { chromium } = createRequire(new URL("../../../tests/e2e/package.json", import.meta.url))("playwright");
+const require = createRequire(import.meta.url);
+const pnpmDir = fileURLToPath(new URL("../../../node_modules/.pnpm/", import.meta.url));
+const pwPkg = readdirSync(pnpmDir)
+    .filter((d) => d.startsWith("playwright@"))
+    .sort()
+    .pop();
+const { chromium } = require(`${pnpmDir}${pwPkg}/node_modules/playwright`);
 
 const STUDIO_URL = process.env.STUDIO_URL ?? "http://localhost:5174/__lunora";
 const OUT_DIR = fileURLToPath(new URL("../src/assets/studio/dark/", import.meta.url));
