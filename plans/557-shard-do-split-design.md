@@ -5,7 +5,9 @@
 (PR #1691), one commit per step: steps 1, 2, 3 and 5 DONE; steps 4 and 6-10 STOPPED by R6 (§6).
 The per-frame-type split of `handleWebSocketMessage` is DONE. The conflict replay (§7) showed that no
 further split of this file buys meaningfully fewer merge conflicts, so the work ends here.
-`shard-do.ts`: 21,278 → 19,573 lines.
+`shard-do.ts`: 21,278 → 19,573 lines. That closes row 22 of #1527 on purpose, with the file still
+large: no follow-up split is planned, and none of the remaining clusters (§1) is carried as open work.
+Reopen this plan only if the conflict picture in §7 changes.
 **Priority / effort / risk:** P3 / L / MED. **Category:** tech-debt.
 
 ## 0. Headline finding
