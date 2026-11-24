@@ -52,7 +52,16 @@ redirect would replay your bearer token to another host. With `dart:io`, set
 
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
 `client.resendSubscriptions()` re-subscribes everything after a reconnect,
-carrying each subscription's resume cursor.
+carrying each subscription's resume cursor. It sends at most three query subscriptions at
+once (`resubscribeConcurrency`), in subscribe order, as the reference client does, so a
+reconnect does not land every query on the shard in one burst. Each of the rest goes out
+when `handleFrame` sees a frame for one already sent, or once one has gone unanswered for
+10 s (`resubscribeAckTimeoutMs`): `nextSubscriptionRetryAt` includes that deadline on the
+`retryClockMs` clock, and `retryDueSubscriptions()` at or after it sends the next. Feed every
+frame to `handleFrame` and pull `retryDueSubscriptions()` on that deadline (a retry hint on a
+subscription error arms the same one). Shape subscriptions all go out at once. Args that no
+longer encode make `resendSubscriptions` throw before anything is sent; a query whose args
+stop encoding while it waits its turn is skipped.
 
 `attachSocket(send)` writes the `connect` frame as the socket's first frame, then
 rejoins every whisper topic. `connect` carries the `sessionToken` and, when you
@@ -81,6 +90,7 @@ var attempt = 0;
 while (!client.closed) {
   int? closeCode;
   String? closeReason;
+  Timer? pacer;
   try {
     final socket = await connect(); // your socket library
     if (client.closed) {
@@ -90,6 +100,20 @@ while (!client.closed) {
     // attachSocket writes `connect` first, so the server's onConnect hook fires before any subscription.
     client.attachSocket((frame) => socket.add(jsonEncode(frame)));
     client.resendSubscriptions();
+    // Frees a re-subscribe slot nobody answered and serves retry hints; cancelled with this socket
+    // run, so it never writes to the next socket. Waking at least every second sees a deadline
+    // armed after it went to sleep.
+    void pace() {
+      final due = client.nextSubscriptionRetryAt;
+      final wait = due == null ? 1000 : (due - client.retryClockMs).clamp(0, 1000);
+      pacer = Timer(Duration(milliseconds: wait), () {
+        try {
+          client.retryDueSubscriptions();
+        } catch (_) {} // a write to a dying socket: the read loop below sees it end
+        pace();
+      });
+    }
+    pace();
     client.setConnected(true);
     await for (final raw in socket) {
       if (client.closed) {
@@ -107,6 +131,7 @@ while (!client.closed) {
     closeCode = socket.closeCode; // dart:io's WebSocket; a 4001 or 4003 close reports the expired or refused session
     closeReason = socket.closeReason;
   } catch (_) {}
+  pacer?.cancel();
   client.setConnected(false);
   client.detachSocket(closeCode, closeReason); // subscriptions made during backoff wait for the next resend
   if (client.closed) break; // the app closed the client: stop, do not back off and dial again
