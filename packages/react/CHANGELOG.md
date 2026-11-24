@@ -1,3 +1,7 @@
+## @lunora/react [1.0.0-alpha.306](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.305...@lunora/react@1.0.0-alpha.306) (2026-11-24)
+
+- fix(react): mirror priceEventAt in the subscription kit (#1686)
+
 ## @lunora/react [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.304...@lunora/react@1.0.0-alpha.305) (2026-11-23)
 
 - fix: keep migrate generate from overwriting, make presence follow room changes (#1643)

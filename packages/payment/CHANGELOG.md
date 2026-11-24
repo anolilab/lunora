@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.276...@lunora/payment@1.0.0-alpha.277) (2026-11-24)
+
+- fix(advisor): let reviewed WARN and INFO findings be accepted (#1685)
+
 ## @lunora/payment [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.275...@lunora/payment@1.0.0-alpha.276) (2026-11-23)
 
 - fix(payment)!: stop double refunds and a paid subscriber losing access (#1653)
