@@ -1,12 +1,16 @@
 import { encodeWire } from "@lunora/wire";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
+import { DISPATCH_CLAIM_CEILING_MS } from "../../../shared/dispatch-claim";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const ADMIN = "s3cret-admin";
+
+/** How often a running pooled job renews its slot: a third of the ceiling it lapses at. */
+const RENEW_MS = DISPATCH_CLAIM_CEILING_MS / 3;
 
 const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
@@ -73,6 +77,113 @@ const dispatch = (worker: ReturnType<typeof createWorker>, body: Record<string, 
         fakeContext,
     );
 
+describe("createWorker — workpool slot renewal", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("renews the slot while the pooled handler runs, and stops once it settles", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+        const sched = schedulerSpy();
+        let settle: (response: Response) => void = () => {};
+        const reached = Promise.withResolvers<undefined>();
+        const heldShard: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        reached.resolve(undefined);
+
+                        return new Promise<Response>((resolve) => {
+                            settle = resolve;
+                        });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: heldShard });
+        const renewals = () => sched.calls.filter((call) => call.path === "/pool/renew");
+        const running = dispatch(worker, { args: {}, attempt: "attempt-1", dedupKey: "job-1-first", functionPath: "jobs:sweep", id: "job-1", pool: "stripe" });
+
+        await reached.promise;
+        await vi.advanceTimersByTimeAsync(RENEW_MS * 2);
+
+        expect(renewals().map((call) => call.body)).toStrictEqual([
+            { attempt: "attempt-1", dedupKey: "job-1-first", id: "job-1", pool: "stripe" },
+            { attempt: "attempt-1", dedupKey: "job-1-first", id: "job-1", pool: "stripe" },
+        ]);
+
+        settle(Response.json({ result: null }, { status: 200 }));
+        await running;
+        await vi.advanceTimersByTimeAsync(RENEW_MS * 2);
+
+        expect(renewals()).toHaveLength(2);
+        expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
+    });
+
+    it("logs a renewal the scheduler refuses, and stops renewing on a 4xx", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        let renewals = 0;
+        const scheduler: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        if (new URL(request.url).pathname !== "/pool/renew") {
+                            return Response.json({ released: true }, { status: 200 });
+                        }
+
+                        renewals += 1;
+
+                        return Response.json({ error: { code: "NOT_FOUND", message: "no such route" } }, { status: 404 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        let settle: (response: Response) => void = () => {};
+        const reached = Promise.withResolvers<undefined>();
+        const heldShard: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        reached.resolve(undefined);
+
+                        return new Promise<Response>((resolve) => {
+                            settle = resolve;
+                        });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: scheduler, shardDO: heldShard });
+        const running = dispatch(worker, { args: {}, attempt: "attempt-1", dedupKey: "job-1-first", functionPath: "jobs:sweep", id: "job-1", pool: "stripe" });
+
+        await reached.promise;
+        await vi.advanceTimersByTimeAsync(RENEW_MS * 3);
+
+        expect(renewals).toBe(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("404"));
+
+        settle(Response.json({ result: null }, { status: 200 }));
+        await running;
+        warn.mockRestore();
+    });
+});
+
 describe("createWorker — workpool slot release", () => {
     it("releases a pooled job's slot via the routed SchedulerDO /complete", async () => {
         expect.assertions(3);
@@ -80,12 +191,53 @@ describe("createWorker — workpool slot release", () => {
         const sched = schedulerSpy();
         const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO: okShard() });
 
-        await dispatch(worker, { args: {}, functionPath: "jobs:sweep", id: "job-1", instanceName: "tenant-a", pool: "stripe" });
+        await dispatch(worker, {
+            args: {},
+            attempt: "attempt-1",
+            dedupKey: "job-1-first",
+            functionPath: "jobs:sweep",
+            id: "job-1",
+            instanceName: "tenant-a",
+            pool: "stripe",
+        });
 
         const complete = sched.calls.find((call) => call.path === "/complete");
 
-        expect(complete?.body).toStrictEqual({ id: "job-1", pool: "stripe" });
+        // The key names the scheduling that owns the slot (a later job under the same id owns another),
+        // and the attempt its share of it (a re-fire sharing the slot holds a share of its own).
+        expect(complete?.body).toStrictEqual({ attempt: "attempt-1", dedupKey: "job-1-first", id: "job-1", pool: "stripe" });
         expect(complete?.instance).toBe("tenant-a");
+        expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
+    });
+
+    it("keeps the slot when the shard declines the dispatch in-progress, but not on a handler's own 409", async () => {
+        expect.assertions(4);
+
+        const answers = [
+            // The claim path's decline: the record's first attempt is still running, and its completion is still coming.
+            Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "running" } }, { headers: { "x-lunora-dispatch-declined": "1" }, status: 409 }),
+            // A handler that threw the same code itself: a real failure, so the slot is freed.
+            Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "nested" } }, { status: 409 }),
+        ];
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return { fetch: async () => answers.shift() ?? Response.json({ result: null }) };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO });
+
+        const declined = await dispatch(worker, { args: {}, functionPath: "jobs:sync", id: "job-busy", pool: "sync" });
+
+        expect(declined.status).toBe(409);
+        expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(0);
+
+        const failed = await dispatch(worker, { args: {}, functionPath: "jobs:sync", id: "job-busy", pool: "sync" });
+
+        expect(failed.status).toBe(409);
         expect(sched.calls.filter((call) => call.path === "/complete")).toHaveLength(1);
     });
 
@@ -438,7 +590,7 @@ describe("createWorker — scheduled dispatch idempotency key", () => {
 });
 
 describe("createWorker — scheduled dispatch per-record dedup key", () => {
-    it("spends the scheduler's dedupKey as the shard mutation id and still releases the slot by record id", async () => {
+    it("spends the scheduler's dedupKey as the shard mutation id and releases the slot it owns", async () => {
         expect.assertions(2);
 
         const seen: Headers[] = [];
@@ -463,7 +615,11 @@ describe("createWorker — scheduled dispatch per-record dedup key", () => {
 
         // A reused id's previous job left its dedup row under the bare id; the key is per scheduling.
         expect(seen[0]?.get("x-lunora-mutation-id")).toBe("sync-user-1700000000000");
-        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({ id: "sync-user", pool: "sync" });
+        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({
+            dedupKey: "sync-user-1700000000000",
+            id: "sync-user",
+            pool: "sync",
+        });
     });
 
     it("refuses a dedupKey the SchedulerDO would not have written with 400 INVALID_INPUT, never reaching the shard", async () => {
@@ -514,7 +670,7 @@ describe("createWorker — scheduled dispatch per-record dedup key", () => {
         await dispatchWithEnv(worker, { args: {}, dedupKey: "digest-1700000000000", id: "digest", pool: "digests", workflow: "AGENT_SUPPORT" }, env);
 
         expect(created).toStrictEqual([{ id: "digest-1700000000000", params: {} }]);
-        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({ id: "digest", pool: "digests" });
+        expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({ dedupKey: "digest-1700000000000", id: "digest", pool: "digests" });
     });
 });
 

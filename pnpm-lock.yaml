@@ -5595,6 +5595,9 @@ importers:
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@lunora/wire':
         specifier: 1.0.0-alpha.6
         version: link:../wire

@@ -788,8 +788,12 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         // the time-index deletion alone, so no `dispatched:` key should ever
         // appear, and a successful fire leaves nothing behind.
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("dispatched:"))).toHaveLength(0);
-        // Only the store's own "nothing is unindexed" marker and the job's terminal history remain.
-        expect([...state.storageMap.keys()].filter((key) => !key.startsWith("done:") && !key.startsWith("dt:"))).toStrictEqual(["meta:clean"]);
+        // Only the store's own markers and the job's terminal history remain.
+        expect(
+            [...state.storageMap.keys()]
+                .filter((key) => !key.startsWith("done:") && !key.startsWith("dt:"))
+                .toSorted((left, right) => left.localeCompare(right)),
+        ).toStrictEqual(["meta:clean", "meta:pools-migrated"]);
     });
 
     it("deletes a dangling time-index entry whose id: header is missing instead of busy-looping", async () => {
@@ -939,7 +943,7 @@ describe("schedulerDO — dead-letter admin endpoints", () => {
         expect(response.status).toBe(400);
         await expect(response.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "INVALID_SCHEDULE_ID" } });
         // No job rows — only the store's own "nothing is unindexed" marker.
-        expect([...state.storageMap.keys()]).toStrictEqual(["meta:clean"]);
+        expect([...state.storageMap.keys()].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["meta:clean", "meta:pools-migrated"]);
     });
 
     it("refuses a caller-supplied id a dead-letter record still holds, so /dead/retry cannot overwrite the new job", async () => {

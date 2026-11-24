@@ -640,9 +640,14 @@ describe("schedulerDO dispatch lease — claiming an already-leased record", () 
         const advanceTo = pinClock(at);
         const { state, successor } = await leaseThenLoseInstance({ maxConcurrency: 1, pool: "p" });
 
-        // The lost instance's reservation is still held — nothing released it —
-        // so the re-claim meets a saturated pool and is re-armed as backpressure
-        // without dispatching. The stale lease key must not survive that either.
+        // Another job now holds the only slot (the lost attempt's has been released), so the
+        // re-claim meets a saturated pool and is re-armed as backpressure without dispatching.
+        // The stale lease key must not survive that either.
+        state.storageMap.set("pool:p", {
+            inFlight: 1,
+            maxConcurrency: 1,
+            slots: [{ attempts: [{ at: at + DISPATCH_LEASE_MS, token: "other-attempt" }], id: "other", kicked: true, owner: "other-key" }],
+        });
         advanceTo(at + DISPATCH_LEASE_MS + 1);
 
         await successor.alarm();
@@ -650,6 +655,29 @@ describe("schedulerDO dispatch lease — claiming an already-leased record", () 
         expect(successor.started).toStrictEqual([]);
         expect(indexKeysFor(state.storageMap, "job-0")).toHaveLength(1);
         expect(state.storageMap.has("id:job-0")).toBe(true);
+    });
+
+    it("re-claims an expired lease once, on one slot, after the lost attempt's slot is reclaimed", async () => {
+        expect.hasAssertions();
+
+        const at = Date.now();
+        const advanceTo = pinClock(at);
+        const { state, successor } = await leaseThenLoseInstance({ maxConcurrency: 1, pool: "p" });
+
+        // Nothing released the lost instance's reservation, but it is past the claim ceiling now:
+        // the re-claim is not backpressured by it, and the pool ends with one slot, not two.
+        advanceTo(at + DISPATCH_LEASE_MS + 1);
+
+        const redrain = successor.alarm();
+
+        await settle();
+
+        expect(successor.started).toStrictEqual(["job-0"]);
+        expect(indexKeysFor(state.storageMap, "job-0")).toHaveLength(1);
+        expect((state.storageMap.get("pool:p") as { slots: { id: string }[] }).slots.map((slot) => slot.id)).toStrictEqual(["job-0"]);
+
+        successor.releaseAll();
+        await redrain;
     });
 
     it("drains a record carrying two due index entries once, and reconciles the extra away", async () => {

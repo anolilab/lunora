@@ -94,9 +94,9 @@ describe("schedulerDO alarm drain concurrency", () => {
 
         // And the pool row must account for all three holders — a concurrent
         // read-modify-write that lost an update would show fewer.
-        const pool = state.storageMap.get("pool:p") as { inFlight: number; inFlightIds: string[] };
+        const pool = state.storageMap.get("pool:p") as { inFlight: number; slots: { id: string }[] };
 
-        expect(pool.inFlightIds).toStrictEqual(["job-0", "job-1", "job-2"]);
+        expect(pool.slots.map((slot) => slot.id)).toStrictEqual(["job-0", "job-1", "job-2"]);
         expect(pool.inFlight).toBe(3);
 
         scheduler.releaseAll();

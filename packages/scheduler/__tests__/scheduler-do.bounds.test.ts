@@ -186,7 +186,7 @@ describe("schedulerDO — bounded reads", () => {
             state.storageMap.set(`id:j${key}`, { args: {}, enqueuedAt: 1, functionPath: "f", id: `j${key}`, pool: "mail", scheduledFor: 1 });
         }
 
-        state.storageMap.set("pool:mail", { inFlight: 1, inFlightIds: ["j0000"], maxConcurrency: 2 });
+        state.storageMap.set("pool:mail", { inFlight: 1, maxConcurrency: 2, slots: [{ id: "j0000", owner: "j0000" }] });
 
         const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
