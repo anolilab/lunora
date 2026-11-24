@@ -482,6 +482,75 @@ const runQueryMetricsScenarios = (factory: () => SqlHarness): void => {
             }).not.toThrow();
             expect(readQueryMetrics(sql)[0]?.execCount).toBe(1);
         });
+
+        it("indexes bucket_ms so pruneQueryBuckets and readQueryInsights avoid full bucket scans", () => {
+            expect.assertions(3);
+
+            const { sql } = createHarness();
+
+            recordQueryMetric(sql, "SELECT 1", 5, 1, 0, at(0));
+
+            const captured: { bindings: unknown[]; query: string }[] = [];
+            const spySql: SqlExec = {
+                exec: <Row = Record<string, unknown>>(query: string, ...bindings: unknown[]) => {
+                    captured.push({ bindings, query });
+
+                    return sql.exec<Row>(query, ...bindings);
+                },
+            };
+
+            pruneQueryBuckets(spySql, at(QUERY_BUCKET_RETENTION + 10));
+
+            const pruneCall = captured.find((entry) => entry.query.startsWith("DELETE FROM"));
+
+            expect(pruneCall).toBeDefined();
+
+            const prunePlan = sql
+                .exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${pruneCall!.query}`, ...pruneCall!.bindings)
+                .toArray()
+                .map((row) => row.detail)
+                .join("\n");
+
+            expect(prunePlan).toContain("USING INDEX __lunora_metrics_queries_buckets_bucket_ms");
+
+            const rangePlan = sql
+                .exec<{ detail: string }>(
+                    `EXPLAIN QUERY PLAN SELECT bucket_ms, SUM(exec_count) FROM "__lunora_metrics_queries_buckets" WHERE bucket_ms >= ? GROUP BY bucket_ms ORDER BY bucket_ms ASC`,
+                    at(0),
+                )
+                .toArray()
+                .map((row) => row.detail)
+                .join("\n");
+
+            expect(rangePlan).toContain("USING INDEX __lunora_metrics_queries_buckets_bucket_ms");
+        });
+
+        it("isolates a bucket_ms index build failure and bounds retries to one attempt per handle", () => {
+            expect.assertions(4);
+
+            const real = createHarness().sql;
+            let indexAttempts = 0;
+            const sql: SqlExec = {
+                exec: <Row = Record<string, unknown>>(query: string, ...bindings: unknown[]) => {
+                    if (query.includes("__lunora_metrics_queries_buckets_bucket_ms")) {
+                        indexAttempts += 1;
+
+                        throw new Error("simulated bucket index failure");
+                    }
+
+                    return real.exec<Row>(query, ...bindings);
+                },
+            };
+
+            expect(() => {
+                recordQueryMetric(sql, "SELECT 1", 5, 1, 0, at(0));
+                recordQueryMetric(sql, "SELECT 1", 7, 1, 0, at(0));
+            }).not.toThrow();
+
+            expect(indexAttempts).toBe(1);
+            expect(readQueryMetrics(sql)[0]?.execCount).toBe(2);
+            expect(readQueryInsights(sql, 60_000, at(0)).entries[0]?.execCount).toBe(2);
+        });
     });
 };
 

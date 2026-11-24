@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { SqlExec } from "../src/ctx-db";
 import { IDEMPOTENCY_TABLE, readIdempotent, runShardMigrations, trimIdempotent, writeIdempotent } from "../src/ctx-db";
+import { IDEMPOTENCY_TS_INDEX } from "../src/ctx-db-idempotency";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -81,5 +83,30 @@ describe("ctx-db mutation idempotency", () => {
 
         expect(readIdempotent(harness.sql, "u1", "old")).toBeUndefined();
         expect(readIdempotent(harness.sql, "u1", "new")?.resultJson).toBe(JSON.stringify(2));
+    });
+
+    it("uses the ts index for trimIdempotent instead of scanning the table", () => {
+        expect.assertions(2);
+
+        const captured: { bindings: unknown[]; query: string }[] = [];
+        const spySql: SqlExec = {
+            exec: <Row = Record<string, unknown>>(query: string, ...bindings: unknown[]) => {
+                captured.push({ bindings, query });
+
+                return harness.sql.exec<Row>(query, ...bindings);
+            },
+        };
+
+        trimIdempotent(spySql, 4000);
+
+        expect(captured).toHaveLength(1);
+
+        const plan = harness.sql
+            .exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${captured[0]!.query}`, ...captured[0]!.bindings)
+            .toArray()
+            .map((row) => row.detail)
+            .join("\n");
+
+        expect(plan).toContain(`USING INDEX ${IDEMPOTENCY_TS_INDEX}`);
     });
 });
