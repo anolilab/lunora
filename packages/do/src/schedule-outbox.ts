@@ -285,9 +285,10 @@ class ScheduleOutboxRunner {
     private readonly scheduleOutboxAttempts = new Map<string, Set<ScheduleOutboxAttempt>>();
 
     /**
-     * Outbox entries an operator is dropping right now. The drop first asks the
-     * scheduler to cancel the job (it may already hold it), and the retry loop must
-     * not hand the entry over again while that is awaiting.
+     * Id-only cancels in flight, per outbox id: an operator's drop, and the cancel an attempt that
+     * landed after a drop sends to take its job back out. While one is awaiting, nothing may hand a
+     * job under that id to the scheduler (the cancel could remove it) and a Retry now is refused
+     * (the cancel's outcome would undo it). See {@link ScheduleOutboxRunner.beginScheduleOutboxCancel}.
      */
     private readonly scheduleOutboxDrops = new Map<string, Set<Promise<void>>>();
 
@@ -486,11 +487,8 @@ class ScheduleOutboxRunner {
         // Registered before the first await, so the retry loop and every hand-off up to this row see
         // it. The coverage ends at the row being dropped: a job recorded anew under the same id after
         // this point carries a newer token and is not part of this drop.
-        const settled = Promise.withResolvers<undefined>();
-        const drops = this.scheduleOutboxDrops.get(id) ?? new Set<Promise<void>>();
+        const endCancel = this.beginScheduleOutboxCancel(id);
 
-        drops.add(settled.promise);
-        this.scheduleOutboxDrops.set(id, drops);
         this.markScheduleOutboxDropped(id, before.createdAt);
 
         try {
@@ -561,14 +559,7 @@ class ScheduleOutboxRunner {
 
             return { dropped: true };
         } finally {
-            drops.delete(settled.promise);
-
-            if (drops.size === 0) {
-                this.scheduleOutboxDrops.delete(id);
-            }
-
-            settled.resolve(undefined);
-            this.pruneScheduleOutboxDropMarker(id);
+            endCancel();
         }
     }
 
@@ -793,6 +784,29 @@ class ScheduleOutboxRunner {
         }
     }
 
+    /**
+     * Register an id-only cancel for `id` as in flight; the returned function ends it. Registered
+     * before the cancel's first await, so a hand-off or Retry now that starts meanwhile sees it.
+     */
+    private beginScheduleOutboxCancel(id: string): () => void {
+        const settled = Promise.withResolvers<undefined>();
+        const cancels = this.scheduleOutboxDrops.get(id) ?? new Set<Promise<void>>();
+
+        cancels.add(settled.promise);
+        this.scheduleOutboxDrops.set(id, cancels);
+
+        return () => {
+            cancels.delete(settled.promise);
+
+            if (cancels.size === 0) {
+                this.scheduleOutboxDrops.delete(id);
+            }
+
+            settled.resolve(undefined);
+            this.pruneScheduleOutboxDropMarker(id);
+        };
+    }
+
     private markScheduleOutboxDropped(id: string, through: number): void {
         this.scheduleOutboxDroppedThrough.set(id, Math.max(through, this.scheduleOutboxDroppedThrough.get(id) ?? 0));
     }
@@ -948,6 +962,10 @@ class ScheduleOutboxRunner {
             return;
         }
 
+        // Fenced like a drop's own cancel: once the drop has settled, a replacement under this id
+        // would otherwise go out while this id-only cancel is still pending and be cancelled by it.
+        const endCancel = this.beginScheduleOutboxCancel(id);
+
         // The row goes only once the cancel is confirmed. If it cannot be, the entry stays
         // (parked, so it is never handed over again) and a later drop can finish the cancel.
         try {
@@ -975,6 +993,8 @@ class ScheduleOutboxRunner {
                 timestamp: Date.now(),
                 traceId: trace?.traceId,
             });
+        } finally {
+            endCancel();
         }
     }
 
