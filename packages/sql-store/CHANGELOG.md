@@ -1,3 +1,7 @@
+## @lunora/sql-store [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.245...@lunora/sql-store@1.0.0-alpha.246) (2026-11-24)
+
+- perf(sql-store): read a table's catalog once per provisioning pass (#1701)
+
 ## @lunora/sql-store [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.244...@lunora/sql-store@1.0.0-alpha.245) (2026-11-23)
 
 - fix: four data-path bugs in rank, sql-store and dispatch metrics (#1636)
