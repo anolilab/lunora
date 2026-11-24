@@ -1693,6 +1693,49 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
     });
 
+    it("hands off a due entry of another id when fenced entries are the oldest a whole batch deep", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        const envelope = JSON.stringify({ args: {}, options: undefined, target: { __lunoraRef: "outbox:charge" }, when: 0 });
+        const fencedIds = Array.from({ length: 32 }, (_, index) => `fenced-${String(index)}`);
+
+        for (const [index, id] of fencedIds.entries()) {
+            harness.run(
+                "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, ?, ?, 0)",
+                id,
+                envelope,
+                index,
+                index + 1,
+            );
+        }
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 0, 100, 100, 0)",
+            "free",
+            envelope,
+        );
+
+        // A cancel in flight on each of the 32 oldest ids, as 32 concurrent drops would leave.
+        const cancelsInFlight = (harness.shard as unknown as { scheduleOutboxRunner: { scheduleOutboxDrops: Map<string, Set<Promise<void>>> } })
+            .scheduleOutboxRunner.scheduleOutboxDrops;
+        const pending = Promise.withResolvers<undefined>();
+
+        for (const id of fencedIds) {
+            cancelsInFlight.set(id, new Set([pending.promise]));
+        }
+
+        await harness.retry();
+
+        expect(harness.received.map((options) => options?.id)).toStrictEqual(["free"]);
+
+        cancelsInFlight.clear();
+        pending.resolve(undefined);
+    });
+
     it("polls a fenced due entry again after a retry interval, not at once", async () => {
         expect.assertions(4);
 

@@ -468,13 +468,23 @@ class ScheduleOutboxRunner {
         }
 
         let fenced = false;
+        let handled = 0;
 
         if (probe.dueAt !== undefined && probe.dueAt <= now) {
             const scheduler = this.host.scheduler();
+            // A fenced row stays due, so read past the fenced ids: otherwise enough of them, being the
+            // oldest, would fill every tick's batch and starve due rows of other ids. One row per id,
+            // so this reads at most that many extra rows, and the scheduler calls stay bounded.
+            const fencedIds = this.fencedScheduleOutboxIds();
 
-            for (const entry of readDueScheduleOutbox(sql, now, SCHEDULE_OUTBOX_BATCH)) {
-                // eslint-disable-next-line no-await-in-loop -- each attempt is an outbound RPC to one DO; firing the batch at once is what the per-tick bound exists to prevent
-                fenced = (await this.retryScheduleOutboxEntry(sql, scheduler, entry, trace)) || fenced;
+            for (const entry of readDueScheduleOutbox(sql, now, SCHEDULE_OUTBOX_BATCH + fencedIds.size)) {
+                if (fencedIds.has(entry.id)) {
+                    fenced = true;
+                } else if (handled < SCHEDULE_OUTBOX_BATCH) {
+                    handled += 1;
+                    // eslint-disable-next-line no-await-in-loop -- each attempt is an outbound RPC to one DO; firing the batch at once is what the per-tick bound exists to prevent
+                    fenced = (await this.retryScheduleOutboxEntry(sql, scheduler, entry, trace)) || fenced;
+                }
             }
         }
 
@@ -485,7 +495,8 @@ class ScheduleOutboxRunner {
         // A row skipped for a fence is still due, and handing its past due time back would re-arm the
         // shared alarm at once, tick after tick, for as long as that scheduler call is outstanding. The
         // outbox is exempt from the re-arm breaker, so nothing else would stop it: wait a retry interval.
-        return fenced && dueAt !== undefined ? Math.max(dueAt, Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS) : dueAt;
+        // Unless the batch was full: the rows behind it are due now and not fenced.
+        return fenced && handled < SCHEDULE_OUTBOX_BATCH && dueAt !== undefined ? Math.max(dueAt, Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS) : dueAt;
     }
 
     /**
@@ -949,6 +960,19 @@ class ScheduleOutboxRunner {
 
     private isScheduleOutboxBeingDropped(id: string): boolean {
         return (this.scheduleOutboxDrops.get(id)?.size ?? 0) > 0;
+    }
+
+    /** Every id with a fence on it; see {@link ScheduleOutboxRunner.scheduleOutboxFences}. */
+    private fencedScheduleOutboxIds(): Set<string> {
+        const ids = new Set(this.scheduleOutboxDrops.keys());
+
+        for (const id of this.scheduleOutboxAttempts.keys()) {
+            if (this.scheduleOutboxFences(id).length > 0) {
+                ids.add(id);
+            }
+        }
+
+        return ids;
     }
 
     /**
