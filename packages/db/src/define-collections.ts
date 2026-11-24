@@ -708,7 +708,7 @@ const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClien
             // moment — see `WriteProvenance.baselineSeq`.
             const metadata: WriteProvenance = {
                 baselineSeq: client.currentBaseline(shardKey),
-                identity: client.currentIdentity(),
+                identity: client.writeIdentityStamp(),
                 // Read in the same tick as `createOfflineTransaction`, which branches on it.
                 ...(executor.isOfflineEnabled ? {} : { oneShot: true }),
                 shardKey,

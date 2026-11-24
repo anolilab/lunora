@@ -274,6 +274,11 @@ import { createAuthClient } from "better-auth/react";
 export const authClient = createAuthClient({ plugins: [lunoraSessionSync()] });
 ```
 
+The plugin also tells the page's clients, from the moment it loads, that there
+is a session to resolve. A write made before the first answer is held, then
+sent as the user that answer names, rather than treated as anonymous and
+dropped once the session resolves.
+
 The report also reaches the browser's other tabs **on the same origin**. Each
 one re-checks the session without reloading, and retires the previous user's
 rows the same way. A sign-out made through better-auth's own client in another

@@ -44,6 +44,7 @@ const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") 
 
             return { verdict: "mismatch" as const };
         },
+        writeIdentityStamp: () => null,
         subscribe: vi.fn<
             (
                 reference: unknown,

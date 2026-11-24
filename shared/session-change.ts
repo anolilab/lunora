@@ -58,6 +58,8 @@ interface State {
     /** Stops listening to other tabs; set while there are listeners in a browser. */
     detach: (() => void) | undefined;
     listeners: Set<Listener>;
+    /** Set by {@link declareSessionSource}; optional because a copy inlined by an older bundle builds the state without it. */
+    sourceDeclared?: boolean;
     tab: string;
 }
 
@@ -187,6 +189,26 @@ const onSessionChanged = (listener: Listener): (() => void) => {
 };
 
 /**
+ * Declare that this page has an auth session the Lunora clients must resolve,
+ * so a client's `null` identity reads as not-known-yet rather than as an app
+ * with no auth. Called when the session source is built — module load, before
+ * the first render — which is earlier than any client can learn it otherwise:
+ * a write composed before the socket's first `identity` frame was otherwise
+ * stamped as the settled anonymous identity and dropped when the frame named
+ * the user. Browser only, like the rest of this module: a server process is
+ * shared by every request, and one declaration would hold every server-side
+ * client's writes.
+ */
+const declareSessionSource = (): void => {
+    if (inBrowser()) {
+        state().sourceDeclared = true;
+    }
+};
+
+/** Whether {@link declareSessionSource} has run in this page. */
+const sessionSourceDeclared = (): boolean => state().sourceDeclared === true;
+
+/**
  * Tell every registered listener — in this tab, and in the others — that the
  * session may have changed. Resolves once the work this tab's listeners
  * returned has settled (for a `LunoraClient`, its re-resolve of who is signed
@@ -208,4 +230,4 @@ const notifySessionChanged = async (): Promise<void> => {
     await runListeners();
 };
 
-export { notifySessionChanged, onSessionChanged };
+export { declareSessionSource, notifySessionChanged, onSessionChanged, sessionSourceDeclared };
