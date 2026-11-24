@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { InsightsPanel } from "../../../src/features/advisors/insights-panel";
@@ -342,29 +342,30 @@ describe("insightsPanel", () => {
             },
         });
 
-        render(
-            wrapInRouter(
-                <LunoraProvider client={mock.asClient}>
-                    <InsightsPanel initialShardKey="shardA" />
-                </LunoraProvider>,
-            ),
-        );
-
-        // Wait for shardA's batched call to have been issued (and left pending)
-        // before switching shards.
-        await waitFor(() => {
-            const issued = mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTablesIndexes);
-
-            if (!issued) {
-                throw new Error("shardA's listTablesIndexes not yet issued");
-            }
-        });
-
-        // Switch to shardB before shardA's reply lands. The shard input settles on a 400 ms
-        // debounce timer, so step past it on a fake clock.
+        // Fake from before the first render: the shard input arms its 400 ms debounce on mount, and a
+        // timer armed on the real clock can be neither cleared by the switch below nor stepped past.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
         try {
+            render(
+                wrapInRouter(
+                    <LunoraProvider client={mock.asClient}>
+                        <InsightsPanel initialShardKey="shardA" />
+                    </LunoraProvider>,
+                ),
+            );
+
+            // The query layer delivers on 0 ms timers. Stepping to just short of the debounce runs
+            // shardA's whole enumeration up to its batched call, which stays pending.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(399);
+            });
+
+            if (!mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTablesIndexes)) {
+                throw new Error("shardA's listTablesIndexes was not issued before the shard switch");
+            }
+
+            // Switch to shardB before shardA's reply lands, and step past the debounce.
             fireEvent.change(screen.getByTestId("in-shard-input"), { target: { value: "shardB" } });
 
             await act(async () => {
