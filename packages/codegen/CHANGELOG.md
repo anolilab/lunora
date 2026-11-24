@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.442](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.441...@lunora/codegen@1.0.0-alpha.442) (2026-11-24)
+
+- feat(payment)!: add scoped facade for server work (#1704)
+
 ## @lunora/codegen [1.0.0-alpha.441](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.440...@lunora/codegen@1.0.0-alpha.441) (2026-11-24)
 
 - fix(advisor): keep table accepts exact and skip CAPTCHA on admin actions (#1690)

@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.277...@lunora/payment@1.0.0-alpha.278) (2026-11-24)
+
+- feat(payment)!: add scoped facade for server work (#1704)
+
 ## @lunora/payment [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.276...@lunora/payment@1.0.0-alpha.277) (2026-11-24)
 
 - fix(advisor): let reviewed WARN and INFO findings be accepted (#1685)
