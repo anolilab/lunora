@@ -281,43 +281,85 @@ is left on the class is mostly the telemetry calls.
 
 ## 7. Where the conflicts actually come from
 
-Measured, not assumed. **Replay:** each of the 121 non-release commits to `shard-do.ts` in the 90
-days before the baseline is applied (`patch --fuzz=0`, 3 lines of context) to the parent of each of
-the 1-3 commits before it, as if the two had been written concurrently. 97 of the 357 pairs (27%)
-fail. Where the failing hunks land:
+Measured two ways. The second is the sounder one; the first is kept because it is what first showed
+the pattern.
 
-| Region               | Failing hunks | Notes                                                                                                               |
-| -------------------- | ------------: | ------------------------------------------------------------------------------------------------------------------- |
-| method bodies        |           226 | `handleFetchCloudflare` 19, `handleWebSocketMessage` 16, then the reactive methods (~40) and the outbox (14, moved) |
-| class field block    |            19 | (and ~19 more attributed to the first class member, which is the field block)                                       |
-| import block         |            16 |                                                                                                                     |
-| module-level helpers |            16 |                                                                                                                     |
+**A. Adjacent-commit replay (a weak proxy).** Each of the 121 non-release commits to `shard-do.ts`
+in the 90 days before the baseline is applied with `patch --fuzz=0` to the parent of each of the 1-3
+commits before it. 97 of 357 pairs fail. It overstates conflicts in two ways:
 
-**Only 12 of the 97 conflicting pairs conflict only in the shared regions** (imports, module-level
-code, fields). Those are the only conflicts that moving code into its own module removes, since the
-moved code takes its imports and fields with it. Another 29 pairs have a shared-region hunk as
-well as a method-body hunk. The other 56 conflict only inside method bodies: two commits changing the
-same logic. Git conflicts on textual proximity, so neither a new file nor a new method boundary
-separates them, because the moved lines keep their neighbours.
+- **It is stricter than git.** A real 3-way merge (`git merge-file`) of the same pairs conflicts in
+  85, not 97.
+- **It counts follow-ups as concurrent.** History is linear squash merges, so adjacent commits are
+  often sequential: in at least 19 of the 85, the later commit edits lines the earlier one
+  introduced.
 
-By cluster: the code that stays on the class (entry points, dispatch, admin, hooks, request scope,
-telemetry) is touched by 109 of the 121 commits. The reactive engine is touched by 48, but only 5
-commits touched it alone. Moving it would take about 6% of commits off `shard-do.ts`, and every one
-of its method-body conflicts would happen in the new module instead.
+**B. PR-overlap replay (independent review).** Each commit's PR `createdAt` comes from `gh`. Its
+change is 3-way merged onto the file as it stood before the first `shard-do.ts` commit that landed
+while that PR was open.
 
-**Conclusion.** The four extractions (steps 1, 2, 3, 5) were worth their cost. They were cheap, they
-took self-contained subsystems with their imports and fields out of the shared regions, and each one
-gave a collaborator that tests can drive directly. Further splitting is not justified by conflicts.
-The remaining conflict rate is concurrent work on the same dispatch, socket and subscription logic,
-and that is a scheduling question (stack or sequence the PRs that touch those paths), not a file
-layout one.
+| PRs touching `shard-do.ts` | Count |
+| -------------------------- | ----: |
+| No concurrent commit       |    69 |
+| Concurrent, merged cleanly |    34 |
+| Concurrent, conflicted     |    18 |
 
-**The per-frame-type split** of `handleWebSocketMessage` is kept for what it does buy: one method per
-frame type to read and review, and complexity disables scoped to the two handlers that need them.
-It is not a conflict fix, for the reason above. `handleFetchCloudflare` is not split. Its `try`,
-`catch` and `finally` share `let` state across the whole dispatch lifecycle (`dispatchError`,
-`dispatchServerFault`, `heldClaim`, `dispatchScope`, `sensitive`), it is the most security-sensitive
-path in the class, and splitting it would buy no conflict relief.
+18 of 121 is 15%. Of those 18:
+
+- **13 are true overlapping edits** to the same lines.
+- **1 edits code** a concurrent commit introduced.
+- **4 are insert-only:** both sides added at the same anchor.
+- **Only 1 conflicts only in the shared regions** (imports, module-level helpers, fields); 11 have
+  at least one hunk there.
+
+The conflict hunks fall in `handleWebSocketMessage` (7, from three PRs: a stacked follow-up and two
+socket features open at once), `handleStream`, `deliverWhisperLocal`,
+`resolveReactiveOutcomeDeduped` (3 each), and a long tail of subscription and socket methods.
+`handleFetchCloudflare` has none. Its hits in replay A all came from sequential commits.
+
+Limits: `createdAt` understates branch age, so 15% is a lower bound. The merge uses squashed diffs,
+not the real PR heads. Region attribution is by nearest preceding member.
+
+**What that means for layout.** Git conflicts on textual proximity. A new module or a new method
+boundary keeps the moved lines next to the same neighbours, so it separates none of the 13 true
+overlaps. The extractions on this branch relocated conflicts rather than removing them; for example,
+the outbox drop conflicts (#1402) would now happen in `schedule-outbox.ts`. Regrouping the field or
+import blocks has a ceiling of the 4 insert-only PRs (about 3% of PRs), which resolve trivially, and
+the regroup itself would conflict with every open PR.
+
+By cluster (replay A's attribution): the code that stays on the class is touched by 109 of the 121
+commits. The reactive engine is touched by 48, but only 5 touched it alone, so moving it whole would
+take about 6% of commits off the file.
+
+**Options rejected, with the reason:**
+
+- **An inheritance chain of abstract bases across files:** the `extends` clause and the members that
+  leave the class body diff `api:check`. Privates shared across layers would have to become
+  `protected`, which is new public surface. It also moves the same lines, so no conflict goes away.
+- **Declaration merging with prototype assignment, or mixins:** interfaces cannot declare
+  `protected` or `private`. It breaks `override`/`super` for the codegen subclass and the ~110 test
+  subclasses, and has the same zero conflict effect.
+- **Moving the reactive engine whole, or splitting `handleFetchCloudflare`:** see §6 and above.
+- **More small collaborators:** they fail R6.
+
+**Conclusion.** Stop restructuring. Steps 1, 2, 3 and 5 were cheap, behaviour-identical moves of
+self-contained subsystems and are worth keeping for reading and ownership. They are not a conflict
+fix, and nothing further in the file's layout would be. 13 of the 18 conflicts are concurrent work on
+the same dispatch, socket and subscription logic, and at least five come from stacked or sibling PRs.
+The levers are process:
+
+- Sequence PRs that touch those paths.
+- Land stacked follow-ups onto their parent.
+- Rebase long-lived branches early (two PRs were open for 1,734h and 3,407h).
+
+The four collaborators are still covered only through `ShardDO`; no test drives them directly yet.
+
+**The per-frame-type split** of `handleWebSocketMessage` is kept for what it does buy: one method
+per frame type to read and review, and complexity disables scoped to the two handlers that need
+them. `handleFetchCloudflare` is not split. Its `try`, `catch` and `finally` share `let` state across
+the whole dispatch lifecycle (`dispatchError`, `dispatchServerFault`, `heldClaim`, `dispatchScope`,
+`sensitive`), it is the most security-sensitive path in the class, and it has no concurrent-PR
+conflicts to relieve.
 
 ## 8. Platform parity
 
