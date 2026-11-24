@@ -118,6 +118,10 @@ interface Harness {
     hold: () => { entered: Promise<void>; release: () => void };
     /** Hold the next `cancel` call the same way. */
     holdCancel: () => { entered: Promise<void>; release: () => void };
+    /** Hold the next `cancel` call's ANSWER: the scheduler has acted (and removed the job, see `removeOnCancel`), the reply is in flight. */
+    holdCancelReply: () => { entered: Promise<void>; release: () => void };
+    /** Hold the next scheduler call's ANSWER: the job is stored at the scheduler, the reply is in flight. */
+    holdReply: () => { entered: Promise<void>; release: () => void };
     /** Shard log lines pushed for `functionPath`. */
     logs: (functionPath: string) => { level: string; message: string }[];
     /** Make every live entry due now, so the retry ladder can be driven without waiting it out. */
@@ -130,6 +134,8 @@ interface Harness {
     received: ReceivedOptions[];
     /** Make `cancel` answer `{ cancelled: false }` whatever the scheduler holds. */
     refuseCancels: (refuse: boolean) => void;
+    /** Make a confirmed `cancel` remove the job, as the real scheduler does, so a second cancel finds nothing. */
+    removeOnCancel: () => void;
     /** Drive the outbox retry tier the shared poll alarm runs. */
     retry: () => Promise<number | undefined>;
     /** Run raw SQL against the shard's store. */
@@ -160,6 +166,29 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
     let cancelFailure: Error | undefined;
     let heldCancel: { entered: () => void; released: Promise<undefined> } | undefined;
     let held: { entered: () => void; released: Promise<undefined> } | undefined;
+    let heldReply: { entered: () => void; released: Promise<undefined> } | undefined;
+    let heldCancelReply: { entered: () => void; released: Promise<undefined> } | undefined;
+    let removing = false;
+
+    const gate = (): { control: { entered: Promise<void>; release: () => void }; hold: { entered: () => void; released: Promise<undefined> } } => {
+        const entered = Promise.withResolvers<undefined>();
+        const released = Promise.withResolvers<undefined>();
+
+        return {
+            control: {
+                entered: entered.promise,
+                release: () => {
+                    released.resolve(undefined);
+                },
+            },
+            hold: {
+                entered: () => {
+                    entered.resolve(undefined);
+                },
+                released: released.promise,
+            },
+        };
+    };
 
     const accept = async (target: unknown, args: unknown, options?: { id?: string }): Promise<string> => {
         received.push(options);
@@ -185,6 +214,14 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
 
         scheduled.push({ args, id, target });
 
+        if (heldReply !== undefined) {
+            const { entered, released } = heldReply;
+
+            heldReply = undefined;
+            entered();
+            await released;
+        }
+
         return id;
     };
 
@@ -209,6 +246,18 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
                               cancelled.push(id);
 
                               const holds = scheduled.some((job) => job.id === id) && !refusing;
+
+                              if (holds && removing) {
+                                  scheduled.splice(0, scheduled.length, ...scheduled.filter((job) => job.id !== id));
+                              }
+
+                              if (heldCancelReply !== undefined) {
+                                  const { entered, released } = heldCancelReply;
+
+                                  heldCancelReply = undefined;
+                                  entered();
+                                  await released;
+                              }
 
                               cancelOutcomes.push(holds);
                               order.push("cancel-done");
@@ -303,6 +352,23 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
                     released.resolve(undefined);
                 },
             };
+        },
+        holdCancelReply: () => {
+            const { control, hold } = gate();
+
+            heldCancelReply = hold;
+
+            return control;
+        },
+        holdReply: () => {
+            const { control, hold } = gate();
+
+            heldReply = hold;
+
+            return control;
+        },
+        removeOnCancel: () => {
+            removing = true;
         },
         hold: () => {
             const entered = Promise.withResolvers<undefined>();
@@ -1511,6 +1577,76 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         // Had the replacement gone out first, the old attempt's id-only cancel would have removed its job.
         expect(harness.order).toStrictEqual(["cancel-done", "run", "run"]);
         expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("treats a landed attempt's empty cancel as success when a drop's cancel already removed the job", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.removeOnCancel();
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        harness.setReachable(true);
+
+        // The scheduler stores the job; its answer to the attempt is still in flight.
+        const reply = harness.holdReply();
+
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await reply.entered;
+        // The drop's cancel reaches the scheduler first and removes the job.
+        await harness.drop("dup-id");
+        reply.release();
+        await attempt;
+
+        // The attempt's own cancel finds nothing: that is the drop's doing, not a job that already ran.
+        expect(harness.outbox()).toStrictEqual([]);
+        expect(harness.logs("scheduler:outbox").filter((line) => line.level === "error")).toStrictEqual([]);
+    });
+
+    it("waits for a drop still answering before calling a landed attempt's empty cancel a failure", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.removeOnCancel();
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        harness.setReachable(true);
+
+        const reply = harness.holdReply();
+
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await reply.entered;
+
+        // The drop's cancel removed the job at the scheduler, but its answer has not come back yet.
+        const cancelReply = harness.holdCancelReply();
+        const drop = harness.drop("dup-id");
+
+        await cancelReply.entered;
+        // The attempt lands now, and its cancel's "not found" comes back first.
+        reply.release();
+        await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+        });
+        cancelReply.release();
+
+        await expect(drop).resolves.toBeInstanceOf(Response);
+
+        await attempt;
+
+        expect(harness.outbox()).toStrictEqual([]);
+        expect(harness.logs("scheduler:outbox").filter((line) => line.level === "error")).toStrictEqual([]);
     });
 
     it("polls a fenced due entry again after a retry interval, not at once", async () => {

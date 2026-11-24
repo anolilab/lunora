@@ -333,6 +333,13 @@ class ScheduleOutboxRunner {
     private readonly scheduleOutboxDroppedThrough = new Map<string, number>();
 
     /**
+     * Per id, the newest recording whose job an operator's drop saw the scheduler confirm cancelled.
+     * An attempt that lands after such a cancel and sends its own gets "not found" back; that is the
+     * drop's doing, not a job that already ran. Pruned with {@link ScheduleOutboxRunner.scheduleOutboxDroppedThrough}.
+     */
+    private readonly scheduleOutboxCancelledThrough = new Map<string, number>();
+
+    /**
      * Calls recorded for an id whose hand-off has not finished (or whose window has not rolled back).
      * A drop marker is needed exactly that long, so it is pruned when this reaches zero instead of by
      * count: evicting a marker early would let a queued call of a dropped job run.
@@ -547,6 +554,8 @@ class ScheduleOutboxRunner {
                 cancelError = error instanceof Error ? error : new Error(String(error));
             }
 
+            this.recordConfirmedScheduleOutboxCancel(id, before.createdAt, held, cancelError);
+
             const after = readScheduleOutboxState(sql, id);
 
             if (after?.version !== before.version) {
@@ -638,6 +647,7 @@ class ScheduleOutboxRunner {
         }
 
         this.scheduleOutboxDroppedThrough.delete(id);
+        this.scheduleOutboxCancelledThrough.delete(id);
         this.unconfirmedScheduleOutboxDrops.delete(id);
 
         return "retried";
@@ -900,6 +910,13 @@ class ScheduleOutboxRunner {
     }
 
     /** Only a scheduler that is not there at all makes a cancel unconfirmable; one that is down is asked again. */
+    /** A drop's cancel that the scheduler confirmed covers every recording up to `through`; see {@link ScheduleOutboxRunner.scheduleOutboxCancelledThrough}. */
+    private recordConfirmedScheduleOutboxCancel(id: string, through: number, held: boolean, cancelError: Error | undefined): void {
+        if (cancelError === undefined && held) {
+            this.scheduleOutboxCancelledThrough.set(id, Math.max(through, this.scheduleOutboxCancelledThrough.get(id) ?? 0));
+        }
+    }
+
     private rememberUnconfirmedScheduleOutboxDrop(id: string, version: string, cancelError: Error): void {
         if (!isSchedulerUnavailable(cancelError)) {
             return;
@@ -971,7 +988,24 @@ class ScheduleOutboxRunner {
             !this.isScheduleOutboxBeingDropped(id)
         ) {
             this.scheduleOutboxDroppedThrough.delete(id);
+            this.scheduleOutboxCancelledThrough.delete(id);
         }
+    }
+
+    /**
+     * Whether a drop's cancel already took the job of the recording `token` names out of the
+     * scheduler. A drop still awaiting its answer may be the one that did, so those are waited for.
+     */
+    private async wasScheduleOutboxCancelConfirmed(id: string, token: number | undefined, earlierCancels: ReadonlyArray<Promise<void>>): Promise<boolean> {
+        const confirmed = (): boolean => token !== undefined && token <= (this.scheduleOutboxCancelledThrough.get(id) ?? Number.NEGATIVE_INFINITY);
+
+        if (confirmed() || earlierCancels.length === 0) {
+            return confirmed();
+        }
+
+        await Promise.all(earlierCancels);
+
+        return confirmed();
     }
 
     /** Whether a drop covers the recording `token` names: recorded no later than the row it acted on. */
@@ -1090,6 +1124,10 @@ class ScheduleOutboxRunner {
             return current !== undefined && current !== attempt.version;
         };
 
+        // Cancels already in flight for this id when this one starts. Taken before registering this
+        // one, so waiting on them below can never wait on itself.
+        const earlierCancels = [...(this.scheduleOutboxDrops.get(id) ?? [])];
+
         // Fenced like a drop's own cancel: once the drop has settled, a replacement under this id
         // would otherwise go out while this id-only cancel is still pending and be cancelled by it.
         const endCancel = this.beginScheduleOutboxCancel(id);
@@ -1102,7 +1140,8 @@ class ScheduleOutboxRunner {
             // A job that was just accepted and is now "not found" has already run or ended: the drop
             // did not stop it, and the operator has to hear that rather than see the entry vanish.
             // A call that was rejected may never have been accepted, where "not found" is the normal answer.
-            if (landed && !held) {
+            // Unless a drop's own cancel removed it first, which is the drop working.
+            if (landed && !held && !(await this.wasScheduleOutboxCancelConfirmed(id, attempt.token, earlierCancels))) {
                 throw new Error("the scheduler no longer holds the job (it already ran or ended), so the drop could not stop it");
             }
 
