@@ -1,18 +1,23 @@
 /**
- * Cold-start migration catalog, index-ledger, and read-only FTS5 probe
- * invariants over a real Durable Object's `state.storage.sql` (measuring
- * workerd's `cursor.rowsRead` and `cursor.rowsWritten` counters).
+ * Cold-start migration wake cost on a real Durable Object's `state.storage.sql`,
+ * measured with workerd's `cursor.rowsRead` and `cursor.rowsWritten` counters.
+ * The shared invariants run in `_scenarios/ctx-db-migrations.cold-start`.
  */
 import { aroundEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runShardMigrations } from "../../src/ctx-db-migrations";
 import type { SchemaLike } from "../../src/schema-types";
+import { spySql } from "../_helpers/ctx-db-migration-spy";
 import type { SqlHarness } from "../_helpers/sql-harness";
+import runColdStartScenarios from "../_scenarios/ctx-db-migrations.cold-start";
 import { createWorkerdExec, FRESH_DO_TIMEOUT, inFreshDurableObject } from "./_helpers/do-sqlite";
 
 aroundEach(inFreshDurableObject, FRESH_DO_TIMEOUT);
 
-const buildWideSchema = (): SchemaLike => {
+runColdStartScenarios(createWorkerdExec);
+
+/** Eight tables with an FTS5 search index and a TTL on the first, so the wake exercises every index family. */
+const buildSearchSchema = (): SchemaLike => {
     const tables: Record<string, unknown> = {};
 
     for (let tableIndex = 0; tableIndex < 8; tableIndex += 1) {
@@ -37,98 +42,49 @@ const buildWideSchema = (): SchemaLike => {
     return { tables } as SchemaLike;
 };
 
-interface WakeMeasurement {
-    catalogScans: number;
-    ftsProbes: number;
-    ledgerScans: number;
-    rowsRead: number;
-    rowsWritten: number;
-}
-
-const measureWake = (sql: SqlHarness["sql"], run: (measuredSql: SqlHarness["sql"]) => void): WakeMeasurement => {
-    const cursors: { rowsRead?: unknown; rowsWritten?: unknown }[] = [];
-    let catalogScans = 0;
-    let ledgerScans = 0;
-    let ftsProbes = 0;
-
-    // A fresh wrapper without `WRAPPED_SQL` acts like a brand-new post-hibernation
-    // DO storage handle for per-handle WeakMap caches (such as FTS5 availability).
-    const measuredSql: SqlHarness["sql"] = {
-        exec: <Row = Record<string, unknown>>(query: string, ...bindings: unknown[]) => {
-            if (query.includes("sqlite_master")) {
-                catalogScans += 1;
-            }
-
-            if (query.includes("SELECT") && query.includes("__lunora_framework_indexes")) {
-                ledgerScans += 1;
-            }
-
-            if (query.includes("__lunora_fts_probe")) {
-                ftsProbes += 1;
-            }
-
-            const cursor = sql.exec<Row>(query, ...bindings);
-
-            cursors.push(cursor as { rowsRead?: unknown; rowsWritten?: unknown });
-
-            return cursor;
-        },
-    };
-
-    run(measuredSql);
-
-    // Read `cursor.rowsRead` / `cursor.rowsWritten` AFTER the pass has consumed
-    // every cursor: workerd increments both counters lazily during iteration.
-    let rowsRead = 0;
-    let rowsWritten = 0;
+/** Sums a counter over a run's cursors. Workerd counts rows lazily while a cursor is iterated, so call this only after the pass has consumed every cursor. */
+const sumCursorCounter = (cursors: { rowsRead?: unknown; rowsWritten?: unknown }[], counter: "rowsRead" | "rowsWritten"): number => {
+    let total = 0;
 
     for (const cursor of cursors) {
-        if (typeof cursor.rowsRead === "number") {
-            rowsRead += cursor.rowsRead;
-        }
+        const value = cursor[counter];
 
-        if (typeof cursor.rowsWritten === "number") {
-            rowsWritten += cursor.rowsWritten;
+        if (typeof value === "number") {
+            total += value;
         }
     }
 
-    return { catalogScans, ftsProbes, ledgerScans, rowsRead, rowsWritten };
+    return total;
 };
 
 let harness: SqlHarness;
 
-describe("runShardMigrations single-pass catalog and ledger on workerd SQLite", () => {
+describe("runShardMigrations wake cost on workerd SQLite", () => {
     beforeEach(() => {
         harness = createWorkerdExec();
     });
 
-    it("scans sqlite_master and the index ledger once with zero writes on post-hibernation wakes and repairs dropped indexes", () => {
-        expect.assertions(8);
+    it("keeps a post-hibernation wake to bounded reads with zero writes and no FTS write probe", () => {
+        expect.assertions(6);
 
-        const schema = buildWideSchema();
+        const schema = buildSearchSchema();
         const options = { cdc: true, schemaSnapshot: { hash: "w1", json: '{"tables":{}}' } };
 
         runShardMigrations(harness.sql, schema, options);
 
-        const wake = measureWake(harness.sql, (measuredSql) => {
-            runShardMigrations(measuredSql, schema, options);
-        });
+        const { sql: wakeSql, stats } = spySql(harness.sql);
 
-        expect(wake.catalogScans).toBe(1);
-        expect(wake.ledgerScans).toBe(1);
-        expect(wake.ftsProbes).toBe(0);
-        expect(wake.rowsWritten).toBe(0);
-        expect(wake.rowsRead).toBeGreaterThan(0);
+        runShardMigrations(wakeSql, schema, options);
+
+        const rowsRead = sumCursorCounter(stats.cursors, "rowsRead");
+
+        expect(stats.sqliteMasterScans).toBe(1);
+        expect(stats.ledgerScans).toBe(1);
+        expect(stats.ftsProbes).toBe(0);
+        expect(sumCursorCounter(stats.cursors, "rowsWritten")).toBe(0);
+        expect(rowsRead).toBeGreaterThan(0);
         // 8 tables × 4 declared indexes + companions produces ~90 catalog rows and 33 ledger rows.
         // Without single-pass catalog + ledger scans this wake read > 3,500 rows.
-        expect(wake.rowsRead).toBeLessThan(300);
-
-        harness.sql.exec(`DROP INDEX "items_0_by_field1"`);
-
-        expect(harness.sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'items_0_by_field1'`).toArray()).toStrictEqual([]);
-
-        runShardMigrations(harness.sql, schema, options);
-
-        expect(harness.sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'items_0_by_field1'`).toArray()).toHaveLength(1);
+        expect(rowsRead).toBeLessThan(300);
     });
 });

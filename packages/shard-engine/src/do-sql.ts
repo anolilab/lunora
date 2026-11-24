@@ -439,12 +439,28 @@ const WRAPPED_SQL = Symbol("lunora.wrappedSql");
 /** The handle under a wrapping handle, or `sql` itself when it wraps nothing. */
 const unwrapSql = (sql: SqlExec): SqlExec => (sql as { [WRAPPED_SQL]?: SqlExec })[WRAPPED_SQL] ?? sql;
 
-const isFtsAvailable = (wrapper: SqlExec): boolean => {
+/**
+ * Whether this engine has FTS5. `existingFtsTable`, when the caller has already seen an FTS5 virtual table in
+ * `sqlite_master`, is read first: preparing a read on it loads the module, so a build without FTS5 fails there and the
+ * CREATE/DROP probe below is skipped on a warm wake.
+ */
+const isFtsAvailable = (wrapper: SqlExec, existingFtsTable?: string): boolean => {
     const sql = unwrapSql(wrapper);
     const cached = ftsAvailabilityCache.get(sql);
 
     if (cached !== undefined) {
         return cached;
+    }
+
+    if (existingFtsTable !== undefined) {
+        try {
+            runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(existingFtsTable)} LIMIT 0`).toArray();
+            ftsAvailabilityCache.set(sql, true);
+
+            return true;
+        } catch {
+            // A failed read is not proof that FTS5 is missing; the write probe below decides.
+        }
     }
 
     let available: boolean;
@@ -472,31 +488,6 @@ const isFtsAvailable = (wrapper: SqlExec): boolean => {
     return available;
 };
 
-/**
- * Verify FTS5 availability read-only against an FTS5 virtual table that
- * `sqlite_master` already holds, avoiding the `CREATE`/`DROP` probe write on
- * every post-hibernation wake. SQLite loads the virtual table's module when
- * preparing `SELECT 1 FROM "<ftsTable>" LIMIT 0`, so a build without FTS5 still
- * throws here and falls back to {@link isFtsAvailable}.
- */
-const probeFtsFromExistingTable = (wrapper: SqlExec, ftsTable: string): boolean => {
-    const sql = unwrapSql(wrapper);
-    const cached = ftsAvailabilityCache.get(sql);
-
-    if (cached !== undefined) {
-        return cached;
-    }
-
-    try {
-        runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(ftsTable)} LIMIT 0`).toArray();
-        ftsAvailabilityCache.set(sql, true);
-
-        return true;
-    } catch {
-        return isFtsAvailable(wrapper);
-    }
-};
-
 /** DO drizzle `where` strategy (flat): fields via `json_extract`, ranges bracketed by `json_type`, values via {@link serializeSqlValue}. The one root every DO `where` strategy extends. */
 const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, rangeTypeGuard: jsonTypeGuardSql, serialize: serializeSqlValue };
 
@@ -519,7 +510,6 @@ export {
     jsonPathSql,
     jsonTypeGuard,
     jsonTypeGuardSql,
-    probeFtsFromExistingTable,
     qualifiedJsonPath,
     qualifiedJsonPathSql,
     rowToDocument,

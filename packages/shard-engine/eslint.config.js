@@ -166,6 +166,7 @@ export default createConfig(
     {
         files: [
             "**/__tests__/admin-tokens.test.ts",
+            "**/__tests__/ctx-db-migrations.cold-start.test.ts",
             "**/__tests__/ctx-db.aggregates.test.ts",
             "**/__tests__/ctx-db.batch-writes.test.ts",
             "**/__tests__/ctx-db.bounded-find-many.test.ts",
@@ -176,6 +177,7 @@ export default createConfig(
             "**/__tests__/ctx-db.soft-delete.companions.test.ts",
             "**/__tests__/introspect-wire-search.test.ts",
             "**/__tests__/workerd/admin-tokens.workerd.test.ts",
+            "**/__tests__/workerd/ctx-db-migrations.cold-start.workerd.test.ts",
             "**/__tests__/workerd/ctx-db.*.workerd.test.ts",
             "**/__tests__/workerd/introspect-wire-search.workerd.test.ts",
         ],
