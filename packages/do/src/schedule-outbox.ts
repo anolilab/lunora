@@ -183,7 +183,8 @@ const cancelScheduleOutboxJob = async (scheduler: SchedulerLike | undefined, id:
 /**
  * One hand-off awaiting the scheduler. `version` identifies the outbox row it was made for, so a
  * failure of an older attempt does not land on a row recorded anew under the same id. `token` is the
- * recording it carries (the `created_at` `record` answered), which is what a drop is compared against.
+ * recording it carries (the `created_at` `record` answered, or the replayed row's), which is what a
+ * drop and an acknowledgement are compared against.
  */
 interface ScheduleOutboxAttempt {
     stale: boolean;
@@ -704,7 +705,7 @@ class ScheduleOutboxRunner {
                 { ...envelope.options, ...replayDedupKey(envelope.options, entry.id, state?.createdAt), id: entry.id } as never,
             );
 
-            await this.settleScheduleOutboxHandOff(sql, scheduler, entry.id, attempt.version, this.wasScheduleOutboxDropped(entry.id, attempt), true, trace);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, entry.id, attempt, this.wasScheduleOutboxDropped(entry.id, attempt), true, trace);
         } catch (error) {
             await this.settleFailedScheduleOutboxAttempt(sql, scheduler, { attempt, attempts, envelope, error, forever, id: entry.id }, trace);
         } finally {
@@ -770,7 +771,7 @@ class ScheduleOutboxRunner {
         } catch (error) {
             try {
                 if (this.wasScheduleOutboxDropped(id, attempt)) {
-                    await this.settleScheduleOutboxHandOff(sql, this.host.scheduler(), id, attempt.version, true, false);
+                    await this.settleScheduleOutboxHandOff(sql, this.host.scheduler(), id, attempt, true, false);
                 }
             } catch {
                 // The original failure is the one to report; the row stays for the retry loop.
@@ -782,7 +783,7 @@ class ScheduleOutboxRunner {
         }
 
         try {
-            await this.settleScheduleOutboxHandOff(sql, this.host.scheduler(), id, attempt.version, this.wasScheduleOutboxDropped(id, attempt), true);
+            await this.settleScheduleOutboxHandOff(sql, this.host.scheduler(), id, attempt, this.wasScheduleOutboxDropped(id, attempt), true);
         } catch {
             // The scheduler accepted the job and the mutation committed. A bookkeeping failure here
             // (a storage hiccup, a stub handle) must not surface as a failed mutation: the row that
@@ -870,7 +871,7 @@ class ScheduleOutboxRunner {
         // dispatch landed and only the bookkeeping was lost. Custody ends the
         // same way an acceptance ends it.
         if (isLunoraError(error) && error.code === "DUPLICATE_SCHEDULE_ID") {
-            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt.version, this.wasScheduleOutboxDropped(id, attempt), true, trace);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt, this.wasScheduleOutboxDropped(id, attempt), true, trace);
 
             return;
         }
@@ -879,7 +880,7 @@ class ScheduleOutboxRunner {
         // The accept may have been lost on the way back, so the job can still exist: cancel it, and
         // keep the row (parked) if that cannot be confirmed.
         if (this.wasScheduleOutboxDropped(id, attempt)) {
-            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt.version, true, false, trace);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt, true, false, trace);
 
             return;
         }
@@ -915,13 +916,20 @@ class ScheduleOutboxRunner {
         sql: SqlExec,
         scheduler: SchedulerLike | undefined,
         id: string,
-        version: string | undefined,
+        attempt: Pick<ScheduleOutboxAttempt, "token" | "version">,
         dropped: boolean,
         landed: boolean,
         trace?: TraceRef,
     ): Promise<void> {
         if (!dropped) {
-            forgetScheduleOutbox(sql, id);
+            // The acknowledgement covers the recording this attempt carried and no other. A row
+            // recorded since under the same id, by a later mutation or a sibling call of this one,
+            // is the retry loop's only copy of a call the scheduler has not answered yet; its own
+            // hand-off releases it. Matched on the token, not `version`: a post-commit hand-off reads
+            // `version` when it starts, after a sibling call may already have replaced the row.
+            if (readScheduleOutboxState(sql, id)?.createdAt === attempt.token) {
+                forgetScheduleOutbox(sql, id);
+            }
 
             return;
         }
@@ -933,7 +941,7 @@ class ScheduleOutboxRunner {
         const replaced = (): boolean => {
             const current = readScheduleOutboxState(sql, id)?.version;
 
-            return current !== undefined && current !== version;
+            return current !== undefined && current !== attempt.version;
         };
 
         if (replaced()) {

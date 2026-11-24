@@ -110,6 +110,8 @@ interface Harness {
     failAlarms: (fail: boolean) => void;
     /** Make `cancel` throw `error` (or work again, with `undefined`). */
     failCancel: (error: Error | undefined) => void;
+    /** Make the scheduler refuse every call whose args carry this `orderId`, and accept the rest. */
+    failOrder: (orderId: string) => void;
     /** Make the scheduler throw `error` on every call until reset with `setReachable(true)`. */
     failWith: (error: Error) => void;
     /** Hold the next scheduler call: `entered` settles once it is waiting, `release` lets it finish. */
@@ -154,6 +156,7 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
     const order: string[] = [];
     let refusing = false;
     let failure: Error | undefined;
+    const failingOrders = new Set<unknown>();
     let cancelFailure: Error | undefined;
     let heldCancel: { entered: () => void; released: Promise<undefined> } | undefined;
     let held: { entered: () => void; released: Promise<undefined> } | undefined;
@@ -172,6 +175,10 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
 
         if (failure !== undefined) {
             throw failure;
+        }
+
+        if (failingOrders.has((args as { orderId?: unknown } | undefined)?.orderId)) {
+            throw new Error("SchedulerDO unreachable");
         }
 
         const id = options?.id ?? "minted";
@@ -272,6 +279,9 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
         drop: (id: string) => shard.drop(id),
         failCancel: (error: Error | undefined) => {
             cancelFailure = error;
+        },
+        failOrder: (orderId: string) => {
+            failingOrders.add(orderId);
         },
         failWith: (error: Error) => {
             failure = error;
@@ -1190,6 +1200,58 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         await attempt;
 
         // The old attempt's failure says nothing about the new row.
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
+    });
+
+    it("keeps a row recorded anew under the same id when the attempt it replaced lands afterwards", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        harness.setReachable(true);
+
+        const { entered, release } = harness.hold();
+
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+
+        // Scheduled anew under the same id while the old attempt is awaiting the scheduler, and not handed off.
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
+
+        harness.setReachable(true);
+        release();
+        await attempt;
+
+        // The old attempt's acknowledgement covers its own recording, not the new one...
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
+
+        // ...which the retry loop still hands off.
+        harness.makeDue();
+        await harness.retry();
+
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("keeps a sibling call's row when the first call with that id lands and the sibling's hand-off fails", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        harness.failOrder("b");
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        // The second call recorded over the first before either was handed off, so the row is the
+        // second call's custody: the first call's acknowledgement must not release it.
         expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id: "dup-id" }]);
     });
 
