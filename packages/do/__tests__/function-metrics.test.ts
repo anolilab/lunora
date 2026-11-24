@@ -625,7 +625,8 @@ describe("shardDO persisted metrics", () => {
             const { database, shard } = setup("100000");
 
             try {
-                const pending = (shard as unknown as { pendingFunctionMetrics: Map<string, unknown> }).pendingFunctionMetrics;
+                const pending = (shard as unknown as { functionMetrics: { pendingFunctionMetrics: Map<string, unknown> } }).functionMetrics
+                    .pendingFunctionMetrics;
 
                 for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
                     pending.set(`fill:${String(index)}`, {
@@ -646,7 +647,8 @@ describe("shardDO persisted metrics", () => {
                 // The new path arrives with the map at the cap: the full map is flushed first.
                 await shard.fetch(userRequest("late:path"));
 
-                const after = (shard as unknown as { pendingFunctionMetrics: Map<string, { calls: number }> }).pendingFunctionMetrics;
+                const after = (shard as unknown as { functionMetrics: { pendingFunctionMetrics: Map<string, { calls: number }> } }).functionMetrics
+                    .pendingFunctionMetrics;
 
                 expect(database.raw(`SELECT COUNT(*) AS c FROM "${FUNCTION_METRICS_TABLE}"`)).toEqual([{ c: FUNCTION_METRICS_MAX_PATHS }]);
                 expect(after.get("late:path")?.calls).toBe(1);

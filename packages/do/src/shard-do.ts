@@ -11,10 +11,8 @@ import type {
     DatabaseTally,
     DatabaseTelemetryDeps,
     FunctionMetricBucket,
-    FunctionMetricBucketsResult,
     FunctionMetricIndexHit,
     HostTracingLike,
-    IndexHit,
     IssueState,
     IssueStatePatch,
     LogEventInput,
@@ -43,29 +41,22 @@ import {
     explainIssue,
     foldTraces,
     formatTally,
-    FUNCTION_METRICS_BUCKET_MS,
-    FUNCTION_METRICS_MAX_PATHS,
     instrumentDatabase,
     instrumentSqlClient,
     ISSUE_STATE_TABLE,
-    latencyBucketIndex,
     LogBuffer,
     maskSensitiveArgs,
-    mergeScanAttribution,
     MetricBuffer,
     NO_SENSITIVE_SCOPE,
     parseLogArgs,
     readErrorIssues,
     readFunctionMetricBuckets,
     readFunctionMetricIndexHits,
-    readFunctionMetrics,
     readFunctionMetricsTotals,
     readMetricHistory,
     readQueryMetrics,
     recordAuthEvent,
-    recordFunctionMetric,
     recordMetricHistory,
-    recordQueryMetric,
     redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
@@ -88,7 +79,6 @@ import type {
     FanoutMetricsResult,
     FlagsResult,
     FunctionCallStat,
-    FunctionStatsResult,
     GlobalPollCounters,
     ImportShardResult,
     IndexKeyEntry,
@@ -114,8 +104,6 @@ import type {
     RlsPoliciesResult,
     RpcRequest,
     ScheduleOutbox,
-    ScheduleOutboxEnvelope,
-    ScheduleOutboxRow,
     SchedulerLike,
     SearchBackfillProgress,
     ShapeDiffCache,
@@ -156,8 +144,6 @@ import {
     buildPokeFrames,
     buildSettings,
     buildShapeDiff,
-    bumpCdcEpoch,
-    CDC_LOG_TABLE,
     cdcCanVouchFor,
     cdcForkedError,
     cdcTouchesTables,
@@ -179,19 +165,16 @@ import {
     cursorBelowRetainedFloor,
     DATA_MIGRATION_STATE_TABLE,
     DEFAULT_MAX_RELAYS,
-    deferScheduleOutbox,
     deleteGlobalShapeSnapshot,
     deleteGlobalShapeSnapshotsForConnection,
     deleteShapePokeCursor,
     deleteShapePokeCursorsForConnection,
     deltaTableFor,
     diffGlobalMembership,
-    dropScheduleOutbox,
     DurableStreamRunner,
     envOptionalPositiveInt,
     envPositiveInt,
     FLAGS_FUNCTION_PREFIX,
-    forgetScheduleOutbox,
     gateReplicaDispatch,
     GlobalPollTick,
     globalShapeReadKey,
@@ -210,10 +193,8 @@ import {
     minShapePokeCursor,
     nextTtlExpiry,
     OwnerRelay,
-    parkScheduleOutbox,
     parseExportShardArgs,
     parseImportShardArgs,
-    probeScheduleOutbox,
     projectColumns,
     quoteIdentifier,
     ReactiveCache,
@@ -223,17 +204,13 @@ import {
     readCdcChangeKeys,
     readCdcChanges,
     readCdcCursor,
-    readCdcEpoch,
     readClientWatermark,
     readDeployInfo,
-    readDueScheduleOutbox,
-    readDueScheduleOutboxEntry,
     readGlobalShapeSnapshot,
     readIdempotent,
     readMigrationStatus,
     readQueueMessageById,
     readReactorState,
-    readScheduleOutboxState,
     readShapePokeCursor,
     readTablePage,
     recordCapturedMail,
@@ -241,12 +218,10 @@ import {
     recordFanoutPass,
     recordGlobalPollPass,
     recordQueueMessages,
-    recordScheduleOutbox,
     recordShapeProbePass,
     RELATION_FUNCTION_PREFIX,
     RELAY_SIGNATURE_HEADER,
     RelayMember,
-    requeueScheduleOutbox,
     revokeAdminTokenRecord,
     runSocketPool,
     SCAN_DEP,
@@ -257,13 +232,11 @@ import {
     siblingSecretOf,
     stableStringify,
     stableWireKey,
-    stubByName,
     subscriptionFrames,
     summarizeFanoutTopics,
     summarizeSubscriptions,
     TransactionHeadroomTracker,
     trimIdempotent,
-    trimScheduleOutbox,
     trySendFrame,
     UNVOUCHABLE_DEP,
     VECTOR_BACKFILL_MAX_PAGES,
@@ -360,7 +333,6 @@ import {
     bookmarkHeaders,
     buildTestMailInput,
     cdcSuffix,
-    decodeIndexHitKey,
     dispatchSpanKey,
     extractBearerToken,
     parseApplyCdcArgs,
@@ -417,26 +389,24 @@ import {
     writeRearmWindow,
 } from "./alarm-rearm-breaker";
 import { buildBatchEntryRequest } from "./batch";
+import CdcMeta from "./cdc-meta";
 import { CdcRetentionRunner } from "./cdc-retention";
 import { deliveryAccessDenied, isDeliveryAccessDenied } from "./delivery-access-denied";
 import type { DeliveryAuthorization, DeliveryAuthorizationRequest, DeliveryPermit } from "./delivery-authorization";
 import { DeliveryFence, validDeliveryPermit } from "./delivery-authorization";
+import type { StmtSample } from "./function-metrics";
+import { FunctionMetrics, MAX_STMT_SAMPLES_PER_DISPATCH } from "./function-metrics";
 import { handleImportSessionRpc } from "./import-session-rpc";
 import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
+import ScheduleOutboxRunner from "./schedule-outbox";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { isRegistryNamespace, isRegistryRpc, registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
+import ShardRegistration from "./shard-registration";
 import type { SubscriptionMemo } from "./socket-table-index";
 import { SocketTableIndex } from "./socket-table-index";
 import SubscriptionFailureLatch from "./subscription-backoff";
 import watchPendingWork from "./unawaited-work";
-
-/** The registry writes a shard makes, whether they reach a namespace or an entrypoint. */
-interface RegistryWriter {
-    register: (table: string, shardKey: string) => Promise<void>;
-    unregister: (table: string, shardKey: string) => Promise<void>;
-}
 
 /**
  * A named admin token cannot manage tokens (or it could mint its own successor),
@@ -1077,43 +1047,6 @@ interface ShapeMemo {
 }
 
 /**
- * One distinct statement's folded activity within a dispatch — see
- * {@link ShardDO.currentStmtSamples}. `count` is how many raw executions
- * folded into this entry; `totalDurationMs`/`rowsRead`/`rowsWritten` are sums
- * across all of them, so `totalDurationMs / count` recovers the per-execution
- * average `recordQueryMetric`'s bucket histogram places the entry by.
- */
-/** One path's un-flushed metric delta; see {@link ShardDO.pendingFunctionMetrics}. */
-interface PendingFunctionMetric {
-    calls: number;
-    conflicts: number;
-    durationMaxMs: number;
-    durationMinMs: number;
-    durationTotalMs: number;
-    errors: number;
-    /** `JSON.stringify([table, index])` key -> dispatches that used the index. */
-    indexHits: Map<string, number>;
-    /** Latest dispatch time for this path; a delta never spans two minute buckets. */
-    lastCalledAt: number;
-    lastErrorAt: number | null;
-    lastErrorMessage: string | null;
-    /** table -> dispatches that full-scanned it. */
-    scans: Map<string, number>;
-}
-
-/** A pending statement write: the samples of one statement that fell in one latency bucket. */
-interface PendingStmtSample extends StmtSample {
-    rawSql: string;
-}
-
-interface StmtSample {
-    count: number;
-    rowsRead: number;
-    rowsWritten: number;
-    totalDurationMs: number;
-}
-
-/**
  * Classification of a watermarked custom-mutator push against the shard's
  * `__client_watermark`: `expected` is the next in-order sequence, `kind`
  * whether the push is a replay (`"already"`), the next one (`"next"`), or an
@@ -1597,220 +1530,6 @@ const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
 const ANONYMOUS_CALLER = stableStringify({ claims: null, ip: null, system: false, userId: null });
 
 /**
- * How many deferred-schedule outbox entries one alarm tick may attempt. The
- * dispatches are outbound RPCs, so a backlog is drained across several ticks
- * rather than held open in one — the same bound `TTL_SWEEP_BATCH` puts on the
- * sweep tier for the same reason.
- */
-const SCHEDULE_OUTBOX_BATCH = 32;
-
-/**
- * How many times a deferred schedule is re-offered to the scheduler before the
- * entry is parked. Together with {@link SCHEDULE_OUTBOX_BACKOFF_MS} this spans a
- * little over an hour — long enough to ride out a scheduler restart or a
- * rebalance, short enough that a job the scheduler will never accept (a caller
- * error it refuses as `INVALID_INPUT`) stops costing alarms and starts being a
- * reported fact instead.
- *
- * A `retry.forever` call is not parked here: it is retried at the ladder's last
- * rung for as long as the scheduler keeps failing, and this count is only where
- * the one warning that it is still waiting gets logged.
- */
-const SCHEDULE_OUTBOX_MAX_ATTEMPTS = 8;
-
-/**
- * The retry ladder, indexed by attempt count: 5s, 15s, 45s, 2m, 6m, 18m, 30m,
- * 30m. Exponential until it flattens, so a transient blip is picked up almost
- * immediately while a persistent outage does not spin the alarm.
- */
-const SCHEDULE_OUTBOX_BACKOFF_MS: ReadonlyArray<number> = [5000, 15_000, 45_000, 120_000, 360_000, 1_080_000, 1_800_000, 1_800_000];
-
-/**
- * How long after a failed hand-off the first retry is offered — also the wake the
- * settle and the cold-start probe ask for, so custody that survived a dispatch is
- * re-offered promptly rather than at whatever cadence another tier happens to
- * want.
- */
-const SCHEDULE_OUTBOX_FIRST_RETRY_MS = 5000;
-
-/** The ladder's rung for `attempts` failures so far, flattening at its last entry. */
-const scheduleOutboxBackoffFor = (attempts: number): number =>
-    SCHEDULE_OUTBOX_BACKOFF_MS[Math.min(attempts, SCHEDULE_OUTBOX_BACKOFF_MS.length - 1)] ?? SCHEDULE_OUTBOX_FIRST_RETRY_MS;
-
-/**
- * The attempt count after one more failure. Saturates rather than overflowing: a
- * `retry.forever` entry is never parked, so its count has no other ceiling.
- */
-const nextScheduleOutboxAttempt = (attempts: number): number => Math.min(Number.MAX_SAFE_INTEGER, attempts + 1);
-
-const isScheduleOutboxTarget = (target: unknown): boolean => {
-    if (typeof target === "string") {
-        return target.length > 0;
-    }
-
-    if (!isPlainObject(target)) {
-        return false;
-    }
-
-    // The brand first: the scheduler routes any branded target to the workflow
-    // path, so a stray `__lunoraRef` must not vouch for a workflow with no class.
-    if (target["isLunoraWorkflow"] === true) {
-        return (
-            typeof target["className"] === "string" && target["className"].length > 0 && (target["name"] === undefined || typeof target["name"] === "string")
-        );
-    }
-
-    return typeof target["__lunoraRef"] === "string" && target["__lunoraRef"].length > 0;
-};
-
-/**
- * Read one stored call back, or say why it cannot be replayed. Checked field by
- * field rather than cast: under the default policy a malformed entry would at
- * worst cost eight attempts, but a `retry.forever` one would never park, so an
- * envelope that can never become a job has to be recognised up front.
- *
- * `args` only has to decode: a workflow's params may be an array or a `Date`, so
- * the root is not required to be an object. A refusal carries whatever `target`
- * the JSON named, so the park log still says which job was lost.
- */
-const parseScheduleOutboxEnvelope = (
-    envelopeJson: string,
-): { args: unknown; envelope: ScheduleOutboxEnvelope; ok: true } | { ok: false; reason: string; target: unknown } => {
-    let parsed: unknown;
-
-    try {
-        parsed = JSON.parse(envelopeJson);
-    } catch {
-        return { ok: false, reason: "its stored payload is not valid JSON", target: undefined };
-    }
-
-    if (!isPlainObject(parsed) || !Object.hasOwn(parsed, "args")) {
-        return { ok: false, reason: "its stored payload is not a scheduled call", target: undefined };
-    }
-
-    const { args, options, target, when } = parsed;
-
-    if (!isScheduleOutboxTarget(target)) {
-        return { ok: false, reason: "its target is neither a function reference nor a workflow", target };
-    }
-
-    if (typeof when !== "number" || !Number.isFinite(when)) {
-        return { ok: false, reason: "its fire time is missing", target };
-    }
-
-    if (options !== undefined && !isPlainObject(options)) {
-        return { ok: false, reason: "its options are not an object", target };
-    }
-
-    // Built from the checked fields, so a field added to the envelope has to be validated here first.
-    const envelope: ScheduleOutboxEnvelope = { args, options, target, when };
-
-    try {
-        return { args: decodeWire(args), envelope, ok: true };
-    } catch {
-        return { ok: false, reason: "its arguments cannot be decoded", target };
-    }
-};
-
-/**
- * Ask the scheduler to cancel `id`, or reject when it cannot be asked. `SchedulerLike` only
- * declares the hand-off methods, but the scheduler a shard is configured with is the real client,
- * which has `cancel`. A missing scheduler or `cancel` is not a confirmation: the job may have been
- * accepted under a binding that has since gone, so the caller must keep the entry. Resolves to what the
- * scheduler answered: whether it held the job.
- */
-/** Cancel errors raised because there is no scheduler (or none with `cancel`) to ask, as opposed to one that was asked and failed: waiting cannot fix them. */
-const schedulerUnavailableErrors = new WeakSet<Error>();
-
-const isSchedulerUnavailable = (error: unknown): boolean => error instanceof Error && schedulerUnavailableErrors.has(error);
-
-const cancelScheduleOutboxJob = async (scheduler: SchedulerLike | undefined, id: string): Promise<boolean> => {
-    const cancel = (scheduler as { cancel?: (jobId: string) => Promise<unknown> } | undefined)?.cancel;
-
-    if (typeof cancel !== "function") {
-        const error = new TypeError("no scheduler with a cancel method is configured on this shard, so the cancel cannot be confirmed");
-
-        schedulerUnavailableErrors.add(error);
-
-        throw error;
-    }
-
-    const answer = (await cancel.call(scheduler, id)) as { cancelled?: unknown } | undefined;
-
-    // `false` is "no such job": never accepted, or already ended. The caller decides what that means.
-    return answer?.cancelled === true;
-};
-
-/**
- * One hand-off awaiting the scheduler. `version` identifies the outbox row it was made for, so a
- * failure of an older attempt does not land on a row recorded anew under the same id. `token` is the
- * recording it carries (the `created_at` `record` answered), which is what a drop is compared against.
- */
-interface ScheduleOutboxAttempt {
-    stale: boolean;
-    token: number | undefined;
-    version: string | undefined;
-}
-
-/**
- * The dedup key a replay carries when its envelope was recorded without one (before the facade
- * fixed a key with its custody record): derived from the row, so every replay of the entry sends
- * the same key and a replay after one that landed is answered from that run.
- */
-const replayDedupKey = (options: Record<string, unknown> | undefined, id: string, createdAt: number | undefined): { dedupKey?: string } =>
-    options?.["dedupKey"] !== undefined || createdAt === undefined || !Number.isFinite(createdAt) || createdAt < 0
-        ? {}
-        : // `created_at` can be fractional (the outbox nudges it to keep rows ordered); `.` is outside the key grammar.
-          { dedupKey: `${id}-${String(createdAt).replace(".", "_")}` };
-
-/**
- * What a drop reports when it could not confirm the cancel. A plain error would be redacted to
- * "internal error" at the admin edge; this one is catalogued, so the operator learns the entry was
- * parked rather than dropped and that the drop has to be repeated.
- */
-const scheduleOutboxDropFailure = (id: string, reason: string, cause: unknown): LunoraError =>
-    new LunoraError(
-        "SERVICE_UNAVAILABLE",
-        `deferred schedule ${id} was parked, not dropped: ${reason}. It will not be handed over; ${
-            isSchedulerUnavailable(cause) ? "drop it again to remove it without a confirmed cancel" : "drop it again once the scheduler answers"
-        }.`,
-        { cause },
-    );
-
-const retriesForever = (envelope: ScheduleOutboxEnvelope): boolean => {
-    const retry = envelope.options?.["retry"];
-
-    return isPlainObject(retry) && retry["forever"] === true;
-};
-
-/**
- * Why a failed attempt ends custody, or `undefined` to retry it. A `retry.forever`
- * entry parks only on a refusal no retry can change; anything else parks once the
- * attempt ceiling is reached.
- */
-const scheduleOutboxParkReason = (error: unknown, forever: boolean, attempts: number): string | undefined => {
-    if (forever) {
-        return isLunoraError(error) && (error.code === "INVALID_INPUT" || error.code === "INVALID_SCHEDULE_ID")
-            ? `the scheduler refused the stored call: ${error.code}`
-            : undefined;
-    }
-
-    if (attempts >= SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
-        return `${String(SCHEDULE_OUTBOX_MAX_ATTEMPTS)} attempts all failed — last: ${error instanceof Error ? error.message : String(error)}`;
-    }
-
-    return undefined;
-};
-
-/**
- * How long a PARKED outbox entry is kept. A job that exhausted its attempts is
- * evidence — the operator needs to know what was promised and never enqueued —
- * so it is retained for a week rather than deleted, and trimmed after. Live
- * entries are never trimmed; the attempt ceiling is what bounds those.
- */
-const SCHEDULE_OUTBOX_RETENTION_MS = 604_800_000;
-
-/**
  * The refusal a paid (`.x402`) procedure gets on a socket. The paywall lives at
  * the origin worker (`/_lunora/rpc`, REST, `serverQuery`), which a WebSocket
  * never crosses — and neither a live subscription (seed plus every poke) nor a
@@ -1903,9 +1622,6 @@ const streamFrames = (
  */
 
 const ROOT_SHARD_NAME = "__root__";
-
-/** How long a failed shard-registry registration waits before a later write retries it. */
-const SHARD_REGISTRY_RETRY_MS = 30_000;
 
 /**
  * Whether a subscription's memo proves this write cannot have changed its
@@ -2090,22 +1806,6 @@ const MAX_TRACKED_DISPATCH_SPANS = 256;
  * runaway single trace, not a working set.
  */
 const MAX_HELD_SPANS_PER_TRACE = 500;
-
-/**
- * Bound on distinct normalised statements folded into
- * {@link ShardDO.currentStmtSamples} per dispatch. Mirrors
- * `database-telemetry.ts`'s `MAX_CLIENT_SPANS_PER_TALLY`: a handler that queries in a
- * loop already folds repeats of the SAME statement into one running entry (see
- * `sql` getter), so this only bounds the number of DISTINCT statement shapes one
- * dispatch can accumulate before {@link ShardDO.foldStmtSamples} starts
- * dropping brand-new ones — a handler building ad-hoc SQL per iteration
- * (dynamic column lists, generated `IN (...)` clauses) would otherwise grow the
- * buffer, and the flush that drains it, without bound.
- */
-const MAX_STMT_SAMPLES_PER_DISPATCH = 200;
-
-/** Dispatches per durable metric write by default; an evicted DO loses at most 7 of them. */
-const DEFAULT_METRICS_FLUSH_EVERY = 8;
 
 /**
  * `event.name` of the per-dispatch wide event. Namespaced so it never collides
@@ -3035,6 +2735,13 @@ abstract class ShardDO {
     private readonly inFlightClaims = new InFlightClaims();
 
     /**
+     * The CDC presence and epoch memos, and the once-per-wake fork seal. Built
+     * from a `sql` thunk, so this field initializer can run before the
+     * constructor assigns the storage it reads.
+     */
+    private readonly cdcMeta = new CdcMeta({ sql: () => this.sql as SqlExec });
+
+    /**
      * Changelog retention: the throttled sweep that bounds `__cdc_log` and the
      * archive-backed read that serves a consumer once it can no longer be
      * answered from the live log.
@@ -3045,7 +2752,7 @@ abstract class ShardDO {
      * built, which is the property the deferred destructive step depends on.
      */
     private readonly cdcRetention = new CdcRetentionRunner({
-        enabled: () => this.cdcEnabled(),
+        enabled: () => this.cdcMeta.cdcEnabled(),
         env: () => this.env,
         epoch: () => this.currentCdcEpoch(),
         recordError: (scope, error) => {
@@ -3439,14 +3146,6 @@ abstract class ShardDO {
     private globalResyncRequested = false;
 
     /**
-     * Whether this wake has already re-minted the epoch to seal a rolled-back
-     * timeline. In-memory on purpose — see {@link ShardDO.sealForkedTimeline} for
-     * why the seal is capped at one per wake, and why losing the flag on eviction
-     * is the correct direction.
-     */
-    private forkSealed = false;
-
-    /**
      * Wall-clock millis of the last unconditional `.global()` membership pass.
      * Bounds how long a write this deployment cannot see in its own changelog —
      * an out-of-band writer against the global database — can go unnoticed.
@@ -3470,60 +3169,17 @@ abstract class ShardDO {
     private shardBinding: string | undefined;
 
     /**
-     * The `.shardBy()` tables this instance has registered with the shard
-     * registry, or is registering right now — claimed before the round trip so
-     * two concurrent first writes send one. Registration is idempotent, so this
-     * only saves round trips; it resets with the instance.
+     * This shard's registrations with the shard registry. Built from thunks, so
+     * this field initializer can run before the constructor assigns `state` and
+     * `env`, and `shardRegistry` stays the subclass's hook, asked per write.
      */
-    private readonly registeredTables = new Set<string>();
-
-    /**
-     * The hand-offs awaiting the scheduler, per outbox id. `retryOutboxEntry` makes them `stale`
-     * (their failure must not overwrite the reset). Whether one was dropped is read from
-     * {@link ShardDO.scheduleOutboxDroppedThrough} by its token, not inferred from the row, because a
-     * row can also vanish for an innocent reason. In memory is enough: an attempt never outlives the
-     * instance that started it.
-     */
-    private readonly scheduleOutboxAttempts = new Map<string, Set<ScheduleOutboxAttempt>>();
-
-    /**
-     * Outbox entries an operator is dropping right now. The drop first asks the
-     * scheduler to cancel the job (it may already hold it), and the retry loop must
-     * not hand the entry over again while that is awaiting.
-     */
-    private readonly scheduleOutboxDrops = new Map<string, Set<Promise<void>>>();
-
-    /**
-     * Per id, the newest recording an operator dropped: a drop covers every call recorded up to the
-     * row it acted on (including calls of one mutation that a later same-id record replaced), and
-     * no call recorded after it. A missing row alone cannot say "dropped": two calls of one mutation
-     * that share an explicit id share one row, and the first hand-off releases it. Pruned by
-     * {@link ShardDO.pruneScheduleOutboxDropMarker} once no call or attempt it could affect is left.
-     */
-    private readonly scheduleOutboxDroppedThrough = new Map<string, number>();
-
-    /**
-     * Calls recorded for an id whose hand-off has not finished (or whose window has not rolled back).
-     * A drop marker is needed exactly that long, so it is pruned when this reaches zero instead of by
-     * count: evicting a marker early would let a queued call of a dropped job run.
-     */
-    private readonly scheduleOutboxPendingHandOffs = new Map<string, number>();
-
-    /** The `created_at` last handed to `recordScheduleOutbox`; see {@link ShardDO.scheduleOutbox}. */
-    private lastScheduleOutboxRecordAt = 0;
-
-    /**
-     * Epoch millis before which registration is not retried, set when one
-     * fails: a registry outage costs one attempt per window rather than one per
-     * write, against the single DO that has to recover.
-     */
-    private registryRetryAt = 0;
-
-    /**
-     * Every registry round trip this shard makes, in order — see
-     * {@link ShardDO.serializeRegistry}. Never rejects.
-     */
-    private registryTail: Promise<void> = Promise.resolve();
+    private readonly shardRegistration = new ShardRegistration({
+        env: () => this.env,
+        jurisdiction: () => this.state.id?.jurisdiction,
+        registry: () => this.shardRegistry(),
+        shardKey: () => this.currentShardKey(),
+        sql: () => this.sql as SqlExec,
+    });
 
     /**
      * Memoised {@link ShardDO.currentAdminBinding} result, keyed by the token it
@@ -3563,19 +3219,14 @@ abstract class ShardDO {
     private readonly usedIndexes = new Set<string>();
 
     /**
-     * Per-function execution counters surfaced by the
-     * `__lunora_admin__:getFunctionStats` RPC, keyed by `<file>:<function>`
-     * path. Shares the `metrics` lifecycle: in-memory, reset on
-     * hibernation/restart. `functionPath` is caller-controlled (the runtime
-     * forwards it unchecked), so the map is NOT bounded by the app's registered
-     * function count — every path that reaches a metrics-recording dispatch
-     * lands here, including one that resolves to nothing. `recordFunctionCall`
-     * therefore caps it at {@link FUNCTION_METRICS_MAX_PATHS} the same way the
-     * durable `__lunora_metrics` twin caps its table. Maintained by
-     * `recordFunctionCall` at the one dispatch site that also bumps the
-     * aggregate `metrics` counters.
+     * Per-function counters and the coalesced durable delta. Built from thunks,
+     * so this field initializer can run before the constructor assigns `env`
+     * and `shardHost`.
      */
-    private readonly functionStats = new Map<string, FunctionCallStat>();
+    private readonly functionMetrics = new FunctionMetrics({
+        env: () => this.env,
+        sql: () => this.shardHost.sql,
+    });
 
     /**
      * Recent RPC errors on this shard instance, surfaced by the
@@ -3586,6 +3237,22 @@ abstract class ShardDO {
      * "recent RPC errors on this instance" feed, not a general application log.
      */
     private readonly logs = new LogBuffer();
+
+    /**
+     * Custody for deferred `ctx.scheduler` calls. Built from thunks, so this field
+     * initializer can run before the constructor assigns the hosts, and the
+     * `scheduleOutboxScheduler` hook stays the subclass's, asked per attempt.
+     */
+    private readonly scheduleOutboxRunner = new ScheduleOutboxRunner({
+        admitScheduleRate: (target) => this.admitScheduleRate(target),
+        logs: () => this.logs,
+        recordAudit: (call, op, fields) => {
+            this.recordAudit(call, op, fields);
+        },
+        scheduleGlobalPoll: async (atMs, rethrow) => this.scheduleGlobalPoll(atMs, rethrow),
+        scheduler: () => this.scheduleOutboxScheduler(),
+        sql: () => this.sql as SqlExec,
+    });
 
     /**
      * Recent `ctx.trace` spans (plus the synthetic per-dispatch root), powering
@@ -3637,7 +3304,7 @@ abstract class ShardDO {
      * that queries in a loop reuses the SAME prepared-statement text on every
      * iteration (bind parameters travel separately via `...params`, never
      * inlined into `query`), so folding each call into its entry as it lands
-     * collapses the loop to one entry — {@link ShardDO.foldStmtSamples} then
+     * collapses the loop to one entry — {@link FunctionMetrics.foldStmtSamples} then
      * pays one upsert per DISTINCT statement instead of one per raw execution.
      * Bounded at {@link MAX_STMT_SAMPLES_PER_DISPATCH} distinct entries; past
      * that, a brand-new statement shape (ad-hoc SQL built per iteration) is
@@ -3651,36 +3318,6 @@ abstract class ShardDO {
     private currentStmtSamples: Map<string, StmtSample> | undefined;
 
     /**
-     * Exact per-path metric deltas not yet written to `__lunora_metrics*`. Every
-     * dispatch folds in here; {@link ShardDO.maybeFlushMetrics} writes the sum once
-     * every N dispatches ({@link ShardDO.metricsFlushEvery}, default 8), so rates stay exact
-     * and only write frequency drops. In memory only: an evicted DO loses at most
-     * N-1 dispatches of counters (no alarm flush).
-     */
-    private pendingFunctionMetrics = new Map<string, PendingFunctionMetric>();
-
-    /**
-     * Per-statement samples folded from `currentStmtSamples`, written with
-     * {@link ShardDO.pendingFunctionMetrics}. Keyed by statement AND the latency
-     * bucket of each dispatch's own average: `recordQueryMetric` places an entry in the
-     * histogram by its average, so only dispatches in the same bucket may merge (summing 19
-     * fast and 1 slow dispatch would flatten the tail percentiles). The key count also
-     * drives the width-based flush.
-     */
-    private pendingStmtSamples = new Map<string, PendingStmtSample>();
-
-    /** Dispatches folded since the last flush. */
-    private dispatchesSinceFlush = 0;
-
-    /** Whether an errored/conflicted dispatch is pending (forces the next flush). */
-    private pendingForceFlush = false;
-
-    /** Time of the first / latest dispatch in the pending delta; `undefined` when empty. */
-    private pendingStartedAt: number | undefined;
-
-    private pendingLastAt: number | undefined;
-
-    /**
      * The instrumented `sql` proxy built for {@link ShardDO.currentStmtSamples},
      * and the samples map it was built for.
      *
@@ -3692,21 +3329,6 @@ abstract class ShardDO {
      * exists to remove.
      */
     private instrumentedSql: undefined | { proxy: unknown; samples: Map<string, StmtSample> };
-
-    /**
-     * Memos for {@link ShardDO.cdcEnabled} and {@link ShardDO.cachedCdcEpoch},
-     * which every flush and resume consults.
-     *
-     * Instance fields, never module state: a native PITR restore reverts
-     * `__cdc_meta` but only takes effect when the object restarts, so a fresh
-     * instance is what guarantees the restored row is read. Presence is
-     * remembered only once TRUE — a migration creates `__cdc_log` mid-instance,
-     * and nothing outside a restore drops it, so a cached `false` is the one
-     * answer that can go stale.
-     */
-    private cdcLogPresent = false;
-
-    private cdcEpochCache: string | undefined;
 
     /**
      * Set when `currentStmtSamples` hit {@link MAX_STMT_SAMPLES_PER_DISPATCH}
@@ -3829,7 +3451,7 @@ abstract class ShardDO {
             // `minCdcSeq` would advertise a position from which replay is
             // impossible, and the follower would sit below the real floor forever
             // without ever being told to bootstrap.
-            ownerFloor: () => (this.cdcEnabled() ? minCdcReplayableSeq(this.sql as SqlExec) : undefined),
+            ownerFloor: () => (this.cdcMeta.cdcEnabled() ? minCdcReplayableSeq(this.sql as SqlExec) : undefined),
             readChanges: (sinceSeq, limit) => this.runShardCdcSync({ limit, sinceSeq }),
             // `COUNT(*)` per user table — cheap next to building the snapshot,
             // which is the whole point: the bootstrap cap has to be decided
@@ -4906,7 +4528,7 @@ abstract class ShardDO {
             // than in the RPC catch, so every caller (reactors included) is covered.
             this.invalidateCompanionMemo();
             // Same for an epoch minted or bumped, or a `__cdc_log` migrated, inside it.
-            this.invalidateCdcMetaCache();
+            this.cdcMeta.invalidateCdcMetaCache();
 
             throw error;
         }
@@ -5646,7 +5268,7 @@ abstract class ShardDO {
     protected runShardCdcSync(args: RunShardCdcSyncArgs): { changes: CdcChange[]; cursor: number; epoch?: string } {
         const sql = this.sql as SqlExec;
 
-        if (!this.cdcEnabled()) {
+        if (!this.cdcMeta.cdcEnabled()) {
             // No changelog, so no timeline to name. The field is omitted rather
             // than guessed, matching {@link ShardDO.currentCdcEpoch} — and a
             // `sinceEpoch` cannot be judged against a shard that has never had
@@ -5678,7 +5300,7 @@ abstract class ShardDO {
         const cursor = readCdcCursor(sql);
         // Read once: it gates the echo guard below AND is stamped on the page
         // this returns, so a served consumer never costs a second read.
-        const epoch = this.cachedCdcEpoch();
+        const epoch = this.cdcMeta.cachedCdcEpoch();
 
         // Echo guard, ahead of the watermark one because it answers a strictly
         // longer-lived question. The watermark proof expires — a rewound log
@@ -5785,7 +5407,7 @@ abstract class ShardDO {
      * wire stays byte-identical to the pre-cursor format for non-CDC apps.
      */
     protected currentCdcCursor(): number | undefined {
-        return this.cdcEnabled() ? readCdcCursor(this.sql as SqlExec) : undefined;
+        return this.cdcMeta.cdcEnabled() ? readCdcCursor(this.sql as SqlExec) : undefined;
     }
 
     /**
@@ -5796,93 +5418,16 @@ abstract class ShardDO {
      * the wire byte-identical to the pre-epoch format for non-CDC apps.
      */
     protected currentCdcEpoch(): string | undefined {
-        return this.cdcEnabled() ? this.cachedCdcEpoch() : undefined;
+        return this.cdcMeta.cdcEnabled() ? this.cdcMeta.cachedCdcEpoch() : undefined;
     }
 
     /**
      * Mint a fresh CDC epoch because a resume claim just proved this shard's
      * changelog forked under it, and return the new value for the outgoing frame.
-     *
-     * The trigger is a client presenting `sinceEpoch === epoch` with `sinceSeq >
-     * cursor`: it holds a cursor this shard once issued on THIS timeline and can
-     * no longer account for. Only a rollback produces that — in practice a native
-     * PITR restore, which is armed in {@link handlePitrAdminOp}.
-     *
-     * **Why the signal has to come from outside SQLite.** A restore reverts the
-     * whole SQLite database, `__cdc_meta` included, so the proactive bump
-     * `pitrRestore` performs is rolled back along with everything else — the
-     * epoch cannot detect the one event it exists for. Nothing durable inside a
-     * SQLite-backed Durable Object escapes that: the KV half of `state.storage`
-     * is the same database, and an alarm is a row in it. So every record of the
-     * pre-restore timeline that survives is somewhere the restore could not
-     * reach, and this shard has exactly two: the cursor a CONSUMER cached (a
-     * subscriber's `sinceSeq` here, a connector's in
-     * {@link ShardDO.runShardCdcSync}, a follower's in `replica.ts`), and the
-     * changelog ARCHIVE's own segments, which R2 keeps while the watermark
-     * naming them rolls back (`cdcArchiveRewound`, consulted by the retention
-     * sweep). Either one calls this, and turning one witness into a shard-wide
-     * epoch bump is what extends the protection to clients that reconnect later,
-     * after post-restore writes have climbed the AUTOINCREMENT back past their
-     * own `sinceSeq` and the `sinceSeq > cursor` guard no longer fires for them.
-     *
-     * **What it detects.** Any rollback under a live subscriber base, promptly: a
-     * restore restarts the object (`ctx.abort()`, or the eviction that lets a
-     * deferred restore apply), which drops every hibernated socket, so the whole
-     * subscriber set reconnects with pre-restore cursors while the restored
-     * cursor is still low. The first of them seals the fork for the rest.
-     *
-     * **What it cannot detect.** A rollback on a shard whose consumers ALL stay
-     * offline until the cursor has climbed back past their cursors, and which
-     * archives nothing — nobody is left to present the proof. A shard with no
-     * subscribers, no connector, no follower and no archive bucket is the
-     * degenerate case of that, and is also the case where nothing is stale.
-     *
-     * **On trusting `sinceSeq`.** It is client-supplied, so a caller that already
-     * knows this shard's epoch can force a bump, and a bump is shard-wide: every
-     * subscriber takes a full snapshot instead of a resume on its NEXT reconnect.
-     * The cost is bounded (the once-per-wake latch below) and deferred — nothing
-     * is pushed and no live subscription is interrupted — and it stays strictly
-     * less than what the same caller can already spend by subscribing without a
-     * `sinceSeq` at all.
-     * @returns the freshly minted epoch, to stamp on the frame this verdict produces
+     * At most once per wake; see {@link CdcMeta.sealForkedTimeline} for why.
      */
     protected sealForkedTimeline(): string {
-        // At most once per wake, and that bound is a security property rather
-        // than an optimisation.
-        //
-        // The proof this acts on — "a client presents a cursor ahead of ours on
-        // our own epoch" — is CLIENT-SUPPLIED, and the epoch it must match is
-        // stamped on every frame the client has ever received. So any subscriber
-        // can manufacture the proof at will, and without a bound each forged
-        // frame would cost one SQLite write and invalidate the cached resume of
-        // every other subscriber on the shard: a one-frame request amplified into
-        // N full snapshots.
-        //
-        // One seal is all a real restore needs — it re-mints the epoch shard-wide,
-        // so every client that reconnects afterwards is refused by the epoch
-        // comparison above rather than by re-proving the rollback. Latching after
-        // the first therefore costs the genuine case nothing.
-        //
-        // What it caps the forged case AT is one epoch bump per wake, and that is
-        // not free: an eviction leaves the epoch intact and every client resumes
-        // across it, whereas a bump forces all N subscribers to take a full
-        // snapshot on their next reconnect. So the honest bound is "one forged
-        // frame buys N snapshots, once per wake", not "the cost of a cold wake" —
-        // still bounded, still deferred (nothing is pushed and no live
-        // subscription is interrupted), and still strictly less than the same
-        // caller can spend by simply subscribing without a `sinceSeq`. Stated
-        // plainly because a latch defended by an understated threat is a latch
-        // someone deletes as unnecessary. A restore evicts the object, so the next
-        // real fork gets a fresh instance and a fresh latch.
-        if (this.forkSealed) {
-            // Already sealed this wake: hand back the epoch minted then, so the
-            // caller still stamps the post-fork timeline on its refusal.
-            return this.cachedCdcEpoch();
-        }
-
-        this.forkSealed = true;
-
-        return this.bumpCdcEpochUncached();
+        return this.cdcMeta.sealForkedTimeline();
     }
 
     /**
@@ -5909,7 +5454,7 @@ abstract class ShardDO {
     ): { cursor: number | undefined; epoch: string | undefined; resumable: boolean } {
         const sql = this.sql as SqlExec;
 
-        if (!this.cdcEnabled()) {
+        if (!this.cdcMeta.cdcEnabled()) {
             // Stub `sql` handle or a pre-CDC shard: can't prove the client is
             // current, so fall back to a full snapshot.
             return { cursor: undefined, epoch: undefined, resumable: false };
@@ -5918,7 +5463,7 @@ abstract class ShardDO {
         const cursor = readCdcCursor(sql);
         // Read the epoch once: it gates the resume verdict AND is returned so the
         // caller (`seedSubscription`) can stamp the frame without a second read.
-        const epoch = this.cachedCdcEpoch();
+        const epoch = this.cdcMeta.cachedCdcEpoch();
 
         // Timeline fork: the client cached against a different epoch (a reset, or
         // a recycled DO id), so its `sinceSeq` indexes an unrelated changelog.
@@ -6303,8 +5848,14 @@ abstract class ShardDO {
             return undefined;
         }
 
-        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, dispatchCollectors.scannedTables, dispatchCollectors.indexHits);
-        this.maybeFlushMetrics();
+        this.functionMetrics.recordFunctionCall(
+            functionPath,
+            Date.now() - dispatchStartedAt,
+            undefined,
+            dispatchCollectors.scannedTables,
+            dispatchCollectors.indexHits,
+        );
+        this.functionMetrics.maybeFlushMetrics();
 
         if (mutatorClass.kind === "already") {
             // Replay of a confirmed (or now-resent) mutation — ack without
@@ -6345,8 +5896,14 @@ abstract class ShardDO {
         cachedValue: unknown,
         dispatchCollectors: { indexHits: Set<string>; scannedTables: Set<string> },
     ): Response {
-        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, dispatchCollectors.scannedTables, dispatchCollectors.indexHits);
-        this.maybeFlushMetrics();
+        this.functionMetrics.recordFunctionCall(
+            functionPath,
+            Date.now() - dispatchStartedAt,
+            undefined,
+            dispatchCollectors.scannedTables,
+            dispatchCollectors.indexHits,
+        );
+        this.functionMetrics.maybeFlushMetrics();
 
         if (mutatorClass?.kind === "next") {
             this.advanceClientMutationWatermark();
@@ -7190,64 +6747,12 @@ abstract class ShardDO {
 
     /**
      * Durable custody for this shard's deferred `ctx.scheduler` calls — the
-     * `ScheduleOutbox` the generated `buildCtx` hands to
-     * `withDeferredSchedules`.
-     *
-     * The two halves land on opposite sides of the COMMIT on purpose:
-     *
-     * - `record` runs while the handler is still inside its transaction, so the
-     * entry is durable exactly when the writes are and rolls back with them.
-     * It deliberately does NOT swallow: a failure here is still inside the span,
-     * so letting it throw rolls the mutation back — the one moment at which
-     * failing is free. Swallowing would put us back where we started, committing
-     * writes whose job nothing is holding.
-     * - `forget` runs after the dispatch, so it must never fail the response. A
-     * delete that does not land leaves an entry the retry loop re-offers, which
-     * the scheduler refuses as a duplicate and which is then dropped — the error
-     * self-heals into one wasted RPC.
-     *
-     * What survives a settle is therefore exactly the set of jobs that were
-     * promised and not enqueued, which is what {@link ShardDO.pollScheduleOutbox}
-     * drains.
+     * `ScheduleOutbox` the generated `buildCtx` hands to `withDeferredSchedules`.
+     * See {@link ScheduleOutboxRunner.scheduleOutbox} for why `record` and
+     * `forget` land on opposite sides of the COMMIT.
      */
     protected scheduleOutbox(): ScheduleOutbox {
-        return {
-            forget: (id: string): void => {
-                // A window that rolled back: its call will never be handed off.
-                this.finishScheduleOutboxHandOff(id);
-
-                try {
-                    forgetScheduleOutbox(this.sql as SqlExec, id);
-                } catch {
-                    // Post-commit: a missing table (pre-migration shard / test stub)
-                    // or a stub handle must not fail a mutation that succeeded. The
-                    // stale entry is re-offered and refused as a duplicate.
-                }
-            },
-            handOff: async (id, run, token): Promise<void> => {
-                await this.runScheduleOutboxHandOff(id, run, token === undefined ? undefined : Number(token));
-            },
-            record: (id, envelope): string => {
-                // Strictly increasing, so two records never share a `created_at`: it is the token this
-                // call's hand-off carries, a drop covers tokens up to the row it acted on and none after,
-                // and a row's (created_at, envelope) pair identifies it.
-                this.lastScheduleOutboxRecordAt = Math.max(Date.now(), this.lastScheduleOutboxRecordAt + 0.001);
-                recordScheduleOutbox(this.sql as SqlExec, id, JSON.stringify(envelope), this.lastScheduleOutboxRecordAt);
-                this.scheduleOutboxPendingHandOffs.set(id, (this.scheduleOutboxPendingHandOffs.get(id) ?? 0) + 1);
-
-                return String(this.lastScheduleOutboxRecordAt);
-            },
-            wake: (): void => {
-                // Fire-and-forget: this is called from a settle that is about to
-                // throw, and arming the alarm is not allowed to change what it
-                // throws. `scheduleGlobalPoll` already no-ops when an earlier wake
-                // is pending and absorbs a host that cannot arm.
-                this.scheduleGlobalPoll(Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS).catch(() => {
-                    /* the host could not arm; the next cold start probes again */
-                });
-            },
-            admit: (target: string): number | undefined => this.admitScheduleRate(target),
-        };
+        return this.scheduleOutboxRunner.scheduleOutbox();
     }
 
     /**
@@ -7269,60 +6774,11 @@ abstract class ShardDO {
 
     /**
      * Re-offer the deferred schedules that were promised to a caller and never
-     * reached the scheduler — the retry half of {@link ShardDO.scheduleOutbox}.
-     * Shares the poll alarm with the source-ingest and TTL tiers, and reports the
-     * earliest next-due time the same way, so a shard with an empty outbox (the
-     * steady state — an entry lives only between a COMMIT and its dispatch) arms
-     * nothing.
-     *
-     * Each attempt reuses the id the caller was already handed, so an entry whose
-     * original dispatch DID land — the failure was the `forget`, or the isolate
-     * died between the two — is refused as a duplicate rather than scheduled
-     * twice. A refusal and an acceptance are therefore both "the scheduler has
-     * it", and both end custody.
-     *
-     * The default bound is {@link SCHEDULE_OUTBOX_MAX_ATTEMPTS}: a job the
-     * scheduler will never accept stops costing alarms and becomes a reported
-     * fact instead — parked, logged at `error` with its id and target, and kept
-     * for {@link SCHEDULE_OUTBOX_RETENTION_MS} so an operator can see what was
-     * promised and never enqueued. A call made with `retry.forever` opts out of
-     * that ceiling: it stays live, paced by the ladder's last rung, until the
-     * scheduler accepts it or refuses it as invalid. The retention sweep only
-     * ever drops parked rows. The sweep rides whatever tick reaches this tier, so a shard
-     * holding ONLY parked entries keeps them until something else wakes it —
-     * which is the right trade: they are one row per genuinely lost job, not a
-     * loop that grows on its own.
+     * reached the scheduler; see {@link ScheduleOutboxRunner.pollScheduleOutbox}.
+     * Reports the earliest next-due time, like the other poll tiers.
      */
     protected async pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined> {
-        const sql = this.sql as SqlExec;
-        const now = Date.now();
-        let probe: { dueAt: number | undefined; populated: boolean };
-
-        try {
-            probe = probeScheduleOutbox(sql);
-        } catch {
-            // No table (a shard whose store predates it, a harness with a stub
-            // handle) means no custody, which is a dormant tier and not a tier
-            // failure — re-arming the alarm over it would wake an idle DO forever.
-            return undefined;
-        }
-
-        if (!probe.populated) {
-            return undefined;
-        }
-
-        if (probe.dueAt !== undefined && probe.dueAt <= now) {
-            const scheduler = this.scheduleOutboxScheduler();
-
-            for (const entry of readDueScheduleOutbox(sql, now, SCHEDULE_OUTBOX_BATCH)) {
-                // eslint-disable-next-line no-await-in-loop -- each attempt is an outbound RPC to one DO; firing the batch at once is what the per-tick bound exists to prevent
-                await this.retryScheduleOutboxEntry(sql, scheduler, entry, trace);
-            }
-        }
-
-        trimScheduleOutbox(sql, now - SCHEDULE_OUTBOX_RETENTION_MS);
-
-        return probeScheduleOutbox(sql).dueAt;
+        return this.scheduleOutboxRunner.pollScheduleOutbox(trace);
     }
 
     /** This DO's shard key (its DO name), or `__root__` for the single-DO default. The `tenantBy` mapper binds it into the source query. */
@@ -7498,7 +6954,7 @@ abstract class ShardDO {
 
             // After init, not instead of it: the probe is a read, and a shard whose
             // init failed is exactly one that may be holding custody.
-            this.armScheduleOutboxRetry();
+            this.scheduleOutboxRunner.armScheduleOutboxRetry();
         })();
 
         await this.shardInitOnce;
@@ -8489,6 +7945,24 @@ abstract class ShardDO {
         );
     }
 
+    /**
+     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
+     * the wide-event surface.
+     *
+     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
+     * attaches to the one that already exists for the request. That is the
+     * distinction between "time this thing" and "record a fact about this
+     * request", and conflating them is why instrumentation usually degrades into
+     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
+     *
+     * Attributes accumulate across the whole dispatch and are folded into the
+     * root span in `recordDispatchRootSpan` — the OTel-native form of a
+     * wide event, needing no non-standard "canonical log line" convention on the
+     * collector side.
+     *
+     * Keyed by `dispatchSpanKey` — trace id AND root span id — so two concurrent
+     * dispatches forwarded under the same client trace accumulate separately.
+     */
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink, scope: SensitiveScope = NO_SENSITIVE_SCOPE): SpanHandle {
         const spanKey = dispatchSpanKey(anchor);
 
@@ -8645,7 +8119,7 @@ abstract class ShardDO {
     }
 
     /** The decode + route body of {@link webSocketMessage}, split out so the trace wrapper stays a one-liner. */
-    // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- the ordered admission gate every frame passes (lapse, size cap, route socket, parse, pending credential, server-only types, delivery mode) before the per-type handler; each gate can end the frame
     protected async handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer, deliveredAfterClose = false): Promise<void> {
         // Token-expiry: a socket whose credential lapsed is dropped before its
         // frame is processed, so the client reconnects and re-resolves identity.
@@ -8763,538 +8237,49 @@ abstract class ShardDO {
         }
 
         if (envelope.type === "connect") {
-            // One-shot control frame the client sends right after the socket
-            // opens: record its connection `context` on the attachment (so it
-            // survives hibernation and can be replayed at close) and fire the
-            // `onConnect` lifecycle hooks under the socket's verified identity.
-            const attachment = this.readAttachmentCopy(ws);
-
-            // Verified before `identity` is sent, so a refused socket learns nothing
-            // about who it is. Only an unauthenticated socket reaches this check.
-            if (attachment.authenticated === false) {
-                // A connect past the deadline closes with the deadline reason, not the refusal: the sweep
-                // would have closed this socket, and the client reads only the reason to tell them apart.
-                if (attachment.pendingSince !== undefined && attachment.pendingSince + PENDING_CONNECT_DEADLINE_MS <= Date.now()) {
-                    this.dropLiveSocket(attachment.connectionId);
-
-                    // A half-closed peer can make close throw; that must not escape as a socket error.
-                    try {
-                        ws.close?.(4003, "connect deadline");
-                    } catch {
-                        /* socket already gone */
-                    }
-
-                    return;
-                }
-
-                const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
-
-                if (expectedBearer === undefined || typeof envelope.token !== "string" || !constantTimeEqual(envelope.token, expectedBearer)) {
-                    this.refusePendingSocket(ws);
-
-                    return;
-                }
-
-                this.rejectRetainedRooms(ws);
-                attachment.authenticated = true;
-                delete attachment.pendingSince;
-
-                // Persisted before the relay announce and the identity frame below: a subscribe
-                // handled during the announce await reads the stored flag, not this local copy.
-                try {
-                    (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
-                } catch {
-                    this.refusePendingSocket(ws);
-
-                    return;
-                }
-            }
-
-            // Tell the client which user this socket was authenticated as, and
-            // "nobody" as an explicit `null`. A cookie-session client holds no
-            // token, so this answer is the only way it can tell a sign-out or a
-            // different user's sign-in from the session it already shows. Sent
-            // on every `connect`, including a re-sent one: the answer is the
-            // socket's, and repeating it costs one small frame.
-
-            // Relay tier: a relay announces itself before the identity frame. The client names this
-            // socket in a live subscribe as soon as it has the connection id, and the owner can only
-            // forward that grant to a relay it already knows. A no-op on an owner.
-            //
-            // A failed attach leaves the relay unannounced, so the socket is still served; the next shape subscribe or whisper join retries it.
-            await this.relay?.announce();
-
-            // The connection id rides here so the client can name this socket in a live
-            // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
-            // `whisperAck` advertises that every live join is answered with `whisper_subscribed`, so a
-            // client can hold a live grant until its join is acknowledged. An older shard omits it.
-            // `revalidateMs` is the window a client re-auths the socket within to keep it open; a relative
-            // duration, so the client's clock never has to agree with this one.
-            this.sendFrame(
-                ws,
-                JSON.stringify({
-                    claims: claimsFingerprint(attachment.userId, attachment.identity),
-                    connectionId: attachment.connectionId,
-                    ...(attachment.revalidateAt === undefined ? {} : { revalidateMs: SOCKET_REVALIDATE_MS }),
-                    // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
-                    subject: attachment.userId ?? null,
-                    type: "identity",
-                    whisperAck: true,
-                }),
-                "control",
-            );
-
-            // Idempotent: a socket announces `connect` exactly once. A re-sent
-            // (or duplicate) frame must not re-fire `onConnect`, or it would
-            // out-number the single `onDisconnect` at close.
-            if (attachment.connected === true) {
-                return;
-            }
-
-            if (envelope.context !== undefined) {
-                attachment.context = envelope.context;
-            }
-
-            // Record the client's stable id so shape pokes to this socket can
-            // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
-            if (envelope.clientId !== undefined) {
-                attachment.clientId = envelope.clientId;
-            }
-
-            // Resolve the announced capabilities to the decisions they gate,
-            // rather than persisting the raw tokens. `caps` is client-supplied
-            // and otherwise unbounded — the sibling attachment arrays (`subs`,
-            // `whispers`) are both explicitly capped for exactly that reason,
-            // and an over-large one here would either starve `subs` or make
-            // `serializeAttachment` throw, dropping the whole attachment. A
-            // fixed set of booleans is bounded by construction, and nothing
-            // reads an unrecognised token back: the server can only act on ones
-            // it understands, so keeping them would store input with no reader.
-            if (Array.isArray(envelope.caps)) {
-                attachment.pageDeltas = envelope.caps.includes(PAGE_DELTA_CAPABILITY);
-                attachment.refreshBatch = envelope.caps.includes(REFRESH_BATCH_CAPABILITY);
-            }
-
-            attachment.connected = true;
-
-            // `connected` lives on the SAME object the `try` below persists —
-            // if `context` is what made it too large and the whole attachment
-            // fails to serialize, `connected` doesn't survive either, even
-            // though only `context` was ever documented as at-risk. A resent
-            // `connect` (the `identity` reply above is no ack — an older server
-            // sends none — so a client may legitimately retry after a
-            // timeout) would then re-enter this
-            // branch and re-fire `onConnect` — `webSocketClose` still only fires
-            // `onDisconnect` once, breaking the symmetry the `connected === true`
-            // check above exists to guarantee.
-            //
-            // Retry once with `context` omitted so `connected`/`clientId`/
-            // `pageDeltas` still persist even when `context` alone is what
-            // doesn't fit. Only if THAT also fails is nothing here persistable;
-            // in that case, don't fire `onConnect` at all — an unpersisted
-            // `connected` flag means the next `deserializeAttachment` read sees
-            // `connected: false`, so a resent `connect` frame correctly re-enters
-            // this branch and retries, rather than silently never firing again.
-            let persisted = true;
-
-            try {
-                this.writeAttachment(ws, attachment);
-            } catch {
-                const withoutContext: SocketAttachment = { ...attachment };
-
-                delete withoutContext.context;
-
-                try {
-                    this.writeAttachment(ws, withoutContext);
-                } catch {
-                    // Neither attempt persisted. Roll back the in-memory flip so
-                    // this local `attachment` object agrees with what's actually
-                    // in storage — the same defensive move `subscribe`/
-                    // `unsubscribe` above make on their own serialize failure.
-                    attachment.connected = false;
-                    persisted = false;
-                }
-            }
-
-            // The in-memory `attachment` still carries `context` regardless of
-            // which serialize attempt (if any) succeeded, so a persisted-retry
-            // still fires the hook with the caller's supplied context THIS turn
-            // — it just won't survive to `onDisconnect` at close.
-            if (persisted) {
-                await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
-            }
+            await this.handleConnectFrame(ws, envelope);
 
             return;
         }
 
         if (envelope.type === "subscribe" && envelope.query) {
-            const { functionPath } = envelope.query;
-            const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
-
-            // A table-only subscribe (no function path) is fed raw table deltas that no claim scopes, and nothing can
-            // seed or reset its rows when the socket's claims change. Refused as soon as the socket's claims are
-            // known, before anything is stored or sent; a socket with none (anonymous) has nothing to leak.
-            if (!functionPath && socketHasClaims(this.readAttachment(ws))) {
-                this.sendSubscriptionError(
-                    ws,
-                    envelope.id,
-                    "SUBSCRIPTION_FUNCTION_REQUIRED",
-                    "a subscription on an authenticated socket must name a function (functionPath)",
-                );
-
-                return;
-            }
-
-            // Admin introspection subscriptions read shard internals (raw rows,
-            // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
-            // as the HTTP admin RPCs — recorded on the socket at upgrade and
-            // re-derived from `env` here, so a rotation revokes the socket rather
-            // than only the HTTP plane. A socket that only cleared the
-            // user-subscription gate must never be able to read admin data by
-            // naming a reserved functionPath.
-            if (isAdmin && !(await this.attachmentAdminAuthorized(this.readAttachment(ws)))) {
-                this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }), "control");
-
-                return;
-            }
-
-            // Decode the wire-encoded subscription args ONCE, at the entry point —
-            // BEFORE the attachment store and the seed — so every downstream
-            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
-            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
-            // structured-clone attachment carries them through hibernation.
-            // `decodeWire` is identity for pure-JSON args (legacy frames included).
-            let query: SubscriptionQuery;
-
-            try {
-                query =
-                    envelope.query.args === undefined
-                        ? envelope.query
-                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
-            } catch {
-                // A malformed tagged payload (over-long bigint, over-deep nesting)
-                // must not throw out of `webSocketMessage` — surface a structured
-                // error frame instead, mirroring the persist-failure path.
-                this.sendFrame(
-                    ws,
-                    JSON.stringify({
-                        code: "BAD_SUBSCRIPTION_ARGS",
-                        error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
-                        id: envelope.id,
-                        type: "error",
-                    }),
-                    "control",
-                );
-
-                return;
-            }
-
-            // A cursor is honoured only under the claims it was read under; otherwise this is a first subscribe.
-            {
-                const { sinceClaims, ...held } = query;
-
-                query = held;
-
-                if (held.sinceSeq !== undefined && !this.resumesUnderCurrentClaims(ws, sinceClaims, held.functionPath)) {
-                    query = { ...held, sinceEpoch: undefined, sinceSeq: undefined };
-                }
-            }
-
-            const preparation = functionPath === undefined || isAdmin ? undefined : this.prepareForLiveQueryGate(functionPath);
-
-            if (preparation === undefined) {
-                // This subscribe is the newest for its id, so one still waiting on a load must not register over it.
-                this.loadingSubscribes.get(ws)?.delete(envelope.id);
-            } else if (!(await this.subscribeOutlivedLoad(ws, envelope.id, preparation))) {
-                return;
-            }
-
-            const registered = this.readAttachment(ws).subs;
-            const isRetry = Object.hasOwn(registered, envelope.id) && isSameSubscription(registered[envelope.id], query);
-            const status = this.subscribe(ws, envelope.id, query);
-
-            if (status !== "ok") {
-                // The `paid` refusal mirrors the origin's batch gate (`BAD_REQUEST`):
-                // a paid query is one payment for one call, which a live
-                // subscription (seed + every poke) cannot be.
-                const { code, message: errorMessage } = {
-                    paid: { code: "BAD_REQUEST", message: paidSocketRefusal(String(functionPath), "subscribed") },
-                    per_dispatch: { code: "BAD_REQUEST", message: perDispatchSubscriptionRefusal(String(functionPath)) },
-                    serialize_failed: {
-                        code: "SUBSCRIPTION_PERSIST_FAILED",
-                        message: subscriptionRefusal("size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
-                    },
-                    too_many: {
-                        code: "TOO_MANY_SUBSCRIPTIONS",
-                        message: subscriptionRefusal("count", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
-                    },
-                }[status];
-
-                this.sendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }), "control");
-
-                return;
-            }
-
-            this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
-
-            // Seed the subscriber with the query's current result so the first
-            // value arrives over the same channel as later updates. When the
-            // subclass doesn't support re-execution (base default), this is a
-            // no-op and the subscriber relies on its initial HTTP query.
-            if (functionPath) {
-                await this.seedSubscriptionGuarded(ws, envelope.id, query, functionPath, isAdmin, isRetry);
-            }
+            await this.handleSubscribeFrame(ws, envelope, envelope.query);
 
             return;
         }
 
         if (envelope.type === "shape_subscribe" && envelope.shape) {
-            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
-            // descriptor and every `resolveShape` see real values.
-            let shapeArgs: Record<string, unknown> | undefined;
-
-            try {
-                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
-            } catch {
-                this.sendSubscriptionError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
-
-                return;
-            }
-
-            await this.handleShapeSubscribe(ws, envelope.id, {
-                args: shapeArgs,
-                name: envelope.shape.name,
-                // As for a query: a checkpoint is honoured only under the claims it was read under.
-                ...(envelope.sinceCheckpoint === undefined || this.resumesUnderCurrentClaims(ws, envelope.sinceClaims, envelope.shape.name)
-                    ? { sinceEpoch: envelope.sinceEpoch, sinceSeq: envelope.sinceCheckpoint }
-                    : {}),
-            });
+            await this.handleShapeSubscribeFrame(ws, envelope, envelope.shape);
 
             return;
         }
 
         if (envelope.type === "shape_unsubscribe") {
-            this.shapeUnsubscribe(ws, envelope.id);
-            this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
+            this.handleShapeUnsubscribeFrame(ws, envelope);
 
             return;
         }
 
         if (envelope.type === "stream" && envelope.query?.functionPath) {
-            // Streams are public-only: there is no admin-streaming surface, so
-            // anything matching the admin prefix is rejected up front rather
-            // than allowed to slip through executeStream().
-            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }), "control");
-
-                return;
-            }
-
-            // `.x402({ price }).stream(...)` carries the price tag into
-            // `LUNORA_FUNCTIONS` like any other paid procedure, but this frame
-            // never crosses the origin's paywall — so a paid stream served here
-            // is served free. Refuse it the same way `subscribe` refuses a paid
-            // live query.
-            if (this.isPaidFunction(envelope.query.functionPath)) {
-                this.sendSubscriptionError(ws, envelope.id, "BAD_REQUEST", paidSocketRefusal(envelope.query.functionPath, "streamed"));
-
-                return;
-            }
-
-            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
-            // before handing them to the stream handler — mirrors the `/rpc` path,
-            // and the `subscribe` / `shape_subscribe` branches above.
-            //
-            // Decoded into a local FIRST, not inline in the call below. `decodeWire`
-            // throws a `RangeError` on an over-long bigint or past its 64-level
-            // nesting cap, and inline it threw during ARGUMENT EVALUATION — before
-            // `handleStream` had returned a promise, so the trailing `.catch()`
-            // could not see it. Neither `handleWebSocketMessage` nor
-            // `webSocketMessage` wraps this, so under the hibernation API one
-            // malformed frame killed the whole socket instead of failing one stream.
-            let streamArgs: Record<string, unknown>;
-
-            try {
-                streamArgs = decodeWire(envelope.query.args ?? {}) as Record<string, unknown>;
-            } catch {
-                this.sendFrame(
-                    ws,
-                    JSON.stringify({
-                        error: { code: "BAD_SUBSCRIPTION_ARGS", message: "stream args failed wire decoding" },
-                        id: envelope.id,
-                        type: "error",
-                    }),
-                    "control",
-                );
-
-                return;
-            }
-
-            // Fire-and-forget: handleStream owns its own error reporting (it
-            // sends `type:"error"` frames to the socket). The trailing no-op
-            // catch only guards the rare pre-try throw path (e.g. ws.send on a
-            // socket the runtime already tore down) so a dead socket can't
-            // surface as an unhandled rejection.
-            this.handleStream(
-                ws,
-                envelope.id,
-                envelope.query.functionPath,
-                streamArgs,
-                // Client input: a non-integer or negative watermark would seed
-                // `delivered` past real chunks and silently truncate the stream,
-                // so it is normalised here rather than trusted.
-                Number.isInteger(envelope.sinceChunk) && (envelope.sinceChunk as number) > 0 ? (envelope.sinceChunk as number) : 0,
-                // Same trust boundary for the resume generation: only a positive
-                // integer counts; anything else behaves like an older client
-                // that never sent one.
-                Number.isInteger(envelope.generation) && (envelope.generation as number) > 0 ? (envelope.generation as number) : undefined,
-            ).catch(() => {
-                /* socket already gone; nothing to report */
-            });
+            this.handleStreamFrame(ws, envelope, envelope.query, envelope.query.functionPath);
 
             return;
         }
 
         if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
-            const { topic } = envelope;
-
-            // A `defineWebSocket` route's reserved topic is never joinable by a
-            // client: route membership is established only at upgrade, so a
-            // foreign socket can neither read nor inject on a route channel.
-            if (typeof topic === "string" && topic.startsWith(SOCKET_TOPIC_PREFIX)) {
-                return;
-            }
-
-            if (typeof topic === "string" && topic.length > 0) {
-                const join = envelope.type === "whisper_subscribe";
-
-                // Only a JOIN is authorized. Leaving a topic is always permitted —
-                // an app that revokes access mid-session must not also strand the
-                // client subscribed to something it can no longer leave.
-                if (join && !(await this.authorizeWhisper(ws, topic, "subscribe"))) {
-                    this.acknowledgeLiveJoin(ws, topic);
-
-                    return;
-                }
-
-                // A room join runs the room's mutation, so it takes the same admission as
-                // a room message; otherwise a join loop is an unbounded write stream. A
-                // leave is not throttled: it only runs `onLeave` for a membership a
-                // (throttled) join created, so it cannot be used to flood, and a throttled
-                // socket must still be able to leave.
-                // A socket whose close is in flight changes no membership: the close tears it down.
-                if (this.closingSockets.has(ws)) {
-                    return;
-                }
-
-                if (join && this.roomHandlerPath(topic) !== undefined && !this.allowRoomJoin(ws)) {
-                    return;
-                }
-
-                // Only a real membership change fires the room handler: a duplicate
-                // join, a join refused at the topic cap, or a leave of a topic the
-                // socket never held must not run `onJoin` / `onLeave`.
-                if (!this.setWhisperMembership(ws, topic, join)) {
-                    if (join) {
-                        this.acknowledgeLiveJoin(ws, topic);
-                    }
-
-                    return;
-                }
-
-                const joinEpoch = join ? this.membershipEpoch(ws, topic) : undefined;
-
-                // The ack follows the membership decision and precedes the room dispatch and the relay
-                // announce. It is not sent from a `finally`: an error from unrelated work must not be
-                // answered as a processed join.
-                if (join) {
-                    this.acknowledgeLiveJoin(ws, topic);
-                }
-
-                // A `defineRoom` topic ALSO dispatches the room's server handler:
-                // `onJoin` after the authorized join is recorded, `onLeave` on
-                // every unsubscribe (never authorization-gated). An ordinary
-                // whisper topic resolves to no room and dispatches nothing. The
-                // dispatch is queued on this socket before any await, so a later
-                // leave cannot run its `onLeave` ahead of this `onJoin`.
-                const admitted = await this.dispatchSettlingJoin(ws, topic, join, joinEpoch);
-
-                // A join whose `onJoin` rejected was already undone in the queued handler,
-                // so the socket holds no membership and gets no relayed frames for it.
-                if (join && !admitted) {
-                    return;
-                }
-
-                // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
-                // announces itself so the owner forwards whisper frames to it. The connect-time
-                // announce already covers grant routing; this one retries a failed attach.
-                if (join) {
-                    await this.relay?.announce();
-                }
-            }
+            await this.handleWhisperMembershipFrame(ws, envelope);
 
             return;
         }
 
         if (envelope.type === "whisper") {
-            // A route channel is not reachable through a whisper frame: a route's
-            // messages arrive only on its dedicated socket. Dropping the raw relay
-            // keeps a foreign socket from injecting into a route.
-            if (typeof envelope.topic === "string" && envelope.topic.startsWith(SOCKET_TOPIC_PREFIX)) {
-                return;
-            }
-
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
-                // The authorizer's await can outlast the sender's credential or window; the frame carries its user id.
-                if (this.dropIfLapsed(ws)) {
-                    return;
-                }
-
-                // A room topic is handled server-side rather than blindly relayed:
-                // the shard decodes the client's typed message, dispatches the
-                // room's `onMessage` (which decides what, if anything, members
-                // see via `socket.broadcast`), and does NOT relay the raw frame.
-                // An ordinary whisper topic keeps the direct peer relay.
-                // Reuse the whisper rate bucket: a room's fan-out is the same
-                // O(members) cost a whisper is, so it gets the same admission. The
-                // client wire-encoded `data`; decode it back to real values
-                // (`bigint`/`Date`/bytes) before it reaches the handler, mirroring
-                // the `subscribe`/`stream` branches.
-                if (this.roomHandlerPath(envelope.topic) === undefined) {
-                    await this.broadcastWhisper(ws, envelope.topic, envelope.data);
-                } else if (
-                    !this.closingSockets.has(ws) &&
-                    this.isWhisperMember(ws, envelope.topic) &&
-                    this.allowWhisper(ws) &&
-                    this.fitsWhisperCap(envelope.data)
-                ) {
-                    // The same 4 KiB cap an ordinary whisper carries: a room message is
-                    // decoded, validated and run as a write, so it must not be unbounded.
-                    // The membership epoch at receive travels with the message: if the socket
-                    // leaves and rejoins before this runs, the message was sent under the old membership.
-                    await this.dispatchRoomEvent(ws, envelope.topic, "message", envelope.data, this.membershipEpoch(ws, envelope.topic));
-                }
-            }
+            await this.handleWhisperFrame(ws, envelope);
 
             return;
         }
 
         if (envelope.type === "unsubscribe") {
-            // Stream cancel: abort the in-flight iterator (if any) before
-            // touching the subscription registry. unsubscribe() on a non-sub
-            // id is a no-op, so this stays safe even when id namespaces overlap.
-            const cancellers = this.streamCancellers.get(ws);
-            const controller = cancellers?.get(envelope.id);
-
-            if (controller) {
-                controller.abort();
-                cancellers?.delete(envelope.id);
-            }
-
-            // A subscribe still waiting on its function's load must not register after this.
-            this.loadingSubscribes.get(ws)?.delete(envelope.id);
-            this.unsubscribe(ws, envelope.id);
-            this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
+            this.handleUnsubscribeFrame(ws, envelope);
         }
     }
 
@@ -9660,13 +8645,19 @@ abstract class ShardDO {
             // Record the handler's own latency (before the subscription
             // write-flush below) against the per-function counters, along
             // with any tables it full-scanned (causal attribution).
-            this.recordFunctionCall(payload.functionPath, durationMs, undefined, dispatchCollectors.scannedTables, dispatchCollectors.indexHits);
+            this.functionMetrics.recordFunctionCall(
+                payload.functionPath,
+                durationMs,
+                undefined,
+                dispatchCollectors.scannedTables,
+                dispatchCollectors.indexHits,
+            );
 
             // Fold the per-statement SQL samples accumulated during dispatch into
             // the pending delta, then write it if this dispatch is due. Best-effort:
             // a failure (e.g. no sql handle in tests) must never fail the response.
-            this.foldStmtSamples(dispatchCollectors.stmtSamples);
-            this.maybeFlushMetrics();
+            this.functionMetrics.foldStmtSamples(dispatchCollectors.stmtSamples);
+            this.functionMetrics.maybeFlushMetrics();
 
             // Snapshot the written-table set BEFORE `flushChangedTables`
             // drains it — afterwards `pendingChangedTables` is `undefined`,
@@ -9749,7 +8740,7 @@ abstract class ShardDO {
                 // `this.logs` dev buffer, unaffected by this local redaction.
                 const redactedErrorMessage = redactArgs(message, isDevEnvironment(this.env)) as string;
 
-                this.recordFunctionCall(
+                this.functionMetrics.recordFunctionCall(
                     payload.functionPath,
                     durationMs,
                     redactedErrorMessage,
@@ -9761,8 +8752,8 @@ abstract class ShardDO {
             // Fold statement samples even on error paths — partial sampling
             // is better than losing the timing signal entirely. An errored dispatch
             // forces the write, so the delta lands with its error counted.
-            this.foldStmtSamples(dispatchCollectors.stmtSamples);
-            this.maybeFlushMetrics();
+            this.functionMetrics.foldStmtSamples(dispatchCollectors.stmtSamples);
+            this.functionMetrics.maybeFlushMetrics();
             this.recordRequestLog(
                 payload.functionPath,
                 payload.args ?? {},
@@ -9950,25 +8941,6 @@ abstract class ShardDO {
     }
 
     /**
-     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
-     * the wide-event surface.
-     *
-     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
-     * attaches to the one that already exists for the request. That is the
-     * distinction between "time this thing" and "record a fact about this
-     * request", and conflating them is why instrumentation usually degrades into
-     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
-     *
-     * Attributes accumulate across the whole dispatch and are folded into the
-     * root span in `recordDispatchRootSpan` — the OTel-native form of a
-     * wide event, needing no non-standard "canonical log line" convention on the
-     * collector side.
-     *
-     * Keyed by `dispatchSpanKey` — trace id AND root span id — so two concurrent
-     * dispatches forwarded under the same client trace accumulate separately.
-     */
-
-    /**
      * Snapshot the per-request identity/replay fields into a {@link RequestScope}.
      * Paired with {@link ShardDO.restoreRequestScope}; see that type's docstring
      * for why the dispatch path needs it.
@@ -10018,6 +8990,548 @@ abstract class ShardDO {
         this.currentRequestTrace = scope.trace;
         this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
+    }
+
+    /** The `connect` control frame: verify a pending socket, send its identity, and fire `onConnect` once. */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- the `connect` handshake: pending-credential check, identity frame, then the persisted-once `onConnect`; the steps share one attachment copy and must stay in order
+    private async handleConnectFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): Promise<void> {
+        // One-shot control frame the client sends right after the socket
+        // opens: record its connection `context` on the attachment (so it
+        // survives hibernation and can be replayed at close) and fire the
+        // `onConnect` lifecycle hooks under the socket's verified identity.
+        let attachment = this.readAttachmentCopy(ws);
+
+        // Verified before `identity` is sent, so a refused socket learns nothing
+        // about who it is. Only an unauthenticated socket reaches this check.
+        if (attachment.authenticated === false) {
+            // A connect past the deadline closes with the deadline reason, not the refusal: the sweep
+            // would have closed this socket, and the client reads only the reason to tell them apart.
+            if (attachment.pendingSince !== undefined && attachment.pendingSince + PENDING_CONNECT_DEADLINE_MS <= Date.now()) {
+                this.dropLiveSocket(attachment.connectionId);
+
+                // A half-closed peer can make close throw; that must not escape as a socket error.
+                try {
+                    ws.close?.(4003, "connect deadline");
+                } catch {
+                    /* socket already gone */
+                }
+
+                return;
+            }
+
+            const expectedBearer = ((this.env ?? {}) as { LUNORA_WS_BEARER?: string }).LUNORA_WS_BEARER;
+
+            if (expectedBearer === undefined || typeof envelope.token !== "string" || !constantTimeEqual(envelope.token, expectedBearer)) {
+                this.refusePendingSocket(ws);
+
+                return;
+            }
+
+            this.rejectRetainedRooms(ws);
+            attachment.authenticated = true;
+            delete attachment.pendingSince;
+
+            // Persisted before the relay announce and the identity frame below: a subscribe
+            // handled during the announce await reads the stored flag, not this local copy.
+            try {
+                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            } catch {
+                this.refusePendingSocket(ws);
+
+                return;
+            }
+        }
+
+        // Tell the client which user this socket was authenticated as, and
+        // "nobody" as an explicit `null`. A cookie-session client holds no
+        // token, so this answer is the only way it can tell a sign-out or a
+        // different user's sign-in from the session it already shows. Sent
+        // on every `connect`, including a re-sent one: the answer is the
+        // socket's, and repeating it costs one small frame.
+
+        // Relay tier: a relay announces itself before the identity frame. The client names this
+        // socket in a live subscribe as soon as it has the connection id, and the owner can only
+        // forward that grant to a relay it already knows. A no-op on an owner.
+        //
+        // A failed attach leaves the relay unannounced, so the socket is still served; the next shape subscribe or whisper join retries it.
+        await this.relay?.announce();
+
+        // A socket that closed meanwhile has had its attachment torn down: there is no identity to
+        // send and no connect to run, and `webSocketClose` already ran the hooks it owes.
+        if (this.closingSockets.has(ws)) {
+            return;
+        }
+
+        // Re-read after the await: a subscribe handled meanwhile persisted its entry, and the
+        // whole-attachment write below would otherwise put the copy from before it back.
+        attachment = this.readAttachmentCopy(ws);
+
+        // The connection id rides here so the client can name this socket in a live
+        // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
+        // `whisperAck` advertises that every live join is answered with `whisper_subscribed`, so a
+        // client can hold a live grant until its join is acknowledged. An older shard omits it.
+        // `revalidateMs` is the window a client re-auths the socket within to keep it open; a relative
+        // duration, so the client's clock never has to agree with this one.
+        this.sendFrame(
+            ws,
+            JSON.stringify({
+                claims: claimsFingerprint(attachment.userId, attachment.identity),
+                connectionId: attachment.connectionId,
+                ...(attachment.revalidateAt === undefined ? {} : { revalidateMs: SOCKET_REVALIDATE_MS }),
+                // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
+                subject: attachment.userId ?? null,
+                type: "identity",
+                whisperAck: true,
+            }),
+            "control",
+        );
+
+        // Idempotent: a socket announces `connect` exactly once. A re-sent
+        // (or duplicate) frame must not re-fire `onConnect`, or it would
+        // out-number the single `onDisconnect` at close.
+        if (attachment.connected === true) {
+            return;
+        }
+
+        if (envelope.context !== undefined) {
+            attachment.context = envelope.context;
+        }
+
+        // Record the client's stable id so shape pokes to this socket can
+        // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
+        if (envelope.clientId !== undefined) {
+            attachment.clientId = envelope.clientId;
+        }
+
+        // Resolve the announced capabilities to the decisions they gate,
+        // rather than persisting the raw tokens. `caps` is client-supplied
+        // and otherwise unbounded — the sibling attachment arrays (`subs`,
+        // `whispers`) are both explicitly capped for exactly that reason,
+        // and an over-large one here would either starve `subs` or make
+        // `serializeAttachment` throw, dropping the whole attachment. A
+        // fixed set of booleans is bounded by construction, and nothing
+        // reads an unrecognised token back: the server can only act on ones
+        // it understands, so keeping them would store input with no reader.
+        if (Array.isArray(envelope.caps)) {
+            attachment.pageDeltas = envelope.caps.includes(PAGE_DELTA_CAPABILITY);
+            attachment.refreshBatch = envelope.caps.includes(REFRESH_BATCH_CAPABILITY);
+        }
+
+        attachment.connected = true;
+
+        // `connected` lives on the SAME object the `try` below persists —
+        // if `context` is what made it too large and the whole attachment
+        // fails to serialize, `connected` doesn't survive either, even
+        // though only `context` was ever documented as at-risk. A resent
+        // `connect` (the `identity` reply above is no ack — an older server
+        // sends none — so a client may legitimately retry after a
+        // timeout) would then re-enter this
+        // branch and re-fire `onConnect` — `webSocketClose` still only fires
+        // `onDisconnect` once, breaking the symmetry the `connected === true`
+        // check above exists to guarantee.
+        //
+        // Retry once with `context` omitted so `connected`/`clientId`/
+        // `pageDeltas` still persist even when `context` alone is what
+        // doesn't fit. Only if THAT also fails is nothing here persistable;
+        // in that case, don't fire `onConnect` at all — an unpersisted
+        // `connected` flag means the next `deserializeAttachment` read sees
+        // `connected: false`, so a resent `connect` frame correctly re-enters
+        // this branch and retries, rather than silently never firing again.
+        let persisted = true;
+
+        try {
+            this.writeAttachment(ws, attachment);
+        } catch {
+            const withoutContext: SocketAttachment = { ...attachment };
+
+            delete withoutContext.context;
+
+            try {
+                this.writeAttachment(ws, withoutContext);
+            } catch {
+                // Neither attempt persisted. Roll back the in-memory flip so
+                // this local `attachment` object agrees with what's actually
+                // in storage — the same defensive move `subscribe`/
+                // `unsubscribe` above make on their own serialize failure.
+                attachment.connected = false;
+                persisted = false;
+            }
+        }
+
+        // The in-memory `attachment` still carries `context` regardless of
+        // which serialize attempt (if any) succeeded, so a persisted-retry
+        // still fires the hook with the caller's supplied context THIS turn
+        // — it just won't survive to `onDisconnect` at close.
+        if (persisted) {
+            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
+        }
+    }
+
+    /** A live-query `subscribe` frame: gate it, register it on the socket, and seed it. */
+    private async handleSubscribeFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope, requested: SubscriptionQuery): Promise<void> {
+        const { functionPath } = requested;
+        const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
+
+        // A table-only subscribe (no function path) is fed raw table deltas that no claim scopes, and nothing can
+        // seed or reset its rows when the socket's claims change. Refused as soon as the socket's claims are
+        // known, before anything is stored or sent; a socket with none (anonymous) has nothing to leak.
+        if (!functionPath && socketHasClaims(this.readAttachment(ws))) {
+            this.sendSubscriptionError(
+                ws,
+                envelope.id,
+                "SUBSCRIPTION_FUNCTION_REQUIRED",
+                "a subscription on an authenticated socket must name a function (functionPath)",
+            );
+
+            return;
+        }
+
+        // Admin introspection subscriptions read shard internals (raw rows,
+        // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
+        // as the HTTP admin RPCs — recorded on the socket at upgrade and
+        // re-derived from `env` here, so a rotation revokes the socket rather
+        // than only the HTTP plane. A socket that only cleared the
+        // user-subscription gate must never be able to read admin data by
+        // naming a reserved functionPath.
+        if (isAdmin && !(await this.attachmentAdminAuthorized(this.readAttachment(ws)))) {
+            this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }), "control");
+
+            return;
+        }
+
+        // Decode the wire-encoded subscription args ONCE, at the entry point —
+        // BEFORE the attachment store and the seed — so every downstream
+        // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
+        // eval) sees REAL values (`bigint`/`Date`/bytes), and the
+        // structured-clone attachment carries them through hibernation.
+        // `decodeWire` is identity for pure-JSON args (legacy frames included).
+        let query: SubscriptionQuery;
+
+        try {
+            query = requested.args === undefined ? requested : { ...requested, args: decodeWire(requested.args) as Record<string, unknown> };
+        } catch {
+            // A malformed tagged payload (over-long bigint, over-deep nesting)
+            // must not throw out of `webSocketMessage` — surface a structured
+            // error frame instead, mirroring the persist-failure path.
+            this.sendFrame(
+                ws,
+                JSON.stringify({
+                    code: "BAD_SUBSCRIPTION_ARGS",
+                    error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+                    id: envelope.id,
+                    type: "error",
+                }),
+                "control",
+            );
+
+            return;
+        }
+
+        // A cursor is honoured only under the claims it was read under; otherwise this is a first subscribe.
+        {
+            const { sinceClaims, ...held } = query;
+
+            query = held;
+
+            if (held.sinceSeq !== undefined && !this.resumesUnderCurrentClaims(ws, sinceClaims, held.functionPath)) {
+                query = { ...held, sinceEpoch: undefined, sinceSeq: undefined };
+            }
+        }
+
+        const preparation = functionPath === undefined || isAdmin ? undefined : this.prepareForLiveQueryGate(functionPath);
+
+        if (preparation === undefined) {
+            // This subscribe is the newest for its id, so one still waiting on a load must not register over it.
+            this.loadingSubscribes.get(ws)?.delete(envelope.id);
+        } else if (!(await this.subscribeOutlivedLoad(ws, envelope.id, preparation))) {
+            return;
+        }
+
+        const registered = this.readAttachment(ws).subs;
+        const isRetry = Object.hasOwn(registered, envelope.id) && isSameSubscription(registered[envelope.id], query);
+        const status = this.subscribe(ws, envelope.id, query);
+
+        if (status !== "ok") {
+            // The `paid` refusal mirrors the origin's batch gate (`BAD_REQUEST`):
+            // a paid query is one payment for one call, which a live
+            // subscription (seed + every poke) cannot be.
+            const { code, message: errorMessage } = {
+                paid: { code: "BAD_REQUEST", message: paidSocketRefusal(String(functionPath), "subscribed") },
+                per_dispatch: { code: "BAD_REQUEST", message: perDispatchSubscriptionRefusal(String(functionPath)) },
+                serialize_failed: {
+                    code: "SUBSCRIPTION_PERSIST_FAILED",
+                    message: subscriptionRefusal("size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
+                },
+                too_many: {
+                    code: "TOO_MANY_SUBSCRIPTIONS",
+                    message: subscriptionRefusal("count", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
+                },
+            }[status];
+
+            this.sendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }), "control");
+
+            return;
+        }
+
+        this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
+
+        // Seed the subscriber with the query's current result so the first
+        // value arrives over the same channel as later updates. When the
+        // subclass doesn't support re-execution (base default), this is a
+        // no-op and the subscriber relies on its initial HTTP query.
+        if (functionPath) {
+            await this.seedSubscriptionGuarded(ws, envelope.id, query, functionPath, isAdmin, isRetry);
+        }
+    }
+
+    /** A `shape_subscribe` frame: decode its args and hand it to {@link ShardDO.handleShapeSubscribe}. */
+    private async handleShapeSubscribeFrame(
+        ws: ShardSocketLike,
+        envelope: SubscriptionEnvelope,
+        shape: NonNullable<SubscriptionEnvelope["shape"]>,
+    ): Promise<void> {
+        // Decode-at-entry, mirroring the `subscribe` branch above: the stored
+        // descriptor and every `resolveShape` see real values.
+        let shapeArgs: Record<string, unknown> | undefined;
+
+        try {
+            shapeArgs = shape.args === undefined ? undefined : (decodeWire(shape.args) as Record<string, unknown>);
+        } catch {
+            this.sendSubscriptionError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
+
+            return;
+        }
+
+        await this.handleShapeSubscribe(ws, envelope.id, {
+            args: shapeArgs,
+            name: shape.name,
+            // As for a query: a checkpoint is honoured only under the claims it was read under.
+            ...(envelope.sinceCheckpoint === undefined || this.resumesUnderCurrentClaims(ws, envelope.sinceClaims, shape.name)
+                ? { sinceEpoch: envelope.sinceEpoch, sinceSeq: envelope.sinceCheckpoint }
+                : {}),
+        });
+    }
+
+    /** A `shape_unsubscribe` frame. */
+    private handleShapeUnsubscribeFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): void {
+        this.shapeUnsubscribe(ws, envelope.id);
+        this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
+    }
+
+    /** A `stream` frame: refuse admin and paid functions, decode the args, and start the stream without awaiting it. */
+    private handleStreamFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope, query: SubscriptionQuery, functionPath: string): void {
+        // Streams are public-only: there is no admin-streaming surface, so
+        // anything matching the admin prefix is rejected up front rather
+        // than allowed to slip through executeStream().
+        if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }), "control");
+
+            return;
+        }
+
+        // `.x402({ price }).stream(...)` carries the price tag into
+        // `LUNORA_FUNCTIONS` like any other paid procedure, but this frame
+        // never crosses the origin's paywall — so a paid stream served here
+        // is served free. Refuse it the same way `subscribe` refuses a paid
+        // live query.
+        if (this.isPaidFunction(functionPath)) {
+            this.sendSubscriptionError(ws, envelope.id, "BAD_REQUEST", paidSocketRefusal(functionPath, "streamed"));
+
+            return;
+        }
+
+        // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
+        // before handing them to the stream handler — mirrors the `/rpc` path,
+        // and the `subscribe` / `shape_subscribe` branches above.
+        //
+        // Decoded into a local FIRST, not inline in the call below. `decodeWire`
+        // throws a `RangeError` on an over-long bigint or past its 64-level
+        // nesting cap, and inline it threw during ARGUMENT EVALUATION — before
+        // `handleStream` had returned a promise, so the trailing `.catch()`
+        // could not see it. Neither `handleWebSocketMessage` nor
+        // `webSocketMessage` wraps this, so under the hibernation API one
+        // malformed frame killed the whole socket instead of failing one stream.
+        let streamArgs: Record<string, unknown>;
+
+        try {
+            streamArgs = decodeWire(query.args ?? {}) as Record<string, unknown>;
+        } catch {
+            this.sendFrame(
+                ws,
+                JSON.stringify({
+                    error: { code: "BAD_SUBSCRIPTION_ARGS", message: "stream args failed wire decoding" },
+                    id: envelope.id,
+                    type: "error",
+                }),
+                "control",
+            );
+
+            return;
+        }
+
+        // Fire-and-forget: handleStream owns its own error reporting (it
+        // sends `type:"error"` frames to the socket). The trailing no-op
+        // catch only guards the rare pre-try throw path (e.g. ws.send on a
+        // socket the runtime already tore down) so a dead socket can't
+        // surface as an unhandled rejection.
+        this.handleStream(
+            ws,
+            envelope.id,
+            functionPath,
+            streamArgs,
+            // Client input: a non-integer or negative watermark would seed
+            // `delivered` past real chunks and silently truncate the stream,
+            // so it is normalised here rather than trusted.
+            Number.isInteger(envelope.sinceChunk) && (envelope.sinceChunk as number) > 0 ? (envelope.sinceChunk as number) : 0,
+            // Same trust boundary for the resume generation: only a positive
+            // integer counts; anything else behaves like an older client
+            // that never sent one.
+            Number.isInteger(envelope.generation) && (envelope.generation as number) > 0 ? (envelope.generation as number) : undefined,
+        ).catch(() => {
+            /* socket already gone; nothing to report */
+        });
+    }
+
+    /** A `whisper_subscribe` / `whisper_unsubscribe` frame: join or leave a topic, running a room's `onJoin` / `onLeave`. */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- join/leave admission is an ordered gate (route topic, authorizer, closing socket, room-join budget, membership change, ack, room dispatch); each step can end the frame
+    private async handleWhisperMembershipFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): Promise<void> {
+        const { topic } = envelope;
+
+        // A `defineWebSocket` route's reserved topic is never joinable by a
+        // client: route membership is established only at upgrade, so a
+        // foreign socket can neither read nor inject on a route channel.
+        if (typeof topic === "string" && topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+            return;
+        }
+
+        if (typeof topic === "string" && topic.length > 0) {
+            const join = envelope.type === "whisper_subscribe";
+
+            // Only a JOIN is authorized. Leaving a topic is always permitted —
+            // an app that revokes access mid-session must not also strand the
+            // client subscribed to something it can no longer leave.
+            if (join && !(await this.authorizeWhisper(ws, topic, "subscribe"))) {
+                this.acknowledgeLiveJoin(ws, topic);
+
+                return;
+            }
+
+            // A room join runs the room's mutation, so it takes the same admission as
+            // a room message; otherwise a join loop is an unbounded write stream. A
+            // leave is not throttled: it only runs `onLeave` for a membership a
+            // (throttled) join created, so it cannot be used to flood, and a throttled
+            // socket must still be able to leave.
+            // A socket whose close is in flight changes no membership: the close tears it down.
+            if (this.closingSockets.has(ws)) {
+                return;
+            }
+
+            if (join && this.roomHandlerPath(topic) !== undefined && !this.allowRoomJoin(ws)) {
+                return;
+            }
+
+            // Only a real membership change fires the room handler: a duplicate
+            // join, a join refused at the topic cap, or a leave of a topic the
+            // socket never held must not run `onJoin` / `onLeave`.
+            if (!this.setWhisperMembership(ws, topic, join)) {
+                if (join) {
+                    this.acknowledgeLiveJoin(ws, topic);
+                }
+
+                return;
+            }
+
+            const joinEpoch = join ? this.membershipEpoch(ws, topic) : undefined;
+
+            // The ack follows the membership decision and precedes the room dispatch and the relay
+            // announce. It is not sent from a `finally`: an error from unrelated work must not be
+            // answered as a processed join.
+            if (join) {
+                this.acknowledgeLiveJoin(ws, topic);
+            }
+
+            // A `defineRoom` topic ALSO dispatches the room's server handler:
+            // `onJoin` after the authorized join is recorded, `onLeave` on
+            // every unsubscribe (never authorization-gated). An ordinary
+            // whisper topic resolves to no room and dispatches nothing. The
+            // dispatch is queued on this socket before any await, so a later
+            // leave cannot run its `onLeave` ahead of this `onJoin`.
+            const admitted = await this.dispatchSettlingJoin(ws, topic, join, joinEpoch);
+
+            // A join whose `onJoin` rejected was already undone in the queued handler,
+            // so the socket holds no membership and gets no relayed frames for it.
+            if (join && !admitted) {
+                return;
+            }
+
+            // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
+            // announces itself so the owner forwards whisper frames to it. The connect-time
+            // announce already covers grant routing; this one retries a failed attach.
+            if (join) {
+                await this.relay?.announce();
+            }
+        }
+    }
+
+    /** A `whisper` frame: relay it to the topic, or dispatch a room's `onMessage`. */
+    private async handleWhisperFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): Promise<void> {
+        // A route channel is not reachable through a whisper frame: a route's
+        // messages arrive only on its dedicated socket. Dropping the raw relay
+        // keeps a foreign socket from injecting into a route.
+        if (typeof envelope.topic === "string" && envelope.topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+            return;
+        }
+
+        if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
+            // The authorizer's await can outlast the sender's credential or window; the frame carries its user id.
+            if (this.dropIfLapsed(ws)) {
+                return;
+            }
+
+            // A room topic is handled server-side rather than blindly relayed:
+            // the shard decodes the client's typed message, dispatches the
+            // room's `onMessage` (which decides what, if anything, members
+            // see via `socket.broadcast`), and does NOT relay the raw frame.
+            // An ordinary whisper topic keeps the direct peer relay.
+            // Reuse the whisper rate bucket: a room's fan-out is the same
+            // O(members) cost a whisper is, so it gets the same admission. The
+            // client wire-encoded `data`; decode it back to real values
+            // (`bigint`/`Date`/bytes) before it reaches the handler, mirroring
+            // the `subscribe`/`stream` branches.
+            if (this.roomHandlerPath(envelope.topic) === undefined) {
+                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
+            } else if (
+                !this.closingSockets.has(ws) &&
+                this.isWhisperMember(ws, envelope.topic) &&
+                this.allowWhisper(ws) &&
+                this.fitsWhisperCap(envelope.data)
+            ) {
+                // The same 4 KiB cap an ordinary whisper carries: a room message is
+                // decoded, validated and run as a write, so it must not be unbounded.
+                // The membership epoch at receive travels with the message: if the socket
+                // leaves and rejoins before this runs, the message was sent under the old membership.
+                await this.dispatchRoomEvent(ws, envelope.topic, "message", envelope.data, this.membershipEpoch(ws, envelope.topic));
+            }
+        }
+    }
+
+    /** An `unsubscribe` frame: cancel a stream with that id, if any, and drop the subscription. */
+    private handleUnsubscribeFrame(ws: ShardSocketLike, envelope: SubscriptionEnvelope): void {
+        // Stream cancel: abort the in-flight iterator (if any) before
+        // touching the subscription registry. unsubscribe() on a non-sub
+        // id is a no-op, so this stays safe even when id namespaces overlap.
+        const cancellers = this.streamCancellers.get(ws);
+        const controller = cancellers?.get(envelope.id);
+
+        if (controller) {
+            controller.abort();
+            cancellers?.delete(envelope.id);
+        }
+
+        // A subscribe still waiting on its function's load must not register after this.
+        this.loadingSubscribes.get(ws)?.delete(envelope.id);
+        this.unsubscribe(ws, envelope.id);
+        this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
     }
 
     /**
@@ -11055,7 +10569,7 @@ abstract class ShardDO {
         subscriptionRefreshErrors: number;
         uptimeMs: number;
     } {
-        this.flushUnwrittenMetrics();
+        this.functionMetrics.flushUnwrittenMetrics();
 
         const size = this.shardHost.sql.databaseSize;
 
@@ -11095,7 +10609,7 @@ abstract class ShardDO {
             // No durable query-metrics table yet — report an empty feed.
         }
 
-        const historyResult = this.collectFunctionMetricBuckets();
+        const historyResult = this.functionMetrics.collectFunctionMetricBuckets();
 
         return {
             // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `cache` is `null | {...}`, null reported when the reactive cache is disabled
@@ -11103,7 +10617,7 @@ abstract class ShardDO {
             // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `databaseSize` is `null | number`, null when the runtime doesn't expose a size
             databaseSize: typeof size === "number" ? size : null,
             errors,
-            functions: this.collectFunctionStats().functions,
+            functions: this.functionMetrics.collectFunctionStats(this.metrics.sinceMs).functions,
             history: historyResult.buckets,
             historyTruncated: historyResult.truncated,
             indexHits,
@@ -11143,393 +10657,6 @@ abstract class ShardDO {
             deleteShapePokeCursorsForConnection(this.sql as SqlExec, connectionId);
         } catch {
             /* stub sql / missing table — nothing durable to clean up */
-        }
-    }
-
-    /**
-     * Fold one dispatch into the per-function counters keyed by `functionPath`,
-     * creating the entry on first sight. `errorMessage` is supplied only when
-     * the handler threw, in which case the failure counters advance too. The
-     * caller is expected to have already redacted `errorMessage` (via
-     * `redactArgs`, the same `standardRules` treatment the request-log sinks
-     * use) — this method persists/caches it verbatim into BOTH the durable
-     * `__lunora_metrics.last_error_message` column and the in-memory
-     * `functionStats.lastErrorMessage` served by `getFunctionStats`, so an
-     * un-redacted message reaching here leaks into the Studio.
-     * `scannedTables` carries the tables the dispatch full-scanned (collected by
-     * `getCtxDbReadHook`), which advance the causal scan attribution.
-     * `indexHits` carries the declared indexes it exercised (collected by
-     * `getCtxDbIndexUseHook`, NUL-free `JSON.stringify([table, index])` keys),
-     * which advance the durable `__lunora_metrics_index` hit counter behind the
-     * dead-index lint. Called once per `/rpc` dispatch alongside the aggregate
-     * `metrics` update.
-     *
-     * Two writes happen here. The in-memory {@link functionStats} map is kept
-     * for the fast warm-instance path, and the durable `__lunora_metrics`
-     * table is upserted so the counters survive hibernation/restart — the
-     * persisted table is the source of truth the admin RPCs read from. The
-     * persist is best-effort: a SQL failure (e.g. a test double without a
-     * `sql` handle) must never turn a successful dispatch into a failed one,
-     * so it is swallowed and the in-memory counters still advance.
-     *
-     * The durable write is COALESCED, not per-dispatch: the call is folded into
-     * {@link ShardDO.pendingFunctionMetrics} (exact counts, durations, scans and
-     * index hits) and {@link ShardDO.maybeFlushMetrics} writes the whole delta once
-     * every N dispatches ({@link ShardDO.metricsFlushEvery}; default 8; 1 = every dispatch),
-     * so the durable counters stay exact and only the write frequency drops.
-     */
-    private recordFunctionCall(
-        functionPath: string,
-        durationMs: number,
-        errorMessage?: string,
-        scannedTables?: ReadonlySet<string>,
-        indexHits?: ReadonlySet<string>,
-        conflicted: boolean = false,
-    ): void {
-        const now = Date.now();
-        const scanned = scannedTables ? [...scannedTables] : [];
-
-        this.foldFunctionMetric(functionPath, durationMs, now, errorMessage, scanned, indexHits, conflicted);
-
-        const existing = this.functionStats.get(functionPath);
-        const stat: FunctionCallStat = existing ?? {
-            calls: 0,
-            conflicts: 0,
-            errors: 0,
-            lastCalledAt: now,
-            // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
-            lastErrorAt: null,
-            // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
-            lastErrorMessage: null,
-            maxDurationMs: 0,
-            path: functionPath,
-            scannedTables: [],
-            scans: 0,
-            totalDurationMs: 0,
-        };
-
-        stat.calls += 1;
-        stat.totalDurationMs += durationMs;
-        stat.maxDurationMs = Math.max(stat.maxDurationMs, durationMs);
-        stat.lastCalledAt = now;
-
-        // Fold the dispatch's full-scan attribution into the in-memory stat so
-        // the warm-instance fallback (used when the durable read fails) carries
-        // the causal data too — via the same `mergeScanAttribution` rule the
-        // durable `__lunora_metrics_scans` upsert uses, so the two can't drift.
-        if (scanned.length > 0) {
-            stat.scans += scanned.length;
-            mergeScanAttribution(stat.scannedTables, scanned);
-        }
-
-        if (errorMessage !== undefined) {
-            stat.errors += 1;
-            stat.lastErrorAt = now;
-            stat.lastErrorMessage = errorMessage;
-        }
-
-        if (conflicted) {
-            stat.conflicts += 1;
-        }
-
-        if (existing === undefined) {
-            // Distinct-path cap, mirroring the durable twin's
-            // `FUNCTION_METRICS_MAX_PATHS` admission rule: `functionPath` is
-            // caller-controlled, and the recording paths that never resolve it
-            // (the idempotency cache hit, the watermark short-circuit) can be
-            // driven with a fresh path per request. Refuse the new path rather
-            // than evict — protecting the incumbents is the reason the cap
-            // exists, exactly as `admitPath` argues on the durable side.
-            if (this.functionStats.size >= FUNCTION_METRICS_MAX_PATHS) {
-                return;
-            }
-
-            this.functionStats.set(functionPath, stat);
-        }
-    }
-
-    /**
-     * Fold the per-DISTINCT-statement SQL samples accumulated during the current
-     * dispatch into {@link ShardDO.pendingStmtSamples}. Called after
-     * `recordFunctionCall` on both the success and error paths, followed by
-     * {@link ShardDO.maybeFlushMetrics}.
-     *
-     * Already folded by the instrumented `sql` getter (see `currentStmtSamples`);
-     * `count` carries the real execution count so the durable
-     * `exec_count`/`total_duration_ms` still reflect every execution. Pure
-     * in-memory; nothing is written until the flush. Clearing `currentStmtSamples`
-     * happens in the `finally` block of the dispatch path, not here.
-     */
-    private foldStmtSamples(samples: ReadonlyMap<string, StmtSample>): void {
-        if (samples.size === 0) {
-            return;
-        }
-
-        for (const [rawSql, sample] of samples) {
-            // Keyed by the dispatch's own latency bucket (the one `recordQueryMetric`
-            // places the entry in), so same-bucket dispatches merge into one write
-            // while a slow dispatch stays in its own bucket.
-            const key = `${String(latencyBucketIndex(sample.totalDurationMs / sample.count))}:${rawSql}`;
-            const pending = this.pendingStmtSamples.get(key);
-
-            if (pending === undefined) {
-                this.pendingStmtSamples.set(key, { ...sample, rawSql });
-            } else {
-                pending.count += sample.count;
-                pending.rowsRead += sample.rowsRead;
-                pending.rowsWritten += sample.rowsWritten;
-                pending.totalDurationMs += sample.totalDurationMs;
-            }
-        }
-    }
-
-    /** Fold one completed dispatch into {@link ShardDO.pendingFunctionMetrics}. */
-    private foldFunctionMetric(
-        functionPath: string,
-        durationMs: number,
-        now: number,
-        errorMessage: string | undefined,
-        scanned: ReadonlyArray<string>,
-        indexHits: ReadonlySet<string> | undefined,
-        conflicted: boolean,
-    ): void {
-        // A delta is written under ONE minute bucket (the last call's), so close
-        // out the pending delta before a dispatch from a later minute joins it.
-        if (
-            this.pendingStartedAt !== undefined &&
-            Math.floor(now / FUNCTION_METRICS_BUCKET_MS) !== Math.floor(this.pendingStartedAt / FUNCTION_METRICS_BUCKET_MS)
-        ) {
-            this.flushPendingMetrics();
-        }
-
-        let pending = this.pendingFunctionMetrics.get(functionPath);
-
-        // A new path at the cap flushes first so this dispatch (an error included) is
-        // recorded rather than dropped.
-        if (pending === undefined && this.pendingFunctionMetrics.size >= FUNCTION_METRICS_MAX_PATHS) {
-            this.flushPendingMetrics();
-        }
-
-        this.pendingStartedAt ??= now;
-        this.pendingLastAt = now;
-        this.dispatchesSinceFlush += 1;
-
-        if (errorMessage !== undefined || conflicted) {
-            this.pendingForceFlush = true;
-        }
-
-        if (pending === undefined) {
-            pending = {
-                calls: 0,
-                conflicts: 0,
-                durationMaxMs: durationMs,
-                durationMinMs: durationMs,
-                durationTotalMs: 0,
-                errors: 0,
-                indexHits: new Map(),
-                lastCalledAt: now,
-                // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
-                lastErrorAt: null,
-                // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
-                lastErrorMessage: null,
-                scans: new Map(),
-            };
-            this.pendingFunctionMetrics.set(functionPath, pending);
-        }
-
-        pending.calls += 1;
-        pending.durationTotalMs += durationMs;
-        pending.lastCalledAt = now;
-        pending.durationMinMs = Math.min(pending.durationMinMs, durationMs);
-        pending.durationMaxMs = Math.max(pending.durationMaxMs, durationMs);
-        if (errorMessage !== undefined) {
-            pending.errors += 1;
-            pending.lastErrorAt = now;
-            pending.lastErrorMessage = errorMessage;
-        }
-
-        if (conflicted) {
-            pending.conflicts += 1;
-        }
-
-        for (const table of new Set(scanned)) {
-            pending.scans.set(table, (pending.scans.get(table) ?? 0) + 1);
-        }
-
-        // Each entry is a `JSON.stringify([table, index])` key stamped by the
-        // index-use hook; one hit per distinct `(table, index)` per dispatch.
-        for (const key of indexHits ?? []) {
-            pending.indexHits.set(key, (pending.indexHits.get(key) ?? 0) + 1);
-        }
-    }
-
-    /**
-     * Write the pending metric delta when this dispatch is due: every
-     * N dispatches ({@link ShardDO.metricsFlushEvery}), immediately after an errored or
-     * conflicted one, or when the pending statement set is as wide as one
-     * dispatch may be. (A minute-boundary crossing flushes earlier, inside
-     * {@link ShardDO.foldFunctionMetric}.) Counts are exact either way; at most
-     * N-1 dispatches of counters are lost if the DO is evicted before a flush.
-     */
-    private maybeFlushMetrics(): void {
-        if (this.dispatchesSinceFlush === 0 && this.pendingStmtSamples.size === 0) {
-            return;
-        }
-
-        if (this.pendingForceFlush || this.dispatchesSinceFlush >= this.metricsFlushEvery() || this.pendingStmtSamples.size >= MAX_STMT_SAMPLES_PER_DISPATCH) {
-            this.flushPendingMetrics();
-        }
-    }
-
-    /**
-     * Persist the pending delta: one `recordFunctionMetric` per path and one
-     * `recordQueryMetric` per (statement, latency bucket) key, so the
-     * histogram still sees each dispatch's own average. The accumulators are swapped out
-     * first, so a write that throws DROPS that path's (or entry's) delta and the rest
-     * of the batch is still written. There is deliberately no retry: metrics are
-     * best-effort, `recordFunctionMetric` is several statements per path and the host
-     * exposes no synchronous transaction, so a retry after a partial write would double
-     * count, and a persistent failure would grow the pending set without bound. One
-     * warning per flush reports what was dropped. Never fails the request.
-     */
-    private flushPendingMetrics(): void {
-        const functions = this.pendingFunctionMetrics;
-        const statements = this.pendingStmtSamples;
-        const ts = this.pendingLastAt ?? Date.now();
-
-        this.pendingFunctionMetrics = new Map();
-        this.pendingStmtSamples = new Map();
-        this.pendingStartedAt = undefined;
-        this.pendingLastAt = undefined;
-        this.pendingForceFlush = false;
-        this.dispatchesSinceFlush = 0;
-
-        let droppedFunctions = 0;
-        let droppedStatements = 0;
-        let firstError: unknown;
-
-        for (const [path, delta] of functions) {
-            try {
-                recordFunctionMetric(this.shardHost.sql, {
-                    calls: delta.calls,
-                    conflicts: delta.conflicts,
-                    durationMaxMs: delta.durationMaxMs,
-                    durationMinMs: delta.durationMinMs,
-                    durationMs: delta.durationTotalMs,
-                    durationTotalMs: delta.durationTotalMs,
-                    errored: delta.errors > 0,
-                    errorMessage: delta.lastErrorMessage ?? undefined,
-                    errors: delta.errors,
-                    indexHitCounts: [...delta.indexHits]
-                        .map(([key, count]) => {
-                            return { count, hit: decodeIndexHitKey(key) };
-                        })
-                        .filter((entry): entry is { count: number; hit: IndexHit } => entry.hit !== undefined)
-                        .map(({ count, hit }) => {
-                            return { ...hit, count };
-                        }),
-                    lastErrorAt: delta.lastErrorAt,
-                    path,
-                    scanCounts: [...delta.scans].map(([table, count]) => {
-                        return { count, table };
-                    }),
-                    ts: delta.lastCalledAt,
-                });
-            } catch (error) {
-                droppedFunctions += 1;
-                firstError ??= error;
-            }
-        }
-
-        const sqlHandle = this.shardHost.sql as unknown as SqlExec;
-
-        for (const sample of statements.values()) {
-            try {
-                recordQueryMetric(sqlHandle, sample.rawSql, sample.totalDurationMs, sample.rowsRead, sample.rowsWritten, ts, sample.count);
-            } catch (error) {
-                droppedStatements += 1;
-                firstError ??= error;
-            }
-        }
-
-        if (droppedFunctions > 0 || droppedStatements > 0) {
-            const message = firstError instanceof Error ? firstError.message : String(firstError);
-
-            // eslint-disable-next-line no-console -- one operational warning per flush: metrics are best-effort and a dropped delta must not be silent
-            console.warn(
-                `[@lunora/do] metric write failed, dropped ${String(droppedFunctions)} function deltas and ${String(droppedStatements)} statement samples: ${message}`,
-            );
-        }
-    }
-
-    /** Write any coalesced delta so an admin read of the durable metric tables is never stale. */
-    private flushUnwrittenMetrics(): void {
-        if (this.dispatchesSinceFlush > 0 || this.pendingStmtSamples.size > 0) {
-            this.flushPendingMetrics();
-        }
-    }
-
-    /**
-     * Dispatches per durable metric write (env `LUNORA_METRICS_FLUSH_EVERY`): a positive
-     * integer, default {@link DEFAULT_METRICS_FLUSH_EVERY} (8). Unset, blank, fractional,
-     * non-numeric or < 1 values fall back to the default. An evicted DO loses at most N-1
-     * dispatches of un-flushed counters (7 by default); errored or conflicted dispatches
-     * and minute-boundary crossings still flush immediately. Set 1 to write every dispatch.
-     */
-    private metricsFlushEvery(): number {
-        // A bare number in wrangler config arrives as a number, not a string.
-        const raw = ((this.env ?? {}) as { LUNORA_METRICS_FLUSH_EVERY?: unknown }).LUNORA_METRICS_FLUSH_EVERY;
-        let value = Number.NaN;
-
-        if (typeof raw === "number") {
-            value = raw;
-        } else if (typeof raw === "string" && raw.trim() !== "") {
-            value = Number(raw);
-        }
-
-        return Number.isInteger(value) && value >= 1 ? value : DEFAULT_METRICS_FLUSH_EVERY;
-    }
-
-    /**
-     * Assemble the per-function readout served by
-     * `__lunora_admin__:getFunctionStats`, sorted most-recently-called first so
-     * the busiest functions surface at the top of the studio table.
-     *
-     * Reads from the durable `__lunora_metrics` table — the source of truth —
-     * so the counts reflect the function's lifetime, not just calls since this
-     * instance woke. Falls back to the in-memory map only if the durable read
-     * throws (e.g. a test double without a usable `sql` handle), keeping the
-     * warm-instance counters available even then. The wire shape is unchanged
-     * (`{ functions, sinceMs }`), so existing studio/runtime consumers keep
-     * working; the rows are now backed by persisted data.
-     */
-    private collectFunctionStats(): FunctionStatsResult {
-        this.flushUnwrittenMetrics();
-
-        try {
-            const functions = readFunctionMetrics(this.shardHost.sql);
-
-            return { functions, sinceMs: this.metrics.sinceMs };
-        } catch {
-            const functions = [...this.functionStats.values()].toSorted((a, b) => b.lastCalledAt - a.lastCalledAt);
-
-            return { functions, sinceMs: this.metrics.sinceMs };
-        }
-    }
-
-    /**
-     * Per-function coarse time-series served additively by the metrics RPC, so
-     * the studio can chart call/error history. Reads the durable
-     * `__lunora_metrics_buckets` table; returns an empty, non-truncated result
-     * when persistence is unavailable so the response stays well-formed.
-     */
-    private collectFunctionMetricBuckets(): FunctionMetricBucketsResult {
-        this.flushUnwrittenMetrics();
-
-        try {
-            return readFunctionMetricBuckets(this.shardHost.sql);
-        } catch {
-            return { buckets: [], truncated: false };
         }
     }
 
@@ -12935,187 +12062,38 @@ abstract class ShardDO {
 
     /**
      * Serve `dropOutboxEntry` — cancel a deferred schedule the scheduler never
-     * confirmed, live or parked. `ctx.scheduler.cancel` only reaches jobs the
-     * SchedulerDO holds, so this is the only way to stop a `retry.forever` entry
-     * that is still waiting.
-     *
-     * The shard cannot always tell that the scheduler never got the job: the accept
-     * may have been lost on the way back, or an attempt may be awaiting it right now.
-     * So the drop cancels the id at the scheduler FIRST and deletes the row only once
-     * that settled. A cancel that fails (the scheduler is often the very thing that is down)
-     * parks the entry so it can never be handed over, and the error goes to the operator;
-     * dropping again completes it. And an attempt that was already in the air takes the job back out
-     * when it lands, see {@link ShardDO.retryScheduleOutboxEntry}. Admin-gated by the caller.
+     * confirmed; see {@link ScheduleOutboxRunner.drop}. Admin-gated by the caller.
      */
     private async handleDropOutboxEntry(args: Record<string, unknown>): Promise<Response> {
         const { id } = parseScheduleOutboxEntryArgs("dropOutboxEntry", args);
-        const sql = this.sql as SqlExec;
 
-        const before = readScheduleOutboxState(sql, id);
-
-        if (before === undefined) {
-            return adminResponse({ dropped: false });
-        }
-
-        // Registered before the first await, so the retry loop and every hand-off up to this row see
-        // it. The coverage ends at the row being dropped: a job recorded anew under the same id after
-        // this point carries a newer token and is not part of this drop.
-        const settled = Promise.withResolvers<undefined>();
-        const drops = this.scheduleOutboxDrops.get(id) ?? new Set<Promise<void>>();
-
-        drops.add(settled.promise);
-        this.scheduleOutboxDrops.set(id, drops);
-        this.markScheduleOutboxDropped(id, before.createdAt);
-
-        try {
-            let cancelError: Error | undefined;
-            let held = true;
-
-            try {
-                held = await cancelScheduleOutboxJob(this.scheduleOutboxScheduler(), id);
-            } catch (error) {
-                cancelError = error instanceof Error ? error : new Error(String(error));
-            }
-
-            const after = readScheduleOutboxState(sql, id);
-
-            if (after?.version !== before.version) {
-                // The entry this drop was cancelling is gone, replaced by a new schedule under the same
-                // id (or released by its own hand-off). Whatever is there now is not this drop's to
-                // delete, mark or park. But a refused cancel still means the old job may be running.
-                if (cancelError !== undefined) {
-                    this.recordAudit(args, "dropOutboxEntry", { id, detail: { outcome: "failed" } });
-
-                    throw scheduleOutboxDropFailure(id, cancelError.message, cancelError);
-                }
-
-                this.recordAudit(args, "dropOutboxEntry", { id, detail: { outcome: "applied" } });
-
-                return adminResponse({ dropped: true });
-            }
-
-            // An attempt still awaiting the scheduler may yet land the job: it sees the drop by its
-            // token and cancels the job itself, and the row has to outlive it. Parking keeps the row
-            // from being handed over meanwhile; the attempt removes it once its cancel is confirmed.
-            const awaiting = this.scheduleOutboxAttempts.get(id);
-
-            // A job that landed during the drop and could not be cancelled by its attempt left the
-            // row parked, which it was not when the drop began: the job may still run.
-            if (cancelError === undefined && after.parked && !before.parked) {
-                cancelError = new Error("a hand-off that landed during the drop could not be cancelled, so the job may still run");
-            }
-
-            if (this.removeUnconfirmableScheduleOutboxDrop(args, sql, id, cancelError, before.parked && after.parked, awaiting)) {
-                return adminResponse({ dropped: true });
-            }
-
-            if (cancelError !== undefined) {
-                // The scheduler may be the very thing that is down. The operator asked for this job
-                // to stop, so the shard must not hand it over in the meantime: park it and report
-                // the failure. Dropping again, once the scheduler answers, completes the cancel.
-                this.parkLiveScheduleOutboxEntry(sql, id);
-                this.logs.push({
-                    functionPath: "scheduler:outbox",
-                    level: "error",
-                    message: `deferred schedule ${id} was dropped by an operator but the scheduler could not confirm the cancel (${cancelError.message}). It is parked and will not be handed over; drop it again once the scheduler answers.`,
-                    timestamp: Date.now(),
-                });
-                this.recordAudit(args, "dropOutboxEntry", { id, detail: { outcome: "parked" } });
-
-                throw scheduleOutboxDropFailure(id, cancelError.message, cancelError);
-            }
-
-            if (awaiting === undefined || awaiting.size === 0) {
-                dropScheduleOutbox(sql, id);
-            } else {
-                this.parkLiveScheduleOutboxEntry(sql, id);
-            }
-
-            this.auditAppliedScheduleOutboxDrop(args, id, held);
-
-            return adminResponse({ dropped: true });
-        } finally {
-            drops.delete(settled.promise);
-
-            if (drops.size === 0) {
-                this.scheduleOutboxDrops.delete(id);
-            }
-
-            settled.resolve(undefined);
-            this.pruneScheduleOutboxDropMarker(id);
-        }
+        return adminResponse(await this.scheduleOutboxRunner.drop(args, id));
     }
 
     /**
-     * Audit a drop that applied. "Not found" is the usual answer for a job the scheduler never
-     * accepted, and the same answer it gives once an accepted job has run: an earlier hand-off whose
-     * accept was lost on the way back. The drop cannot tell the two apart, so the operator is told the
-     * job may have run.
-     */
-    private auditAppliedScheduleOutboxDrop(call: Record<string, unknown>, id: string, held: boolean): void {
-        if (!held) {
-            this.logs.push({
-                functionPath: "scheduler:outbox",
-                level: "warn",
-                message: `deferred schedule ${id} was dropped, but the scheduler held no job under that id. Usually it was never accepted; if an earlier hand-off was accepted and only its answer was lost, the job may already have run.`,
-                timestamp: Date.now(),
-            });
-        }
-
-        this.recordAudit(call, "dropOutboxEntry", { id, detail: held ? { outcome: "applied" } : { outcome: "applied", schedulerHeld: false } });
-    }
-
-    /**
-     * With no scheduler to ask, waiting never confirms the cancel. The first drop parked the row (a
-     * job may have been accepted under a binding that has since gone); dropping a row that was already
-     * parked, with nothing in flight, is the operator accepting that, and removes it.
-     * @returns whether the row was removed
-     */
-    private removeUnconfirmableScheduleOutboxDrop(
-        call: Record<string, unknown>,
-        sql: SqlExec,
-        id: string,
-        cancelError: Error | undefined,
-        alreadyParked: boolean,
-        awaiting: ReadonlySet<ScheduleOutboxAttempt> | undefined,
-    ): boolean {
-        if (!isSchedulerUnavailable(cancelError) || !alreadyParked || (awaiting !== undefined && awaiting.size > 0)) {
-            return false;
-        }
-
-        dropScheduleOutbox(sql, id);
-        this.logs.push({
-            functionPath: "scheduler:outbox",
-            level: "warn",
-            message: `deferred schedule ${id} was removed by a repeated drop without a confirmed cancel: no scheduler is configured on this shard to ask. If it was accepted under a scheduler that has since been removed, it may still run there.`,
-            timestamp: Date.now(),
-        });
-        this.recordAudit(call, "dropOutboxEntry", { id, detail: { outcome: "applied", schedulerHeld: "unknown" } });
-
-        return true;
-    }
-
-    /**
-     * Serve `retryOutboxEntry` — put an entry back on the retry ladder, due now:
-     * the way back for a parked entry, and a way to skip a long backoff once the
-     * scheduler is healthy. Arms the poll alarm for now, because nothing else is
-     * due to wake a shard whose entries were all parked. Admin-gated by the caller.
+     * Serve `retryOutboxEntry` — put an entry back on the retry ladder, due now
+     * (see {@link ScheduleOutboxRunner.retry}), and arm the poll alarm for now,
+     * because nothing else is due to wake a shard whose entries were all parked.
+     * Admin-gated by the caller.
      */
     private async handleRetryOutboxEntry(args: Record<string, unknown>): Promise<Response> {
         const { id } = parseScheduleOutboxEntryArgs("retryOutboxEntry", args);
         const now = Date.now();
-        // A drop owns the id until its cancel settles; requeueing now would report a retry the drop then undoes.
-        const retried = !this.isScheduleOutboxBeingDropped(id) && requeueScheduleOutbox(this.sql as SqlExec, id, now);
+        const outcome = this.scheduleOutboxRunner.retry(id, now);
+
+        // Not `retried: false`: Studio reads that as "no such entry", and this one exists and is
+        // retryable as soon as the cancel at the scheduler settles.
+        if (outcome === "cancelling") {
+            this.recordAudit(args, "retryOutboxEntry", { id, detail: { outcome: "refused" } });
+
+            throw new LunoraError("CONFLICT", `retryOutboxEntry: a cancel of "${id}" at the scheduler is still in flight; retry once it settles`, {
+                status: 409,
+            });
+        }
+
+        const retried = outcome === "retried";
 
         if (retried) {
-            // The operator wants the job after all: an attempt still carrying an earlier drop must
-            // not cancel it or delete the requeued row when it lands.
-            for (const attempt of this.scheduleOutboxAttempts.get(id) ?? []) {
-                attempt.stale = true;
-            }
-
-            this.scheduleOutboxDroppedThrough.delete(id);
-
             // The in-memory alarm time may name a wake the host never delivered (an init
             // that kept failing before the alarm handler cleared it), and `scheduleGlobalPoll`
             // would then skip arming. This wake is the one the row now depends on.
@@ -13848,8 +12826,8 @@ abstract class ShardDO {
         //
         // Best-effort: `cdcEnabled()` is false on a stub `sql` handle or a
         // pre-CDC shard, so the bump simply no-ops there.
-        if (this.cdcEnabled()) {
-            this.bumpCdcEpochUncached();
+        if (this.cdcMeta.cdcEnabled()) {
+            this.cdcMeta.bumpCdcEpochUncached();
         }
 
         this.recordAudit(args, "pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
@@ -13929,7 +12907,7 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.runSql) {
             // The console can query the internal metric tables directly.
-            this.flushUnwrittenMetrics();
+            this.functionMetrics.flushUnwrittenMetrics();
 
             return readAdminRunSql(sql, args);
         }
@@ -13937,7 +12915,7 @@ abstract class ShardDO {
         // Query insights read the durable statement tables, so the pending delta lands first; the
         // other schema-history reads never touch the metric tables and must not force a write.
         if (functionPath === ADMIN_FUNCTIONS.getQueryInsights) {
-            this.flushUnwrittenMetrics();
+            this.functionMetrics.flushUnwrittenMetrics();
         }
 
         // The SQL linter + schema-version ledger reads live in their own module
@@ -14052,7 +13030,7 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getFunctionStats) {
-            return this.collectFunctionStats();
+            return this.functionMetrics.collectFunctionStats(this.metrics.sinceMs);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.listSubscriptions) {
@@ -14860,190 +13838,21 @@ abstract class ShardDO {
     }
 
     /**
-     * Run one registry step after every step before it. Registration and release
-     * both go through here, so a release's emptiness check and unregister can
-     * never interleave with a registration: a write that lands mid-release
-     * registers AFTER the unregister, not before it.
-     */
-    private async serializeRegistry<T>(work: () => Promise<T>): Promise<T> {
-        const run = this.registryTail.then(work);
-
-        this.registryTail = run.then(
-            () => undefined,
-            () => undefined,
-        );
-
-        return run;
-    }
-
-    /** The registry stub, pinned to this DO's own jurisdiction — the subnamespace the worker pins the registry it reads. */
-    private registryStub(namespace: unknown): ReturnType<typeof stubByName> {
-        return stubByName(namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
-    }
-
-    /**
-     * Where this shard's registry writes go. A Durable Object namespace is this app's own
-     * registry: signed directly with this worker's secret. Anything else is the RPC surface of
-     * the worker that hosts the registry, reached through its service binding, so the binding
-     * itself is the capability and no secret is needed. `undefined` when a namespace is not in
-     * this shard's jurisdiction.
-     */
-    private registryWriter(binding: unknown): RegistryWriter | undefined {
-        if (!isRegistryNamespace(binding)) {
-            if (!isRegistryRpc(binding)) {
-                return undefined;
-            }
-
-            const host = binding;
-
-            return {
-                register: async (table, shardKey) => host.register(table, shardKey),
-                unregister: async (table, shardKey) => host.unregister(table, shardKey),
-            };
-        }
-
-        const stub = this.registryStub(binding);
-
-        if (stub === undefined) {
-            return undefined;
-        }
-
-        const secret = siblingSecretOf(this.env);
-
-        return {
-            register: async (table, shardKey) => registerShardKey(stub, table, shardKey, secret),
-            unregister: async (table, shardKey) => unregisterShardKey(stub, table, shardKey, secret),
-        };
-    }
-
-    /**
-     * Tell the shard registry this shard holds rows of each `.shardBy()` table
-     * the flushed write touched, once per table per instance. The cross-shard
-     * fan-outs (export, CDC sync, migrations) only reach the shards the registry
-     * lists, so a shard that never registers is left out of every one of them.
-     *
-     * Runs past the response (see `flushChangedTables`) and never rejects: the
-     * write has already committed, so a failure is logged, the table's claim
-     * released, and the first write after {@link SHARD_REGISTRY_RETRY_MS} retries.
-     */
-    private async registerWrittenShard(changed: ReadonlySet<string>): Promise<void> {
-        await this.serializeRegistry(async () => {
-            const registry = this.shardRegistry();
-
-            if (registry === undefined || Date.now() < this.registryRetryAt) {
-                return;
-            }
-
-            const shardKey = this.currentShardKey();
-
-            // A replica or relay is a copy of (or a door to) another shard, not a
-            // shard of its own. Listed, it would join every fan-out and refuse the
-            // admin RPCs it was sent — a replica answers 421 to anything not routed
-            // to it as a read — so every export and backup of the table would fail.
-            if (parseReplicaName(shardKey) !== undefined || parseRelayName(shardKey) !== undefined) {
-                return;
-            }
-
-            const tables = [...changed].filter((table) => registry.shardedTables.has(table) && !this.registeredTables.has(table));
-
-            if (tables.length === 0) {
-                return;
-            }
-
-            const writer = this.registryWriter(registry.namespace);
-
-            if (writer === undefined) {
-                // eslint-disable-next-line no-console -- server-side diagnostic: a misbound registry leaves this shard out of every fan-out
-                console.error(
-                    `[@lunora/do] shard registry binding is neither a Durable Object namespace in this shard's jurisdiction nor a registry entrypoint; shard "${shardKey}" is not registered`,
-                );
-
-                return;
-            }
-
-            await Promise.all(
-                tables.map(async (table) => {
-                    this.registeredTables.add(table);
-
-                    try {
-                        await writer.register(table, shardKey);
-                    } catch (error: unknown) {
-                        this.registeredTables.delete(table);
-                        this.registryRetryAt = Date.now() + SHARD_REGISTRY_RETRY_MS;
-                        // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose registration failed
-                        console.error(
-                            `[@lunora/do] could not register shard "${shardKey}" for "${table}"; cross-shard export, sync and migrations miss it until a later write registers it:`,
-                            error,
-                        );
-                    }
-                }),
-            );
-        });
-    }
-
-    /**
      * `__lunora_admin__:releaseShardRegistration`: drop this shard from the
      * registry for each named table it holds no rows of, and keep it for the rest.
-     *
-     * The shard decides rather than the caller because only here can the check
-     * be ordered against this shard's own writes. It runs on the registry chain
-     * (see {@link ShardDO.serializeRegistry}) and clears the table's claim, so a
-     * row written before the check is seen by it and keeps the table, and one
-     * written after re-registers once the unregister has landed. A caller that
-     * probed first and unregistered second could hide a shard written in between:
-     * its claim would say "registered" while the registry said otherwise.
-     *
-     * A soft-deleted row still counts as a row — the shard is kept.
+     * See {@link ShardRegistration.release} for why the shard, not the caller,
+     * decides.
      */
     private async handleReleaseShardRegistration(args: Record<string, unknown>): Promise<Response> {
         const { dryRun, tables } = parseReleaseShardRegistrationArgs(args);
 
-        const result = await this.serializeRegistry(async () => {
-            const registry = this.shardRegistry();
-            const writer = registry === undefined ? undefined : this.registryWriter(registry.namespace);
-
-            if (registry === undefined || writer === undefined) {
-                throw new LunoraError("BAD_REQUEST", "releaseShardRegistration: this shard has no shard registry bound", { status: 400 });
-            }
-
-            const shardKey = this.currentShardKey();
-            const kept: string[] = [];
-            const released: string[] = [];
-
-            for (const table of tables) {
-                if (this.tableHasRows(table)) {
-                    kept.push(table);
-                    continue;
-                }
-
-                if (!dryRun) {
-                    // eslint-disable-next-line no-await-in-loop -- one small round trip per table this shard is listed for; ordered with the rest of the chain
-                    await writer.unregister(table, shardKey);
-                    this.registeredTables.delete(table);
-                }
-
-                released.push(table);
-            }
-
-            return { kept, released };
-        });
+        const result = await this.shardRegistration.release(tables, dryRun);
 
         if (!dryRun && result.released.length > 0) {
             this.recordAudit(args, "releaseShardRegistration", { detail: { released: result.released } });
         }
 
         return adminResponse(result);
-    }
-
-    /** Whether this shard's SQLite holds at least one row of `table` — `false` for a table it never created. */
-    private tableHasRows(table: string): boolean {
-        const sql = this.sql as SqlExec;
-
-        if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray().length === 0) {
-            return false;
-        }
-
-        return sql.exec(`SELECT 1 FROM ${quoteIdentifier(table)} LIMIT 1`).toArray().length > 0;
     }
 
     /**
@@ -15094,7 +13903,7 @@ abstract class ShardDO {
         // the registry having heard about it. Checked here first so a shard with
         // no registry pays nothing on the write path.
         if (this.shardRegistry() !== undefined) {
-            await this.deferPastResponse(this.registerWrittenShard(changed));
+            await this.deferPastResponse(this.shardRegistration.register(changed));
         }
 
         await this.startSubscriptionRefresh();
@@ -15947,7 +14756,7 @@ abstract class ShardDO {
         //
         // Refused at subscribe time instead, naming the switch. `.global()` shapes
         // are driven by the poll loop rather than this log and are unaffected.
-        if (!resolved.global && !this.cdcEnabled()) {
+        if (!resolved.global && !this.cdcMeta.cdcEnabled()) {
             return {
                 code: "SHAPE_REQUIRES_CDC",
                 message: `shape "${shape.name}" replicates from the changelog, which this app has not enabled — call .cdc() on defineApp()`,
@@ -16035,7 +14844,7 @@ abstract class ShardDO {
         const sql = this.sql as SqlExec;
         const cursor = this.currentCdcCursor() ?? 0;
         const currentEpoch = this.currentCdcEpoch();
-        const floor = this.cdcEnabled() ? minCdcSeq(sql) : undefined;
+        const floor = this.cdcMeta.cdcEnabled() ? minCdcSeq(sql) : undefined;
         const onThisTimeline = currentEpoch !== undefined && shape.sinceEpoch === currentEpoch;
 
         // Same rollback proof the subscription path acts on, and for the same
@@ -16045,11 +14854,11 @@ abstract class ShardDO {
         // cursor is still low would re-seed correctly while every LATER one — by
         // then back inside the range — resumes across it. See
         // {@link ShardDO.sealForkedTimeline}.
-        const rolledBack = this.cdcEnabled() && shape.sinceSeq !== undefined && onThisTimeline && shape.sinceSeq > cursor;
+        const rolledBack = this.cdcMeta.cdcEnabled() && shape.sinceSeq !== undefined && onThisTimeline && shape.sinceSeq > cursor;
         const epoch = rolledBack ? this.sealForkedTimeline() : currentEpoch;
 
         const canResume =
-            this.cdcEnabled() &&
+            this.cdcMeta.cdcEnabled() &&
             shape.sinceSeq !== undefined &&
             onThisTimeline &&
             shape.sinceSeq <= cursor &&
@@ -16956,405 +15765,6 @@ abstract class ShardDO {
             );
         } catch {
             // Best-effort, like every other telemetry call on the schedule path.
-        }
-    }
-
-    /**
-     * One outbox attempt: replay the stored call, then either end custody or push
-     * the entry out along {@link SCHEDULE_OUTBOX_BACKOFF_MS}. The default policy
-     * parks once the ladder runs out; `retry.forever` keeps a valid call live.
-     *
-     * An envelope that will not parse is parked immediately rather than retried:
-     * no number of attempts turns malformed JSON into a job, and the log line is
-     * the only useful output left.
-     */
-    private async retryScheduleOutboxEntry(
-        sql: SqlExec,
-        scheduler: SchedulerLike | undefined,
-        snapshot: ScheduleOutboxRow,
-        trace?: TraceRefLike,
-    ): Promise<void> {
-        // The tick read its batch before awaiting the scheduler for the rows ahead of
-        // this one, so the snapshot may predate an operator's drop, requeue or park.
-        // The row is read again, synchronously with the claim below, and that read is
-        // what gets replayed. A drop in progress owns the id until it settles.
-        const entry = this.isScheduleOutboxBeingDropped(snapshot.id) ? undefined : readDueScheduleOutboxEntry(sql, snapshot.id, Date.now());
-        const state = readScheduleOutboxState(sql, snapshot.id);
-
-        if (entry === undefined) {
-            return;
-        }
-
-        const attempts = nextScheduleOutboxAttempt(entry.attempts);
-        const stored = parseScheduleOutboxEnvelope(entry.envelopeJson);
-
-        if (!stored.ok) {
-            this.parkScheduleOutboxEntry(sql, entry.id, attempts, stored.target, stored.reason, trace);
-
-            return;
-        }
-
-        const { envelope } = stored;
-        const forever = retriesForever(envelope);
-
-        if (scheduler === undefined) {
-            if (forever) {
-                this.deferScheduleOutboxEntry(sql, entry.id, attempts, true, trace);
-            } else {
-                this.parkScheduleOutboxEntry(sql, entry.id, attempts, envelope.target, "no scheduler is configured on this shard", trace);
-            }
-
-            return;
-        }
-
-        const attempt: ScheduleOutboxAttempt = { stale: false, token: state?.createdAt, version: state?.version };
-        const awaiting = this.scheduleOutboxAttempts.get(entry.id) ?? new Set<ScheduleOutboxAttempt>();
-
-        awaiting.add(attempt);
-        this.scheduleOutboxAttempts.set(entry.id, awaiting);
-
-        try {
-            // `runAt`, never `runAfter`: the envelope stores the absolute instant
-            // the caller asked for, so an entry that spent an hour in custody still
-            // fires when it was meant to rather than an hour late.
-            await (scheduler.runAt as (timestampMs: number, target: never, args: never, options?: never) => Promise<string>)(
-                envelope.when,
-                envelope.target as never,
-                stored.args as never,
-                { ...envelope.options, ...replayDedupKey(envelope.options, entry.id, state?.createdAt), id: entry.id } as never,
-            );
-
-            await this.settleScheduleOutboxHandOff(sql, scheduler, entry.id, attempt.version, this.wasScheduleOutboxDropped(entry.id, attempt), true, trace);
-        } catch (error) {
-            await this.settleFailedScheduleOutboxAttempt(sql, scheduler, { attempt, attempts, envelope, error, forever, id: entry.id }, trace);
-        } finally {
-            awaiting.delete(attempt);
-
-            if (awaiting.size === 0) {
-                this.scheduleOutboxAttempts.delete(entry.id);
-            }
-        }
-    }
-
-    /**
-     * The post-commit hand-off of a deferred schedule, run as a recorded attempt like every retry:
-     * a drop that arrives while the call awaits the scheduler is seen here and the job is cancelled
-     * when it lands (the row stays parked if that cancel fails). A failure leaves the row for the
-     * retry loop, unless a drop already ended the entry, in which case the row goes.
-     */
-    private async runScheduleOutboxHandOff(id: string, run: () => Promise<unknown>, token: number | undefined): Promise<void> {
-        try {
-            // Covered by a drop already: it never goes out, and waits for nothing.
-            if (!this.isScheduleOutboxTokenDropped(id, token)) {
-                // A newer schedule must not meet an id-only cancel still in flight for the old one at
-                // the scheduler, so it goes out only after every drop in progress has settled.
-                for (let drops = this.scheduleOutboxDrops.get(id); drops !== undefined && drops.size > 0; drops = this.scheduleOutboxDrops.get(id)) {
-                    // eslint-disable-next-line no-await-in-loop -- a drop that starts while waiting must be waited for too
-                    await Promise.all(drops);
-                }
-            }
-
-            await this.handOffRecordedScheduleOutboxCall(id, run, token);
-        } finally {
-            this.finishScheduleOutboxHandOff(id);
-        }
-    }
-
-    private async handOffRecordedScheduleOutboxCall(id: string, run: () => Promise<unknown>, token: number | undefined): Promise<void> {
-        const sql = this.sql as SqlExec;
-
-        // An operator may have dropped the entry (or the retry loop parked it) while an earlier
-        // hand-off in the same drain was still awaiting: the call must not start then. Checked
-        // synchronously with the registration below, the same ordering a drop uses.
-        const state = readScheduleOutboxState(sql, id);
-
-        if (this.isScheduleOutboxTokenDropped(id, token)) {
-            return;
-        }
-
-        // A parked row is one the retry loop gave up on or a failed drop stopped. An ABSENT row is
-        // not a drop: a sibling call with the same explicit id may already have released it, and that
-        // call must still reach the scheduler, which answers it as a duplicate.
-        if (state?.parked === true) {
-            return;
-        }
-
-        const attempt: ScheduleOutboxAttempt = { stale: false, token, version: state?.version };
-        const awaiting = this.scheduleOutboxAttempts.get(id) ?? new Set<ScheduleOutboxAttempt>();
-
-        awaiting.add(attempt);
-        this.scheduleOutboxAttempts.set(id, awaiting);
-
-        try {
-            await run();
-        } catch (error) {
-            try {
-                if (this.wasScheduleOutboxDropped(id, attempt)) {
-                    await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.version, true, false);
-                }
-            } catch {
-                // The original failure is the one to report; the row stays for the retry loop.
-            } finally {
-                this.releaseScheduleOutboxAttempt(id, awaiting, attempt);
-            }
-
-            throw error;
-        }
-
-        try {
-            await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.version, this.wasScheduleOutboxDropped(id, attempt), true);
-        } catch {
-            // The scheduler accepted the job and the mutation committed. A bookkeeping failure here
-            // (a storage hiccup, a stub handle) must not surface as a failed mutation: the row that
-            // is left behind is re-offered by the retry loop and refused as a duplicate.
-        } finally {
-            this.releaseScheduleOutboxAttempt(id, awaiting, attempt);
-        }
-    }
-
-    private markScheduleOutboxDropped(id: string, through: number): void {
-        this.scheduleOutboxDroppedThrough.set(id, Math.max(through, this.scheduleOutboxDroppedThrough.get(id) ?? 0));
-    }
-
-    private isScheduleOutboxBeingDropped(id: string): boolean {
-        return (this.scheduleOutboxDrops.get(id)?.size ?? 0) > 0;
-    }
-
-    /** One recorded call is done with: handed off, skipped, or rolled back with its window. */
-    private finishScheduleOutboxHandOff(id: string): void {
-        const left = (this.scheduleOutboxPendingHandOffs.get(id) ?? 0) - 1;
-
-        if (left > 0) {
-            this.scheduleOutboxPendingHandOffs.set(id, left);
-        } else {
-            this.scheduleOutboxPendingHandOffs.delete(id);
-        }
-
-        this.pruneScheduleOutboxDropMarker(id);
-    }
-
-    /**
-     * Forget the drop marker of `id` once nothing it could still decide is left: no recorded call
-     * waiting for its hand-off, no attempt awaiting the scheduler, no drop in flight. Pruned by that
-     * condition rather than by count, because evicting a marker early would let a queued call of a
-     * dropped job go out.
-     */
-    private pruneScheduleOutboxDropMarker(id: string): void {
-        if (
-            (this.scheduleOutboxPendingHandOffs.get(id) ?? 0) === 0 &&
-            (this.scheduleOutboxAttempts.get(id)?.size ?? 0) === 0 &&
-            !this.isScheduleOutboxBeingDropped(id)
-        ) {
-            this.scheduleOutboxDroppedThrough.delete(id);
-        }
-    }
-
-    /** Whether a drop covers the recording `token` names: recorded no later than the row it acted on. */
-    private isScheduleOutboxTokenDropped(id: string, token: number | undefined): boolean {
-        const through = this.scheduleOutboxDroppedThrough.get(id);
-
-        return token !== undefined && through !== undefined && token <= through;
-    }
-
-    /** Whether the entry this attempt was made for has been dropped, now or while it was in the air. */
-    private wasScheduleOutboxDropped(id: string, attempt: ScheduleOutboxAttempt): boolean {
-        return this.isScheduleOutboxTokenDropped(id, attempt.token);
-    }
-
-    private releaseScheduleOutboxAttempt(id: string, awaiting: Set<ScheduleOutboxAttempt>, attempt: ScheduleOutboxAttempt): void {
-        awaiting.delete(attempt);
-
-        if (awaiting.size === 0) {
-            this.scheduleOutboxAttempts.delete(id);
-            this.pruneScheduleOutboxDropMarker(id);
-        }
-    }
-
-    /** A hand-off that threw: end custody if the scheduler turns out to hold the job, else defer or park the entry. */
-    private async settleFailedScheduleOutboxAttempt(
-        sql: SqlExec,
-        scheduler: SchedulerLike,
-        failed: {
-            attempt: ScheduleOutboxAttempt;
-            attempts: number;
-            envelope: ScheduleOutboxEnvelope;
-            error: unknown;
-            forever: boolean;
-            id: string;
-        },
-        trace?: TraceRefLike,
-    ): Promise<void> {
-        const { attempt, attempts, envelope, error, forever, id } = failed;
-
-        // A duplicate id means the scheduler already has this job — the first
-        // dispatch landed and only the bookkeeping was lost. Custody ends the
-        // same way an acceptance ends it.
-        if (isLunoraError(error) && error.code === "DUPLICATE_SCHEDULE_ID") {
-            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt.version, this.wasScheduleOutboxDropped(id, attempt), true, trace);
-
-            return;
-        }
-
-        // The operator dropped the entry while this attempt was awaiting.
-        // The accept may have been lost on the way back, so the job can still exist: cancel it, and
-        // keep the row (parked) if that cannot be confirmed.
-        if (this.wasScheduleOutboxDropped(id, attempt)) {
-            await this.settleScheduleOutboxHandOff(sql, scheduler, id, attempt.version, true, false, trace);
-
-            return;
-        }
-
-        // `retryOutboxEntry` reset the row while this attempt was awaiting the
-        // scheduler; writing this attempt's count and backoff would undo that.
-        if (attempt.stale) {
-            return;
-        }
-
-        // The row was recorded anew under the same id while this attempt was awaiting: its backoff
-        // or park state would land on a different schedule.
-        if (readScheduleOutboxState(sql, id)?.version !== attempt.version) {
-            return;
-        }
-
-        const parkReason = scheduleOutboxParkReason(error, forever, attempts);
-
-        if (parkReason === undefined) {
-            this.deferScheduleOutboxEntry(sql, id, attempts, forever, trace);
-        } else {
-            this.parkScheduleOutboxEntry(sql, id, attempts, envelope.target, parkReason, trace);
-        }
-    }
-
-    /**
-     * The scheduler holds the job: end custody. If the entry was dropped while the
-     * hand-off was awaiting (or a drop is cancelling it right now), the operator asked
-     * for the job NOT to run, so take it back out of the scheduler. `landed` says the scheduler
-     * is known to hold (or to have held) the job, which is what makes a "not found" cancel a failure.
-     */
-    private async settleScheduleOutboxHandOff(
-        sql: SqlExec,
-        scheduler: SchedulerLike | undefined,
-        id: string,
-        version: string | undefined,
-        dropped: boolean,
-        landed: boolean,
-        trace?: TraceRefLike,
-    ): Promise<void> {
-        if (!dropped) {
-            forgetScheduleOutbox(sql, id);
-
-            return;
-        }
-
-        // `version` is the row this attempt was made for. A row recorded since under the same id is a
-        // newer request the drop does not cover, and the retry loop's only copy of that call: it is
-        // neither deleted nor parked, and with an id-only cancel the job the scheduler holds may already
-        // be its, so this hand-off does not cancel either. An absent row is not a replacement.
-        const replaced = (): boolean => {
-            const current = readScheduleOutboxState(sql, id)?.version;
-
-            return current !== undefined && current !== version;
-        };
-
-        if (replaced()) {
-            return;
-        }
-
-        // The row goes only once the cancel is confirmed. If it cannot be, the entry stays
-        // (parked, so it is never handed over again) and a later drop can finish the cancel.
-        try {
-            const held = await cancelScheduleOutboxJob(scheduler, id);
-
-            // A job that was just accepted and is now "not found" has already run or ended: the drop
-            // did not stop it, and the operator has to hear that rather than see the entry vanish.
-            // A call that was rejected may never have been accepted, where "not found" is the normal answer.
-            if (landed && !held) {
-                throw new Error("the scheduler no longer holds the job (it already ran or ended), so the drop could not stop it");
-            }
-
-            if (!replaced()) {
-                forgetScheduleOutbox(sql, id);
-            }
-        } catch (error) {
-            if (!replaced()) {
-                this.parkLiveScheduleOutboxEntry(sql, id);
-            }
-
-            this.logs.push({
-                functionPath: "scheduler:outbox",
-                level: "error",
-                message: `deferred schedule ${id} was dropped while its hand-off was in flight, and cancelling it at the scheduler failed: ${error instanceof Error ? error.message : String(error)}. The job may still run; drop the parked entry again once the scheduler answers.`,
-                timestamp: Date.now(),
-                traceId: trace?.traceId,
-            });
-        }
-    }
-
-    /** Park `id` if it is still live, keeping its attempt count; a parked or absent row is left as it is. */
-    // eslint-disable-next-line class-methods-use-this -- sits beside the other outbox row transitions
-    private parkLiveScheduleOutboxEntry(sql: SqlExec, id: string): void {
-        const live = readDueScheduleOutboxEntry(sql, id, Number.MAX_SAFE_INTEGER);
-
-        if (live !== undefined) {
-            parkScheduleOutbox(sql, id, live.attempts, Date.now());
-        }
-    }
-
-    /**
-     * Push one entry out along the ladder. A `retry.forever` entry that reaches
-     * the attempts a default entry would have parked at says so once, at `warn`:
-     * past that point nothing else reports that the job is still not enqueued.
-     */
-    private deferScheduleOutboxEntry(sql: SqlExec, id: string, attempts: number, forever: boolean, trace?: TraceRefLike): void {
-        deferScheduleOutbox(sql, id, attempts, Date.now() + scheduleOutboxBackoffFor(attempts));
-
-        if (forever && attempts === SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
-            this.logs.push({
-                functionPath: "scheduler:outbox",
-                level: "warn",
-                message: `deferred schedule ${id} is still waiting for the scheduler after ${String(attempts)} attempts. Its mutation committed; custody keeps retrying (retry.forever).`,
-                timestamp: Date.now(),
-                traceId: trace?.traceId,
-            });
-        }
-    }
-
-    /** Park one entry and say so at `error` — a job was promised to a caller and will not be enqueued. */
-    private parkScheduleOutboxEntry(sql: SqlExec, id: string, attempts: number, target: unknown, why: string, trace?: TraceRefLike): void {
-        parkScheduleOutbox(sql, id, attempts, Date.now());
-
-        this.logs.push({
-            functionPath: "scheduler:outbox",
-            level: "error",
-            message: `deferred schedule ${id} (target ${target === undefined ? "<unreadable>" : JSON.stringify(target)}) will not be enqueued: ${why}. Its mutation committed; the job did not.`,
-            timestamp: Date.now(),
-            traceId: trace?.traceId,
-        });
-    }
-
-    /**
-     * Arm the poll alarm once per warm instance if this shard is holding deferred
-     * schedules nobody has enqueued.
-     *
-     * The settle asks for a wake when its own dispatch fails, but the window that
-     * loses a job most quietly is the one where no settle ran at all: the DO is
-     * evicted between the COMMIT and the dispatch, and the entry sits with nothing
-     * pointing at it. Every entry point into this object goes through shard init,
-     * so hooking it here means the next time anything wakes this shard the retry
-     * loop starts — for the cost of one indexed read per cold start.
-     *
-     * Swallows: a shard whose store predates the table (or a harness with a stub
-     * handle) simply has no custody to resume, and init must not fail for it.
-     */
-    private armScheduleOutboxRetry(): void {
-        try {
-            if (probeScheduleOutbox(this.sql as SqlExec).dueAt !== undefined) {
-                this.scheduleGlobalPoll(Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS).catch(() => {
-                    /* the host could not arm; the next cold start probes again */
-                });
-            }
-        } catch {
-            // No table, no custody to resume.
         }
     }
 
@@ -19256,57 +17666,6 @@ abstract class ShardDO {
         }
 
         return this.socketHost.upgradeResponse(client);
-    }
-
-    /**
-     * Whether this shard has a `__cdc_log` table. The single source of the
-     * "is CDC on here?" probe shared by {@link currentCdcCursor},
-     * {@link currentCdcEpoch}, {@link evaluateResume}, and the PITR-restore epoch
-     * bump. Returns `false` (rather than throwing) on a stub `sql` handle (unit
-     * harness double) or a pre-CDC shard, so callers degrade to the no-CDC path.
-     */
-    private cdcEnabled(): boolean {
-        if (this.cdcLogPresent) {
-            return true;
-        }
-
-        try {
-            this.cdcLogPresent =
-                (this.sql as SqlExec).exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
-        } catch {
-            return false;
-        }
-
-        return this.cdcLogPresent;
-    }
-
-    /**
-     * The `__cdc_meta` epoch, read from SQLite at most once until
-     * {@link invalidateCdcMetaCache} runs. Callers gate on {@link cdcEnabled}
-     * first, except {@link sealForkedTimeline}, whose callers already proved it.
-     */
-    private cachedCdcEpoch(): string {
-        this.cdcEpochCache ??= readCdcEpoch(this.sql as SqlExec);
-
-        return this.cdcEpochCache;
-    }
-
-    /** Bump the CDC epoch and drop the CDC memos in one step, so no caller can bump without invalidating. */
-    private bumpCdcEpochUncached(): string {
-        const epoch = bumpCdcEpoch(this.sql as SqlExec);
-
-        this.invalidateCdcMetaCache();
-
-        return epoch;
-    }
-
-    /**
-     * Drop both CDC memos — the single exit for every path that can change
-     * `__cdc_log`'s presence or the `__cdc_meta` row behind this instance's back.
-     */
-    private invalidateCdcMetaCache(): void {
-        this.cdcLogPresent = false;
-        this.cdcEpochCache = undefined;
     }
 
     /**

@@ -115,6 +115,26 @@ describe("shardDO CDC meta cache", () => {
         expect([shard.epoch(), shard.syncEpoch()]).toStrictEqual([storedEpoch(), storedEpoch()]);
     });
 
+    it("seals again on the next witness when the first epoch write failed", () => {
+        expect.assertions(3);
+
+        runShardMigrations(database.sql, messagesSchema, { cdc: true });
+
+        const shard = new CacheShard(buildState(), {});
+        const before = shard.epoch();
+        // The bump mints its epoch just before the write, so failing there fails the write.
+        vi.spyOn(crypto, "randomUUID").mockImplementationOnce(() => {
+            throw new Error("SQLITE_FULL");
+        });
+
+        expect(() => shard.seal()).toThrow("SQLITE_FULL");
+
+        const sealed = shard.seal();
+
+        expect(sealed).not.toBe(before);
+        expect(storedEpoch()).toBe(sealed);
+    });
+
     it("reports the re-minted epoch after an admin pitrRestore", async () => {
         expect.assertions(2);
 
