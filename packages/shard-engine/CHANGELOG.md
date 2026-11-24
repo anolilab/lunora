@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.208...@lunora/shard-engine@1.0.0-alpha.209) (2026-11-24)
+
+- perf(shard-engine): read catalog and ledger once per migration pass (#1698)
+
 ## @lunora/shard-engine [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.207...@lunora/shard-engine@1.0.0-alpha.208) (2026-11-24)
 
 - fix(advisor): let reviewed WARN and INFO findings be accepted (#1685)
