@@ -1,6 +1,7 @@
 import type { Finding } from "@lunora/advisor";
 import { describe, expect, it } from "vitest";
 
+import type { AcceptedFinding } from "../src/advisor-accept";
 import { applyAcceptedFindings, unreadableAcceptance } from "../src/advisor-accept";
 
 const finding = (overrides: Partial<Finding> & { metadata?: Record<string, unknown> }): Finding => {
@@ -19,7 +20,13 @@ const finding = (overrides: Partial<Finding> & { metadata?: Record<string, unkno
     };
 };
 
-const entry = { exportName: "addTeamMember", file: "lunora/auth/team.ts", reason: "org admin gate", rule: "owner_field_from_args_not_auth" };
+const entry: AcceptedFinding = {
+    exportName: "addTeamMember",
+    file: "lunora/auth/team.ts",
+    level: "ERROR",
+    reason: "org admin gate",
+    rule: "owner_field_from_args_not_auth",
+};
 
 describe("applyAcceptedFindings", () => {
     it("demotes the one ERROR whose rule, file and export all match, with the reason in the detail", () => {
@@ -43,15 +50,38 @@ describe("applyAcceptedFindings", () => {
         expect(kept?.level).toBe("ERROR");
     });
 
-    it("never accepts a finding that is not an ERROR", () => {
-        expect.assertions(1);
+    it("demotes a reviewed WARN to INFO with the reason, so it no longer reads as an open item", () => {
+        expect.assertions(3);
 
-        const [warn] = applyAcceptedFindings([finding({ level: "WARN" })], [entry]);
+        const [reviewed] = applyAcceptedFindings([finding({ level: "WARN" })], [{ ...entry, level: "WARN" }]);
 
-        expect(warn?.level).toBe("WARN");
+        expect(reviewed?.level).toBe("INFO");
+        expect(reviewed?.detail).toBe("Accepted: org admin gate. the problem");
+        expect(reviewed?.metadata["accepted"]).toBe("org admin gate");
     });
 
-    it("warns about an entry that matches no ERROR", () => {
+    it("keeps a reviewed INFO at INFO and marks it accepted, with no unused-entry warning", () => {
+        expect.assertions(3);
+
+        const result = applyAcceptedFindings([finding({ level: "INFO" })], [{ ...entry, level: "INFO" }]);
+
+        expect(result.map((advisory) => advisory.name)).toStrictEqual(["owner_field_from_args_not_auth"]);
+        expect(result[0]?.level).toBe("INFO");
+        expect(result[0]?.metadata["accepted"]).toBe("org admin gate");
+    });
+
+    // An acceptance written for a WARN must not silently cover the same export once it is an ERROR.
+    it("keeps an ERROR that an entry written for a WARN would otherwise cover", () => {
+        expect.assertions(3);
+
+        const result = applyAcceptedFindings([finding({})], [{ ...entry, level: "WARN" }]);
+
+        expect(result.find((advisory) => advisory.name === "owner_field_from_args_not_auth")?.level).toBe("ERROR");
+        expect(result.find((advisory) => advisory.name === "advisor_accept_unused")?.level).toBe("WARN");
+        expect(result.find((advisory) => advisory.name === "advisor_accept_unused")?.detail).toContain("No WARN `owner_field_from_args_not_auth`");
+    });
+
+    it("warns about an entry that matches no finding at any level", () => {
         expect.assertions(2);
 
         const result = applyAcceptedFindings([], [entry]);

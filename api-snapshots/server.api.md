@@ -175,6 +175,12 @@ interface AuthState {
 }
 ```
 
+### `AuthorizeCheck` (type)
+
+```ts
+type AuthorizeCheck<Context> = (context: Context) => boolean | Promise<boolean>;
+```
+
 ### `CachePurge` (interface)
 
 ```ts
@@ -3562,6 +3568,12 @@ const asBucketStorage: (raw: unknown) => unknown;
 
 ```ts
 const assertShapesDeclareReadPolicies: (shapes: Readonly<Record<string, ShapeGuardDeclaration>>, readPolicyTables: Iterable<string>, rlsRequired: boolean) => void;
+```
+
+### `authorize` (const)
+
+```ts
+const authorize: <Context extends object>(check: AuthorizeCheck<Context>) => Middleware<Context, Context>;
 ```
 
 ### `beginDeferredDeletes` (const)

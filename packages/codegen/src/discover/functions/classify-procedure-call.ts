@@ -128,13 +128,14 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
 };
 
 /**
- * Whether a chain carries a `.use(platformAdmin(...))` step. Follows a local
- * `const` (or an imported one) ONE hop, as {@link resolveBuilderRootKind} does, so the common shape
- * `const adminMutation = mutation.use(platformAdmin(...))` marks every procedure
- * built on it. Bounded to one hop so a `const a = b; const b = a;` cycle ends.
+ * Whether a chain carries a `.use(<exportName>(...))` step imported from `@lunora/server`, such as
+ * `platformAdmin` or `authorize`. Follows a local `const` (or an imported one) ONE hop, as
+ * {@link resolveBuilderRootKind} does, so the common shape `const adminMutation = mutation.use(platformAdmin(...))`
+ * marks every procedure built on it, including one imported from another module. Bounded to one hop so a
+ * `const a = b; const b = a;` cycle ends.
  */
-const usesPlatformAdmin = (receiver: Node, followedLocal = false): boolean => {
-    if (wrappedCallsWhere(receiver, "use", (callee) => isServerImport(callee, "platformAdmin")).length > 0) {
+const chainCarriesServerMarker = (receiver: Node, exportName: string, followedLocal = false): boolean => {
+    if (wrappedCallsWhere(receiver, "use", (callee) => isServerImport(callee, exportName)).length > 0) {
         return true;
     }
 
@@ -148,7 +149,7 @@ const usesPlatformAdmin = (receiver: Node, followedLocal = false): boolean => {
     const declaration = (symbol?.isAlias() ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
     const initializer = declaration && Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
 
-    return initializer !== undefined && usesPlatformAdmin(initializer, true);
+    return initializer !== undefined && chainCarriesServerMarker(initializer, exportName, true);
 };
 
 /**
@@ -156,7 +157,8 @@ const usesPlatformAdmin = (receiver: Node, followedLocal = false): boolean => {
  * `platformAdmin` import from `@lunora/server` used as a `.use(...)` step, matched
  * by its import origin and not by the name of the variable that holds the chain.
  */
-const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> => (usesPlatformAdmin(receiver) ? { adminOnly: true } : {});
+const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> =>
+    chainCarriesServerMarker(receiver, "platformAdmin") ? { adminOnly: true } : {};
 
 /** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
 interface ProcedureClassification {
@@ -367,5 +369,5 @@ const classifyProcedureCall = (call: CallExpression, lazyFunctions = false): Rea
     return byFlag.get(lazyFunctions);
 };
 
-export { classifyProcedureCall };
+export { chainCarriesServerMarker, classifyProcedureCall };
 export type { ChannelKind, LifecycleMoment, ProcedureClassification };

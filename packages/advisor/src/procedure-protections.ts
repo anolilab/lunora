@@ -87,6 +87,13 @@ export interface AdvisorProcedureProtection {
      * design — see `isUnboundedAiGeneration`).
      */
     unboundedAiGeneration?: boolean;
+
+    /**
+     * `true` when the chain carries `.use(authorize(...))` from `@lunora/server`: the procedure is behind a
+     * permission check, so a CAPTCHA is not expected. `undefined` from a feeder predating this field, which
+     * leaves the CAPTCHA lint firing.
+     */
+    usesAuthorize?: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */
     usesCaptcha: boolean;
 

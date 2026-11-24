@@ -31,6 +31,9 @@ const customers = defineTable({
     providerCustomerId: v.string(),
     referenceId: v.string(),
 })
+    // The store writes every payment table through `database.insert` with the name held in a constant. The app's advisor does not
+    // scan this package, so the write path is declared here rather than read from the call sites.
+    .externallyManaged()
     .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
     // Not unique: one reference may legitimately hold a customer per provider (Stripe AND Polar).
     // `upsertCustomer` MATCHES on `(provider, referenceId)`, so the steady state is one row per pair
@@ -77,6 +80,7 @@ const subscriptions = defineTable({
     revision: v.optional(v.number()),
     updatedAt: v.number(),
 })
+    .externallyManaged()
     .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
     .index("by_reference", ["referenceId"])
     // Dunning: every `past_due` subscription across references, read without scanning the
@@ -104,6 +108,7 @@ const sessions = defineTable({
     revision: v.optional(v.number()),
     updatedAt: v.number(),
 })
+    .externallyManaged()
     .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
     .index("by_provider_subscription", ["provider", "subscriptionId"])
     .index("by_reference", ["referenceId"]);
@@ -114,7 +119,9 @@ const events = defineTable({
     provider: v.string(),
     providerEventId: v.string(),
     type: v.string(),
-}).index("by_provider_event", ["provider", "providerEventId"], { unique: true });
+})
+    .externallyManaged()
+    .index("by_provider_event", ["provider", "providerEventId"], { unique: true });
 
 // One counter per reference that orders access-granting subscription writes under `singleSubscriptionPerReference`. The
 // store cannot write two subscription rows atomically, so a grant bumps this row with a conditional patch after its write:
@@ -123,7 +130,9 @@ const events = defineTable({
 const referenceRevisions = defineTable({
     referenceId: v.string(),
     revision: v.number(),
-}).index("by_reference", ["referenceId"], { unique: true });
+})
+    .externallyManaged()
+    .index("by_reference", ["referenceId"], { unique: true });
 
 // Append-only metered-usage ledger: `track` writes, `check` sums over the current period. The
 // unique `by_idempotency` index makes recording exactly-once under concurrent/retried writes.
@@ -140,6 +149,7 @@ const usageEvents = defineTable({
     /** Epoch ms the usage sweep may next retry this forward — see `UsageEvent.reportRetryAt`. */
     reportRetryAt: v.optional(v.number()),
 })
+    .externallyManaged()
     .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
     .index("by_reference_feature_created", ["referenceId", "featureId", "createdAt"])
     .index("by_reference_created", ["referenceId", "createdAt"])

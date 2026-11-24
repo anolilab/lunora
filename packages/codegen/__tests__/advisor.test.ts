@@ -481,7 +481,7 @@ export const schema = defineSchema({
             expect(invalid[0]?.detail).toContain(detail);
         });
 
-        // `advisor.accept` demotes a reviewed ERROR to INFO, matched exactly by rule, file and export.
+        // `advisor.accept` demotes a reviewed finding to INFO, matched exactly by rule, file and export.
         it("demotes the one ERROR an accept entry names to INFO, with its reason, and lets the gate pass", () => {
             expect.assertions(4);
 
@@ -491,7 +491,7 @@ export const schema = defineSchema({
 
             writeFileSync(
                 join(workdir, "lunora.config.ts"),
-                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }] } };\n`,
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: "reviewed fixture" }] } };\n`,
                 "utf8",
             );
 
@@ -504,7 +504,7 @@ export const schema = defineSchema({
             expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
         });
 
-        it("warns about an accept entry that matches no ERROR and leaves every ERROR in place", () => {
+        it("warns about an accept entry that matches no finding and leaves every ERROR in place", () => {
             expect.assertions(3);
 
             seedAllLevels();
@@ -514,7 +514,7 @@ export const schema = defineSchema({
             // The right rule and file, but the wrong export: the ghost shape is still an ERROR.
             writeFileSync(
                 join(workdir, "lunora.config.ts"),
-                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "nobody", reason: "wrong export" }] } };\n`,
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "nobody", level: "error", reason: "wrong export" }] } };\n`,
                 "utf8",
             );
 
@@ -526,9 +526,13 @@ export const schema = defineSchema({
         });
 
         it.each([
-            ["an empty reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "" }`],
-            ["a computed reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: ["x"].join("") }`],
+            ["an empty reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: "" }`],
+            ["a computed reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: ["x"].join("") }`],
             ["a spread entry", `{ ...base }`],
+            [
+                "a level that is not error, warn or info",
+                `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "critical", reason: "x" }`,
+            ],
         ])("ignores the whole list for %s and keeps every ERROR", (_label, entry) => {
             expect.assertions(3);
 
@@ -545,13 +549,26 @@ export const schema = defineSchema({
             expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
         });
 
+        // Without a `level` the entry cannot say which finding it reviewed, so the config is refused rather than read as a match-any entry.
+        it("stops codegen on an entry without a level", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "x" }] } };\n`,
+                "utf8",
+            );
+
+            expect(() => runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/`advisor\.accept\[0\]` is missing `level`/u);
+        });
+
         // The parse refuses it before the advisor runs, so a misspelt key never reads as an entry that matched nothing.
         it("stops codegen on an unknown key in an entry", () => {
             expect.assertions(1);
 
             writeFileSync(
                 join(workdir, "lunora.config.ts"),
-                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "x", note: "y" }] } };\n`,
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: "x", note: "y" }] } };\n`,
                 "utf8",
             );
 
@@ -566,7 +583,7 @@ export const schema = defineSchema({
 
             writeFileSync(
                 join(workdir, "lunora.config.ts"),
-                `export default { advisor: { minSeverity: "error", accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }, { rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "nobody", reason: "stale" }] } };\n`,
+                `export default { advisor: { minSeverity: "error", accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: "reviewed fixture" }, { rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "nobody", level: "error", reason: "stale" }] } };\n`,
                 "utf8",
             );
 
@@ -587,7 +604,7 @@ export const schema = defineSchema({
 
             writeFileSync(
                 join(workdir, "lunora.config.ts"),
-                `const level = ["warn"][0];\nexport default { advisor: { minSeverity: level, accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }] } };\n`,
+                `const level = ["warn"][0];\nexport default { advisor: { minSeverity: level, accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", level: "error", reason: "reviewed fixture" }] } };\n`,
                 "utf8",
             );
 
@@ -758,6 +775,7 @@ describe("toAdvisorContext (codegen → advisor coverage map)", () => {
                 file: "posts",
                 kind: "query" as const,
                 unboundedAiGeneration: false,
+                usesAuthorize: false,
                 usesCaptcha: false,
                 usesEmailGate: false,
                 usesInsertManyUnsafe: false,

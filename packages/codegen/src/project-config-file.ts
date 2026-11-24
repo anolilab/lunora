@@ -44,6 +44,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 
+import type { Level } from "@lunora/advisor";
 import { createJiti } from "jiti";
 import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
 import { Node as TsNode, Project, VariableDeclarationKind } from "ts-morph";
@@ -280,12 +281,16 @@ const readPlainMember = (declared: TsNode | undefined, sourceFile: SourceFile, k
     return literal === undefined ? { unreadable: true } : { literal };
 };
 
-const ACCEPT_KEYS = ["exportName", "file", "reason", "rule"] as const;
+const ACCEPT_KEYS = ["exportName", "file", "level", "reason", "rule"] as const;
+
+/** The `level` an entry accepts, spelled as `minSeverity` spells it, and the advisor level it names. */
+const ACCEPT_LEVELS: Readonly<Record<string, Level>> = { error: "ERROR", info: "INFO", warn: "WARN" };
 
 /**
- * One `advisor.accept` entry as four non-empty string literals, or `undefined`
- * for anything else — an extra key, a computed value, a blank reason. A typo in
- * a key would otherwise match nothing and fail silently, so only the four are read.
+ * One `advisor.accept` entry as five non-empty string literals, or `undefined`
+ * for anything else — an extra key, a computed value, a blank reason, a `level`
+ * that is not `"error"`, `"warn"` or `"info"`. A typo in a key would otherwise
+ * match nothing and fail silently, so only the five are read.
  */
 const readAcceptedEntry = (entry: TsNode): AcceptedFinding | undefined => {
     const value = unwrapLiteral(entry);
@@ -315,9 +320,12 @@ const readAcceptedEntry = (entry: TsNode): AcceptedFinding | undefined => {
         fields[key as (typeof ACCEPT_KEYS)[number]] = initializer.getLiteralValue();
     }
 
-    const { exportName, file, reason, rule } = fields;
+    const { exportName, file, level, reason, rule } = fields;
+    const reviewedLevel = level !== undefined && Object.hasOwn(ACCEPT_LEVELS, level) ? ACCEPT_LEVELS[level] : undefined;
 
-    return exportName?.trim() && file?.trim() && reason?.trim() && rule?.trim() ? { exportName, file, reason, rule } : undefined;
+    return exportName?.trim() && file?.trim() && reason?.trim() && rule?.trim() && reviewedLevel !== undefined
+        ? { exportName, file, level: reviewedLevel, reason, rule }
+        : undefined;
 };
 
 /** `advisor.accept` from the `advisor` literal: the entries, or `acceptUnreadable` when any part is not a literal the parser can read. */

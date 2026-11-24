@@ -100,6 +100,17 @@ describe("public_mutation_without_ratelimit", () => {
 });
 
 describe("user_creating_mutation_without_captcha", () => {
+    it("does not ask for a captcha on a procedure behind a permission check", () => {
+        expect.assertions(1);
+
+        const findings = userCreatingMutationWithoutCaptcha.run({
+            procedureProtections: [procedure({ usesAuthorize: true, writesUserTable: true })],
+            schema: schema(),
+        });
+
+        expect(findings).toHaveLength(0);
+    });
+
     it("flags a user-table write with no captcha", () => {
         expect.assertions(2);
 
