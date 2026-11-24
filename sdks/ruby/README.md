@@ -54,6 +54,16 @@ around the poster.
 `client.handle_frame(raw)` is what you call with each inbound WebSocket message;
 `client.resend_subscriptions` re-subscribes everything after a reconnect —
 queries and shape views alike — carrying each one's resume cursor or checkpoint.
+It sends at most three query subscriptions at once (`Lunora::RESUBSCRIBE_CONCURRENCY`),
+in subscribe order, as the reference client does, so a reconnect does not land every query
+on the shard in one burst. Each of the rest goes out when `handle_frame` sees a frame for
+one already sent, or once one has gone unanswered for 10 s (`Lunora::RESUBSCRIBE_ACK_TIMEOUT`):
+`next_subscription_retry_at` includes that deadline, and `retry_due_subscriptions` at or
+after it sends the next. Feed every frame to `handle_frame` and pull
+`retry_due_subscriptions` on that deadline (a retry hint on a subscription error arms the
+same one). Shape subscriptions all go out at once. Args that no longer encode make
+`resend_subscriptions` raise before anything is sent; a query whose args stop encoding while
+it waits its turn is skipped.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
 (`handle_frame` returns the frame's type). `attach_socket` sends the `connect` frame
@@ -68,12 +78,22 @@ attempt = 0
 loop do
   retry_thread = nil
   retry_stop = false # set in ensure, so the retry thread does not flush after the run ends
+  pacer = nil
   socket = nil
   close_code = close_reason = nil # the close frame that ended the run; nil when the socket dropped without one
   begin
     socket = connect # your socket library
     client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) }) # sends connect first, under session_token
     client.resend_subscriptions
+    # Frees a re-subscribe slot nobody answered and serves retry hints; stopped in ensure, so it
+    # never writes to the next socket. Waking at least every second sees a deadline armed later.
+    pacer = Thread.new do
+      until retry_stop
+        due = client.next_subscription_retry_at
+        sleep(due ? (due - Lunora.monotonic_now).clamp(0.0, 1.0) : 1.0)
+        client.retry_due_subscriptions unless retry_stop
+      end
+    end
     report = client.flush_offline_queue # HTTP replay; transient failures stay queued
     if report.retry_after_ms || report.requeued.any?
       # requeued writes never stop the read loop: retry on a thread, stopped in ensure
@@ -109,6 +129,12 @@ loop do
       retry_thread&.join # so a requeued write is seen by the next run's flush
     rescue StandardError
       nil # a flush that raised must not skip the close below
+    end
+    begin
+      pacer&.wakeup
+      pacer&.join
+    rescue StandardError
+      nil # a write that raised on the dying socket must not skip the close below
     end
     socket&.close # assumed: connect returns an IO-like socket; close it so each reconnect frees the last one
   end

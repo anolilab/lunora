@@ -55,6 +55,19 @@ module Lunora
   # digits, so this is far above any legitimate working set.
   MAX_PENDING_POKES = 64
 
+  # How many re-sent +subscribe+ frames a reconnect keeps unanswered at once
+  # before it waits for a reply. Each one runs its query server-side to build a
+  # snapshot, and most land on the one default-shard Durable Object, so an
+  # unpaced burst can knock it over (RESUBSCRIBE_CONCURRENCY in
+  # packages/client/src/client-tuning.ts, issue #796).
+  RESUBSCRIBE_CONCURRENCY = 3
+
+  # Seconds an unanswered re-subscribe holds its slot before the next one goes
+  # out without it. A slot no reply ever frees would stop every queued
+  # re-subscribe until the next reconnect, which is worse than the burst the
+  # pacing avoids.
+  RESUBSCRIBE_ACK_TIMEOUT = 10.0
+
   # A coded error from an RPC error envelope.
   #
   # +transient+ says the call did not reach a verdict: the reply carried no
@@ -404,6 +417,11 @@ module Lunora
       # The monotonic deadline of the one re-subscribe a retry hint asked for, per query id.
       # See +retry_due_subscriptions+.
       @pending_retries = {}
+      # Query ids a reconnect has yet to re-send, in subscribe order, and the ones
+      # sent and not yet heard back about, each with the monotonic deadline after
+      # which it stops holding a slot. See +resend_subscriptions+.
+      @resubscribe_queue = []
+      @resubscribe_slots = {}
       @shapes = {}
       @pokes = {}
       @next_id = 0
@@ -453,6 +471,7 @@ module Lunora
         discard_held_runs
         @attach_generation += 1
         @pending_retries.clear
+        clear_resubscribes
         @socket_generation = @credential_generation
         [@attach_generation,
          Lunora.build_connect_frame(@client_id, context, token: @session_token, caps: [Delta::PAGE_DELTA_CAPABILITY])]
@@ -489,6 +508,7 @@ module Lunora
         discard_held_runs
         @attach_generation += 1
         @pending_retries.clear
+        clear_resubscribes
         expiry_notified_by_close?(close_code, reason)
       end
 
@@ -586,6 +606,7 @@ module Lunora
         @attach_generation += 1
         @send = nil
         @pending_retries.clear
+        clear_resubscribes
         discard_held_runs
         [@offline_queue.clear, @streams.slice!(0..)]
       end
@@ -631,10 +652,20 @@ module Lunora
       end
 
       lambda do
-        locked_send do
+        sender, generation, paced = @mutex.synchronize do
           @subscriptions.delete(id)
           @pending_retries.delete(id)
-          Lunora.build_unsubscribe_frame(id)
+          # Its frame will never be answered now, so the slot it holds goes to the next one.
+          released = @resubscribe_slots.delete(id) && @send
+          [@send, @attach_generation, released ? take_resubscribes(Lunora.monotonic_now) : []]
+        end
+        next if sender.nil?
+
+        begin
+          sender.call(Lunora.build_unsubscribe_frame(id))
+        ensure
+          # The batch holds slots this call claimed: a failed unsubscribe write must not strand it.
+          send_resubscribes(sender, generation, paced, raise_errors: false)
         end
       end
     end
@@ -721,52 +752,40 @@ module Lunora
     # The frames are BUILT under the lock, not merely collected: each one carries
     # a +cursor+ the frame handler writes, so snapshotting the entries and
     # reading their cursors afterwards resends a torn frame.
+    #
+    # Query subscriptions go out at most +RESUBSCRIBE_CONCURRENCY+ at a time, in
+    # subscribe order, as the reference client sends them: each of the rest is
+    # sent once +handle_frame+ sees a frame for one already sent, or once
+    # +retry_due_subscriptions+ finds one has gone unanswered for
+    # +RESUBSCRIBE_ACK_TIMEOUT+ (the deadline is included in
+    # +next_subscription_retry_at+). Shape subscriptions all go out here. A write
+    # that raises propagates, and the queries it left unsent go back to the front
+    # of the queue, so the next reply or due deadline sends them.
     def resend_subscriptions
-      sender = nil
+      sender, generation, batch, shapes = @mutex.synchronize do
+        next [nil, nil, [], []] if @send.nil?
 
-      queries, shapes = @mutex.synchronize do
-        sender = @send
-        next [[], []] if sender.nil?
-
-        [
-          @subscriptions.map do |id, entry|
-            [entry, Lunora.build_subscribe_frame(
-              id, entry[:function_path], entry[:args],
-              since_seq: entry[:cursor], since_epoch: entry[:epoch]
-            )]
-          end,
-          # BOTH registries. A resend that walks only the queries leaves every
-          # shape view subscribed to a socket that no longer exists — silently, and
-          # for the rest of the process's life.
-          @shapes.map do |id, entry|
-            Lunora.build_shape_subscribe_frame(
-              id, entry[:name], entry[:args],
-              since_checkpoint: entry[:checkpoint], since_epoch: entry[:epoch]
-            )
-          end
-        ]
-      end
-
-      queries.each do |entry, frame|
-        # Cleared per send, not up front: the resume position is still before any dropped
-        # change, so the replay re-applies it. A send that fails means the server never saw
-        # that replay, so the flag comes back and a later delta cannot advance the cursor.
-        was_poisoned = @mutex.synchronize do
-          poisoned = entry[:poisoned]
-          entry[:poisoned] = false
-          # The cursor still sits before the run, so the server replays all of it.
-          entry[:run] = nil
-          poisoned
+        # Every query frame is built up front, so args that no longer encode raise
+        # to the caller here; later in the drain they can only be skipped.
+        @subscriptions.each do |id, entry|
+          Lunora.build_subscribe_frame(id, entry[:function_path], entry[:args], since_seq: entry[:cursor], since_epoch: entry[:epoch])
         end
-
-        begin
-          sender.call(frame)
-        rescue StandardError
-          @mutex.synchronize { entry[:poisoned] = true } if was_poisoned
-          raise
+        # BOTH registries. A resend that walks only the queries leaves every
+        # shape view subscribed to a socket that no longer exists — silently, and
+        # for the rest of the process's life. Shapes are not paced.
+        shapes = @shapes.map do |id, entry|
+          Lunora.build_shape_subscribe_frame(
+            id, entry[:name], entry[:args],
+            since_checkpoint: entry[:checkpoint], since_epoch: entry[:epoch]
+          )
         end
+        clear_resubscribes
+        @resubscribe_queue = @subscriptions.keys
+        [@send, @attach_generation, take_resubscribes(Lunora.monotonic_now), shapes]
       end
+      return if sender.nil?
 
+      send_resubscribes(sender, generation, batch, raise_errors: true)
       shapes.each { |frame| sender.call(frame) }
     end
 
@@ -783,7 +802,14 @@ module Lunora
       return nil unless frame.is_a?(Hash)
 
       deferred = []
-      kind = @mutex.synchronize { dispatch(frame, deferred) }
+      paced = nil
+      kind = @mutex.synchronize do
+        paced = release_resubscribe_slot(frame["id"])
+        dispatch(frame, deferred)
+      end
+      # Not this frame's error: raising would end the caller's read loop, and the
+      # dead socket's detach starts the next resend anyway.
+      send_resubscribes(*paced, raise_errors: false) if paced
       run_callbacks(deferred)
       kind
     end
@@ -973,6 +999,10 @@ module Lunora
     # socket is attached nothing is sent and nothing is dropped: the deadline waits
     # for the next one. A sender that raises stops the batch, and the retries not yet
     # written stay due; a socket change while the batch is sent stops it too.
+    #
+    # It also frees each slot of +resend_subscriptions+' pacing that has gone
+    # unanswered past its deadline, and sends (and counts) the queued
+    # re-subscribes that then fit. Those keep their resume cursor.
     def retry_due_subscriptions(now = Lunora.monotonic_now)
       sender, generation, batch = @mutex.synchronize do
         next [nil, nil, []] if @send.nil?
@@ -989,6 +1019,7 @@ module Lunora
         end
         [@send, @attach_generation, batch]
       end
+      return 0 if sender.nil?
 
       sent = 0
       batch.each_with_index do |(id, frame), index|
@@ -1004,13 +1035,122 @@ module Lunora
         end
         sent += 1
       end
-      sent
+
+      # Claimed only now: a batch claimed before a write above raised would keep
+      # its slots and lose its freeze without ever going out. A socket attached
+      # while the frames above were written has its own pacing, which this run must
+      # neither expire nor drain onto the socket it captured.
+      paced = @mutex.synchronize do
+        next [] unless @attach_generation == generation
+
+        @resubscribe_slots.delete_if { |_id, deadline| deadline <= now }
+        take_resubscribes(now)
+      end
+      send_resubscribes(sender, generation, paced, raise_errors: true)
+      sent + paced.size
     end
 
-    # The monotonic deadline of the earliest pending retry, or nil when none is pending.
-    def next_subscription_retry_at = @mutex.synchronize { @pending_retries.values.min }
+    # The monotonic deadline of the earliest pending retry or paced re-subscribe,
+    # or nil when none is pending.
+    def next_subscription_retry_at = @mutex.synchronize { [*@pending_retries.values, *@resubscribe_slots.values].min }
 
     private
+
+    # Forget the paced re-subscribe. Runs with the lock held.
+    def clear_resubscribes
+      @resubscribe_queue = []
+      @resubscribe_slots.clear
+    end
+
+    # Build the queued re-subscribes that fit in the free slots and claim a slot
+    # for each. Runs with the lock held. Returns +[id, entry, frame, was_poisoned]+
+    # tuples for +send_resubscribes+.
+    #
+    # Each frame is BUILT here, at the moment it goes out, not when it was queued:
+    # it reads the cursor and epoch the frame handler writes, and an identity
+    # change can clear them while the subscription waits its turn.
+    def take_resubscribes(now)
+      batch = []
+      while @resubscribe_slots.size < RESUBSCRIBE_CONCURRENCY && !@resubscribe_queue.empty?
+        id = @resubscribe_queue.shift
+        entry = @subscriptions[id]
+        # Unsubscribed while it waited its turn: nothing to re-send.
+        next if entry.nil?
+
+        # Built before any state moves: args the caller mutated into something the
+        # wire cannot carry are skipped, rather than stalling the queue behind them.
+        frame = begin
+          Lunora.build_subscribe_frame(id, entry[:function_path], entry[:args], since_seq: entry[:cursor], since_epoch: entry[:epoch])
+        rescue WireFormatError
+          next
+        end
+
+        # The replay from the old cursor re-applies the dropped change, and poisons
+        # again if it is still unmergeable. Lifted only now: a queued subscription is
+        # not replaying yet, so a delta reaching it must not move the cursor past it.
+        was_poisoned = entry[:poisoned]
+        entry[:poisoned] = false
+        entry[:run] = nil
+        batch << [id, entry, frame, was_poisoned]
+        @resubscribe_slots[id] = now + RESUBSCRIBE_ACK_TIMEOUT
+      end
+      batch
+    end
+
+    # Send what +take_resubscribes+ built, with the lock released, on the socket of
+    # attach generation +generation+.
+    #
+    # A send that raises means the server never saw that replay or any after it,
+    # so their dropped changes are still unapplied and a later delta must not
+    # advance the cursor past them: see +restore_unsent_resubscribes+. Off the
+    # caller's own resend (+raise_errors+ false) the error is swallowed rather
+    # than raised into a frame handler or an unsubscribe.
+    def send_resubscribes(sender, generation, batch, raise_errors:)
+      return if batch.empty?
+
+      sent = 0
+      begin
+        batch.each do |(_id, _entry, frame, _was_poisoned)|
+          sender.call(frame)
+          sent += 1
+        end
+        # The frames went out with the lock released, so an unsubscribe on another
+        # thread may have reached the socket first; follow it with another, or the
+        # server keeps a subscription this client no longer holds.
+        dropped = @mutex.synchronize { batch.reject { |(id, entry)| @subscriptions[id].equal?(entry) }.map(&:first) }
+        dropped.each { |id| sender.call(Lunora.build_unsubscribe_frame(id)) }
+      rescue StandardError
+        restore_unsent_resubscribes(batch.drop(sent), generation)
+        raise if raise_errors
+      end
+    end
+
+    # A failed send's unsent re-subscribes get their freeze back, free their slots
+    # and return to the front of the queue, in order, or nothing would ever send
+    # them on a socket that stays open. A replaced socket's resend owns the queue
+    # by then, so nothing happens once the generation has moved on.
+    def restore_unsent_resubscribes(unsent, generation)
+      @mutex.synchronize do
+        next unless @attach_generation == generation
+
+        unsent.each do |(id, entry, _frame, was_poisoned)|
+          entry[:poisoned] = true if was_poisoned
+          @resubscribe_slots.delete(id)
+        end
+        @resubscribe_queue.unshift(*unsent.filter_map { |(id, entry)| id if @subscriptions[id].equal?(entry) })
+      end
+    end
+
+    # ANY frame bearing a re-sent subscription's id proves the server has taken it
+    # off its plate: an +ack+, but equally the +error+ that refuses it or a +data+
+    # that overtakes its ack. Releasing here rather than per type keeps an
+    # unanticipated frame, or a case that returns early, from stalling the drain.
+    # Runs with the lock held; returns +send_resubscribes+' arguments, or nil.
+    def release_resubscribe_slot(id)
+      return nil unless id.is_a?(String) && @resubscribe_slots.delete(id) && @send
+
+      [@send, @attach_generation, take_resubscribes(Lunora.monotonic_now)]
+    end
 
     # Put a failed batch's unwritten retries back, unless the socket has changed since
     # (which cancels every retry) or a newer hint or an unsubscribe has decided them.
