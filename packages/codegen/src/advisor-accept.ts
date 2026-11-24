@@ -32,10 +32,11 @@ const namesFinding = (candidate: AcceptedFinding, advisory: Finding): boolean =>
 
 /**
  * Whether the entry's `table` fits the finding. One procedure can carry the same finding for several tables (an RLS
- * gap, an unmasked PII column), so an entry that names no table covers a procedure's table finding only while it is
- * the procedure's only one: once a second table shows up, the entry matches none of them, and the unused-entry WARN
- * asks for the table. A table the procedure starts reaching later is never accepted unseen. A shape's finding names
- * its one table, so an entry for it keeps matching without one.
+ * gap, an unmasked PII column), so an entry that names no table covers a procedure's table findings only while they
+ * are all about one table: once a second table shows up, the entry matches none of them, and the unused-entry WARN
+ * asks for the table. A table the procedure starts reaching later is never accepted unseen. Several findings about one
+ * table (one per hashed column) still count as one table. A shape's finding names its one table, so an entry for it
+ * keeps matching without one.
  */
 const tableFits = (candidate: AcceptedFinding, advisory: Finding, advisories: ReadonlyArray<Finding>): boolean => {
     const table = procedureTableOf(advisory);
@@ -44,7 +45,7 @@ const tableFits = (candidate: AcceptedFinding, advisory: Finding, advisories: Re
         return candidate.table === table;
     }
 
-    return advisories.filter((other) => namesFinding(candidate, other)).length === 1;
+    return new Set(advisories.filter((other) => namesFinding(candidate, other)).map((other) => procedureTableOf(other))).size === 1;
 };
 
 /** One reviewed finding to accept. `reason` says why it is by design; it is shown with the finding. */

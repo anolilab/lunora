@@ -131,6 +131,27 @@ describe("applyAcceptedFindings", () => {
         expect(several[2]?.remediation).toContain("`table`");
     });
 
+    // A weak hash reports one finding per column, so two hashed columns of one table are still one table.
+    it("accepts every finding about one table for an entry without a table, one per column", () => {
+        expect.assertions(2);
+
+        const columnFinding = (column: string, table: string): Finding =>
+            finding({ level: "WARN", metadata: { column, exportName: "listUsers", file: "lunora/users.ts", table }, name: "mask_weak_hash_strategy_on_pii" });
+        const untabled: AcceptedFinding = {
+            exportName: "listUsers",
+            file: "lunora/users.ts",
+            level: "WARN",
+            reason: "hashes are salted",
+            rule: "mask_weak_hash_strategy_on_pii",
+        };
+
+        const result = applyAcceptedFindings([columnFinding("email", "users"), columnFinding("phone", "users")], [untabled]);
+        const unknownTable = applyAcceptedFindings([columnFinding("email", "")], [untabled]);
+
+        expect(result.map((advisory) => advisory.level)).toStrictEqual(["INFO", "INFO"]);
+        expect(unknownTable.map((advisory) => advisory.level)).toStrictEqual(["INFO"]);
+    });
+
     it("does not match an entry that names a table to a finding about no table", () => {
         expect.assertions(1);
 
