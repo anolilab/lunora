@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.273...@lunora/auth@1.0.0-alpha.274) (2026-11-24)
+
+- fix(auth)!: match duplicate emails on a canonical column (#1681)
+
 ## @lunora/auth [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.272...@lunora/auth@1.0.0-alpha.273) (2026-11-24)
 
 - fix(do)!: stop subscribers being rate-limited for other users' writes (#1661)

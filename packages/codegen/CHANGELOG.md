@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.439](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.438...@lunora/codegen@1.0.0-alpha.439) (2026-11-24)
+
+- fix(auth)!: match duplicate emails on a canonical column (#1681)
+
 ## @lunora/codegen [1.0.0-alpha.438](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.437...@lunora/codegen@1.0.0-alpha.438) (2026-11-24)
 
 - fix(do)!: stop subscribers being rate-limited for other users' writes (#1661)
