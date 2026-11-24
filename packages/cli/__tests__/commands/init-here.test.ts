@@ -1,12 +1,70 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runInitCommand } from "../../src/commands/init/handler";
 import { detectFramework } from "../../src/util/detect-framework";
 import type { Logger } from "../../src/util/logger";
+
+/** When set, a `writeFileSync` whose path contains it writes half its content and then fails, as ENOSPC does. */
+const writeFailure = vi.hoisted(() => {
+    return {
+        beforePublish: undefined as ((path: string) => void) | undefined,
+        beforeWrite: undefined as ((path: string) => void) | undefined,
+        noHardLinks: false,
+        pathPart: undefined as string | undefined,
+        tempRemovalFails: false,
+    };
+});
+
+/** When set, the scaffold's temp-file suffix, so a test can plant something at the exact name. */
+const temporaryName = vi.hoisted(() => {
+    return { uuid: undefined as string | undefined };
+});
+
+vi.mock(import("node:crypto"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, randomUUID: (() => temporaryName.uuid ?? actual.randomUUID()) as typeof actual.randomUUID };
+});
+
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        writeFileSync: ((path: Parameters<typeof actual.writeFileSync>[0], data: string, options?: Parameters<typeof actual.writeFileSync>[2]) => {
+            writeFailure.beforeWrite?.(String(path));
+
+            if (writeFailure.pathPart !== undefined && String(path).includes(writeFailure.pathPart)) {
+                actual.writeFileSync(path, data.slice(0, Math.floor(data.length / 2)), options);
+
+                throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+            }
+
+            actual.writeFileSync(path, data, options);
+        }) as typeof actual.writeFileSync,
+        rmSync: ((path: string, options?: Parameters<typeof actual.rmSync>[1]) => {
+            if (writeFailure.tempRemovalFails && path.includes(".lunora-")) {
+                throw Object.assign(new Error("EBUSY: resource busy or locked, rm"), { code: "EBUSY" });
+            }
+
+            actual.rmSync(path, options);
+        }) as typeof actual.rmSync,
+        // A filesystem without hard links, and a hook for another process acting just before publication.
+        linkSync: ((existing: string, created: string) => {
+            writeFailure.beforePublish?.(created);
+
+            if (writeFailure.noHardLinks) {
+                throw Object.assign(new Error("EPERM: operation not permitted, link"), { code: "EPERM" });
+            }
+
+            actual.linkSync(existing, created);
+        }) as typeof actual.linkSync,
+    };
+});
 
 interface CapturingLogger extends Logger {
     lines: string[];
@@ -270,6 +328,257 @@ describe("lunora init --here", () => {
         // The hand-edited schema is preserved.
         expect(readFileSync(schemaPath, "utf8")).toBe("// hand edited\n");
         expect(logger.lines.join("\n")).toContain("already present");
+    });
+
+    it("a re-run leaves a sample function the user deleted deleted", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        const functionPath = join(workdir, "lunora", "messages.ts");
+
+        unlinkSync(functionPath);
+
+        const result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        expect(result.code).toBe(0);
+        // Its public messages:list / messages:send functions must not come back.
+        expect(existsSync(functionPath)).toBe(false);
+    });
+});
+
+describe("lunora init --here — a failed lunora/ scaffold", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-here-fail-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    /**
+     * A dangling link at `lunora/<name>`: `existsSync` reports it missing, so
+     * the scaffold tries to write it, and the write follows the link into a
+     * directory that does not exist — a deterministic write failure that does
+     * not depend on file modes (which root ignores).
+     */
+    const breakScaffoldFile = (name: string): string => {
+        const path = join(workdir, "lunora", name);
+
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        symlinkSync(join(workdir, "missing-dir", name), path);
+
+        return path;
+    };
+
+    it("exits non-zero, logs the failure and runs neither --add nor --ci", async () => {
+        expect.assertions(5);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+        writeFileSync(join(workdir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+        breakScaffoldFile("messages.ts");
+
+        const registryRoot = mkdtempSync(join(tmpdir(), "lunora-empty-registry-"));
+        const logger = capturingLogger();
+        const result = await runInitCommand({ add: "auth", ci: "github", cwd: workdir, inPlace: true, logger, registryFrom: registryRoot });
+
+        rmSync(registryRoot, { force: true, recursive: true });
+
+        expect(result.code).toBe(1);
+        expect(logger.lines.join("\n")).toContain("could not write");
+        expect(logger.lines.join("\n")).toContain("messages.ts");
+        // The empty registry would have logged an "auth" failure had --add run.
+        expect(logger.lines.join("\n")).not.toMatch(/auth/u);
+        expect(existsSync(join(workdir, ".github", "workflows", "deploy.yml"))).toBe(false);
+    });
+
+    it("a re-run after the failure is fixed writes the missing file and leaves messages.ts byte-identical", async () => {
+        expect.assertions(4);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const schemaPath = breakScaffoldFile("schema.ts");
+        const first = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        expect(first.code).toBe(1);
+
+        const functionPath = join(workdir, "lunora", "messages.ts");
+        const functionBefore = readFileSync(functionPath);
+
+        // unlinkSync, not rmSync: Node 24.11's rmSync({ force }) leaves a dangling link in place.
+        unlinkSync(schemaPath);
+
+        const second = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        expect(second.code).toBe(0);
+        expect(existsSync(schemaPath)).toBe(true);
+        expect(readFileSync(functionPath).equals(functionBefore)).toBe(true);
+    });
+
+    it("does not replace a schema.ts another process creates while the sample is being written", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const schemaPath = join(workdir, "lunora", "schema.ts");
+
+        // Runs once, as the scaffold writes schema.ts's temp file: after its absence check, before publication.
+        writeFailure.beforeWrite = (path) => {
+            if (path.includes("schema.ts.lunora-")) {
+                writeFailure.beforeWrite = undefined;
+                writeFileSync(schemaPath, "user\n", "utf8");
+            }
+        };
+
+        let result: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        } finally {
+            writeFailure.beforeWrite = undefined;
+        }
+
+        expect(result.code).toBe(1);
+        expect(readFileSync(schemaPath, "utf8")).toBe("user\n");
+    });
+
+    it("fails clearly where hard links are unsupported, leaving the destination and no temp file", async () => {
+        expect.assertions(4);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const lunoraDirectory = join(workdir, "lunora");
+        // messages.ts is published first, and its failure ends the scaffold.
+        const destination = join(lunoraDirectory, "messages.ts");
+        const logger = capturingLogger();
+
+        writeFailure.noHardLinks = true;
+        // Another process creates the file just before publication; it must survive the failed publish.
+        writeFailure.beforePublish = (path) => {
+            if (path === destination) {
+                writeFailure.beforePublish = undefined;
+                writeFileSync(destination, "user\n", "utf8");
+            }
+        };
+
+        let result: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            result = await runInitCommand({ cwd: workdir, inPlace: true, logger });
+        } finally {
+            writeFailure.noHardLinks = false;
+            writeFailure.beforePublish = undefined;
+        }
+
+        expect(result.code).toBe(1);
+        expect(logger.lines.join("\n")).toContain("does not support hard links");
+        expect(readFileSync(destination, "utf8")).toBe("user\n");
+        expect(readdirSync(lunoraDirectory).filter((name) => name.includes(".lunora-"))).toStrictEqual([]);
+    });
+
+    it("reports success when a published sample's temp file cannot be removed", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+        writeFailure.tempRemovalFails = true;
+
+        let result: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        } finally {
+            writeFailure.tempRemovalFails = false;
+        }
+
+        // Both samples were linked into place; the leftover temp files are inert.
+        expect(result.code).toBe(0);
+        expect(readFileSync(join(workdir, "lunora", "schema.ts"), "utf8")).toContain("defineSchema");
+    });
+
+    it("does not follow a link planted at the scaffold's temp file", async () => {
+        expect.assertions(3);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const victim = join(workdir, "victim.txt");
+
+        writeFileSync(victim, "keep\n", "utf8");
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+
+        const planted = join(workdir, "lunora", `messages.ts.lunora-${String(process.pid)}-planted.tmp`);
+
+        symlinkSync(victim, planted);
+        temporaryName.uuid = "planted";
+
+        let result: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        } finally {
+            temporaryName.uuid = undefined;
+        }
+
+        expect(result.code).toBe(1);
+        expect(readFileSync(victim, "utf8")).toBe("keep\n");
+        // The planted link is not this run's to remove.
+        expect(lstatSync(planted).isSymbolicLink()).toBe(true);
+    });
+
+    it("a temp file an interrupted run left behind does not block or confuse a re-run", async () => {
+        expect.assertions(3);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const lunoraDirectory = join(workdir, "lunora");
+
+        // What a run killed between writing and publishing leaves: a temp file, no schema.ts. Its pid may be reused.
+        mkdirSync(lunoraDirectory, { recursive: true });
+        writeFileSync(join(lunoraDirectory, `schema.ts.lunora-${String(process.pid)}.tmp`), "half", "utf8");
+
+        const result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        expect(result.code).toBe(0);
+        expect(readFileSync(join(lunoraDirectory, "schema.ts"), "utf8")).toContain("defineSchema");
+        expect(readFileSync(join(lunoraDirectory, "messages.ts"), "utf8")).not.toBe("");
+    });
+
+    it("a write that fails part-way leaves no schema.ts, so a re-run writes the whole sample", async () => {
+        expect.assertions(4);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const schemaPath = join(workdir, "lunora", "schema.ts");
+
+        writeFailure.pathPart = "schema.ts";
+
+        let first: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            first = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        } finally {
+            writeFailure.pathPart = undefined;
+        }
+
+        expect(first.code).toBe(1);
+        // A truncated schema.ts would mark the scaffold finished, and the re-run would keep it.
+        expect(existsSync(schemaPath)).toBe(false);
+
+        const second = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+
+        // Byte-identical to a scaffold that never failed.
+        const clean = mkdtempSync(join(tmpdir(), "lunora-here-clean-"));
+
+        writePackageJson(clean, { "@sveltejs/kit": "^2.0.0" });
+        await runInitCommand({ cwd: clean, inPlace: true, logger: capturingLogger() });
+
+        const expected = readFileSync(join(clean, "lunora", "schema.ts"), "utf8");
+
+        rmSync(clean, { force: true, recursive: true });
+
+        expect(second.code).toBe(0);
+        expect(readFileSync(schemaPath, "utf8")).toBe(expected);
     });
 });
 

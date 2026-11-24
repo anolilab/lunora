@@ -268,8 +268,10 @@ wrangler secret put AUTH_SECRET --env production
 wrangler secret put RESEND_API_KEY --env production
 ```
 
-Or push everything from `.dev.vars` at once with `lunora env push --yes`
-(`--prod` targets the production environment). Pipe a freshly generated value
+Or push everything from `.dev.vars` at once with `lunora env push --yes`.
+`--prod` targets the production environment and pushes `.dev.vars.production`
+instead, the file `lunora deploy --env production` records generated secrets in
+(see [Environments](/docs/concepts/environments)). Pipe a freshly generated value
 straight in: `lunora env generate AUTH_SECRET | cut -d= -f2- | wrangler secret put AUTH_SECRET --env production`.
 
 `wrangler deploy` never pushes `.dev.vars` values, so `lunora deploy` checks the
