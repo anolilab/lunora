@@ -85,9 +85,10 @@ describe("lunoraProvider — swapping the `client` prop", () => {
                 listener();
             }
 
-            // TanStack delivers cache updates to observers on a timer.
+            // query-core's notifyManager delivers a batch of cache updates to observers on a
+            // `setTimeout(0)` the listener queued; this one, queued after it, fires after that delivery.
             await new Promise((resolve) => {
-                setTimeout(resolve, 20);
+                setTimeout(resolve, 0);
             });
         });
 

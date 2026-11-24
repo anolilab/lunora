@@ -80,18 +80,6 @@
         "reason": "pending conversion"
     },
     {
-        "file": "packages/react/__tests__/client-swap.test.tsx",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/react/__tests__/paginated-core-gc.test.tsx",
-        "reason": "pending conversion"
-    },
-    {
-        "file": "packages/react/__tests__/use-mutation.test.tsx",
-        "reason": "pending conversion"
-    },
-    {
         "file": "packages/replica/__tests__/runtime-edges.test.ts",
         "reason": "a real-clock timeout sentinel in a race, pending conversion"
     },

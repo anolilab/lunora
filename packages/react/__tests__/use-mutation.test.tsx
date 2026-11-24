@@ -21,6 +21,16 @@ const makeRef = (ref: string): FunctionReference => {
 /** A reference to a function with a `v.sensitive` argument, as codegen emits it. */
 const makeSensitiveRef = (ref: string): FunctionReference => ({ __lunoraRef: ref, sensitive: true }) as FunctionReference;
 
+/**
+ * Waits out the delivery of cache updates already batched. Query-core's notifyManager delivers a
+ * batch to observers on a `setTimeout(0)` queued when the batch closed, and a timer queued after
+ * that one fires after the delivery.
+ */
+const afterCacheDelivery = (): Promise<void> =>
+    new Promise((resolve) => {
+        setTimeout(resolve, 0);
+    });
+
 interface WriterHandle {
     send: () => Promise<unknown>;
 }
@@ -247,7 +257,15 @@ describe("useMutation", () => {
             url: "https://app.example",
             WebSocket: createMockWebSocket(sockets),
         });
-        const spy = vi.spyOn(client, "mutation");
+        const mutation = client.mutation.bind(client);
+        const reached = Promise.withResolvers<undefined>();
+        const spy = vi.spyOn(client, "mutation").mockImplementation(async (...args) => {
+            const result = mutation(...args);
+
+            reached.resolve(undefined);
+
+            return result;
+        });
 
         const Counter = (): ReactElement => {
             const value = useQuery(counter, {}) as { count: number } | undefined;
@@ -302,10 +320,10 @@ describe("useMutation", () => {
 
             fireEvent.click(screen.getByTestId("count"));
 
+            // The write reaches the client, which queues it and applies its optimistic update at once.
             await act(async () => {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 20);
-                });
+                await reached.promise;
+                await afterCacheDelivery();
             });
 
             expect(spy).toHaveBeenCalledTimes(1);
@@ -323,7 +341,17 @@ describe("useMutation", () => {
         const sockets: MockSocket[] = [];
         const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ result: "sent" }));
         const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket(sockets) });
+        const canQueueOffline = client.canQueueOffline.bind(client);
+        // The hook asks this before deciding to hold the write for the network.
+        const asked = Promise.withResolvers<undefined>();
+        const settled = Promise.withResolvers<undefined>();
         let outcome = "pending";
+
+        vi.spyOn(client, "canQueueOffline").mockImplementation((shardKey) => {
+            asked.resolve(undefined);
+
+            return canQueueOffline(shardKey);
+        });
 
         const Writer = (): ReactElement => {
             const { mutate } = useMutation(makeRef("posts:create"));
@@ -336,11 +364,13 @@ describe("useMutation", () => {
                         mutate({ title: "cold" })
                             .then((value) => {
                                 outcome = `resolved:${String(value)}`;
+                                settled.resolve(undefined);
 
                                 return undefined;
                             })
                             .catch((error: unknown) => {
                                 outcome = `rejected:${String(error)}`;
+                                settled.resolve(undefined);
                             });
                     }}
                     type="button"
@@ -365,19 +395,16 @@ describe("useMutation", () => {
             // No socket has ever opened, so the client cannot queue this write.
             fireEvent.click(screen.getByTestId("write"));
 
+            // Told it cannot queue, the hook holds the write on the network instead of sending it.
             await act(async () => {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 20);
-                });
+                await asked.promise;
             });
 
             expect(fetchMock).toHaveBeenCalledTimes(0);
 
             await act(async () => {
                 onlineManager.setOnline(true);
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 20);
-                });
+                await settled.promise;
             });
 
             expect(fetchMock).toHaveBeenCalledTimes(1);
