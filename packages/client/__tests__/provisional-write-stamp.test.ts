@@ -547,6 +547,50 @@ describe("a page whose session source is declared (`lunoraSessionSync()`)", () =
         client.close();
     });
 
+    it("keeps asking at a capped delay while the endpoint stays down, never giving up", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+        vi.stubGlobal("document", {});
+        declareSessionSource();
+
+        const { client, pendingAnswers } = cookieClient({ declared: true });
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        const stamp = client.writeIdentityStamp();
+
+        await vi.waitFor(() => {
+            expect(pendingAnswers).toHaveLength(1);
+        });
+
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        try {
+            // The first probe and six re-asks fail: past any fixed retry count.
+            for (let attempt = 0; attempt < 7; attempt += 1) {
+                pendingAnswers.shift()?.(new TypeError("network down"));
+                // eslint-disable-next-line no-await-in-loop -- each re-ask is scheduled only after the previous one fails
+                await vi.advanceTimersByTimeAsync(30_000);
+
+                expect(pendingAnswers).toHaveLength(1);
+            }
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // The endpoint recovers: the next re-ask is answered and the early write is bound.
+        pendingAnswers.shift()?.(alice);
+        await settle();
+
+        expect(client.replayIdentityVerdict(stamp).verdict).toBe("match");
+
+        client.close();
+    });
+
     it("declares nothing off the browser, where one process serves every request", () => {
         expect.assertions(1);
 

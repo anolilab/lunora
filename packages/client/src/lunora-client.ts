@@ -502,9 +502,13 @@ const LIVE_CONTROL_TIMEOUT_MS = 10_000;
 const OWN_CLAIMS_MAX_RETRIES = 5;
 const OWN_CLAIMS_RETRY_BASE_MS = 500;
 
-/** Retries of a declared-session probe that failed on a live connection, and the first delay; each doubles the last. */
-const DECLARED_SESSION_MAX_RETRIES = 5;
+/**
+ * Delay before re-asking a declared-session probe that failed on a live connection: the
+ * first, doubling up to the cap. Capped rather than counted — early writes wait on the
+ * answer, so the client keeps asking until the endpoint recovers.
+ */
 const DECLARED_SESSION_RETRY_BASE_MS = 1000;
+const DECLARED_SESSION_RETRY_MAX_MS = 30_000;
 
 /** Longest a supplementary socket waits on a ticket provider before it mints again: a provider that never settles must not stall the channel. */
 const WS_TICKET_MINT_TIMEOUT_MS = 10_000;
@@ -8966,8 +8970,8 @@ class LunoraClient {
      * token, or none opening at all, never delivers the cookie identity, so
      * without this its early writes were held and its read cache refused for the
      * life of the page. A probe that fails is asked again when the connection is
-     * live again (see the constructor), or after a short backoff when it failed
-     * while the connection was already live and no transition is coming.
+     * live again (see the constructor), or after a capped backoff for as long as it
+     * keeps failing while the connection stays live and no transition is coming.
      */
     private resolveDeclaredSession(): void {
         if (this.closed || this.sessionProbesInFlight > 0) {
@@ -8984,21 +8988,19 @@ class LunoraClient {
         this.retryDeclaredSession();
     }
 
-    /** Re-ask a declared-session probe that got no answer while the connection stayed live, a bounded number of times. */
+    /** Re-ask a declared-session probe that got no answer while the connection stayed live, at a capped backoff. */
     private retryDeclaredSession(): void {
-        if (
-            this.closed ||
-            this.identitySettled ||
-            this.declaredSessionRetryTimer !== undefined ||
-            this.declaredSessionFailures >= DECLARED_SESSION_MAX_RETRIES ||
-            !isLiveStatus(this.computeStatus())
-        ) {
+        if (this.closed || this.identitySettled || this.declaredSessionRetryTimer !== undefined || !isLiveStatus(this.computeStatus())) {
             return;
         }
 
-        const delay = DECLARED_SESSION_RETRY_BASE_MS * 2 ** this.declaredSessionFailures;
+        const delay = Math.min(DECLARED_SESSION_RETRY_BASE_MS * 2 ** this.declaredSessionFailures, DECLARED_SESSION_RETRY_MAX_MS);
 
-        this.declaredSessionFailures += 1;
+        // Stops growing once the delay is capped, so the exponent stays small.
+        if (delay < DECLARED_SESSION_RETRY_MAX_MS) {
+            this.declaredSessionFailures += 1;
+        }
+
         this.declaredSessionRetryTimer = setTimeout(() => {
             this.declaredSessionRetryTimer = undefined;
 
