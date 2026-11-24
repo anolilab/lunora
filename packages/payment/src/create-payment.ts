@@ -346,6 +346,13 @@ export interface LunoraPayment {
     resumeSubscription: (subscriptionId: string, options?: { idempotencyKey?: string }) => Promise<Subscription>;
 
     /**
+     * A facade over the same provider adapter and store, authorized by `authorize` instead of this facade's rule. For
+     * server work with no caller (a deletion job, a queued charge, an org-billing action): the app's `authorize` is the
+     * whole check, so it must decide ownership itself. Nothing here widens this facade's own authorization.
+     */
+    scoped: (authorize: AuthorizeReference) => LunoraPayment;
+
+    /**
      * Clear the hold {@link LunoraPayment.refundPayment} keeps on a Polar or Dodo session while one of its
      * refunds is pending, by asking the provider what became of it — the way out when the refund webhook
      * never arrives. Authorized like `refundPayment` (unknown and not-owner both raise NOT_FOUND).
@@ -359,6 +366,7 @@ export interface LunoraPayment {
      * `refundPayment` call is still waiting on the provider. Returns the stored row.
      */
     settlePendingRefund: (input: { sessionId: string }) => Promise<PaymentSession>;
+
     readonly store: PaymentStore;
 
     /**
@@ -842,6 +850,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
     return {
         attach: async (input) => startCheckout({ ...input, mode: input.mode ?? "subscription" }),
+
+        scoped: (authorize) => createPayment({ ...options, authorize }),
 
         cancelPayment: async (sessionId, cancelOptions) => {
             const existing = await ownedSession(sessionId);

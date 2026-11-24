@@ -235,6 +235,7 @@ interface LunoraPayment {
     resumeSubscription: (subscriptionId: string, options?: {
         idempotencyKey?: string;
     }) => Promise<Subscription>;
+    scoped: (authorize: AuthorizeReference) => LunoraPayment;
     settlePendingRefund: (input: {
         sessionId: string;
     }) => Promise<PaymentSession>;
