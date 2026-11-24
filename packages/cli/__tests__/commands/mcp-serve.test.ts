@@ -476,14 +476,22 @@ describe("lunora mcp serve", () => {
                     parked.resolve(undefined);
                 },
             };
-            const pending = runMcpServe({ cwd: workdir, version: "1.0.0", writeError: () => undefined }, async () => server);
+            let settled = false;
+            const pending = runMcpServe({ cwd: workdir, version: "1.0.0", writeError: () => undefined }, async () => server).finally(() => {
+                settled = true;
+            });
 
-            const outcome = await Promise.race([parked.promise.then(() => "serving"), pending.then(() => "settled")]);
+            // Parked on the server, then given one macrotask turn: a command that registered the
+            // callback but did not wait on it returns within microtasks, so it would have settled.
+            await parked.promise;
+            await new Promise((resolve) => {
+                setImmediate(resolve);
+            });
 
             // Still serving: the command framework exits with whatever this
             // resolves to, so resolving at connect time would kill the server
             // before its first request.
-            expect(outcome).toBe("serving");
+            expect(settled).toBe(false);
 
             server.onclose?.();
 
