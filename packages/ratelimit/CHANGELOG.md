@@ -1,3 +1,7 @@
+## @lunora/ratelimit [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.197...@lunora/ratelimit@1.0.0-alpha.198) (2026-11-24)
+
+- fix(do)!: stop subscribers being rate-limited for other users' writes (#1661)
+
 ## @lunora/ratelimit [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.196...@lunora/ratelimit@1.0.0-alpha.197) (2026-11-23)
 
 - fix(ratelimit): charge cached queries and reject limits nothing can pass (#1641)

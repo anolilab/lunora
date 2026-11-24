@@ -1,3 +1,7 @@
+## @lunora/do [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.295...@lunora/do@1.0.0-alpha.296) (2026-11-24)
+
+- fix(do)!: stop subscribers being rate-limited for other users' writes (#1661)
+
 ## @lunora/do [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.294...@lunora/do@1.0.0-alpha.295) (2026-11-23)
 
 - fix: four data-path bugs in rank, sql-store and dispatch metrics (#1636)

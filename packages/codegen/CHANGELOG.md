@@ -1,3 +1,8 @@
+## @lunora/codegen [1.0.0-alpha.438](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.437...@lunora/codegen@1.0.0-alpha.438) (2026-11-24)
+
+- fix(do)!: stop subscribers being rate-limited for other users' writes (#1661)
+- security(codegen): fail the build when a whisper authorizer is dropped (#1664)
+
 ## @lunora/codegen [1.0.0-alpha.437](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.436...@lunora/codegen@1.0.0-alpha.437) (2026-11-23)
 
 - fix: keep migrate generate from overwriting, make presence follow room changes (#1643)

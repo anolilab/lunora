@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.272...@lunora/auth@1.0.0-alpha.273) (2026-11-24)
+
+- fix(do)!: stop subscribers being rate-limited for other users' writes (#1661)
+
 ## @lunora/auth [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.271...@lunora/auth@1.0.0-alpha.272) (2026-11-23)
 
 - fix(auth): close leftover admin and audit review findings (#1678)
