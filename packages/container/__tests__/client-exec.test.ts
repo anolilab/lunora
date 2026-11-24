@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { CONTAINER_EXEC_HEADER } from "../src/exec";
 import type { ContainerNamespaceLike } from "../src/index";
@@ -37,75 +37,78 @@ const execNamespace = (
 const jsonResponse = (body: unknown, status = 200): Response => Response.json(body, { status });
 
 /**
- * A container handler that models a slow container: it answers only after
- * `answerAfterMs`, and rejects early if the request is aborted first.
- *
- * Two details are load-bearing, both learned the hard way.
+ * A container handler that never answers and rejects once the request is
+ * aborted — a container slower than any deadline under test.
  *
  * The `signal.aborted` check comes first because an abort that has ALREADY
  * fired when the handler runs dispatches no `abort` event — listening alone
  * would leave the promise pending forever.
- *
- * The pending `answerAfterMs` timer is not decoration. A handler that merely
- * awaits an abort leaves the Vitest worker's event loop with the deadline timer
- * as its only pending work, and in that state the timer is sometimes never
- * delivered: the `timeoutMs` test hung for its full budget in 3 runs out of 10,
- * unchanged at a 20s budget, while passing every time in isolation or with any
- * other timer pending. Modelling the container as slow-but-answering keeps the
- * loop alive and makes the deadline deterministic — and is a fairer model of a
- * real container anyway, which does eventually reply.
  */
 const slowContainer =
-    (answerAfterMs: number) =>
+    () =>
     async (request: Request): Promise<Response> =>
-        new Promise<Response>((resolve, reject) => {
+        new Promise<Response>((_resolve, reject) => {
             if (request.signal.aborted) {
                 reject(request.signal.reason as Error);
 
                 return;
             }
 
-            const timer = setTimeout(() => {
-                resolve(jsonResponse({ code: 0, stderr: "", stdout: "too late" }));
-            }, answerAfterMs);
-
             request.signal.addEventListener("abort", () => {
-                clearTimeout(timer);
                 reject(request.signal.reason as Error);
             });
         });
 
 /**
- * A container that answers `200 application/json` immediately and then stalls
- * mid-body for `answerAfterMs` — the shape `slowContainer` deliberately does NOT
- * model. `fetch` resolves on HEADERS, so this is the half of the call a deadline
- * scoped to the request alone stops covering: the status line lands instantly,
- * the deadline is disposed, and the body read waits forever.
+ * A container that answers `200 application/json` immediately and then never
+ * sends a body byte — the shape `slowContainer` deliberately does NOT model.
+ * `fetch` resolves on HEADERS, so this is the half of the call a deadline scoped
+ * to the request alone stops covering: the status line lands instantly, the
+ * deadline is disposed, and the body read waits forever.
  *
  * It is also the natural shape of a streaming runner, which answers with headers
  * as soon as the command starts, and what any wedged container degrades into.
  *
- * The eventual enqueue is load-bearing for the same reason `slowContainer`'s is
- * — a stream that never resolves at all leaves the deadline timer as the event
- * loop's only pending work, a state in which it is sometimes never delivered.
+ * `reading` settles once the caller asks for the body: with a high-water mark of
+ * 0 the stream pulls only on a read, so an abort after it hits the body read
+ * rather than the request.
  */
-const stallingBodyContainer = (answerAfterMs: number) => (): Response => {
-    let timer: ReturnType<typeof setTimeout>;
+const stallingBodyContainer = (): { reading: Promise<unknown>; respond: () => Response } => {
+    const reading = Promise.withResolvers<undefined>();
 
-    const stream = new ReadableStream<Uint8Array>({
-        cancel() {
-            clearTimeout(timer);
-        },
-        start(controller) {
-            timer = setTimeout(() => {
-                controller.enqueue(new TextEncoder().encode(String.raw`{"code":0,"stdout":"too late","stderr":""}`));
-                controller.close();
-            }, answerAfterMs);
-        },
-    });
+    return {
+        reading: reading.promise,
+        respond: () => {
+            const stream = new ReadableStream<Uint8Array>(
+                {
+                    pull() {
+                        reading.resolve(undefined);
+                    },
+                },
+                { highWaterMark: 0 },
+            );
 
-    return new Response(stream, { headers: { "content-type": "application/json" }, status: 200 });
+            return new Response(stream, { headers: { "content-type": "application/json" }, status: 200 });
+        },
+    };
 };
+
+/**
+ * Fake the timers the exec deadline is built on, so it fires exactly when the
+ * test advances the clock rather than whenever a loaded event loop delivers it.
+ */
+const fakeDeadlineClock = (): void => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => {
+        vi.useRealTimers();
+    });
+};
+
+/**
+ * `promise`'s rejection if it has already settled, else a "still pending"
+ * resolution. Already-settled promises are raced in order, so `promise` wins.
+ */
+const settledNow = async (promise: Promise<unknown>): Promise<unknown> => Promise.race([promise, Promise.resolve("still pending")]);
 
 describe("containerHandle.exec", () => {
     it("posts the command to /__lunora/exec and returns the runner's result", async () => {
@@ -222,48 +225,67 @@ describe("containerHandle.exec", () => {
         expect(requests.at(-1)!.headers.get("cf-container-target-port")).toBe("9090");
     });
 
-    // 250ms, not 10ms: the deadline is a real timer competing with a loaded event
-    // loop, and at 10ms it lost that race often enough to fail ~3 runs in 10 while
-    // passing in isolation. The behaviour under test is "the deadline fires and
-    // says so", not "a timer is punctual to the millisecond".
     it("aborts the call when timeoutMs elapses", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        const { namespace } = execNamespace(slowContainer(5000));
+        fakeDeadlineClock();
+
+        const { namespace } = execNamespace(slowContainer());
         const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
 
+        const pending = containers.runner!.get("s").exec("sleep", { args: ["60"], timeoutMs: 250 });
+
+        // It rejects while the clock advances, before the probe below reads it.
+        pending.catch(() => undefined);
+
+        await vi.advanceTimersByTimeAsync(249);
+
+        await expect(settledNow(pending)).resolves.toBe("still pending");
+
+        await vi.advanceTimersByTimeAsync(1);
+
         // The directed message, not a loose /abort|timeout/ — a caller reading
-        // "exec timed out after 10ms" knows which deadline fired and how long it
+        // "exec timed out after 250ms" knows which deadline fired and how long it
         // was, which a generic AbortError does not tell them.
-        await expect(containers.runner!.get("s").exec("sleep", { args: ["60"], timeoutMs: 250 })).rejects.toThrow("ctx.containers: exec timed out after 250ms");
+        await expect(settledNow(pending)).rejects.toThrow("ctx.containers: exec timed out after 250ms");
     });
 
     it("keeps the timeoutMs deadline over the body, not just the headers", async () => {
         expect.assertions(1);
 
-        const { namespace } = execNamespace(stallingBodyContainer(5000));
+        fakeDeadlineClock();
+
+        const container = stallingBodyContainer();
+        const { namespace } = execNamespace(container.respond);
         const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
 
-        // The response is `200 application/json` within a millisecond; only the
-        // body stalls. A deadline disposed once `fetch` resolves is already gone
-        // by this point, so the read would sit unbounded inside the shard DO.
-        await expect(containers.runner!.get("s").exec("sleep", { args: ["60"], timeoutMs: 250 })).rejects.toThrow("ctx.containers: exec timed out after 250ms");
+        const pending = containers.runner!.get("s").exec("sleep", { args: ["60"], timeoutMs: 250 });
+
+        // It rejects while the clock advances, before the probe below reads it.
+        pending.catch(() => undefined);
+
+        // The response is `200 application/json` at once; only the body stalls.
+        // A deadline disposed once `fetch` resolves is already gone by this
+        // point, so the read would sit unbounded inside the shard DO.
+        await container.reading;
+        await vi.advanceTimersByTimeAsync(250);
+
+        await expect(settledNow(pending)).rejects.toThrow("ctx.containers: exec timed out after 250ms");
     });
 
     it("aborts a stalled body on the caller's own signal too", async () => {
         expect.assertions(1);
 
         const controller = new AbortController();
-        const { namespace } = execNamespace(stallingBodyContainer(5000));
+        const container = stallingBodyContainer();
+        const { namespace } = execNamespace(container.respond);
         const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
 
         const pending = containers.runner!.get("s").exec("sleep", { signal: controller.signal });
 
-        // Give the headers a turn to land, so the abort hits the body read
-        // rather than the request.
-        await new Promise((resolve) => {
-            setTimeout(resolve, 50);
-        });
+        // The headers have landed and the body is being read, so the abort hits
+        // the body read rather than the request.
+        await container.reading;
         controller.abort(new Error("caller gave up mid-body"));
 
         await expect(pending).rejects.toThrow(/caller gave up mid-body/u);
@@ -312,7 +334,7 @@ describe("containerHandle.exec", () => {
         expect.assertions(1);
 
         const controller = new AbortController();
-        const { namespace } = execNamespace(slowContainer(5000));
+        const { namespace } = execNamespace(slowContainer());
         const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
 
         const pending = containers.runner!.get("s").exec("sleep", { args: ["60"], signal: controller.signal });
@@ -326,7 +348,7 @@ describe("containerHandle.exec", () => {
         expect.assertions(1);
 
         const controller = new AbortController();
-        const { namespace } = execNamespace(slowContainer(5000));
+        const { namespace } = execNamespace(slowContainer());
         const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
 
         // Both set: the caller aborts immediately, well inside the 60s deadline,

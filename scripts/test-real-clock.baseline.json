@@ -16,10 +16,6 @@
         "reason": "a real-clock timeout sentinel in a race, pending conversion"
     },
     {
-        "file": "packages/container/__tests__/client-exec.test.ts",
-        "reason": "pending conversion"
-    },
-    {
         "file": "packages/db/__tests__/scoped-mutators.test.ts",
         "reason": "a real-clock timeout sentinel in a race, pending conversion"
     },
