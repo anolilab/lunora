@@ -275,6 +275,26 @@ describe("shardDO: session credential rides the connect frame, not the URL", () 
         expect(ws.attachment?.connected).toBe(true);
     });
 
+    it("runs no connect for a socket that closed during the relay announce", async () => {
+        expect.assertions(2);
+
+        const shard = new GateShard(state, bearerEnv);
+        const ws = createFakeWebSocket();
+
+        // The socket closes while the announce awaits the owner; the close tears its attachment down.
+        Reflect.set(shard, "relay", {
+            announce: async () => {
+                await shard.driveClose(ws);
+            },
+        });
+
+        shard.registerSocket(ws, unauthenticated());
+        await shard.driveFrame(ws, { id: "connect", token: SESSION_BEARER, type: "connect" });
+
+        expect(ws.sent.some((data) => data.includes('"type":"identity"'))).toBe(false);
+        expect(ws.attachment?.connected).not.toBe(true);
+    });
+
     it("does not run onDisconnect for a socket refused at the gate, since it never ran onConnect", async () => {
         expect.assertions(1);
 

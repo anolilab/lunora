@@ -9056,6 +9056,12 @@ abstract class ShardDO {
         // A failed attach leaves the relay unannounced, so the socket is still served; the next shape subscribe or whisper join retries it.
         await this.relay?.announce();
 
+        // A socket that closed meanwhile has had its attachment torn down: there is no identity to
+        // send and no connect to run, and `webSocketClose` already ran the hooks it owes.
+        if (this.closingSockets.has(ws)) {
+            return;
+        }
+
         // Re-read after the await: a subscribe handled meanwhile persisted its entry, and the
         // whole-attachment write below would otherwise put the copy from before it back.
         attachment = this.readAttachmentCopy(ws);
