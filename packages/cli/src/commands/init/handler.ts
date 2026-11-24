@@ -1,4 +1,17 @@
-import { copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+    constants as fsConstants,
+    copyFileSync,
+    existsSync,
+    linkSync,
+    lstatSync,
+    mkdirSync,
+    mkdtempSync,
+    readdirSync,
+    readFileSync,
+    renameSync,
+    rmSync,
+    writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 
 import { applyLintIgnores, BADGES, detectLintTools, isInteractive, readProjectDependencies, readProjectManifest } from "@lunora/config";
@@ -1121,8 +1134,8 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
 /**
  * Move the complete `temporaryPath` to `path` unless something already sits there, including a dangling
  * link, and fail with EEXIST if it does. A hard link creates `path` atomically, so a file created after
- * the caller's absence check is never replaced; a filesystem without hard links falls back to a check
- * and `rename`.
+ * the caller's absence check is never replaced; a filesystem without hard links falls back to an
+ * exclusive copy.
  */
 const publishExclusively = (temporaryPath: string, path: string): void => {
     try {
@@ -1138,11 +1151,19 @@ const publishExclusively = (temporaryPath: string, path: string): void => {
         }
     }
 
-    if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) {
-        throw Object.assign(new Error(`EEXIST: file already exists, ${path}`), { code: "EEXIST" });
+    // An exclusive copy still fails with EEXIST on anything created meanwhile. It is not atomic, so a
+    // copy that fails part-way removes the file it created, which nothing else can have written.
+    try {
+        copyFileSync(temporaryPath, path, fsConstants.COPYFILE_EXCL);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+            rmSync(path, { force: true });
+        }
+
+        throw error;
     }
 
-    renameSync(temporaryPath, path);
+    rmSync(temporaryPath, { force: true });
 };
 
 /**

@@ -3116,7 +3116,7 @@ export const backfillNames = defineMigration({
                     { key: "AUTH_SECRET", value: "local" },
                 ]);
                 expect(recorded).toMatch(new RegExp(String.raw`^# .*AUTH_SECRET="${bulkBody.AUTH_SECRET ?? "missing"}"`, "mu"));
-                expect(warns.join("\n")).toMatch(/AUTH_SECRET: the failed bulk push may already have set/u);
+                expect(warns.join("\n")).toMatch(/AUTH_SECRET: the failed push may already have set/u);
                 expect(warns.join("\n")).not.toMatch(/LUNORA_ADMIN_TOKEN[^\n]*may already have set/u);
             });
 
@@ -3427,13 +3427,13 @@ export const backfillNames = defineMigration({
             });
 
             it("records a single key whose `secret put` failed, since the write may still have landed", async () => {
-                expect.assertions(2);
+                expect.assertions(3);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
                 // One missing key, so no bulk request: the lone `secret put` exits non-zero.
                 const { calls, spawner } = createRecordingSpawner(1);
-                const { logger } = silentLogger();
+                const { logger, warns } = silentLogger();
 
                 const result = await runDeployCommand({
                     cwd: workdir,
@@ -3448,6 +3448,8 @@ export const backfillNames = defineMigration({
 
                 expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${put?.descriptor.input ?? "missing"}"`);
+                // No bulk request was sent, so none may be blamed.
+                expect(warns.join("\n")).not.toContain("bulk push");
             });
 
             it("aborts an interactive deploy when the confirmed secret push fails instead of deploying anyway", async () => {

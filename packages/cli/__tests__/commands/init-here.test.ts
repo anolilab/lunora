@@ -10,7 +10,12 @@ import type { Logger } from "../../src/util/logger";
 
 /** When set, a `writeFileSync` whose path contains it writes half its content and then fails, as ENOSPC does. */
 const writeFailure = vi.hoisted(() => {
-    return { beforeWrite: undefined as ((path: string) => void) | undefined, pathPart: undefined as string | undefined };
+    return {
+        beforePublish: undefined as ((path: string) => void) | undefined,
+        beforeWrite: undefined as ((path: string) => void) | undefined,
+        noHardLinks: false,
+        pathPart: undefined as string | undefined,
+    };
 });
 
 vi.mock(import("node:fs"), async (importOriginal) => {
@@ -29,6 +34,25 @@ vi.mock(import("node:fs"), async (importOriginal) => {
 
             actual.writeFileSync(path, data, options);
         }) as typeof actual.writeFileSync,
+        // A filesystem without hard links, and a hook for another process acting just before publication.
+        copyFileSync: ((source: string, destination: string, mode?: number) => {
+            writeFailure.beforePublish?.(destination);
+            actual.copyFileSync(source, destination, mode);
+        }) as typeof actual.copyFileSync,
+        linkSync: ((existing: string, created: string) => {
+            if (writeFailure.noHardLinks) {
+                throw Object.assign(new Error("EPERM: operation not permitted, link"), { code: "EPERM" });
+            }
+
+            actual.linkSync(existing, created);
+        }) as typeof actual.linkSync,
+        lstatSync: ((path: string, options?: Parameters<typeof actual.lstatSync>[1]) => {
+            const result = actual.lstatSync(path, options);
+
+            writeFailure.beforePublish?.(path);
+
+            return result;
+        }) as typeof actual.lstatSync,
     };
 });
 
@@ -404,6 +428,34 @@ describe("lunora init --here — a failed lunora/ scaffold", () => {
             result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
         } finally {
             writeFailure.beforeWrite = undefined;
+        }
+
+        expect(result.code).toBe(1);
+        expect(readFileSync(schemaPath, "utf8")).toBe("user\n");
+    });
+
+    it("does not replace a schema.ts created just before publication where hard links are unsupported", async () => {
+        expect.assertions(2);
+
+        writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
+
+        const schemaPath = join(workdir, "lunora", "schema.ts");
+
+        writeFailure.noHardLinks = true;
+        writeFailure.beforePublish = (path) => {
+            if (path === schemaPath) {
+                writeFailure.beforePublish = undefined;
+                writeFileSync(schemaPath, "user\n", "utf8");
+            }
+        };
+
+        let result: Awaited<ReturnType<typeof runInitCommand>>;
+
+        try {
+            result = await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
+        } finally {
+            writeFailure.noHardLinks = false;
+            writeFailure.beforePublish = undefined;
         }
 
         expect(result.code).toBe(1);

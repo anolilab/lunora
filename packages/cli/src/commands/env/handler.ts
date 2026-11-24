@@ -688,12 +688,6 @@ const writeGeneratedSecrets = (context: EnvContext, generated: ReadonlyArray<{ k
         logger.warn(`env generate --set: left ${live.join(", ")} untouched (already set) — re-run with --yes to rotate them too`);
     }
 
-    const refused = ignoreNamedEnvironmentFile(context);
-
-    if (refused !== undefined) {
-        return refused;
-    }
-
     let raw = readDevVariablesRaw(devVariablesPath);
 
     for (const entry of writable) {
@@ -738,6 +732,13 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
         }
 
         keys = [options.key];
+    }
+
+    // Refused before anything is minted, as deploy does: no value exists for a file that cannot hold it.
+    const refused = options.set === true ? ignoreNamedEnvironmentFile(context) : undefined;
+
+    if (refused !== undefined) {
+        return refused;
     }
 
     const generated = keys.map((key) => {

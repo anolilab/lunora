@@ -4,7 +4,7 @@
  * the same file, so the two must resolve it identically.
  */
 import { spawnSync } from "node:child_process";
-import { lstatSync, readdirSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { DEV_VARS_FILE, ensureGitignoreEntries } from "@lunora/config";
@@ -85,8 +85,9 @@ const ensureDevVariablesIgnored = (cwd: string, logger: Logger): void => {
 };
 
 /**
- * The other `.dev.vars`-shaped file in `cwd` that `file` is a symlink or hard link to, or `undefined`.
- * Reading or writing through such a link reaches another environment's values.
+ * What `file` is a symlink or hard link to — the other `.dev.vars`-shaped file in `cwd`, a symlink's
+ * target, or "another file" for a hard link elsewhere — or `undefined` when it is a plain file.
+ * Reading or writing through such a link reaches values that are not this environment's own.
  */
 const linkedDevVariablesFile = (cwd: string, file: string): string | undefined => {
     const own = statSync(join(cwd, file), { throwIfNoEntry: false });
@@ -107,7 +108,7 @@ const linkedDevVariablesFile = (cwd: string, file: string): string | undefined =
     // a case-only sibling is a separate entry and can be a link like any other.
     const self = names.includes(file) ? file : names.find((name) => name.toLowerCase() === file.toLowerCase());
 
-    return names.find((name) => {
+    const sibling = names.find((name) => {
         // Case-insensitively: a case-insensitive filesystem may store the bare file as `.DEV.VARS`.
         const lower = name.toLowerCase();
 
@@ -119,6 +120,18 @@ const linkedDevVariablesFile = (cwd: string, file: string): string | undefined =
 
         return other?.dev === own.dev && other.ino === own.ino;
     });
+
+    if (sibling !== undefined) {
+        return sibling;
+    }
+
+    // A link to a file that is no `.dev.vars` sibling (`../.env`, a host secret) reads values no
+    // environment of this project owns.
+    if (lstatSync(join(cwd, file)).isSymbolicLink()) {
+        return realpathSync(join(cwd, file));
+    }
+
+    return own.nlink > 1 ? "another file" : undefined;
 };
 
 /**

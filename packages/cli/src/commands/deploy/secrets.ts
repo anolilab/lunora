@@ -432,7 +432,7 @@ const failedPushOutcome = (logger: Logger, uncertain: ReadonlyArray<string>, min
     }
 
     logger.warn(
-        `${uncertain.join(", ")}: the failed bulk push may already have set these on the target — their values are recorded ` +
+        `${uncertain.join(", ")}: the failed push may already have set these on the target — their values are recorded ` +
             `${mintedSecretsFile === undefined ? "nowhere (see above)" : `in ${mintedSecretsFile}`} in case it did (as a comment where a local value already existed). The next deploy re-checks the target ` +
             `and replaces the record of any that are still missing with a fresh value; for one it finds set, the recorded value is the live one.`,
     );

@@ -687,6 +687,25 @@ describe("lunora env", () => {
             expect(recorded.errors.join("\n")).toContain("is a link to .DEV.VARS");
         });
 
+        it("push --prod refuses a .dev.vars.production that is a symlink to a file outside the project", async () => {
+            expect.assertions(3);
+
+            const outside = mkdtempSync(join(tmpdir(), "lunora-cli-env-outside-"));
+
+            writeFileSync(join(outside, ".env"), 'HOST_TOKEN="host"\n', "utf8");
+            symlinkSync(join(outside, ".env"), join(workdir, ".dev.vars.production"));
+
+            const { logger, recorded } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runEnvCommand({ cwd: workdir, logger, prod: true, spawner, subcommand: "push", yes: true });
+
+            rmSync(outside, { force: true, recursive: true });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(calls).toHaveLength(0);
+            expect(recorded.errors.join("\n")).toMatch(/is a link to .*\.env/u);
+        });
+
         it("push --from-dev-vars pushes the bare file to a named environment", async () => {
             expect.assertions(3);
 
@@ -870,6 +889,21 @@ describe("lunora env", () => {
 
             expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(existsSync(join(workdir, ".dev.vars.staging"))).toBe(false);
+            expect(recorded.errors.join("\n")).toContain(".gitignore is a symlink");
+        });
+
+        it("generate --set --env staging refuses a symlinked .gitignore before it judges or mints any value", async () => {
+            expect.assertions(2);
+
+            // Every key already live: without the early check this stops at "rotating is irreversible" instead.
+            writeFileSync(join(workdir, ".dev.vars.staging"), `AUTH_SECRET="${"a".repeat(64)}"\n`, "utf8");
+            writeFileSync(join(workdir, "shared-ignore"), ".dev.vars\n.dev.vars.*\n!.dev.vars.example\n", "utf8");
+            symlinkSync(join(workdir, "shared-ignore"), join(workdir, ".gitignore"));
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, env: "staging", key: "AUTH_SECRET", logger, set: true, subcommand: "generate" });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(recorded.errors.join("\n")).toContain(".gitignore is a symlink");
         });
 
