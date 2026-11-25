@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.278...@lunora/payment@1.0.0-alpha.279) (2026-11-25)
+
+- feat(payment)!: add getSubscriptionStatus, a live provider read (#1706)
+
 ## @lunora/payment [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.277...@lunora/payment@1.0.0-alpha.278) (2026-11-24)
 
 - feat(payment)!: add scoped facade for server work (#1704)

@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.443](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.442...@lunora/codegen@1.0.0-alpha.443) (2026-11-25)
+
+- feat(payment)!: add getSubscriptionStatus, a live provider read (#1706)
+
 ## @lunora/codegen [1.0.0-alpha.442](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.441...@lunora/codegen@1.0.0-alpha.442) (2026-11-24)
 
 - feat(payment)!: add scoped facade for server work (#1704)
