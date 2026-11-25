@@ -264,6 +264,7 @@ own check.
 | `attach(input)`                                | `CheckoutResult`   | Plan alias of `createCheckout` with `mode` defaulting to `"subscription"`.                                      |
 | `createPortalSession(referenceId, returnUrl)`  | `{ url }`          | Open the provider billing portal; customer derived from the store (no insecure direct object reference (IDOR)). |
 | `cancelSubscription(subscriptionId, options?)` | `Subscription`     | Cancel now or `atPeriodEnd`; persists the result.                                                               |
+| `getSubscriptionStatus(subscriptionId)`        | `Subscription`     | The provider's current state, read live (not the store copy); owner-checked like the writes; does not persist.  |
 | `updateSubscription(subscriptionId, patch)`    | `Subscription`     | Change the plan (`priceId`) or seats (`quantity`) of the caller's own subscription; persists the result.        |
 | `resumeSubscription(subscriptionId, options?)` | `Subscription`     | Undo a period-end cancel (Creem: resume a paused subscription); persists the result.                            |
 | `refundPayment(input)`                         | `PaymentSession`   | Refund the caller's own captured payment, in full or in part; persists the result.                              |

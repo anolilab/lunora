@@ -16,6 +16,7 @@ const METHODS = {
     check: true,
     createCheckout: true,
     createPortalSession: true,
+    getSubscriptionStatus: true,
     handleWebhook: true,
     listBalances: true,
     listSubscriptions: true,

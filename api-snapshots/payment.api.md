@@ -224,6 +224,7 @@ interface LunoraPayment {
     createPortalSession: (referenceId: string, returnUrl: string) => Promise<{
         url: string;
     }>;
+    getSubscriptionStatus: (subscriptionId: string) => Promise<Subscription>;
     handleWebhook: (request: Request) => Promise<Response>;
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;

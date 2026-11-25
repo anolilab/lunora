@@ -761,6 +761,7 @@ const PAYMENT_METHODS = [
     "check",
     "createCheckout",
     "createPortalSession",
+    "getSubscriptionStatus",
     "handleWebhook",
     "listBalances",
     "listSubscriptions",
