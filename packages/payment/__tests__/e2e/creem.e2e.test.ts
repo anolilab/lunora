@@ -104,7 +104,7 @@ describe("creem e2e", () => {
     });
 
     it("creates a checkout over HTTP, with the buyer's email, and returns the hosted URL", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const store = new MemoryPaymentStore();
         const payment = facade(store);
@@ -118,6 +118,12 @@ describe("creem e2e", () => {
         });
 
         expect(result.url).toBe("https://checkout.creem.test/ch_1");
+        expect(JSON.parse(provider.requests[1]?.body ?? "{}")).toMatchObject({
+            customer: { id: "cus_1" },
+            metadata: { referenceId: REFERENCE },
+            product_id: "prod_pro",
+            success_url: "https://app.example.com/billing",
+        });
         expect(provider.requests.map((request) => `${request.method} ${request.path}`)).toStrictEqual(["POST /v1/customers", "POST /v1/checkouts"]);
         expect(JSON.parse(provider.requests[0]?.body ?? "{}")).toMatchObject({ email: "buyer@example.com" });
         await expect(store.getCustomerByReference("creem", REFERENCE)).resolves.toMatchObject({ id: "cus_1" });
