@@ -264,6 +264,9 @@ const paymentStub: LunoraPayment = {
     createPortalSession: () => {
         throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
+    getSubscriptionStatus: () => {
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
+    },
     handleWebhook: () => {
         throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },

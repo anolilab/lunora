@@ -2938,6 +2938,83 @@ describe("createPayment — bug-hunt regressions", () => {
     });
 });
 
+describe("createPayment — getSubscriptionStatus", () => {
+    it("answers an unknown id and another caller's subscription with the same NOT_FOUND, without calling the provider", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_2", "active"));
+
+        const getSubscriptionStatus = vi.fn<PaymentAdapter["getSubscriptionStatus"]>(fakeAdapter().getSubscriptionStatus);
+        const payment = createPayment({
+            adapter: fakeAdapter({ getSubscriptionStatus }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store,
+        });
+
+        await expect(payment.getSubscriptionStatus("sub_1")).rejects.toMatchObject({
+            code: "NOT_FOUND",
+            message: `subscription "sub_1" not found`,
+        });
+        await expect(payment.getSubscriptionStatus("sub_absent")).rejects.toMatchObject({ code: "NOT_FOUND" });
+        expect(getSubscriptionStatus).not.toHaveBeenCalled();
+    });
+
+    it("returns the provider's current state on the stored owner and leaves the stored row as it was", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        // A status read that does not echo the owner's metadata must not hand the caller an orphaned row.
+        const payment = createPayment({
+            adapter: fakeAdapter({ getSubscriptionStatus: async () => subscription("", "canceled") }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store,
+        });
+
+        await expect(payment.getSubscriptionStatus("sub_1")).resolves.toMatchObject({
+            id: "sub_1",
+            referenceId: "user_1",
+            state: "canceled",
+        });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "active" });
+    });
+
+    it("raises the provider's read error rather than answering from the store", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+
+        const payment = createPayment({
+            adapter: fakeAdapter({ getSubscriptionStatus: () => Promise.reject(new Error("provider read unavailable")) }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store,
+        });
+
+        await expect(payment.getSubscriptionStatus("sub_1")).rejects.toThrow("provider read unavailable");
+    });
+
+    it("is authorized by a scoped facade's own check, not the default owner rule", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("user_2", "active"));
+
+        const payment = createPayment({ adapter: fakeAdapter(), authorize: () => false, store });
+
+        await expect(payment.scoped((referenceId) => referenceId === "user_2").getSubscriptionStatus("sub_1")).resolves.toMatchObject({
+            id: "sub_1",
+        });
+        await expect(payment.getSubscriptionStatus("sub_1")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+});
+
 describe("createPayment — updateSubscription / resumeSubscription", () => {
     it("answers an unknown id and another caller's subscription with the same NOT_FOUND, without calling the provider", async () => {
         expect.assertions(6);

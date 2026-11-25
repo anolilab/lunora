@@ -301,6 +301,13 @@ export interface LunoraPayment {
     createPortalSession: (referenceId: string, returnUrl: string) => Promise<{ url: string }>;
 
     /**
+     * The provider's current state of a subscription, read live. Authorized against the subscription's owner, unknown
+     * and not-owner both raise NOT_FOUND. Read-only: the store is not written, so a webhook or `reconcile` is what brings
+     * a stored row up to date with this answer.
+     */
+    getSubscriptionStatus: (subscriptionId: string) => Promise<Subscription>;
+
+    /**
      * Verify + normalize + apply a provider webhook. 200 once verified, even on a no-op — except an
      * event whose target row doesn't exist yet, which returns 500 so the provider redelivers it once.
      */
@@ -903,6 +910,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             // Whatever the store now holds is what the caller gets, so a refused or merged cancel is reported as stored.
             return (await store.getSubscription(adapter.identifier, subscriptionId)) ?? synced;
+        },
+
+        getSubscriptionStatus: async (subscriptionId) => {
+            // A status read is not an event, so the owner and the event clock stay as the store has them.
+            const existing = await ownedSubscription(subscriptionId);
+
+            return overlayProviderSubscription(existing, await adapter.getSubscriptionStatus(subscriptionId));
         },
 
         capturePayment: async (input) => {
