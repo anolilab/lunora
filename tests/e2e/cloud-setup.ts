@@ -72,16 +72,20 @@ const REQUIRED_KEYS = ["AUTH_SECRET", "LUNORA_ADMIN_TOKEN"];
  * Writes the deterministic `.dev.vars` first, but only if the app has none —
  * create-if-absent for the same reason `examples-setup.ts` gives: Vite watches
  * the file, this module is re-imported by every Playwright process, and a
- * write-then-restore cycle restarts the dev server mid-run. A developer's own
- * secrets are left alone; if theirs is missing a required key we skip rather
- * than overwrite it.
+ * write-then-restore cycle restarts the dev server mid-run. One this suite wrote
+ * from an older {@link DEV_VARS} is replaced once, so a checkout does not keep
+ * running on stale vars. A developer's own secrets are left alone; if theirs is
+ * missing a required key we skip rather than overwrite it.
  */
 export const cloudSkipReason = (): string | undefined => {
     if (!existsSync(join(CLOUD_ROOT, "package.json"))) {
         return "apps/cloud is not present in this checkout";
     }
 
-    if (!existsSync(DEV_VARS_PATH)) {
+    const existing = existsSync(DEV_VARS_PATH) ? readFileSync(DEV_VARS_PATH, "utf8") : undefined;
+    const writtenHere = existing?.startsWith(DEV_VARS.slice(0, DEV_VARS.indexOf("\n"))) ?? false;
+
+    if (existing === undefined || (writtenHere && existing !== DEV_VARS)) {
         writeFileSync(DEV_VARS_PATH, DEV_VARS, "utf8");
     }
 
