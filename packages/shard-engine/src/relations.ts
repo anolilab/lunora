@@ -1210,16 +1210,30 @@ const typeOf = (value: unknown): string => {
     return typeof value;
 };
 
-/** Where on the patch path a failing column came from. */
-const patchOrigin = (field: string, patched: ReadonlySet<string> | undefined): string => {
-    if (patched === undefined) {
+/**
+ * Where on the patch path a failing column came from: the patch, the stored row (the value is the
+ * one `previous` holds), or neither, which leaves an update hook (`$onUpdateFn`).
+ */
+const patchOrigin = (field: string, value: unknown, options: RowValidatorOptions): string => {
+    if (options.patched === undefined) {
         return "";
     }
 
-    return patched.has(field)
-        ? " (set by this patch)"
-        : " (a stored value this patch does not set: the row already holds it, and every patch of the row fails until it is fixed)";
+    if (options.patched.has(field)) {
+        return " (set by this patch)";
+    }
+
+    return Object.is(options.previous?.()?.[field], value)
+        ? " (a stored value this patch does not set: the row already holds it, and every patch of the row fails until it is fixed)"
+        : " (not set by this patch: an update hook assigned it)";
 };
+
+/**
+ * The type tag of a `@lunora/values` `received`: `string "abc"` → `string`. A refinement reports the
+ * value it rejected, which a transform may have turned into another type than the input, so the tag
+ * comes from the error rather than from the input. A constructor name (`object Date`) is kept.
+ */
+const receivedType = (received: string): string => (received.startsWith("object") ? received : (received.split(" ")[0] ?? received));
 
 /** The value at `path` inside `value`, or `undefined` when the path does not resolve. */
 const valueAtPath = (value: unknown, path: ValidationPath): unknown => {
@@ -1261,12 +1275,12 @@ const isValidationError = (error: unknown): error is ValidationError =>
 
 const columnValidationError = (error: ValidationError, field: string, value: unknown, options: RowValidatorOptions): ValidationError => {
     const path = [field, ...error.path];
-    const received = typeOf(valueAtPath(value, error.path));
     const where = `${options.table === undefined ? "" : `${options.table}.`}${formatColumnPath(path)}`;
     // The shape `@lunora/values`' type and refinement failures take, which quotes a primitive literally.
     const quotesValue = error.message.startsWith(`Expected ${error.expected} at `) && error.message.endsWith(`, received ${error.received}`);
+    const received = quotesValue ? receivedType(error.received) : typeOf(valueAtPath(value, error.path));
     const detail = quotesValue ? `expected ${error.expected}, received ${received}` : error.message;
-    const origin = patchOrigin(field, options.patched);
+    const origin = patchOrigin(field, value, options);
 
     // Built with the thrown error's own class, so the caller's `instanceof ValidationError` (and the
     // transport's 400 mapping) still holds.

@@ -24,6 +24,29 @@ const schema = {
                 profile: v.object({ age: v.number().check((value) => value >= 0, "age must not be negative") }),
             },
         },
+        hooked: {
+            indexes: [],
+            shape: {
+                name: v.string(),
+                score: v.number().$onUpdateFn(() => "not a number" as unknown as number),
+            },
+        },
+        parsed: {
+            indexes: [],
+            shape: {
+                amount: v
+                    .from({
+                        "~standard": {
+                            validate: (input: unknown) => {
+                                return { value: Number(input) };
+                            },
+                            vendor: "test",
+                            version: 1,
+                        },
+                    })
+                    .check((n) => (n as number) > 0, "amount must be positive"),
+            },
+        },
     },
 } as unknown as SchemaLike;
 
@@ -78,6 +101,24 @@ describe("ctx.db — whole-row validation errors", () => {
 
         expect(error.message).toBe("accounts.profile.age: expected age must not be negative, received number (set by this patch)");
         expect(error.path).toStrictEqual(["profile", "age"]);
+    });
+
+    it("blames an update hook, not the stored row, for a value the hook assigned", async () => {
+        expect.hasAssertions();
+
+        const id = await writer.insert("hooked", { name: "a", score: 1 });
+        const error = await rejection(writer.patch("hooked", id, { name: "b" }));
+
+        expect(error.message).toBe("hooked.score: expected number, received string (not set by this patch: an update hook assigned it)");
+    });
+
+    it("reports the type a refinement rejected after a transform, not the input's", async () => {
+        expect.hasAssertions();
+
+        const error = await rejection(writer.insert("parsed", { amount: "-1" }));
+
+        expect(error.message).toBe("parsed.amount: expected amount must be positive, received number");
+        expect(error.received).toBe("number");
     });
 
     it("names the table and column on insert too, without the value", async () => {
