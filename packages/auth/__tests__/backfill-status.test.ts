@@ -89,3 +89,50 @@ describe(authBackfillStatus, () => {
         });
     });
 });
+
+describe("the backfill's duplicate report", () => {
+    beforeEach(() => {
+        database = new DatabaseSync(":memory:");
+        database.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "emailCanonical" text)`);
+        database.exec(`CREATE UNIQUE INDEX "user_emailCanonical_uidx" ON "user" ("emailCanonical")`);
+        database.exec(`INSERT INTO "user" ("id", "email") VALUES ('first', 'ÉLISE@example.com'), ('twin', 'élise@example.com')`);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        database.close();
+    });
+
+    const isHolderRead = (sql: string): boolean => sql.includes(`OR "id" IN`);
+
+    it("does not name a holder for an account that changed its address during the run", async () => {
+        expect.hasAssertions();
+
+        const executor = executorFor(database);
+        const all: typeof executor.all = async (sql, parameters) => {
+            if (isHolderRead(sql)) {
+                database.exec(`UPDATE "user" SET "email" = 'renamed@example.com' WHERE "id" = 'twin'`);
+            }
+
+            return executor.all(sql, parameters);
+        };
+
+        await expect(backfillCanonicalEmails({ all }, column)).resolves.toStrictEqual({ complete: true, duplicates: 1, rows: [] });
+    });
+
+    it("completes the run when only the report's holder read fails", async () => {
+        expect.hasAssertions();
+
+        const executor = executorFor(database);
+        const all: typeof executor.all = async (sql, parameters) => {
+            if (isHolderRead(sql)) {
+                throw new Error("D1 unavailable");
+            }
+
+            return executor.all(sql, parameters);
+        };
+
+        await expect(backfillCanonicalEmails({ all }, column)).resolves.toStrictEqual({ complete: true, duplicates: 1, rows: [] });
+    });
+});

@@ -413,11 +413,11 @@ const backfillTally = (): { report: BackfillReport; tally: BackfillTally } => {
 const skippedRows = (
     rows: { email?: unknown; id?: unknown }[],
     filled: (row: { email?: unknown; id?: unknown }) => boolean,
-): { canonical: string; id: string }[] =>
+): { canonical: string; email: string; id: string }[] =>
     rows
         .filter((row) => typeof row.email === "string" && !filled(row))
         .map((row) => {
-            return { canonical: canonicalEmail(row.email as string), id: String(row.id) };
+            return { canonical: canonicalEmail(row.email as string), email: row.email as string, id: String(row.id) };
         });
 
 /** `{ id, heldBy }` for each skipped row, the holder read by canonical value. */
@@ -493,16 +493,38 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
     const resumed = yield* readBackfillState(state);
     let after = typeof resumed === "number" ? resumed : 0;
     // The skipped rows to name in the report; their holders are read once, when the run ends.
-    const reported: { canonical: string; id: string }[] = [];
+    const reported: { canonical: string; email: string; id: string }[] = [];
     const reportHolders = function* reportHolders(): BackfillSteps<void> {
-        if (reported.length > 0) {
-            const holders = yield {
-                params: [JSON.stringify([...new Set(reported.map((row) => row.canonical))])],
-                sql: `SELECT "id", ${canonical} FROM ${table} WHERE ${canonical} IN (SELECT "value" FROM json_each(?))`,
-            };
-
-            tally.duplicate(0, duplicateRows(reported, holders, column.canonical));
+        if (reported.length === 0) {
+            return;
         }
+
+        let found: Record<string, unknown>[];
+
+        try {
+            // The holders, and the skipped rows themselves: one changed or filled since the page read it is not named.
+            found = yield {
+                params: [JSON.stringify([...new Set(reported.map((row) => row.canonical))]), JSON.stringify(reported.map((row) => row.id))],
+                sql:
+                    `SELECT "id", ${email} AS "email", ${canonical} AS "canonical" FROM ${table} ` +
+                    `WHERE ${canonical} IN (SELECT "value" FROM json_each(?)) OR "id" IN (SELECT "value" FROM json_each(?))`,
+            };
+        } catch {
+            // The rows are only for the report: its count is already tallied, and the fills are written.
+            return;
+        }
+
+        const current = new Map(found.map((row) => [String(row["id"]), row]));
+        const unchanged = reported.filter((row) => current.get(row.id)?.["email"] === row.email && current.get(row.id)?.["canonical"] === null);
+
+        tally.duplicate(
+            0,
+            duplicateRows(
+                unchanged,
+                found.filter((row) => row["canonical"] !== null),
+                "canonical",
+            ),
+        );
     };
 
     for (let page = 0; page < maxPages; page += 1) {
@@ -572,33 +594,46 @@ const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn, rows?:
 
 /** Run `steps` through an async executor (D1). */
 const runBackfill = async <R>(steps: BackfillSteps<R>, executor: BackfillExecutor): Promise<R> => {
-    let answer: Record<string, unknown>[] = [];
+    let step = steps.next([]);
 
-    for (;;) {
-        const step = steps.next(answer);
+    while (step.done !== true) {
+        let answer: Record<string, unknown>[];
 
-        if (step.done === true) {
-            return step.value;
+        // A failed statement is thrown into the steps, so one that can do without its answer catches it.
+        try {
+            // eslint-disable-next-line no-await-in-loop -- each statement depends on the last one's answer
+            answer = await executor.all(step.value.sql, step.value.params);
+        } catch (error) {
+            step = steps.throw(error);
+
+            continue;
         }
 
-        // eslint-disable-next-line no-await-in-loop -- each statement depends on the last one's answer
-        answer = await executor.all(step.value.sql, step.value.params);
+        step = steps.next(answer);
     }
+
+    return step.value;
 };
 
 /** Run `steps` through a synchronous executor (a Durable Object's `storage.sql.exec`). */
 const runBackfillSync = <R>(steps: BackfillSteps<R>, exec: (sql: string, params: unknown[]) => Record<string, unknown>[]): R => {
-    let answer: Record<string, unknown>[] = [];
+    let step = steps.next([]);
 
-    for (;;) {
-        const step = steps.next(answer);
+    while (step.done !== true) {
+        let answer: Record<string, unknown>[];
 
-        if (step.done === true) {
-            return step.value;
+        try {
+            answer = exec(step.value.sql, step.value.params);
+        } catch (error) {
+            step = steps.throw(error);
+
+            continue;
         }
 
-        answer = exec(step.value.sql, step.value.params);
+        step = steps.next(answer);
     }
+
+    return step.value;
 };
 
 /**
