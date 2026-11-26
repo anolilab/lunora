@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createD1CtxDb, runD1GlobalTableMigrations } from "@lunora/d1";
 import type { TableDefinition } from "@lunora/server";
 import { defineSchema } from "@lunora/server";
+import type { MockInstance } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
@@ -282,6 +283,7 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
         schema: { appGrant: { disableMigration: true, fields: { expiresAt: { required: true, type: "date" } } } },
     } as const;
     const withAppTable: LunoraAuthOptions = { ...options, plugins: [...(options.plugins ?? []), appOwned] };
+    let consoleError: MockInstance<(...data: unknown[]) => void>;
 
     beforeEach(async () => {
         database = new DatabaseSync(":memory:");
@@ -289,10 +291,30 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
         await runD1GlobalTableMigrations(executor, schema as never);
         // TEXT affinity, so a number is stored as its digits.
         database.exec(`CREATE TABLE "appGrant" ("id" TEXT PRIMARY KEY, "expiresAt" TEXT)`);
+        // Each run reports that column; the test below asserts it, the rest only keep it quiet.
+        consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     });
 
     afterEach(() => {
+        vi.restoreAllMocks();
         database.close();
+    });
+
+    it("reports an app-managed date column declared with text affinity, and only that one", async () => {
+        expect.hasAssertions();
+
+        const logged = (): string[] => consoleError.mock.calls.map((call) => String(call[0]));
+
+        await convertAuthDatesToEpochMs(executor, withAppTable);
+
+        expect(logged()).toStrictEqual([expect.stringContaining("appGrant.expiresAt is a date column with text affinity")]);
+
+        consoleError.mockClear();
+        database.exec(`DROP TABLE "appGrant"`);
+        database.exec(`CREATE TABLE "appGrant" ("id" TEXT PRIMARY KEY, "expiresAt" REAL)`);
+        await convertAuthDatesToEpochMs(executor, withAppTable);
+
+        expect(logged()).toStrictEqual([]);
     });
 
     it("keeps a pre-1970 epoch stored as signed digits, and reads it back as that date", async () => {

@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { LunoraAuthOptions } from "../../src/create-auth";
 import { resolveAuthOptions } from "../../src/create-auth";
@@ -19,7 +19,7 @@ const LEGACY = "2020-01-01T00:00:00.123Z";
 
 describe("convertAuthDatesToEpochMs on workerd SQLite", () => {
     it("converts ISO strings to exact epoch ms in a Durable Object's storage", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const stub = env.AUTH_DO.get(env.AUTH_DO.idFromName("convert-dates"));
 
@@ -52,6 +52,19 @@ describe("convertAuthDatesToEpochMs on workerd SQLite", () => {
             } as const;
 
             await expect(convertAuthDatesToEpochMs(executor, { ...options, plugins: [appOwned] })).resolves.toStrictEqual([]);
+
+            // Once it exists, its declared column types are read with `PRAGMA table_info`, which DO storage allows too.
+            [...state.storage.sql.exec(`CREATE TABLE "appGrant" ("id" TEXT PRIMARY KEY, "expiresAt" TEXT)`)];
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+            await convertAuthDatesToEpochMs(executor, { ...options, plugins: [appOwned] });
+
+            const logged = error.mock.calls.map((call) => String(call[0]));
+
+            error.mockRestore();
+
+            expect(logged).toStrictEqual([expect.stringContaining("appGrant.expiresAt is a date column with text affinity")]);
         });
     });
 
@@ -64,6 +77,19 @@ describe("convertAuthDatesToEpochMs on workerd SQLite", () => {
         );
 
         expect(row).toStrictEqual({ digits: 0, iso: 1, millis: Date.parse(LEGACY) });
+    });
+
+    it("reads declared column types through D1's authorizer", async () => {
+        expect.assertions(1);
+
+        await env.TEST_DB.prepare(`CREATE TABLE "dates_affinity" ("id" TEXT PRIMARY KEY, "expiresAt" TEXT)`).run();
+
+        const rows = await d1Executor(env.TEST_DB).all(`PRAGMA table_info("dates_affinity")`, []);
+
+        expect(rows.map((row) => [row["name"], row["type"]])).toStrictEqual([
+            ["id", "TEXT"],
+            ["expiresAt", "TEXT"],
+        ]);
     });
 
     it("runs on D1 as part of ensureMigrated", async () => {

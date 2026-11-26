@@ -77,6 +77,38 @@ const asDatesState = (value: unknown): DatesState | undefined => {
     return Array.isArray(state?.coverage) && typeof state.since === "number" ? (state as DatesState) : undefined;
 };
 
+/** SQLite's affinity rules: `INT` wins, then `CHAR` / `CLOB` / `TEXT` make a column text. */
+const INTEGER_TYPE = /INT/iu;
+const TEXT_TYPE = /CHAR|CLOB|TEXT/iu;
+const hasTextAffinity = (declared: string): boolean => !INTEGER_TYPE.test(declared) && TEXT_TYPE.test(declared);
+
+/**
+ * Report an app-managed table's date columns declared with text affinity. Lunora's and
+ * better-auth's DDL give date columns a numeric type; a table the app created itself may not,
+ * and then the epoch numbers the adapter writes are stored as text, so range filters and
+ * ordering on them compare as text (chronological only between 2001 and 2286). Logged, not
+ * thrown: refusing would also hold back the conversion of every other table.
+ */
+const warnTextDateColumns = function* warnTextDateColumns(entry: DateTable): BackfillSteps<void> {
+    const declared = yield { params: [], sql: `PRAGMA table_info(${quoteIdentifier(entry.table)})` };
+    const textual = entry.columns.filter((column) =>
+        declared.some(
+            (row) =>
+                typeof row["name"] === "string" &&
+                row["name"].toLowerCase() === column.toLowerCase() &&
+                typeof row["type"] === "string" &&
+                hasTextAffinity(row["type"]),
+        ),
+    );
+
+    for (const column of textual) {
+        // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+        console.error(
+            `@lunora/auth: ${entry.table}.${column} is a date column with text affinity; declare it REAL, INTEGER, NUMERIC or date so range filters on it compare as numbers.`,
+        );
+    }
+};
+
 /** The tables to convert: every Lunora-provisioned one, and the app-managed ones that exist. */
 const presentTables = function* presentTables(options: LunoraAuthOptions): BackfillSteps<DateTable[]> {
     const tables: DateTable[] = [];
@@ -92,6 +124,7 @@ const presentTables = function* presentTables(options: LunoraAuthOptions): Backf
 
         if (found.length > 0) {
             tables.push(entry);
+            yield* warnTextDateColumns(entry);
         }
     }
 

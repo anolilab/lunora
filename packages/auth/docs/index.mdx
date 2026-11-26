@@ -163,7 +163,8 @@ against the schema and accepts it.
 A plugin table your app manages itself (`disableMigration`) must declare its date columns with
 a numeric type (`REAL`, `INTEGER`, `NUMERIC` or `date`), as Lunora's and better-auth's DDL do.
 In a `TEXT` column the numbers are stored as text, and range filters and ordering on them
-compare as text, which is only chronological between 2001 and 2286.
+compare as text, which is only chronological between 2001 and 2286. The date conversion logs an
+error naming any such column it finds.
 
 Earlier versions stored these columns as ISO strings. Rows written then still read
 correctly through better-auth, but Lunora's writer refuses them (`VALIDATION_ERROR:
