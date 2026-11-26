@@ -407,7 +407,8 @@ interface PrepareAuthDataOptions {
  * without `issuer`. With no schema it only logs.
  * - Canonical-email backfill (`canonicalEmailBackfill: false` skips it): reads rows whose
  * `user.emailCanonical` is `NULL` and fills them. Leaves an address another account holds
- * `NULL` and logs the count. Its position is kept in `__lunora_auth_backfill__`.
+ * `NULL` and logs it by id with its holder; `authBackfillStatus` reads the same. Its position is kept in
+ * `__lunora_auth_backfill__`.
  * - Invitation-email backfill (`invitationEmailBackfill: false` skips it): rewrites
  * `signUpInvitation.email` to its canonical form, unless another invitation holds that form.
  * - Date conversion: rewrites ISO-string dates in the auth tables to epoch ms. Always runs.
