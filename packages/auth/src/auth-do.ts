@@ -39,6 +39,7 @@ import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
 import type { CredentialColumns } from "./data-port";
 import { authCredentialColumns, authCredentialTableNames, parentsFirst } from "./data-port";
+import { convertAuthDatesOnceSync } from "./dates";
 import { handleAuthDiscoveryRequest } from "./discovery";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
@@ -184,6 +185,15 @@ class LunoraAuthDO {
     /** Whether the canonical-email backfill has rows left: it runs a bounded pass on each request until it has none. */
     #backfillPending = false;
 
+    /** Whether a restore wrote rows since the date conversion last ran: the next request converts them. */
+    #datesPending = false;
+
+    /**
+     * Settles once every import or replace in flight has finished. Auth requests wait for it, so
+     * none reads a restored row before the conversion that runs on the next request has reached it.
+     */
+    #restoreDone: Promise<void> = Promise.resolve();
+
     /** Where `user.emailCanonical` lives physically, known once `#ensureReady` has run. */
     #canonicalEmail: CanonicalEmailColumn | undefined;
 
@@ -210,6 +220,10 @@ class LunoraAuthDO {
         if (this.#auth !== undefined) {
             if (this.#backfillPending) {
                 this.#backfill();
+            }
+
+            if (this.#datesPending) {
+                this.#convertDates(this.#auth.options);
             }
 
             return this.#auth;
@@ -271,6 +285,7 @@ class LunoraAuthDO {
 
             this.#invitationColumns = invitationEmailColumns(resolved);
             this.#backfill();
+            this.#convertDates(resolved);
 
             // The mirror image, and the only column this ever removes. See
             // `legacy-issuer.ts` for what better-auth 1.7.0 added and 1.7.3 reverted.
@@ -304,6 +319,23 @@ class LunoraAuthDO {
             this.#backfillPending = true;
             // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
             console.error("@lunora/auth: the canonical-email backfill stopped; the next request resumes it.", error);
+        }
+    }
+
+    /**
+     * Rewrite the ISO-string dates earlier versions stored as epoch ms, synchronously, so the
+     * request that cold-started the object never reads a row the conversion has not reached.
+     * Logged, not thrown: until it succeeds the rows still read correctly, and the next cold
+     * start retries it.
+     */
+    #convertDates(resolved: LunoraAuthOptions): void {
+        this.#datesPending = false;
+
+        try {
+            convertAuthDatesOnceSync((query, parameters) => [...this.#storage.sql.exec(query, ...parameters)], resolved);
+        } catch (error) {
+            // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+            console.error("@lunora/auth: converting stored ISO dates to epoch ms stopped; the next cold start retries it.", error);
         }
     }
 
@@ -435,8 +467,21 @@ class LunoraAuthDO {
             return Response.json({ error: "unauthorized" }, { status: 401 });
         }
 
+        // Settled in the `finally` below once a restore has finished, whatever its outcome.
+        let restored: (() => void) | undefined;
+
         try {
             const body: Record<string, unknown> = await request.json();
+
+            if (body["op"] === "import" || body["op"] === "replace") {
+                const done = Promise.withResolvers<undefined>();
+                const previous = this.#restoreDone;
+
+                restored = () => {
+                    done.resolve(undefined);
+                };
+                this.#restoreDone = previous.then(async () => done.promise);
+            }
 
             const result = await handleMoveRequest(this.#storage, body, {
                 canonicalEmail: () => this.#canonicalEmail,
@@ -481,6 +526,12 @@ class LunoraAuthDO {
             }
 
             return Response.json({ error: body }, { status });
+        } finally {
+            if (restored !== undefined) {
+                // Even when the restore failed part-way: an import commits row by row.
+                this.#datesPending = true;
+                restored();
+            }
         }
     }
 
@@ -533,16 +584,27 @@ class LunoraAuthDO {
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
 
-        if (url.pathname === RESOLVE_SESSION_PATH) {
-            return this.#resolveSession(request);
+        if (url.pathname === MOVE_PATH) {
+            return this.#move(request);
         }
 
         if (url.pathname === READ_AUDIT_PATH) {
             return this.#readAudit(request);
         }
 
-        if (url.pathname === MOVE_PATH) {
-            return this.#move(request);
+        // A restore that registers while this request waits chains onto the barrier it replaces, so
+        // waiting on the current one until it stops changing covers every restore before it.
+        for (let barrier = this.#restoreDone; ; barrier = this.#restoreDone) {
+            // eslint-disable-next-line no-await-in-loop -- re-checked after each wait
+            await barrier;
+
+            if (barrier === this.#restoreDone) {
+                break;
+            }
+        }
+
+        if (url.pathname === RESOLVE_SESSION_PATH) {
+            return this.#resolveSession(request);
         }
 
         const auth = this.#ensureReady();

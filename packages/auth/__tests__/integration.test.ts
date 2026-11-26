@@ -166,7 +166,7 @@ describe("auth integration — real better-auth over in-memory SQLite", () => {
         const session = await signIn(auth);
 
         const expiryOf = (token: string): number => {
-            const row = database.prepare(`SELECT "expiresAt" FROM "session" WHERE "token" = ?`).get(token) as { expiresAt: string } | undefined;
+            const row = database.prepare(`SELECT "expiresAt" FROM "session" WHERE "token" = ?`).get(token) as { expiresAt: number } | undefined;
 
             return new Date(row?.expiresAt ?? 0).getTime();
         };

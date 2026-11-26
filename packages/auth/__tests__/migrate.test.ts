@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveAuthOptions } from "../src/create-auth";
 import { inviteOnly } from "../src/invite-only";
 import { compileMigrationsSql, createMigrationAuth, ensureMigrated } from "../src/migrate";
+import { materialiseAuthSchema } from "./helpers/sqlite-auth-db";
 
 vi.mock(import("better-auth/db/migration"), () => {
     return { getMigrations: vi.fn<typeof getMigrations>() };
@@ -625,5 +626,35 @@ describe("compileMigrationsSql", () => {
         expect(mockGetMigrations).toHaveBeenCalledWith(expect.objectContaining({ rateLimit: expect.objectContaining({ enabled: true, storage: "database" }) }));
         expect(compileMigrations).toHaveBeenCalledTimes(1);
         expect(sql).toBe("CREATE TABLE user (...)");
+    });
+});
+
+describe("ensureMigrated — stored ISO dates on D1", () => {
+    it("holds a concurrent caller until the conversion has finished", async () => {
+        expect.assertions(1);
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations() as never);
+
+        const legacy = "2020-01-01T00:00:00.123Z";
+        const raw = { secret: "x".repeat(32) };
+        const database = fakeD1((sqlite) => {
+            materialiseAuthSchema(sqlite, raw);
+            sqlite
+                .prepare(`INSERT INTO "verification" ("id", "identifier", "value", "expiresAt", "createdAt", "updatedAt") VALUES ('v1', 'i', 'x', ?, ?, ?)`)
+                .run(legacy, legacy, legacy);
+        });
+        const options = resolveAuthOptions({ ...raw, database });
+
+        // The second caller arrives while the first is converting; it must not return before the rows are numbers.
+        const first = ensureMigrated({ options });
+
+        await ensureMigrated({ options });
+
+        const { results } = await database.prepare(`SELECT "expiresAt" FROM "verification" WHERE "id" = 'v1'`).all();
+
+        expect({ ...(results[0] as object) }).toStrictEqual({ expiresAt: Date.parse(legacy) });
+
+        await first;
     });
 });

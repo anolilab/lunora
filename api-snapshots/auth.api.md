@@ -427,6 +427,15 @@ interface AuthDataPortLike {
 }
 ```
 
+### `AuthDateConversion` (interface)
+
+```ts
+interface AuthDateConversion {
+    converted: number;
+    table: string;
+}
+```
+
 ### `AuthDoOptions` (interface)
 
 ```ts
@@ -1124,6 +1133,12 @@ const canonicalEmail: (email: string) => string;
 
 ```ts
 const classifyEmail: (email: string, config?: EmailGateConfig) => EmailClassification;
+```
+
+### `convertAuthDatesToEpochMs` (const)
+
+```ts
+const convertAuthDatesToEpochMs: (executor: SqlExecutor, options: LunoraAuthOptions) => Promise<AuthDateConversion[]>;
 ```
 
 ### `createAuth` (const)

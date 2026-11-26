@@ -9,6 +9,7 @@ import { authCanonicalEmailColumn, backfillCanonicalEmails, backfillCanonicalEma
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { prepareAuthOptions, resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
+import { convertAuthDatesOnce } from "./dates";
 import { backfillInvitationEmails, backfillInvitationEmailsThroughAdapter, invitationEmailColumns } from "./invitation-email-backfill";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 import { d1Executor } from "./sql-store";
@@ -285,6 +286,50 @@ const backfillPass = async (key: object, options: LunoraAuthOptions): Promise<vo
     await run;
 };
 
+/** The date conversion in flight per `options`, so a concurrent caller waits for it rather than passing it. */
+const convertingDates = new WeakMap<object, Promise<void>>();
+
+/** The `options` whose date conversion has run in this isolate, successfully or not. */
+const datesAttempted = new WeakSet<object>();
+
+/**
+ * Rewrite the ISO-string dates earlier versions stored as epoch ms, on D1 only: the other
+ * databases `ensureMigrated` drives are written by better-auth's own adapter, not Lunora's.
+ *
+ * Once per isolate, whatever the outcome: the generated worker awaits `ensureMigrated` ahead of
+ * every route, so a value that cannot be converted must not cost every request a retry. It is
+ * logged, the rows still read correctly, and the next cold start tries again. It shares the
+ * invocation's D1 query limit with the backfill: three queries once the grace period is over,
+ * `2n + k + 4` at most for `n` date tables, `k` of them app-managed, during it (see `conversionSteps`).
+ */
+const convertDatesPass = async (key: object, options: LunoraAuthOptions): Promise<void> => {
+    const { database } = options as { database?: unknown };
+
+    if (datesAttempted.has(key) || !isD1Database(database)) {
+        return;
+    }
+
+    let run = convertingDates.get(key);
+
+    if (run === undefined) {
+        run = convertAuthDatesOnce(d1Executor(database), options)
+            .then(
+                () => undefined,
+                (error: unknown) => {
+                    // eslint-disable-next-line no-console -- no injected logger at the migration layer (workerd/Node both capture console)
+                    console.error("@lunora/auth: converting stored ISO dates to epoch ms stopped; the next cold start retries it.", error);
+                },
+            )
+            .finally(() => {
+                datesAttempted.add(key);
+                convertingDates.delete(key);
+            });
+        convertingDates.set(key, run);
+    }
+
+    await run;
+};
+
 /**
  * Apply better-auth's required schema (`user`, `session`, `account`,
  * `verification`) to the configured database. Idempotent — better-auth
@@ -299,6 +344,7 @@ const backfillPass = async (key: object, options: LunoraAuthOptions): Promise<vo
  * Each call then runs one pass of the canonical-email backfill until it is done (on D1, a bounded
  * number of pages; see `backfillCanonicalEmailColumn`), and a pass never rejects the call. A worker
  * that calls this once per isolate, as the generated one does, continues it on its next cold start.
+ * On D1 it also converts dates earlier versions stored as ISO strings (see `convertAuthDatesToEpochMs`).
  *
  * For production you should prefer pre-applying the schema at deploy time
  * via `compileMigrationsSql` + `wrangler d1 execute`; this helper exists for
@@ -331,6 +377,7 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
 
     await run;
     await backfillPass(given, options);
+    await convertDatesPass(given, options);
 };
 
 /**

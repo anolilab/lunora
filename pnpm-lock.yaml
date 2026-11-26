@@ -3362,6 +3362,9 @@ importers:
       '@lunora/config':
         specifier: workspace:*
         version: link:../config
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../d1
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime

@@ -34,6 +34,7 @@ import { AUTH_AUDIT_TABLE } from "./audit";
 import type { CanonicalEmailColumn } from "./canonical-email";
 import { CANONICAL_EMAIL_FIELD, canonicalEmail as foldEmail, foldSafeKey, warnDuplicates, withCanonicalEmailValue } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
+import { datesInvalidation } from "./dates";
 import type { SqlExecutor } from "./sql-store";
 
 type Row = Record<string, unknown>;
@@ -369,6 +370,20 @@ const heldByUnfilledRow = async (
 };
 
 /**
+ * The second invalidation of an import, after its rows: they are committed, so a failure here is
+ * logged rather than thrown, which would misreport the import. The record was invalidated before
+ * the first row too, so only a conversion that ran while the rows were written is missed.
+ */
+const invalidateAfterImport = async (sql: AuthSqlReader, invalidate: Statement): Promise<void> => {
+    try {
+        await sql.all(invalidate.sql, invalidate.params);
+    } catch (error) {
+        // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+        console.error("@lunora/auth: could not invalidate the dates-epoch-ms record after an import; run convertAuthDatesToEpochMs.", error);
+    }
+};
+
+/**
  * Insert wire-encoded rows, skipping any that collide with an existing key or
  * unique value. Only columns the table has are written, so a row from a newer
  * plugin set still lands, minus what this schema cannot hold — and never a
@@ -387,62 +402,74 @@ const insertAuthRows = async (
     const result: AuthImportResult = { conflicts: 0, errors: [], inserted: 0 };
     const columns = new Map<string, string[]>();
     const seen = heldCanonical(canonicalEmail);
+    const dates = datesInvalidation();
 
-    for (const [index, { doc, table }] of rows.entries()) {
-        const refusal = importRefusalOf(table, isAuthTable);
+    // Before the first row, so a failure here leaves the import undone. Repeated after the rows
+    // below with a fresh token, for a date conversion that read the record while they were being
+    // written: rewriting the same token would leave its compare-and-swap matching.
+    await sql.all(dates.ddl.sql, dates.ddl.params);
+    await sql.all(dates.invalidate.sql, dates.invalidate.params);
 
-        if (refusal !== undefined) {
-            result.errors.push({ index, message: refusal, table });
-            continue;
-        }
+    try {
+        for (const [index, { doc, table }] of rows.entries()) {
+            const refusal = importRefusalOf(table, isAuthTable);
 
-        // eslint-disable-next-line no-await-in-loop -- once per table
-        const known = columns.get(table) ?? (await columnsOf(sql, table));
-
-        columns.set(table, known);
-
-        const decodedRow = decodeRow(doc, table, credentialColumns);
-
-        if ("message" in decodedRow) {
-            result.errors.push({ index, message: decodedRow.message, table });
-            continue;
-        }
-
-        const row = seen.without(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail), table);
-        const names = Object.keys(row).filter((name) => known.includes(name));
-
-        // eslint-disable-next-line no-await-in-loop -- rows go in order, and a holder may be one this import wrote
-        if (await heldByUnfilledRow(sql, row, table, canonicalEmail, known)) {
-            result.conflicts += 1;
-            continue;
-        }
-
-        if (names.length === 0) {
-            result.errors.push({ index, message: `no column of the row exists on "${table}"`, table });
-            continue;
-        }
-
-        try {
-            // eslint-disable-next-line no-await-in-loop -- rows go in order, parents first
-            const written = await sql.all(
-                `INSERT INTO ${quoteIdentifier(table)} (${names.map((name) => quoteIdentifier(name)).join(", ")}) VALUES (${names.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING RETURNING 1 AS "written"`,
-                // eslint-disable-next-line unicorn/no-null -- SQL NULL
-                names.map((name) => row[name] ?? null),
-            );
-
-            if (written.length > 0) {
-                seen.hold(row, table);
-                result.inserted += 1;
-            } else {
-                result.conflicts += 1;
+            if (refusal !== undefined) {
+                result.errors.push({ index, message: refusal, table });
+                continue;
             }
-        } catch (error) {
-            result.errors.push({ index, message: `"${table}": ${safeCause(error)}`, table });
-        }
-    }
 
-    if (canonicalEmail !== undefined) {
-        warnDuplicates(seen.dropped(), canonicalEmail);
+            // eslint-disable-next-line no-await-in-loop -- once per table
+            const known = columns.get(table) ?? (await columnsOf(sql, table));
+
+            columns.set(table, known);
+
+            const decodedRow = decodeRow(doc, table, credentialColumns);
+
+            if ("message" in decodedRow) {
+                result.errors.push({ index, message: decodedRow.message, table });
+                continue;
+            }
+
+            const row = seen.without(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail), table);
+            const names = Object.keys(row).filter((name) => known.includes(name));
+
+            // eslint-disable-next-line no-await-in-loop -- rows go in order, and a holder may be one this import wrote
+            if (await heldByUnfilledRow(sql, row, table, canonicalEmail, known)) {
+                result.conflicts += 1;
+                continue;
+            }
+
+            if (names.length === 0) {
+                result.errors.push({ index, message: `no column of the row exists on "${table}"`, table });
+                continue;
+            }
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- rows go in order, parents first
+                const written = await sql.all(
+                    `INSERT INTO ${quoteIdentifier(table)} (${names.map((name) => quoteIdentifier(name)).join(", ")}) VALUES (${names.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING RETURNING 1 AS "written"`,
+                    // eslint-disable-next-line unicorn/no-null -- SQL NULL
+                    names.map((name) => row[name] ?? null),
+                );
+
+                if (written.length > 0) {
+                    seen.hold(row, table);
+                    result.inserted += 1;
+                } else {
+                    result.conflicts += 1;
+                }
+            } catch (error) {
+                result.errors.push({ index, message: `"${table}": ${safeCause(error)}`, table });
+            }
+        }
+
+        if (canonicalEmail !== undefined) {
+            warnDuplicates(seen.dropped(), canonicalEmail);
+        }
+    } finally {
+        // Also when a lookup threw part-way: the rows before it are committed.
+        await invalidateAfterImport(sql, datesInvalidation().invalidate);
     }
 
     return result;
@@ -616,8 +643,12 @@ const replaceAuthRows = async (
         return { deleted: plan.deleted, errors: [], inserted: rows.length };
     }
 
+    const dates = datesInvalidation();
+
     try {
-        await atomic(plan.statements);
+        await sql.all(dates.ddl.sql, dates.ddl.params);
+        // In the same unit as the rows: the restore and the invalidation commit together or not at all.
+        await atomic([...plan.statements, dates.invalidate]);
     } catch (error) {
         return { deleted: 0, errors: [{ index: -1, message: `auth replace rolled back: ${safeCause(error)}`, table: "" }], inserted: 0 };
     }

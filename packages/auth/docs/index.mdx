@@ -151,6 +151,58 @@ it, and sign-up invitations are stored in the same form.
   `email` is kept. The auth data port's own import and restore recompute the value from
   `email`.
 
+## Dates are stored as epoch milliseconds
+
+`authTables(...)` declares every better-auth date column (`user.createdAt`,
+`session.expiresAt`, `account.accessTokenExpiresAt`, `user.banExpires`, the organization
+and invitation dates, and so on) as `v.date()`, an epoch-millisecond number. The adapters
+store exactly that, and hand better-auth a `Date` when they read the row back. A
+`ctx.db.patch("user", id, { role })` from your own mutation then validates the whole row
+against the schema and accepts it.
+
+A plugin table your app manages itself (`disableMigration`) must declare its date columns with
+a numeric type (`REAL`, `INTEGER`, `NUMERIC` or `date`), as Lunora's and better-auth's DDL do.
+In a `TEXT` column the numbers are stored as text, and range filters and ordering on them
+compare as text, which is only chronological between 2001 and 2286. The date conversion logs an
+error naming any such column it finds.
+
+Earlier versions stored these columns as ISO strings. Rows written then still read
+correctly through better-auth, but Lunora's writer refuses them (`VALIDATION_ERROR:
+Expected number`) on any patch, because it validates every column of the row, not only
+the ones you changed. Range filters on them are wrong too: SQLite orders every string
+above every number, so an old `expiresAt` never matches `< now`.
+
+They are converted for you. `ensureMigrated` rewrites them on D1, and the auth Durable
+Object does it on its cold start. Each tries once per isolate: if a value cannot be
+converted, the error is logged with the table, column and row, nothing is changed, and the
+next cold start tries again. Once a run comes back clean it is recorded in the database, and
+later cold starts keep converting for a day, so rows that isolates still on the earlier version
+write during a gradual deploy are caught too. The first cold start after that day converts once
+more, and from then on a cold start skips it with a few lookups,
+until a plugin adds date columns or an import or replace restores rows. A restore clears the
+record, so the next cold start converts the restored rows (the auth Durable Object does it on its
+next request). If a gradual deploy runs longer than a day, run `convertAuthDatesToEpochMs` once
+after it finishes.
+
+If your deploy applies the schema with `compileMigrationsSql` and never calls
+`ensureMigrated`, convert them yourself, once, with the same options you pass to
+`createAuth`:
+
+```ts
+import { convertAuthDatesToEpochMs, d1Executor } from "@lunora/auth";
+
+await convertAuthDatesToEpochMs(d1Executor(env.DB), authOptions);
+// → [{ table: "user", converted: 1204 }, { table: "session", converted: 3811 }, …]
+```
+
+It checks every table before it writes anything, and throws on a value that is not an
+ISO-8601 date, naming the table, column and row, without converting anything. The
+conversion runs in SQLite (D1 or a Durable Object's storage), a few statements per table
+however many rows it holds, so it fits in one Worker invocation. A plugin table your app
+manages itself (`disableMigration`) is converted when it exists and skipped when it does
+not. Running it again converts nothing, so a run that stops part-way is finished by
+running it again.
+
 ## Read `ctx.auth` in functions
 
 The runtime resolves the inbound session and populates `ctx.auth` on every

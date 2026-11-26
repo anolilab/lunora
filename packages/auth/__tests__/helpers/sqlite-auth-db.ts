@@ -35,9 +35,9 @@ const executorFor = (database: DatabaseSync): SqlExecutor => {
     };
 };
 
-/** SQLite column affinity for a better-auth field type. */
+/** SQLite column affinity for a better-auth field type — `date` is REAL, as Lunora's own DDL declares `v.date()`. */
 const affinity = (type: ReadonlyArray<string> | string): string => {
-    if (type === "number") {
+    if (type === "number" || type === "date") {
         return "REAL";
     }
 
