@@ -157,7 +157,7 @@ Build a SECOND, migration-only instance over the raw binding — `createMigratio
 
 To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all.
 
-If the auth tables are declared in your Lunora schema (`authTables(options)` as `.global()` tables), the migrator does not apply: create them with `lunoraD1Adapter(env.DB, { provision })` and run the data steps with `prepareAuthData(d1Executor(env.DB), options)` from `@lunora/auth`.
+If the auth tables are declared in your Lunora schema (`authTables(options)` as `.global()` tables), the migrator does not apply: create them with `lunoraD1Adapter(env.DB, { provision })` and run the data steps with `prepareAuthData(d1Executor(env.DB), options, { provision })` from `@lunora/auth`.
 
 ### `AUTH_MOVE_CONFLICT`
 

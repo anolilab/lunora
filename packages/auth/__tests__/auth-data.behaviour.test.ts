@@ -218,6 +218,27 @@ describe("prepareAuthData — the data steps without better-auth's migrator", ()
         expect(find).toHaveBeenCalledTimes(2);
     });
 
+    it("prepares each database that shares one options object", async () => {
+        expect.hasAssertions();
+
+        const other = new DatabaseSync(":memory:");
+        const otherD1 = fakeD1(other);
+        const runOptions = { ...options };
+
+        try {
+            await Promise.all([provisionSchema(d1Executor(d1)), provisionSchema(d1Executor(otherD1))]);
+
+            other.exec(`ALTER TABLE "account" ADD COLUMN "issuer" text NOT NULL DEFAULT ''`);
+
+            await prepareAuthData(d1Executor(d1), runOptions);
+            await prepareAuthData(d1Executor(otherD1), runOptions);
+
+            expect(other.prepare(`SELECT name FROM pragma_table_info('account') WHERE name = 'issuer'`).get()).toBeUndefined();
+        } finally {
+            other.close();
+        }
+    });
+
     it("logs and leaves the column when the executor cannot drop it atomically", async () => {
         expect.hasAssertions();
 

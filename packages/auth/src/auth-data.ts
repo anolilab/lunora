@@ -106,17 +106,40 @@ const dropLegacyIssuerColumn = async (executor: SqlExecutor, options: LunoraAuth
     }
 };
 
-/** The `options` whose issuer cleanup has run in this isolate, whatever its outcome. */
+/** One key per `options` and executor pair, so one options object shared by two databases prepares each of them. */
+const pairKeys = new WeakMap<object, WeakMap<SqlExecutor, object>>();
+
+/** The memo key for the data steps of `options` over `executor`. */
+const pairKey = (options: object, executor: SqlExecutor): object => {
+    let byExecutor = pairKeys.get(options);
+
+    if (byExecutor === undefined) {
+        byExecutor = new WeakMap();
+        pairKeys.set(options, byExecutor);
+    }
+
+    let key = byExecutor.get(executor);
+
+    if (key === undefined) {
+        key = {};
+        byExecutor.set(executor, key);
+    }
+
+    return key;
+};
+
+/** The pairs whose issuer cleanup has run in this isolate, whatever its outcome. */
 const issuerChecked = new WeakMap<object, Promise<void>>();
 
 /**
- * Run {@link dropLegacyIssuerColumn} once per isolate per `options`; concurrent callers share the attempt.
+ * Run {@link dropLegacyIssuerColumn} once per isolate per `options` and executor; concurrent callers share the attempt.
  *
  * A drop also re-takes the adapter's schema verdict, which was taken while the required `issuer` column
  * was still there. better-auth keys it on the D1 binding the executor wraps. Inside the memoised run, so
  * it happens once rather than on every later call, each of which would re-introspect every auth table.
  */
-const dropLegacyIssuerOnce = async (key: object, executor: SqlExecutor, options: LunoraAuthOptions): Promise<void> => {
+const dropLegacyIssuerOnce = async (optionsKey: object, executor: SqlExecutor, options: LunoraAuthOptions): Promise<void> => {
+    const key = pairKey(optionsKey, executor);
     let run = issuerChecked.get(key);
 
     if (run === undefined) {
@@ -232,11 +255,14 @@ const convertDatesPass = async (key: object, executor: SqlExecutor, options: Lun
 };
 
 /**
- * The data steps over an executor, memoised on `key`. `ensureMigrated` keys them on the options it
- * was given, so a later `prepareAuthData` with the same object finds them done.
+ * The data steps over an executor, memoised on `optionsKey` and the executor together. `ensureMigrated`
+ * keys them on the options it was given, so a later `prepareAuthData` with the same object and binding
+ * finds them done.
  */
-const prepareAuthDataFor = async (key: object, executor: SqlExecutor, options: LunoraAuthOptions): Promise<void> => {
-    await dropLegacyIssuerOnce(key, executor, options);
+const prepareAuthDataFor = async (optionsKey: object, executor: SqlExecutor, options: LunoraAuthOptions): Promise<void> => {
+    const key = pairKey(optionsKey, executor);
+
+    await dropLegacyIssuerOnce(optionsKey, executor, options);
     await backfillPass(key, async () => backfillThroughExecutor(executor, options));
     await convertDatesPass(key, executor, options);
 };
@@ -266,7 +292,8 @@ interface PrepareAuthDataOptions {
  * sees the cleaned-up `account` table).
  *
  * Never rejects for a data step: each logs and resumes on a later call or cold start, like
- * `ensureMigrated`. Memoised per `options` object for the isolate: the cleanup and conversion run
+ * `ensureMigrated`. Memoised per `options` object and executor for the isolate (`d1Executor` returns
+ * one executor per binding): the cleanup and conversion run
  * once, the backfill until it reaches the end of its tables. Pass the same long-lived options
  * object on every call; a fresh one per request repeats the work.
  *
