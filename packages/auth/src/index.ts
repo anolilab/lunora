@@ -1,3 +1,4 @@
+export type { LunoraD1AdapterOptions } from "./adapter";
 export { lunoraAuthAdapter, lunoraD1Adapter, lunoraDoAdapter } from "./adapter";
 export type {
     AuthAccount,
@@ -36,6 +37,8 @@ export type {
 export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, createAuthAuditWriter, ensureAuthAuditTable, readAuthAuditLog } from "./audit";
 export type { AuthAuditHookConfig } from "./audit-hooks";
 export { authAuditBeforeHook, authAuditHook, buildAuditEntry, eventForPath, withAuthAudit } from "./audit-hooks";
+export type { PrepareAuthDataOptions } from "./auth-data";
+export { prepareAuthData } from "./auth-data";
 export type { AuthDoOptions, AuthDoState } from "./auth-do";
 export {
     READ_AUDIT_PATH as AUTH_DO_AUDIT_PATH,
@@ -52,7 +55,7 @@ export { createAuth, resolveAuthOptions } from "./create-auth";
 export type { AuthDataPortLike, AuthImportResult, AuthReplaceResult } from "./data-port";
 export { authCredentialColumns, authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "./data-port";
 export type { AuthDateConversion } from "./dates";
-export { convertAuthDatesToEpochMs } from "./dates";
+export { convertAuthDatesOnce, convertAuthDatesToEpochMs } from "./dates";
 export { authDiscoveryPaths, authDiscoveryPathsFor, handleAuthDiscoveryRequest } from "./discovery";
 export { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 export type { AuthJurisdiction, AuthNamespaceLike, DoAuthWiring, DoAuthWiringOptions } from "./do-wiring";
