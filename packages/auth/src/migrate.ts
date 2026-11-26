@@ -67,7 +67,9 @@ const backfillThroughAdapter = async (options: LunoraAuthOptions): Promise<boole
     const adapter = await getAdapter(options);
 
     if (column !== undefined) {
-        warnDuplicates(await backfillCanonicalEmailsThroughAdapter(adapter), column);
+        const { duplicates, rows } = await backfillCanonicalEmailsThroughAdapter(adapter);
+
+        warnDuplicates(duplicates, column, rows);
     }
 
     if (invitationEmailColumns(options) !== undefined) {

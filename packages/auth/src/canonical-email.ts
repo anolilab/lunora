@@ -368,17 +368,32 @@ interface BackfillReport {
     /** Whether the run reached the end of the table; otherwise its position is saved and the next run resumes. */
     complete: boolean;
     duplicates: number;
+    /** The rows behind `duplicates`, at most {@link MAX_REPORTED_DUPLICATES} of them. */
+    rows: DuplicateRow[];
 }
+
+/**
+ * A `user` row left without a canonical value because another account holds it. Ids only: the
+ * report is logged, and an address is personal data the operator can read from the row itself.
+ */
+interface DuplicateRow {
+    /** The account that holds the canonical value, when one does; absent when the row changed under the run. */
+    heldBy?: string;
+    id: string;
+}
+
+/** Rows a report carries; the count goes on past it. Keeps a log line, and a status answer, bounded. */
+const MAX_REPORTED_DUPLICATES = 100;
 
 /** What a backfill's steps record into: methods, so the steps fill in a report their runner owns. */
 interface BackfillTally {
     done: () => void;
-    duplicate: (count: number) => void;
+    duplicate: (count: number, rows?: DuplicateRow[]) => void;
 }
 
 /** A report and the tally that fills it in. */
 const backfillTally = (): { report: BackfillReport; tally: BackfillTally } => {
-    const report: BackfillReport = { complete: false, duplicates: 0 };
+    const report: BackfillReport = { complete: false, duplicates: 0, rows: [] };
 
     return {
         report,
@@ -386,15 +401,42 @@ const backfillTally = (): { report: BackfillReport; tally: BackfillTally } => {
             done: () => {
                 report.complete = true;
             },
-            duplicate: (count) => {
+            duplicate: (count, rows = []) => {
                 report.duplicates += count;
+                report.rows.push(...rows.slice(0, MAX_REPORTED_DUPLICATES - report.rows.length));
             },
         },
     };
 };
 
+/** The rows of a page with an address that `filled` says were not written, keyed for {@link duplicateRows}. */
+const skippedRows = (
+    rows: { email?: unknown; id?: unknown }[],
+    filled: (row: { email?: unknown; id?: unknown }) => boolean,
+): { canonical: string; email: string; id: string }[] =>
+    rows
+        .filter((row) => typeof row.email === "string" && !filled(row))
+        .map((row) => {
+            return { canonical: canonicalEmail(row.email as string), email: row.email as string, id: String(row.id) };
+        });
+
+/** `{ id, heldBy }` for each skipped row, the holder read by canonical value. */
+const duplicateRows = (skipped: { canonical: string; id: string }[], holders: Record<string, unknown>[], canonicalColumn: string): DuplicateRow[] => {
+    const holderOf = new Map(holders.map((holder) => [String(holder[canonicalColumn]), String(holder["id"])]));
+
+    // A row that holds its own value was filled between the reads that found it unfilled and this one: not a duplicate.
+    return skipped
+        .filter(({ canonical, id }) => holderOf.get(canonical) !== id)
+        .map(({ canonical, id }) => {
+            const heldBy = holderOf.get(canonical);
+
+            return heldBy === undefined ? { id } : { heldBy, id };
+        });
+};
+
 /**
- * Pages one D1 run fills at most: three queries a page (read, write, position), so a run leaves most of the
+ * Pages one D1 run fills at most: three queries a page (read, write, position), plus one read of the skipped rows'
+ * holders a run, so a run leaves most of the
  * per-invocation query limit (50 on the Workers Free plan) to the request it shares it with. The rest of a
  * larger table fills over later runs.
  */
@@ -450,15 +492,50 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
     const state = `${column.table}.${column.canonical}`;
     const resumed = yield* readBackfillState(state);
     let after = typeof resumed === "number" ? resumed : 0;
+    // The skipped rows to name in the report; their holders are read once, when the run ends.
+    const reported: { canonical: string; email: string; id: string }[] = [];
+    const reportHolders = function* reportHolders(): BackfillSteps<void> {
+        if (reported.length === 0) {
+            return;
+        }
+
+        let found: Record<string, unknown>[];
+
+        try {
+            // The holders, and the skipped rows themselves: one changed or filled since the page read it is not named.
+            found = yield {
+                params: [JSON.stringify([...new Set(reported.map((row) => row.canonical))]), JSON.stringify(reported.map((row) => row.id))],
+                sql:
+                    `SELECT "id", ${email} AS "email", ${canonical} AS "canonical" FROM ${table} ` +
+                    `WHERE ${canonical} IN (SELECT "value" FROM json_each(?)) OR "id" IN (SELECT "value" FROM json_each(?))`,
+            };
+        } catch {
+            // The rows are only for the report: its count is already tallied, and the fills are written.
+            return;
+        }
+
+        const current = new Map(found.map((row) => [String(row["id"]), row]));
+        const unchanged = reported.filter((row) => current.get(row.id)?.["email"] === row.email && current.get(row.id)?.["canonical"] === null);
+        // A row another runner filled after this one read it was never a duplicate; it leaves the count too.
+        const filledSince = reported.filter((row) => current.has(row.id) && current.get(row.id)?.["canonical"] !== null).length;
+
+        tally.duplicate(
+            -filledSince,
+            duplicateRows(
+                unchanged,
+                found.filter((row) => row["canonical"] !== null),
+                "canonical",
+            ),
+        );
+    };
 
     for (let page = 0; page < maxPages; page += 1) {
         const rows = yield {
             params: [after, BACKFILL_PAGE_ROWS],
-            sql: `SELECT rowid AS "rid", ${email} AS "email" FROM ${table} WHERE ${canonical} IS NULL AND rowid > ? ORDER BY rowid LIMIT ?`,
+            sql: `SELECT rowid AS "rid", "id", ${email} AS "email" FROM ${table} WHERE ${canonical} IS NULL AND rowid > ? ORDER BY rowid LIMIT ?`,
         };
         const fills = pageFills(rows);
-
-        tally.duplicate(rows.filter((row) => typeof row["email"] === "string").length - fills.size);
+        let filledRids = new Set<unknown>();
 
         if (fills.size > 0) {
             const filled = yield {
@@ -467,11 +544,17 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
                     `UPDATE ${table} SET ${canonical} = ${values}."canonical" ` +
                     `FROM (SELECT json_extract("value", '$[0]') AS "rid", json_extract("value", '$[1]') AS "email", json_extract("value", '$[2]') AS "canonical" FROM json_each(?)) AS ${values} ` +
                     `WHERE ${table}.rowid = ${values}."rid" AND ${table}.${email} = ${values}."email" AND ${table}.${canonical} IS NULL ` +
-                    `AND NOT EXISTS (SELECT 1 FROM ${table} AS ${held} WHERE ${held}.${canonical} = ${values}."canonical") RETURNING rowid`,
+                    `AND NOT EXISTS (SELECT 1 FROM ${table} AS ${held} WHERE ${held}.${canonical} = ${values}."canonical") RETURNING rowid AS "rid"`,
             };
 
-            tally.duplicate(fills.size - filled.length);
+            filledRids = new Set(filled.map((row) => row["rid"]));
         }
+
+        // A row with an address that is not the page's first for its canonical value, or whose fill the guard refused.
+        const left = skippedRows(rows, (row) => filledRids.has((row as Record<string, unknown>)["rid"]));
+
+        tally.duplicate(left.length);
+        reported.push(...left.slice(0, MAX_REPORTED_DUPLICATES - reported.length));
 
         const last = rows.at(-1)?.["rid"];
 
@@ -480,6 +563,7 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
                 yield* writeBackfillState(state, undefined);
             }
 
+            yield* reportHolders();
             tally.done();
 
             return;
@@ -488,47 +572,70 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
         after = last;
         yield* writeBackfillState(state, after);
     }
+
+    yield* reportHolders();
 };
 
-const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn): void => {
+/**
+ * Log the rows a pass left unfilled: a sentence for a person, and a structured record (event name,
+ * table, count, `{ id, heldBy }` pairs) for a log pipeline to alert on. The account that holds the
+ * address keeps it: one that held it before the pass, else the first of the pair the pass read (in
+ * `rowid` order, or `id` order through the adapter). `authBackfillStatus` answers the same on demand.
+ */
+const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn, rows?: DuplicateRow[]): void => {
     if (duplicates > 0) {
         // eslint-disable-next-line no-console -- no injected logger at the migration layer (workerd/Node both capture console)
         console.warn(
             `@lunora/auth: ${String(duplicates)} user row(s) share an address with another account once case and Unicode form are ignored, ` +
                 `so their "${column.canonical}" stays empty and they are not protected against a further duplicate. Merge or rename them.`,
+            // `rows` is left out, not empty, when the caller did not collect them, so an empty list never reads as "none".
+            { count: duplicates, event: "lunora.auth.canonical_email_duplicate", table: column.table, ...(rows === undefined ? {} : { rows }) },
         );
     }
 };
 
 /** Run `steps` through an async executor (D1). */
 const runBackfill = async <R>(steps: BackfillSteps<R>, executor: BackfillExecutor): Promise<R> => {
-    let answer: Record<string, unknown>[] = [];
+    let step = steps.next([]);
 
-    for (;;) {
-        const step = steps.next(answer);
+    while (step.done !== true) {
+        let answer: Record<string, unknown>[];
 
-        if (step.done === true) {
-            return step.value;
+        // A failed statement is thrown into the steps, so one that can do without its answer catches it.
+        try {
+            // eslint-disable-next-line no-await-in-loop -- each statement depends on the last one's answer
+            answer = await executor.all(step.value.sql, step.value.params);
+        } catch (error) {
+            step = steps.throw(error);
+
+            continue;
         }
 
-        // eslint-disable-next-line no-await-in-loop -- each statement depends on the last one's answer
-        answer = await executor.all(step.value.sql, step.value.params);
+        step = steps.next(answer);
     }
+
+    return step.value;
 };
 
 /** Run `steps` through a synchronous executor (a Durable Object's `storage.sql.exec`). */
 const runBackfillSync = <R>(steps: BackfillSteps<R>, exec: (sql: string, params: unknown[]) => Record<string, unknown>[]): R => {
-    let answer: Record<string, unknown>[] = [];
+    let step = steps.next([]);
 
-    for (;;) {
-        const step = steps.next(answer);
+    while (step.done !== true) {
+        let answer: Record<string, unknown>[];
 
-        if (step.done === true) {
-            return step.value;
+        try {
+            answer = exec(step.value.sql, step.value.params);
+        } catch (error) {
+            step = steps.throw(error);
+
+            continue;
         }
 
-        answer = exec(step.value.sql, step.value.params);
+        step = steps.next(answer);
     }
+
+    return step.value;
 };
 
 /**
@@ -541,7 +648,8 @@ const backfillCanonicalEmails = async (executor: BackfillExecutor, column: Canon
     try {
         await runBackfill(backfillSteps(column, BACKFILL_MAX_PAGES, tally), executor);
     } finally {
-        warnDuplicates(report.duplicates, column);
+        // A run cut short before its end has not read the holders: its rows are unknown, not absent.
+        warnDuplicates(report.duplicates, column, report.rows.length > 0 ? report.rows : undefined);
     }
 
     return report;
@@ -554,7 +662,8 @@ const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => R
     try {
         runBackfillSync(backfillSteps(column, BACKFILL_MAX_PAGES_SYNC, tally), exec);
     } finally {
-        warnDuplicates(report.duplicates, column);
+        // A run cut short before its end has not read the holders: its rows are unknown, not absent.
+        warnDuplicates(report.duplicates, column, report.rows.length > 0 ? report.rows : undefined);
     }
 
     return report;
@@ -584,6 +693,50 @@ const fillThroughAdapter = async (adapter: BackfillAdapter, row: { email: string
     }
 };
 
+/** One page of the adapter backfill: fill what no one holds, and tally the rest with their holders. */
+const fillAdapterPage = async (adapter: BackfillAdapter, rows: { email?: unknown; id: string }[], tally: BackfillTally): Promise<void> => {
+    // The first row of the page per canonical value: two written side by side would both pass the check.
+    const fills = new Map<string, { email: string; id: string }>();
+
+    for (const row of rows) {
+        if (typeof row.email === "string" && !fills.has(canonicalEmail(row.email))) {
+            fills.set(canonicalEmail(row.email), { email: row.email, id: row.id });
+        }
+    }
+
+    const held =
+        fills.size > 0
+            ? await adapter.findMany<Record<string, unknown>>({
+                  limit: fills.size,
+                  model: "user",
+                  where: [{ field: CANONICAL_EMAIL_FIELD, operator: "in", value: [...fills.keys()] }],
+              })
+            : [];
+
+    for (const holder of held) {
+        fills.delete(String(holder[CANONICAL_EMAIL_FIELD]));
+    }
+
+    const writes = [...fills];
+    // The page's writes run side by side.
+    const filled = await Promise.all(writes.map(async ([value, row]) => fillThroughAdapter(adapter, row, value)));
+    const filledIds = new Set(writes.filter((_, index) => filled[index]).map(([, row]) => row.id));
+    const left = skippedRows(rows, (row) => filledIds.has(String(row.id)));
+
+    if (left.length > 0) {
+        const holders = await adapter.findMany<Record<string, unknown>>({
+            limit: left.length,
+            model: "user",
+            where: [{ field: CANONICAL_EMAIL_FIELD, operator: "in", value: [...new Set(left.map((row) => row.canonical))] }],
+        });
+
+        const rowsHeld = duplicateRows(left, holders, CANONICAL_EMAIL_FIELD);
+
+        // `duplicateRows` drops a row that holds its own value: filled by another runner, so not a duplicate.
+        tally.duplicate(rowsHeld.length, rowsHeld);
+    }
+};
+
 /**
  * The same backfill through better-auth's adapter, for a database the SQL above cannot
  * target (Postgres, MySQL, any other Kysely dialect): no `rowid`, no `UPDATE ... FROM
@@ -592,11 +745,11 @@ const fillThroughAdapter = async (adapter: BackfillAdapter, row: { email: string
  * filled rows leave the `IS NULL` range, so a run cut short loses only its last page. The
  * guards match the SQL's: a row is written only while it still holds the address read and
  * no canonical value, and skipped while another row holds its value.
- * @returns How many rows could not be filled because another row holds their canonical value.
+ * @returns The rows that could not be filled because another row holds their canonical value.
  */
-const backfillCanonicalEmailsThroughAdapter = async (adapter: BackfillAdapter): Promise<number> => {
+const backfillCanonicalEmailsThroughAdapter = async (adapter: BackfillAdapter): Promise<Omit<BackfillReport, "complete">> => {
+    const { report, tally } = backfillTally();
     let after: string | undefined;
-    let duplicates = 0;
 
     for (;;) {
         // eslint-disable-next-line no-await-in-loop -- each page starts after the last one's final id
@@ -606,48 +759,20 @@ const backfillCanonicalEmailsThroughAdapter = async (adapter: BackfillAdapter): 
             sortBy: { direction: "asc", field: "id" },
             where: [...UNFILLED, ...(after === undefined ? [] : [{ field: "id", operator: "gt" as const, value: after }])],
         });
-        // The first row of the page per canonical value: two written side by side would both pass the check.
-        const fills = new Map<string, { email: string; id: string }>();
-
-        for (const row of rows) {
-            if (typeof row.email === "string" && !fills.has(canonicalEmail(row.email))) {
-                fills.set(canonicalEmail(row.email), { email: row.email, id: row.id });
-            }
-        }
-
-        duplicates += rows.filter((row) => typeof row.email === "string").length - fills.size;
-
-        const held =
-            fills.size > 0
-                ? // eslint-disable-next-line no-await-in-loop -- one read of the page's values
-                  await adapter.findMany<Record<string, unknown>>({
-                      limit: fills.size,
-                      model: "user",
-                      where: [{ field: CANONICAL_EMAIL_FIELD, operator: "in", value: [...fills.keys()] }],
-                  })
-                : [];
-
-        for (const holder of held) {
-            fills.delete(String(holder[CANONICAL_EMAIL_FIELD]));
-            duplicates += 1;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- the page's writes run side by side; pages run in order
-        const filled = await Promise.all([...fills].map(async ([value, row]) => fillThroughAdapter(adapter, row, value)));
-
-        duplicates += filled.filter((written) => !written).length;
+        // eslint-disable-next-line no-await-in-loop -- pages run in order
+        await fillAdapterPage(adapter, rows, tally);
 
         const last = rows.at(-1);
 
         if (rows.length < BACKFILL_PAGE_ROWS || last === undefined) {
-            return duplicates;
+            return { duplicates: report.duplicates, rows: report.rows };
         }
 
         after = last.id;
     }
 };
 
-export type { BackfillAdapter, BackfillExecutor, BackfillReport, BackfillStep, BackfillSteps, CanonicalEmailColumn };
+export type { BackfillAdapter, BackfillExecutor, BackfillReport, BackfillStep, BackfillSteps, CanonicalEmailColumn, DuplicateRow };
 export {
     aliasBeside,
     authCanonicalEmailColumn,
@@ -661,7 +786,9 @@ export {
     CANONICAL_EMAIL_FIELD,
     canonicalEmail,
     canonicalHolders,
+    duplicateRows,
     foldSafeKey,
+    MAX_REPORTED_DUPLICATES,
     quote,
     readBackfillState,
     runBackfill,

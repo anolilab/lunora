@@ -349,7 +349,10 @@ describe("ensureMigrated", () => {
             { emailCanonical: "other@example.com", id: "other" },
             { emailCanonical: null, id: "twin" },
         ]);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"));
+        expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("1 user row(s) share an address"),
+            expect.objectContaining({ rows: [{ heldBy: "first", id: "twin" }] }),
+        );
 
         warn.mockRestore();
     });
@@ -494,7 +497,10 @@ describe("ensureMigrated", () => {
             { emailCanonical: "other@example.com", id: "other" },
             { emailCanonical: null, id: "twin" },
         ]);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"));
+        expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("1 user row(s) share an address"),
+            expect.objectContaining({ rows: [{ heldBy: "first", id: "twin" }] }),
+        );
 
         warn.mockRestore();
     });

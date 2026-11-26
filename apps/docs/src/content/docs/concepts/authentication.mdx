@@ -241,12 +241,36 @@ export default {
 - `schema` lets the `account.issuer` cleanup see the columns your schema
   declares. Without it the cleanup never drops anything.
 
-| Step                                     | Reads                                        | Writes                                                                                                                                   | Destructive | Skip with                        | How to check it                                                                                                    |
-| ---------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `account.issuer` cleanup                 | the account table's columns and indexes      | drops `issuer` and the indexes over it, only when `schema` declares the account table without `issuer`                                   | yes         | omit `schema`                    | a present but undeclared column is logged with `legacyIssuerCleanupStatements()` as the fix                        |
-| Canonical-email backfill                 | `user` rows whose `emailCanonical` is `NULL` | fills `emailCanonical`; an address another account already holds stays `NULL` and is counted in a warning                                | no          | `canonicalEmailBackfill: false`  | `SELECT count(*) FROM "user" WHERE "emailCanonical" IS NULL`; the resume position is in `__lunora_auth_backfill__` |
-| Invitation-email backfill                | `signUpInvitation` rows                      | rewrites `email` to its canonical form; a clash with another invitation is left unchanged and logged by id                               | no          | `invitationEmailBackfill: false` | the warning lists the ids; position in `__lunora_auth_backfill__`                                                  |
-| Date conversion (`convertAuthDatesOnce`) | date columns of the auth tables              | rewrites ISO-string dates as epoch ms, and keeps converting for a day after the first clean run so a rollout's older isolates are caught | no          | not skippable                    | its record in `__lunora_auth_backfill__` holds the first clean run                                                 |
+| Step                                     | Reads                                        | Writes                                                                                                                                   | Destructive | Skip with                        | How to check it                                                                             |
+| ---------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------------------------------- | ------------------------------------------------------------------------------------------- |
+| `account.issuer` cleanup                 | the account table's columns and indexes      | drops `issuer` and the indexes over it, only when `schema` declares the account table without `issuer`                                   | yes         | omit `schema`                    | a present but undeclared column is logged with `legacyIssuerCleanupStatements()` as the fix |
+| Canonical-email backfill                 | `user` rows whose `emailCanonical` is `NULL` | fills `emailCanonical`; an address another account already holds stays `NULL` and is logged by id with the account that holds it         | no          | `canonicalEmailBackfill: false`  | `authBackfillStatus` (below); the resume position is in `__lunora_auth_backfill__`          |
+| Invitation-email backfill                | `signUpInvitation` rows                      | rewrites `email` to its canonical form; a clash with another invitation is left unchanged and logged by id                               | no          | `invitationEmailBackfill: false` | the warning lists the ids; position in `__lunora_auth_backfill__`                           |
+| Date conversion (`convertAuthDatesOnce`) | date columns of the auth tables              | rewrites ISO-string dates as epoch ms, and keeps converting for a day after the first clean run so a rollout's older isolates are caught | no          | not skippable                    | its record in `__lunora_auth_backfill__` holds the first clean run                          |
+
+### Checking the backfills
+
+When two accounts' addresses differ only in case or Unicode form, the
+canonical-email backfill gives the canonical address to one of them: the account
+that already holds it, or, if neither does, the first one the pass reads. Every
+other row stays unfilled. Which account should keep the address is the
+operator's call, so the rest are reported rather than resolved. Each pass logs
+those rows as a structured record (`event: "lunora.auth.canonical_email_duplicate"`,
+with `{ id, heldBy }` pairs and no addresses). To read the same state on demand,
+for example from an admin route, call `authBackfillStatus`:
+
+```ts
+import { authBackfillStatus, d1Executor } from "@lunora/auth";
+
+const { canonicalEmail } = await authBackfillStatus(d1Executor(env.DB), options);
+// canonicalEmail.unfilled   rows still without a canonical value
+// canonicalEmail.duplicates [{ id, heldBy }]: merge or rename `id`; `heldBy` keeps the address
+// canonicalEmail.inProgress a pass stopped part-way and resumes on the next call
+```
+
+It only reads, runs at most a handful of statements, and needs SQLite (D1).
+On Postgres or MySQL, and in the auth Durable Object, which keeps its tables in
+its own storage, the log record is the signal.
 
 ## The client side
 

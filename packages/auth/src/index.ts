@@ -46,7 +46,9 @@ export {
     RESOLVE_SESSION_PATH as AUTH_DO_SESSION_PATH,
     LunoraAuthDO,
 } from "./auth-do";
-export type { CanonicalEmailColumn } from "./canonical-email";
+export type { AuthBackfillStatus, CanonicalEmailBackfillStatus } from "./backfill-status";
+export { authBackfillStatus } from "./backfill-status";
+export type { CanonicalEmailColumn, DuplicateRow } from "./canonical-email";
 export { authCanonicalEmailColumn, canonicalEmail } from "./canonical-email";
 export type { CookieCache } from "./cookie-cache";
 export { effectiveCookieCache } from "./cookie-cache";
