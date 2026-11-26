@@ -34,12 +34,10 @@ import { cloudSkipReason, DEV_EMAIL, DEV_PASSWORD } from "../cloud-setup";
  * same setup signs that account in once and the config hands every test that session,
  * so only the sign-in test itself starts signed out.
  *
- * Deliberately NOT covered: creating a project through the UI. Quota is resolved
- * from live subscription state, and with no billing provider locally the seeded org
- * resolves to the free plan's limit of ONE project — which the seed's own project
- * already occupies. Covering it would mean forging a provider webhook to buy a
- * higher limit, and would still accumulate a row per run against persisted local
- * state. `apps/cloud/__tests__/plans.test.ts` and `entitlements.test.ts` own that path.
+ * Deliberately NOT covered: creating a project through the UI. It would add a row
+ * per run against persisted local state, and quota is resolved from the live
+ * subscription the seed syncs, which this suite does not pin.
+ * `apps/cloud/__tests__/plans.test.ts` and `entitlements.test.ts` own that path.
  */
 const SKIP = cloudSkipReason();
 

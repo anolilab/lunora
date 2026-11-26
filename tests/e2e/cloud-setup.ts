@@ -51,11 +51,16 @@ const DEV_VARS_PATH = join(CLOUD_ROOT, ".dev.vars");
  * which the seed needs before an organization can be placed on a cell.
  * `MAIL_FROM` keeps better-auth's send-on-sign-up verification mail from
  * throwing; in dev it is captured, not delivered.
+ * `CREEM_WEBHOOK_SECRET` lets the seed sign the `subscription.active` webhook
+ * that gives its organization the pro plan. Without it the org resolves to the
+ * free plan and the paid tabs render a short upsell, which the shell spec
+ * cannot scroll.
  */
 const DEV_VARS = `# Written by tests/e2e/cloud-setup.ts because none existed. Do not commit.
 LUNORA_ADMIN_TOKEN="cloud-e2e-deterministic-admin-token"
 AUTH_SECRET="cloud-e2e-deterministic-secret-do-not-use-in-prod"
 MAIL_FROM="Lunora Cloud E2E <noreply@lunora.test>"
+CREEM_WEBHOOK_SECRET="cloud-e2e-deterministic-webhook-secret"
 `;
 
 /** Keys whose absence stops the worker booting at all — see {@link DEV_VARS}. */
