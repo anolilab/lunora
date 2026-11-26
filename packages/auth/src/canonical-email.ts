@@ -424,11 +424,14 @@ const skippedRows = (
 const duplicateRows = (skipped: { canonical: string; id: string }[], holders: Record<string, unknown>[], canonicalColumn: string): DuplicateRow[] => {
     const holderOf = new Map(holders.map((holder) => [String(holder[canonicalColumn]), String(holder["id"])]));
 
-    return skipped.map(({ canonical, id }) => {
-        const heldBy = holderOf.get(canonical);
+    // A row that holds its own value was filled between the reads that found it unfilled and this one: not a duplicate.
+    return skipped
+        .filter(({ canonical, id }) => holderOf.get(canonical) !== id)
+        .map(({ canonical, id }) => {
+            const heldBy = holderOf.get(canonical);
 
-        return heldBy === undefined ? { id } : { heldBy, id };
-    });
+            return heldBy === undefined ? { id } : { heldBy, id };
+        });
 };
 
 /**

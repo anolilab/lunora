@@ -51,6 +51,24 @@ describe(authBackfillStatus, () => {
         });
     });
 
+    it("leaves out a row filled between the status call's reads", async () => {
+        expect.hasAssertions();
+
+        database.exec(`INSERT INTO "user" ("id", "email") VALUES ('ada', 'Ada@example.com')`);
+
+        const executor = executorFor(database);
+        const all: typeof executor.all = async (sql, parameters) => {
+            // A backfill fills the row after the status read it as unfilled, before its holder read.
+            if (sql.includes("json_each")) {
+                database.exec(`UPDATE "user" SET "emailCanonical" = 'ada@example.com' WHERE "id" = 'ada'`);
+            }
+
+            return executor.all(sql, parameters);
+        };
+
+        await expect(authBackfillStatus({ all }, options)).resolves.toMatchObject({ canonicalEmail: { duplicates: [] } });
+    });
+
     it("reports a pass stopped part-way, and the invitation backfill when it is configured", async () => {
         expect.hasAssertions();
 
