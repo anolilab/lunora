@@ -3,12 +3,13 @@ import { DatabaseSync } from "node:sqlite";
 import { createD1CtxDb, runD1GlobalTableMigrations } from "@lunora/d1";
 import type { TableDefinition } from "@lunora/server";
 import { defineSchema } from "@lunora/server";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
 import { INTERNAL_SECRET_HEADER, LunoraAuthDO, RESOLVE_SESSION_PATH } from "../src/auth-do";
 import type { LunoraAuth, LunoraAuthOptions } from "../src/create-auth";
 import { createAuth, resolveAuthOptions } from "../src/create-auth";
+import { createSqlAuthDataPort } from "../src/data-port";
 import { decodeAuthDate } from "../src/date-codec";
 import { convertAuthDatesOnce, convertAuthDatesToEpochMs } from "../src/dates";
 import { authDoSchemaStatements } from "../src/do-schema";
@@ -314,29 +315,81 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
         await expect(convertAuthDatesToEpochMs(executor, withAppTable)).rejects.toThrow(/appGrant\.expiresAt of row g1 holds "12:00:00"/u);
     });
 
-    it("skips a finished conversion until the covered tables change", async () => {
+    describe("automatic runs", () => {
+        const DAY_MS = 24 * HOUR_MS;
+        const statements: string[] = [];
+        const recording = (): SqlExecutor => {
+            return {
+                all: (sql, parameters) => {
+                    statements.push(sql);
+
+                    return executor.all(sql, parameters);
+                },
+                run: (sql, parameters) => executor.run(sql, parameters),
+            };
+        };
+        /** Whether the last automatic run scanned the tables rather than stopping at its record. */
+        const scanned = (): boolean => statements.some((sql) => sql.startsWith("SELECT COUNT(*)"));
+        const runAt = async (at: number, runOptions: LunoraAuthOptions = options): Promise<unknown> => {
+            vi.setSystemTime(at);
+            statements.length = 0;
+
+            return convertAuthDatesOnce(recording(), runOptions);
+        };
+        const start = Date.parse("2026-01-01T00:00:00.000Z");
+
+        beforeEach(() => {
+            vi.useFakeTimers({ toFake: ["Date"] });
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it("keep converting through the grace period, then stop at their record", async () => {
+            expect.hasAssertions();
+
+            await runAt(start, withAppTable);
+
+            // An isolate still on the earlier version writes an ISO string during the rollout.
+            database.prepare(`INSERT INTO "appGrant" ("id", "expiresAt") VALUES ('g1', '2020-01-01T00:00:00.123Z')`).run();
+
+            await expect(runAt(start + HOUR_MS, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
+
+            await runAt(start + DAY_MS + HOUR_MS, withAppTable);
+
+            expect(scanned()).toBe(false);
+
+            // A plugin table with date columns changes the coverage, so the conversion runs again.
+            await runAt(start + 2 * DAY_MS, options);
+
+            expect(scanned()).toBe(true);
+        });
+
+        it("convert again after an import restores rows an earlier version wrote", async () => {
+            expect.hasAssertions();
+
+            await runAt(start, withAppTable);
+            await runAt(start + DAY_MS + HOUR_MS, withAppTable);
+
+            expect(scanned()).toBe(false);
+
+            const port = createSqlAuthDataPort(executor, ["appGrant"]);
+
+            await port.importRows([{ doc: { expiresAt: "2020-01-01T00:00:00.123Z", id: "g1" }, table: "appGrant" }]);
+
+            await expect(runAt(start + 2 * DAY_MS, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
+        });
+    });
+
+    it("finds an app-managed table whose stored name differs only in case", async () => {
         expect.hasAssertions();
 
-        const statements: string[] = [];
-        const recording: SqlExecutor = {
-            all: (sql, parameters) => {
-                statements.push(sql);
+        database.exec(`DROP TABLE "appGrant"`);
+        database.exec(`CREATE TABLE "APPGRANT" ("id" TEXT PRIMARY KEY, "expiresAt" TEXT)`);
+        database.prepare(`INSERT INTO "APPGRANT" ("id", "expiresAt") VALUES ('g1', '2020-01-01T00:00:00.123Z')`).run();
 
-                return executor.all(sql, parameters);
-            },
-            run: (sql, parameters) => executor.run(sql, parameters),
-        };
-
-        await convertAuthDatesOnce(recording, options);
-        statements.length = 0;
-        await convertAuthDatesOnce(recording, options);
-
-        expect(statements.some((sql) => sql.startsWith("SELECT COUNT(*)"))).toBe(false);
-
-        // A plugin table with date columns joins the coverage, so the conversion runs again.
-        database.prepare(`INSERT INTO "appGrant" ("id", "expiresAt") VALUES ('g1', ?)`).run("2020-01-01T00:00:00.123Z");
-
-        await expect(convertAuthDatesOnce(recording, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
+        await expect(convertAuthDatesToEpochMs(executor, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
     });
 });
 

@@ -54,10 +54,28 @@ const dateTables = (options: LunoraAuthOptions): DateTable[] =>
         .filter((entry) => entry.columns.length > 0);
 
 /**
- * The state row recording a finished conversion, in the backfill's state table. Its value is
- * the tables and columns the run covered, so adding a plugin with date columns runs it again.
+ * The state row recording a finished conversion, in the backfill's state table: the tables and
+ * columns it covered, so adding a plugin with date columns runs it again, and when a run over
+ * that coverage first came back clean.
  */
 const DATES_STATE = "dates-epoch-ms";
+
+/**
+ * How long automatic runs keep converting after the first clean one. During a gradual deploy,
+ * isolates still on an earlier version go on writing ISO strings; a day outlasts the rollout.
+ */
+const DATES_GRACE_MS = 24 * 60 * 60 * 1000;
+
+interface DatesState {
+    coverage: string[][];
+    since: number;
+}
+
+const asDatesState = (value: unknown): DatesState | undefined => {
+    const state = value as Partial<DatesState> | undefined;
+
+    return Array.isArray(state?.coverage) && typeof state.since === "number" ? (state as DatesState) : undefined;
+};
 
 /** The tables to convert: every Lunora-provisioned one, and the app-managed ones that exist. */
 const presentTables = function* presentTables(options: LunoraAuthOptions): BackfillSteps<DateTable[]> {
@@ -70,7 +88,7 @@ const presentTables = function* presentTables(options: LunoraAuthOptions): Backf
             continue;
         }
 
-        const found = yield { params: [entry.table], sql: `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?` };
+        const found = yield { params: [entry.table], sql: `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE` };
 
         if (found.length > 0) {
             tables.push(entry);
@@ -106,12 +124,18 @@ const assertConvertible = function* assertConvertible(entry: DateTable): Backfil
     );
 };
 
-/** The conversion's statements. With `once`, a run whose recorded coverage still matches does nothing. */
-const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, once: boolean): BackfillSteps<AuthDateConversion[]> {
+/**
+ * The conversion's statements. With `now`, an automatic run: skipped once a run over the same
+ * coverage came back clean more than {@link DATES_GRACE_MS} ago, and recorded when it finishes.
+ */
+const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, now?: number): BackfillSteps<AuthDateConversion[]> {
     const tables = yield* presentTables(options);
     const coverage = tables.map((entry) => [entry.table, ...entry.columns]);
+    const matching = (state: DatesState | undefined): DatesState | undefined =>
+        state !== undefined && JSON.stringify(state.coverage) === JSON.stringify(coverage) ? state : undefined;
+    const recorded = now === undefined ? undefined : matching(asDatesState(yield* readBackfillState(DATES_STATE)));
 
-    if (once && JSON.stringify(yield* readBackfillState(DATES_STATE)) === JSON.stringify(coverage)) {
+    if (now !== undefined && recorded !== undefined && now - recorded.since >= DATES_GRACE_MS) {
         return [];
     }
 
@@ -142,8 +166,8 @@ const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, on
         conversions.push({ converted, table: entry.table });
     }
 
-    if (once) {
-        yield* writeBackfillState(DATES_STATE, coverage);
+    if (now !== undefined) {
+        yield* writeBackfillState(DATES_STATE, { coverage, since: recorded?.since ?? now } satisfies DatesState);
     }
 
     return conversions;
@@ -174,19 +198,29 @@ const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, on
  * ```
  */
 const convertAuthDatesToEpochMs = async (executor: SqlExecutor, options: LunoraAuthOptions): Promise<AuthDateConversion[]> =>
-    runBackfill(conversionSteps(options, false), executor);
+    runBackfill(conversionSteps(options), executor);
 
 /**
  * The conversion `ensureMigrated` and the auth Durable Object run on their own: skipped by one
- * indexed lookup once a run has finished over the same tables and columns, so a cold start
- * after the conversion does not scan every date table again.
+ * indexed lookup once the data has stayed converted through the grace period, so a cold start
+ * long after the upgrade does not scan every date table again.
  */
 const convertAuthDatesOnce = async (executor: SqlExecutor, options: LunoraAuthOptions): Promise<AuthDateConversion[]> =>
-    runBackfill(conversionSteps(options, true), executor);
+    runBackfill(conversionSteps(options, Date.now()), executor);
 
 /** The same conversion as `convertAuthDatesOnce`, over a synchronous executor, so it finishes before the caller's next statement. */
 const convertAuthDatesOnceSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], options: LunoraAuthOptions): AuthDateConversion[] =>
-    runBackfillSync(conversionSteps(options, true), exec);
+    runBackfillSync(conversionSteps(options, Date.now()), exec);
+
+/** Drop the record of a finished conversion, so the next automatic run converts again. */
+const forgetSteps = function* forgetSteps(): BackfillSteps<void> {
+    // Read first: it creates the state table, which a database that never ran a backfill lacks.
+    yield* readBackfillState(DATES_STATE);
+    yield* writeBackfillState(DATES_STATE, undefined);
+};
+
+/** After an import or replace: a restored snapshot can bring back dates an earlier version wrote as ISO strings. */
+const forgetAuthDatesConversion = async (sql: Pick<SqlExecutor, "all">): Promise<void> => runBackfill(forgetSteps(), sql);
 
 export type { AuthDateConversion };
-export { convertAuthDatesOnce, convertAuthDatesOnceSync, convertAuthDatesToEpochMs };
+export { convertAuthDatesOnce, convertAuthDatesOnceSync, convertAuthDatesToEpochMs, forgetAuthDatesConversion };

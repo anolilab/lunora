@@ -34,6 +34,7 @@ import { AUTH_AUDIT_TABLE } from "./audit";
 import type { CanonicalEmailColumn } from "./canonical-email";
 import { CANONICAL_EMAIL_FIELD, canonicalEmail as foldEmail, foldSafeKey, warnDuplicates, withCanonicalEmailValue } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
+import { forgetAuthDatesConversion } from "./dates";
 import type { SqlExecutor } from "./sql-store";
 
 type Row = Record<string, unknown>;
@@ -445,6 +446,8 @@ const insertAuthRows = async (
         warnDuplicates(seen.dropped(), canonicalEmail);
     }
 
+    await forgetAuthDatesConversion(sql);
+
     return result;
 };
 
@@ -625,6 +628,8 @@ const replaceAuthRows = async (
     if (canonicalEmail !== undefined) {
         warnDuplicates(plan.dropped, canonicalEmail);
     }
+
+    await forgetAuthDatesConversion(sql);
 
     return { deleted: plan.deleted, errors: [], inserted: rows.length };
 };

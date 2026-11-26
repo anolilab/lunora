@@ -185,6 +185,9 @@ class LunoraAuthDO {
     /** Whether the canonical-email backfill has rows left: it runs a bounded pass on each request until it has none. */
     #backfillPending = false;
 
+    /** Whether a restore wrote rows since the date conversion last ran: the next request converts them. */
+    #datesPending = false;
+
     /** Where `user.emailCanonical` lives physically, known once `#ensureReady` has run. */
     #canonicalEmail: CanonicalEmailColumn | undefined;
 
@@ -211,6 +214,10 @@ class LunoraAuthDO {
         if (this.#auth !== undefined) {
             if (this.#backfillPending) {
                 this.#backfill();
+            }
+
+            if (this.#datesPending) {
+                this.#convertDates(this.#auth.options);
             }
 
             return this.#auth;
@@ -316,6 +323,8 @@ class LunoraAuthDO {
      * start retries it.
      */
     #convertDates(resolved: LunoraAuthOptions): void {
+        this.#datesPending = false;
+
         try {
             convertAuthDatesOnceSync((query, parameters) => [...this.#storage.sql.exec(query, ...parameters)], resolved);
         } catch (error) {
@@ -480,6 +489,7 @@ class LunoraAuthDO {
             // move's `write`: the move compares each copied row with its source, and a rewrite would read as a collision.
             if (body["op"] === "import" || body["op"] === "replace") {
                 this.#backfillPending = true;
+                this.#datesPending = true;
             }
 
             return Response.json(result);
