@@ -143,15 +143,23 @@ const dropLegacyIssuerOnce = async (optionsKey: object, executor: SqlExecutor, o
     let run = issuerChecked.get(key);
 
     if (run === undefined) {
-        run = dropLegacyIssuerColumn(executor, options).then((dropped) => {
-            const database = executorDatabase(executor);
+        run = dropLegacyIssuerColumn(executor, options).then(
+            (dropped) => {
+                const database = executorDatabase(executor);
 
-            if (dropped && database !== undefined) {
-                invalidateSchemaChecks(database);
-            }
+                if (dropped && database !== undefined) {
+                    invalidateSchemaChecks(database);
+                }
 
-            return undefined;
-        });
+                return undefined;
+            },
+            (error: unknown) => {
+                // Not kept: the next call tries the cleanup again rather than replaying this for the isolate.
+                issuerChecked.delete(key);
+                // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+                console.error("@lunora/auth: the `account.issuer` cleanup stopped; the next call retries it.", error);
+            },
+        );
         issuerChecked.set(key, run);
     }
 

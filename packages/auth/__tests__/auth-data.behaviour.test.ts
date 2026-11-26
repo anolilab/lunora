@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-import { createSchemaCheck } from "@better-auth/core/db/internal";
+import { createSchemaCheck, getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
 import { runD1GlobalTableMigrations } from "@lunora/d1";
 import type { TableDefinition } from "@lunora/server";
 import { defineSchema } from "@lunora/server";
@@ -16,6 +16,12 @@ import { admin } from "../src/plugins";
 import authTables from "../src/schema";
 import type { SqlExecutor } from "../src/sql-store";
 import { d1Executor } from "../src/sql-store";
+
+vi.mock(import("@better-auth/core/db/internal"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, getAuthTablesWithResolvedIndexes: vi.fn<typeof actual.getAuthTablesWithResolvedIndexes>(actual.getAuthTablesWithResolvedIndexes) };
+});
 
 /**
  * An app that declares the auth tables `.global()` in its Lunora schema and serves better-auth
@@ -125,6 +131,18 @@ describe("lunoraD1Adapter — provisioning `.global()` auth tables", () => {
         await expect(signUp(buildAuth(provision), "grace@example.com")).resolves.toEqual(expect.any(String));
 
         expect(provision).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-takes a missing-table verdict cached before provisioning created the tables", async () => {
+        expect.hasAssertions();
+
+        const unprovisioned = buildAuth();
+
+        await expect(signUp(unprovisioned, "ada@example.com")).rejects.toThrow(/no such table|rateLimit|user/iu);
+
+        await signUp(buildAuth(provisionSchema), "grace@example.com");
+
+        await expect(signUp(unprovisioned, "ada@example.com")).resolves.toEqual(expect.any(String));
     });
 
     it("retries a failed provisioning on the next statement instead of keeping the failure", async () => {
@@ -237,6 +255,29 @@ describe("prepareAuthData — the data steps without better-auth's migrator", ()
         } finally {
             other.close();
         }
+    });
+
+    it("retries an issuer cleanup that threw instead of keeping the failure", async () => {
+        expect.hasAssertions();
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        const executor = d1Executor(d1);
+
+        await provisionSchema(executor);
+        database.exec(`ALTER TABLE "account" ADD COLUMN "issuer" text NOT NULL DEFAULT ''`);
+
+        const runOptions = { ...options };
+
+        vi.mocked(getAuthTablesWithResolvedIndexes).mockImplementationOnce(() => {
+            throw new Error("schema unreadable");
+        });
+
+        await expect(prepareAuthData(executor, runOptions)).resolves.toBeUndefined();
+
+        await prepareAuthData(executor, runOptions);
+
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("the next call retries it"), expect.any(Error));
+        expect(database.prepare(`SELECT name FROM pragma_table_info('account') WHERE name = 'issuer'`).get()).toBeUndefined();
     });
 
     it("logs and leaves the column when the executor cannot drop it atomically", async () => {

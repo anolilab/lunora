@@ -1,3 +1,5 @@
+import { invalidateSchemaChecks } from "@better-auth/core/db/internal";
+
 import type { SqlExecutor } from "./sql-store";
 
 /** The binding each `d1Executor` wraps: better-auth keys a database's schema verdict on it. */
@@ -23,7 +25,17 @@ const provisionOnce = async (executor: SqlExecutor, provision: (executor: SqlExe
     let run = provisioned.get(executor);
 
     if (run === undefined) {
-        run = provision(executor);
+        // A schema verdict an adapter without `provision` cached before the tables existed is stale once
+        // they do; better-auth keys it on the binding.
+        run = provision(executor).then(() => {
+            const database = executorDatabase(executor);
+
+            if (database !== undefined) {
+                invalidateSchemaChecks(database);
+            }
+
+            return undefined;
+        });
         provisioned.set(executor, run);
         run.catch(() => provisioned.delete(executor));
     }

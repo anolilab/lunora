@@ -197,28 +197,34 @@ plans an `ALTER TABLE … ADD COLUMN … NOT NULL` that SQLite rejects outright.
 
 ### Auth tables in your Lunora schema
 
-The other owner is Lunora: declare `authTables(options)` as `.global()` tables in
-`lunora/schema.ts`, so functions can query and patch them through `ctx.db`. Then
-skip better-auth's migrator entirely, and make two calls instead:
+The other owner is Lunora: declare `authTables(resolveAuthOptions(options))` as
+`.global()` tables in `lunora/schema.ts`, so functions can query and patch them
+through `ctx.db`. Resolve the options first: that is what adds the `rateLimit`
+table the default durable rate limiter writes to. Then skip better-auth's
+migrator entirely, and make two calls instead:
 
 ```ts title="src/server/index.ts"
 import { createAuth, d1Executor, handleAuthRequest, lunoraD1Adapter, prepareAuthData } from "@lunora/auth";
 import { runD1GlobalTableMigrations } from "@lunora/d1";
 
-import schema from "../../lunora/schema";
 import { authOptions } from "../../lunora/auth";
+import schema from "../../lunora/schema";
 
 const provision = (exec) => runD1GlobalTableMigrations(exec, schema);
 
+// Built once per isolate: the data steps are memoised on this object.
+let options;
+
 export default {
     async fetch(request, env, ctx) {
-        await prepareAuthData(d1Executor(env.DB), authOptions, { provision });
+        options ??= authOptions(env);
+        await prepareAuthData(d1Executor(env.DB), options, { provision });
 
-        const auth = createAuth({ ...authOptions, database: lunoraD1Adapter(env.DB, { provision }) });
+        const auth = createAuth({ ...options, database: lunoraD1Adapter(env.DB, { provision }) });
         const authResponse = await handleAuthRequest(auth, request);
         if (authResponse) return authResponse;
 
-        return worker.fetch(request, env, ctx);
+        // … hand off to your Lunora worker
     },
 };
 ```

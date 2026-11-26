@@ -86,7 +86,7 @@ export default {
 };
 ```
 
-If the auth tables are declared in your Lunora schema instead (`authTables(options)` as `.global()` tables), better-auth's migrator does not apply. Create the tables with `lunoraD1Adapter(env.DB, { provision: (exec) => runD1GlobalTableMigrations(exec, schema) })`, and run the data steps `ensureMigrated` would have run (the `account.issuer` cleanup, the canonical-email backfills, the ISO-date conversion) with `await prepareAuthData(d1Executor(env.DB), options, { provision })` before building the auth instance.
+If the auth tables are declared in your Lunora schema instead (`authTables(resolveAuthOptions(options))` as `.global()` tables), better-auth's migrator does not apply. Create the tables with `lunoraD1Adapter(env.DB, { provision: (exec) => runD1GlobalTableMigrations(exec, schema) })`, and run the data steps `ensureMigrated` would have run (the `account.issuer` cleanup, the canonical-email backfills, the ISO-date conversion) with `await prepareAuthData(d1Executor(env.DB), options, { provision })` before building the auth instance.
 
 The runtime resolves the inbound session and stamps `ctx.auth` on every `query` / `mutation` / `action`: `ctx.auth.userId` is the signed-in user's id (or `null` when anonymous), and `ctx.auth.getIdentity()` resolves the claims: `email`, `name`, `role`, `expiresAtMs`, and, with the `organization()` plugin, `orgId` / `teamId` for the session's active organization and team.
 
