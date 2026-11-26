@@ -343,6 +343,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "When a bare filter is fine",
             "How the advisors catch this",
             "Composing",
+            "An optional column that is not set",
             "Inside an object column",
         ],
         id: "concepts/filtering",

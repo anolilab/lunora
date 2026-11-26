@@ -3282,9 +3282,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // parsed only when the patch sets it to something other than what is stored:
         // the rest of the row, an update hook's value included, is stored output,
         // which its own transform would reject or apply twice.
+        const patched = new Set(Object.keys(effectivePatch));
         const merged = runRowValidators(definition, mergedRow, {
-            only: new Set(Object.keys(effectivePatch)),
+            only: patched,
+            patched,
             previous: () => existing,
+            table: tableName,
             tolerateStoredNull: true,
         });
 
@@ -4228,6 +4231,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // that output already, and a trusted replay holds it.
             const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), {
                 supplied: document,
+                table: tableName,
                 trusted: insertOptions?.allowExplicitId === true,
             });
 
@@ -4977,6 +4981,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const replaced = runRowValidators(definition, replacement, {
                 previous: () => previous ?? decodeRow(definition, snapshot) ?? undefined,
                 supplied: document,
+                table: tableName,
                 trusted: replaceOptions?.allowExplicitId === true,
             });
 

@@ -6329,8 +6329,10 @@ type RowPredicate = (document: Record<string, unknown>) => boolean;
 ```ts
 interface RowValidatorOptions {
     only?: ReadonlySet<string>;
+    patched?: ReadonlySet<string>;
     previous?: () => Readonly<Record<string, unknown>> | undefined;
     supplied?: Readonly<Record<string, unknown>>;
+    table?: string;
     tolerateStoredNull?: boolean;
     trusted?: boolean;
 }

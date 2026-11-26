@@ -4573,7 +4573,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // is what reads are typed as; a defaulted one is declared as that output
             // already, and a trusted replay holds it.
             const trusted = insertOptions?.allowExplicitId === true;
-            const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), { supplied: document, trusted });
+            const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), {
+                supplied: document,
+                table: tableName,
+                trusted,
+            });
 
             // A client-chosen id is honored two ways: a validated `clientId`
             // (public, UUID-shaped — keys an optimistic row before the server
@@ -4715,7 +4719,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const rows = documents.map((document, index) => {
                 const defaulted = applyInsertDefaults(definition, document, auth);
-                const withDefaults = transformColumns === undefined ? defaulted : runRowValidators(transformColumns, defaulted, { supplied: document });
+                const withDefaults =
+                    transformColumns === undefined ? defaulted : runRowValidators(transformColumns, defaulted, { supplied: document, table: tableName });
                 const explicitId = batchOptions?.allowExplicitId === true && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : undefined;
 
                 // Checked on the value stored: the rows are all built before any is written, so a refusal writes nothing.
@@ -4946,9 +4951,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // other than what is stored: the rest of `merged`, an update hook's value
             // included, is stored output, which its own transform would reject or
             // apply twice.
+            const patched = new Set(Object.keys(effectivePatch));
             const merged = runRowValidators(tableDefinition, mergedRow, {
-                only: new Set(Object.keys(effectivePatch)),
+                only: patched,
+                patched,
                 previous: () => existing,
+                table: tableName,
                 tolerateStoredNull: true,
             });
 
@@ -5496,7 +5504,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // the caller wrote is stored as its parsed output; an update hook's value
             // is already that output, and so is a trusted replay's document.
             const trusted = replaceOptions?.allowExplicitId === true;
-            const replaced = runRowValidators(tableDefinition, replacement, { previous: () => previous, supplied: document, trusted });
+            const replaced = runRowValidators(tableDefinition, replacement, { previous: () => previous, supplied: document, table: tableName, trusted });
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
