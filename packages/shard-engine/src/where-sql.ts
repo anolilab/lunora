@@ -406,11 +406,6 @@ const serverInList =
         // `1 = NULL` is that UNKNOWN, typed boolean on both engines.
         const unknown = parts.hasNull ? [sql`1 = NULL`] : [];
         const terms = [...tests, ...unknown];
-
-        if (terms.length === 0) {
-            return sql`1 = 0`;
-        }
-
         const members = terms.length === 1 ? (terms[0] as SQL) : sql`(${sql.join(terms, sql` OR `)})`;
 
         return negated ? sql`NOT (${members})` : members;
