@@ -248,6 +248,28 @@ export default {
 | Invitation-email backfill                | `signUpInvitation` rows                      | rewrites `email` to its canonical form; a clash with another invitation is left unchanged and logged by id                               | no          | `invitationEmailBackfill: false` | the warning lists the ids; position in `__lunora_auth_backfill__`                                                  |
 | Date conversion (`convertAuthDatesOnce`) | date columns of the auth tables              | rewrites ISO-string dates as epoch ms, and keeps converting for a day after the first clean run so a rollout's older isolates are caught | no          | not skippable                    | its record in `__lunora_auth_backfill__` holds the first clean run                                                 |
 
+### Checking the backfills
+
+The canonical-email backfill never chooses between two accounts whose addresses
+differ only in case or Unicode form. The account that already holds the
+canonical address keeps it, and every other row stays unfilled. Each pass logs
+those rows as a structured record (`event: "lunora.auth.canonical_email_duplicate"`,
+with `{ id, heldBy }` pairs and no addresses). To read the same state on demand,
+for example from an admin route, call `authBackfillStatus`:
+
+```ts
+import { authBackfillStatus, d1Executor } from "@lunora/auth";
+
+const { canonicalEmail } = await authBackfillStatus(d1Executor(env.DB), options);
+// canonicalEmail.unfilled   rows still without a canonical value
+// canonicalEmail.duplicates [{ id, heldBy }]: merge or rename `id`; `heldBy` keeps the address
+// canonicalEmail.inProgress a pass stopped part-way and resumes on the next call
+```
+
+It only reads, and runs at most a handful of statements. The auth Durable
+Object keeps its tables in its own storage, so there the log record is the
+signal.
+
 ## The client side
 
 On the client, identity is a token carried on the shared `LunoraClient`. After a

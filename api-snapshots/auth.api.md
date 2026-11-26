@@ -364,6 +364,17 @@ interface AuthAuditWriter {
 }
 ```
 
+### `AuthBackfillStatus` (interface)
+
+```ts
+interface AuthBackfillStatus {
+    canonicalEmail?: CanonicalEmailBackfillStatus;
+    invitationEmail?: {
+        inProgress: boolean;
+    };
+}
+```
+
 ### `AuthCapabilities` (interface)
 
 ```ts
@@ -716,6 +727,17 @@ interface AuthUserFieldSpec {
 type AuthWhereClause = NonNullable<Parameters<CustomAdapter["findOne"]>[0]["where"]>[number];
 ```
 
+### `CanonicalEmailBackfillStatus` (interface)
+
+```ts
+interface CanonicalEmailBackfillStatus {
+    duplicates: DuplicateRow[];
+    inProgress: boolean;
+    truncated: boolean;
+    unfilled: number;
+}
+```
+
 ### `CanonicalEmailColumn` (interface)
 
 ```ts
@@ -771,6 +793,15 @@ interface DoAuthWiringOptions {
     jurisdiction?: AuthJurisdiction;
     namespace: AuthNamespaceLike | undefined;
     objectName?: string;
+}
+```
+
+### `DuplicateRow` (interface)
+
+```ts
+interface DuplicateRow {
+    heldBy?: string;
+    id: string;
 }
 ```
 
@@ -1085,6 +1116,12 @@ const authAuditBeforeHook: () => ReturnType<typeof createAuthMiddleware>;
 
 ```ts
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
+```
+
+### `authBackfillStatus` (const)
+
+```ts
+const authBackfillStatus: (executor: BackfillExecutor, options: LunoraAuthOptions) => Promise<AuthBackfillStatus>;
 ```
 
 ### `authCanonicalEmailColumn` (const)
@@ -2228,6 +2265,14 @@ interface AuditHookContext {
     params?: Record<string, unknown>;
     path?: string;
     request?: Request;
+}
+```
+
+### `BackfillExecutor` (interface)
+
+```ts
+interface BackfillExecutor {
+    all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
 }
 ```
 

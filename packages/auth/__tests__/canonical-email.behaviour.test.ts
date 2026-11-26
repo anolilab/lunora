@@ -16,6 +16,7 @@ import {
     backfillCanonicalEmails,
     backfillCanonicalEmailsThroughAdapter,
     canonicalEmail,
+    MAX_REPORTED_DUPLICATES,
     withCanonicalEmail,
 } from "../src/canonical-email";
 import type { LunoraAuthOptions } from "../src/create-auth";
@@ -181,7 +182,10 @@ describe("canonical email", () => {
         await expect(port.importRows([userRow("a", UPPER), userRow("b", LOWER)])).resolves.toMatchObject({ conflicts: 0, errors: [], inserted: 2 });
 
         expect([canonicalOf("a"), canonicalOf("b")]).toStrictEqual([canonicalEmail(UPPER), null]);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"));
+        expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("1 user row(s) share an address"),
+            expect.objectContaining({ count: 1, event: "lunora.auth.canonical_email_duplicate" }),
+        );
 
         warn.mockRestore();
     });
@@ -735,7 +739,7 @@ describe("canonical email on the schema paths", () => {
         const unfilled = (): number => (database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get() as { n: number }).n;
 
         // A run shares D1's per-invocation query limit with its request, so it stops after BACKFILL_MAX_PAGES pages.
-        await expect(backfillCanonicalEmails(executorFor(database), column)).resolves.toStrictEqual({ complete: false, duplicates: 0 });
+        await expect(backfillCanonicalEmails(executorFor(database), column)).resolves.toStrictEqual({ complete: false, duplicates: 0, rows: [] });
         expect(unfilled()).toBe(1001 - BACKFILL_MAX_PAGES * BACKFILL_PAGE_ROWS);
 
         await backfillCanonicalEmails(executorFor(database), column);
@@ -772,12 +776,15 @@ describe("canonical email on the schema paths", () => {
 
         await expect(backfillCanonicalEmails({ all: cutShortAfter(database, "user", 3) }, column)).rejects.toThrow("Too many API requests");
         // Those rows are behind the saved position: a retry would never report them.
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("600 user row(s)"));
+        expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("600 user row(s)"),
+            expect.objectContaining({ count: 600, rows: expect.toSatisfy((rows: unknown[]) => rows.length === MAX_REPORTED_DUPLICATES) }),
+        );
 
         const all = vi.fn<SqlExecutor["all"]>(executorFor(database).all);
 
         // The cut-short run read three pages and recorded two; the resumed one reads what is left.
-        await expect(backfillCanonicalEmails({ all }, column)).resolves.toStrictEqual({ complete: true, duplicates: 400 });
+        await expect(backfillCanonicalEmails({ all }, column)).resolves.toMatchObject({ complete: true, duplicates: 400 });
         expect(all.mock.calls.find(([sql]) => sql.startsWith(`SELECT rowid AS "rid"`))?.[1]).toStrictEqual([601, BACKFILL_PAGE_ROWS]);
         expect((database.prepare(`SELECT "emailCanonical" FROM "user" WHERE "id" = 'behind'`).get() as { emailCanonical: unknown }).emailCanonical).toBe(
             "behind@example.com",
@@ -840,7 +847,7 @@ describe("canonical email on the schema paths", () => {
         const findMany = vi.spyOn(adapter, "findMany");
         const findOne = vi.spyOn(adapter, "findOne");
 
-        await expect(backfillCanonicalEmailsThroughAdapter(adapter)).resolves.toBe(0);
+        await expect(backfillCanonicalEmailsThroughAdapter(adapter)).resolves.toStrictEqual({ duplicates: 0, rows: [] });
         // Three pages, each read and checked once.
         expect([findMany.mock.calls.length, findOne.mock.calls.length]).toStrictEqual([6, 0]);
         expect(database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get()).toEqual({ n: 0 });
@@ -867,7 +874,7 @@ describe("canonical email on the schema paths", () => {
             return update(query);
         };
 
-        await expect(backfillCanonicalEmailsThroughAdapter(adapter)).resolves.toBe(1);
+        await expect(backfillCanonicalEmailsThroughAdapter(adapter)).resolves.toStrictEqual({ duplicates: 1, rows: [{ heldBy: "new", id: "u0000" }] });
         expect(database.prepare(`SELECT COUNT(*) AS "n" FROM "user" WHERE "emailCanonical" IS NULL`).get()).toEqual({ n: 1 });
     });
 
@@ -911,7 +918,10 @@ describe("canonical email on the schema paths", () => {
         );
 
         expect(canonical).toStrictEqual({ first: canonicalEmail(UPPER), other: "other@example.com", twin: null });
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"));
+        expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("1 user row(s) share an address"),
+            expect.objectContaining({ rows: [{ heldBy: "first", id: "twin" }] }),
+        );
         expect(() =>
             database
                 .prepare(
