@@ -181,7 +181,10 @@ describe("convertAuthDatesToEpochMs — rows written as ISO strings", () => {
 
         // Unconverted: the writer refuses the row, and SQLite sorts the string above every
         // number, so the long-expired session never matches `< now`.
-        await expect(lunoraWriter().patch("user", userId, { role: "admin" })).rejects.toThrow(/expected number/iu);
+        // The error names the stored column the patch did not set, and never quotes its value.
+        await expect(lunoraWriter().patch("user", userId, { role: "admin" })).rejects.toThrow(
+            /^user\.createdAt: expected number, received string \(a stored value this patch does not set/u,
+        );
         await expect(adapter.count({ model: "session", where: [{ field: "expiresAt", operator: "lt", value: now }] })).resolves.toBe(0);
 
         const converted = await convertAuthDatesToEpochMs(executor, options);

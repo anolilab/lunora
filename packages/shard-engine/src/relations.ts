@@ -34,6 +34,7 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import type { ValidationError, ValidationPath } from "@lunora/values";
 
 import { tableColumns } from "./do-sql";
 import { applySelect } from "./query-args";
@@ -1013,6 +1014,12 @@ interface RowValidatorOptions {
     only?: ReadonlySet<string>;
 
     /**
+     * The patch path's own keys. A failure on a column outside them is a stored value the
+     * patch did not touch, and the error says so: the fix is the stored row, not the call.
+     */
+    patched?: ReadonlySet<string>;
+
+    /**
      * The row being overwritten (`patch` and `replace`), read lazily. A transform
      * column whose value deep-equals the stored one is that stored OUTPUT handed
      * back — `{ ...(await db.get("table", id)), x: 1 }` — so it is passed through unparsed;
@@ -1030,6 +1037,9 @@ interface RowValidatorOptions {
      * `only` is set.
      */
     supplied?: Readonly<Record<string, unknown>>;
+
+    /** The table the row belongs to, named in a validation failure. */
+    table?: string;
 
     /**
      * Skip a `null` on an optional field (see below). Set on the patch path only.
@@ -1167,6 +1177,113 @@ const applyInsertDefaults = (
     return result;
 };
 
+/** A column path as `@lunora/values` prints one: `profile.tags[0]`. */
+const formatColumnPath = (path: ValidationPath): string =>
+    path
+        .map((segment, index) => {
+            if (typeof segment === "number") {
+                return `[${String(segment)}]`;
+            }
+
+            return index === 0 ? segment : `.${segment}`;
+        })
+        .join("");
+
+/** The type of a value, never the value: a row can hold a secret. */
+const typeOf = (value: unknown): string => {
+    if (value === null) {
+        return "null";
+    }
+
+    if (Array.isArray(value)) {
+        return "array";
+    }
+
+    if (value instanceof ArrayBuffer) {
+        return "ArrayBuffer";
+    }
+
+    if (value instanceof Date) {
+        return "object Date";
+    }
+
+    return typeof value;
+};
+
+/** Where on the patch path a failing column came from. */
+const patchOrigin = (field: string, patched: ReadonlySet<string> | undefined): string => {
+    if (patched === undefined) {
+        return "";
+    }
+
+    return patched.has(field)
+        ? " (set by this patch)"
+        : " (a stored value this patch does not set: the row already holds it, and every patch of the row fails until it is fixed)";
+};
+
+/** The value at `path` inside `value`, or `undefined` when the path does not resolve. */
+const valueAtPath = (value: unknown, path: ValidationPath): unknown => {
+    let current = value;
+
+    for (const segment of path) {
+        if (typeof current !== "object" || current === null) {
+            return undefined;
+        }
+
+        current = (current as Record<number | string, unknown>)[segment];
+    }
+
+    return current;
+};
+
+/**
+ * Restate a column's validation failure for the whole-row check: the table, the column path, the
+ * expected kind and the received *type*, and on the patch path whether the patch set the column.
+ *
+ * A type or refinement failure (`Expected <kind> at <path>, received <value>`) is described from the
+ * column's root and quotes a primitive literally. A row can hold a secret, and on the patch path the
+ * column may be one the caller never wrote, so that message is rebuilt without the value; its
+ * `expected` keeps a `.check()` refinement's reason. Any other message (a Standard Schema issue, an
+ * undeclared key) is kept after the column: `@lunora/values` already withholds those under
+ * `sensitive`, which is the policy for third-party text everywhere else.
+ */
+
+/**
+ * A validator's `ValidationError`, recognised by shape: `@lunora/values` is not a runtime
+ * dependency of this package, and the class the app's validators throw is the app's copy.
+ */
+const isValidationError = (error: unknown): error is ValidationError =>
+    error instanceof Error &&
+    (error as Partial<ValidationError>).code === "VALIDATION_ERROR" &&
+    Array.isArray((error as Partial<ValidationError>).path) &&
+    typeof (error as Partial<ValidationError>).expected === "string" &&
+    typeof (error as Partial<ValidationError>).received === "string";
+
+const columnValidationError = (error: ValidationError, field: string, value: unknown, options: RowValidatorOptions): ValidationError => {
+    const path = [field, ...error.path];
+    const received = typeOf(valueAtPath(value, error.path));
+    const where = `${options.table === undefined ? "" : `${options.table}.`}${formatColumnPath(path)}`;
+    // The shape `@lunora/values`' type and refinement failures take, which quotes a primitive literally.
+    const quotesValue = error.message.startsWith(`Expected ${error.expected} at `) && error.message.endsWith(`, received ${error.received}`);
+    const detail = quotesValue ? `expected ${error.expected}, received ${received}` : error.message;
+    const origin = patchOrigin(field, options.patched);
+
+    // Built with the thrown error's own class, so the caller's `instanceof ValidationError` (and the
+    // transport's 400 mapping) still holds.
+    const ValidationErrorClass = error.constructor as typeof ValidationError;
+
+    return new ValidationErrorClass(`${where}: ${detail}${origin}`, { expected: error.expected, path, received });
+};
+
+/** Parse one column, restating a validation failure with the column it happened in. */
+const parseColumn = (parse: (value: unknown) => unknown, field: string, value: unknown, options: RowValidatorOptions): unknown => {
+    try {
+        return parse(value);
+    } catch (error) {
+        throw isValidationError(error) ? columnValidationError(error, field, value, options) : error;
+    }
+};
+
 /**
  * Run each declared column's `validator.parse()` against the matching field on
  * `document`. Fires user refinements (e.g. `v.number().check(n => n >= 0)`)
@@ -1238,7 +1355,7 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
 
         // Re-parse the field; the validator's own ValidationError carries the
         // refinement message and propagates up to the caller unchanged.
-        const result = validator.parse(document[field]);
+        const result = parseColumn((input) => validator.parse?.(input), field, document[field], options);
 
         if (fromColumn) {
             parsed ??= { ...document };
