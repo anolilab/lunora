@@ -1,5 +1,6 @@
 import { getAuthTables } from "better-auth/db";
 
+import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { LunoraAuthOptions } from "./create-auth";
 import { resolveAuthOptions } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
@@ -33,7 +34,7 @@ const encodeAuthDate = (value: unknown): unknown => {
     }
 
     if (Array.isArray(value)) {
-        return value.map((entry: unknown) => encodeAuthDate(entry));
+        return value.map((entry) => encodeAuthDate(entry));
     }
 
     return value;
@@ -55,9 +56,6 @@ const decodeAuthDate = (value: unknown): unknown => {
 
     return value;
 };
-
-/** Double-quote a table/column identifier, escaping embedded quotes. */
-const quoteId = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
  * A cell still holding a date string. Digits-only text is an epoch already (a TEXT-affinity
@@ -96,13 +94,13 @@ const dateTables = (options: LunoraAuthOptions): DateTable[] =>
 /** Throws, naming the first cell of `entry` that holds text SQLite cannot read as a date. */
 const assertConvertible = async (executor: SqlExecutor, entry: DateTable): Promise<void> => {
     const checks = entry.columns.map((column) => {
-        const quoted = quoteId(column);
+        const quoted = quoteIdentifier(column);
 
         return { column, sql: `(${quoted} = '' OR (${isDateText(quoted)} AND julianday(${quoted}) IS NULL))` };
     });
     const [row] = await executor.all(
-        `SELECT "id" AS "id", ${checks.map((check, index) => `${check.sql} AS "bad${String(index)}", ${quoteId(check.column)} AS "value${String(index)}"`).join(", ")} ` +
-            `FROM ${quoteId(entry.table)} WHERE ${checks.map((check) => check.sql).join(" OR ")} LIMIT 1`,
+        `SELECT "id" AS "id", ${checks.map((check, index) => `${check.sql} AS "bad${String(index)}", ${quoteIdentifier(check.column)} AS "value${String(index)}"`).join(", ")} ` +
+            `FROM ${quoteIdentifier(entry.table)} WHERE ${checks.map((check) => check.sql).join(" OR ")} LIMIT 1`,
         [],
     );
 
@@ -147,12 +145,12 @@ const convertAuthDatesToEpochMs = async (executor: SqlExecutor, options: LunoraA
     }
 
     for (const entry of tables) {
-        const quoted = entry.columns.map((column) => quoteId(column));
+        const quoted = entry.columns.map((column) => quoteIdentifier(column));
         // Each cell is converted only while it still holds date text, so a cell another
         // writer has turned into a number meanwhile keeps that number.
         // eslint-disable-next-line no-await-in-loop -- one statement per table, in order
         const rows = await executor.all(
-            `UPDATE ${quoteId(entry.table)} SET ${quoted.map((column) => `${column} = CASE WHEN ${isDateText(column)} THEN ${toEpochMs(column)} ELSE ${column} END`).join(", ")} ` +
+            `UPDATE ${quoteIdentifier(entry.table)} SET ${quoted.map((column) => `${column} = CASE WHEN ${isDateText(column)} THEN ${toEpochMs(column)} ELSE ${column} END`).join(", ")} ` +
                 `WHERE ${quoted.map((column) => isDateText(column)).join(" OR ")} ` +
                 `RETURNING "id"`,
             [],
