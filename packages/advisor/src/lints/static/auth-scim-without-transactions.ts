@@ -9,17 +9,17 @@ import { callSiteFields, callSiteWhere } from "../helpers";
  * `@better-auth/scim` refuses to serve at all unless its adapter exposes a
  * `transaction` function — its provisioning writes go through a read-then-conditional-write
  * decommission lease. `lunoraD1Adapter` and `lunoraAuthAdapter` are single-table CRUD,
- * and D1 has no interactive transactions to expose in the first place, so this pairing
- * throws on the first SCIM request:
+ * and D1 has no interactive transactions to expose in the first place. With this pairing the
+ * plugin logs an error at startup and answers every SCIM request with a 501:
  *
  * ```
- * BetterAuthError: The scim plugin requires a database adapter with native transaction support.
+ * The scim plugin requires a database adapter with native transaction support.
  * ```
  *
  * This exists because the combination shipped in real documentation once. It is not a
  * subtle misconfiguration — it is a deployment where directory sync cannot work at all —
  * and it is entirely visible at build time, so there is no reason for the first
- * indication to be a 500 from an IdP's provisioning call.
+ * indication to be a 501 from an IdP's provisioning call.
  *
  * Runs only when the codegen feeder supplies auth-config evidence
  * (`context.authConfigs`), and only for an analyzable config; an opaque one could pass
