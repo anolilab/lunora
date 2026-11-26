@@ -250,9 +250,11 @@ export default {
 
 ### Checking the backfills
 
-The canonical-email backfill never chooses between two accounts whose addresses
-differ only in case or Unicode form. The account that already holds the
-canonical address keeps it, and every other row stays unfilled. Each pass logs
+When two accounts' addresses differ only in case or Unicode form, the
+canonical-email backfill gives the canonical address to one of them: the account
+that already holds it, or, if neither does, the first one the pass reads. Every
+other row stays unfilled. Which account should keep the address is the
+operator's call, so the rest are reported rather than resolved. Each pass logs
 those rows as a structured record (`event: "lunora.auth.canonical_email_duplicate"`,
 with `{ id, heldBy }` pairs and no addresses). To read the same state on demand,
 for example from an admin route, call `authBackfillStatus`:

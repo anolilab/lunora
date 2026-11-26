@@ -432,7 +432,8 @@ const duplicateRows = (skipped: { canonical: string; id: string }[], holders: Re
 };
 
 /**
- * Pages one D1 run fills at most: three queries a page (read, write, position), so a run leaves most of the
+ * Pages one D1 run fills at most: three queries a page (read, write, position), and a fourth when it skips rows
+ * (their holders), so a run leaves most of the
  * per-invocation query limit (50 on the Workers Free plan) to the request it shares it with. The rest of a
  * larger table fills over later runs.
  */
@@ -504,10 +505,10 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
                     `UPDATE ${table} SET ${canonical} = ${values}."canonical" ` +
                     `FROM (SELECT json_extract("value", '$[0]') AS "rid", json_extract("value", '$[1]') AS "email", json_extract("value", '$[2]') AS "canonical" FROM json_each(?)) AS ${values} ` +
                     `WHERE ${table}.rowid = ${values}."rid" AND ${table}.${email} = ${values}."email" AND ${table}.${canonical} IS NULL ` +
-                    `AND NOT EXISTS (SELECT 1 FROM ${table} AS ${held} WHERE ${held}.${canonical} = ${values}."canonical") RETURNING rowid`,
+                    `AND NOT EXISTS (SELECT 1 FROM ${table} AS ${held} WHERE ${held}.${canonical} = ${values}."canonical") RETURNING rowid AS "rid"`,
             };
 
-            filledRids = new Set(filled.map((row) => row["rowid"]));
+            filledRids = new Set(filled.map((row) => row["rid"]));
         }
 
         // A row with an address that is not the page's first for its canonical value, or whose fill the guard refused.
@@ -541,8 +542,9 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
 
 /**
  * Log the rows a pass left unfilled: a sentence for a person, and a structured record (event name,
- * table, count, `{ id, heldBy }` pairs) for a log pipeline to alert on. Neither picks which account
- * keeps the address; `authBackfillStatus` answers the same question on demand.
+ * table, count, `{ id, heldBy }` pairs) for a log pipeline to alert on. The account that holds the
+ * address keeps it: one that held it before the pass, else the first of the pair the pass read (in
+ * `rowid` order, or `id` order through the adapter). `authBackfillStatus` answers the same on demand.
  */
 const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn, rows: DuplicateRow[] = []): void => {
     if (duplicates > 0) {
