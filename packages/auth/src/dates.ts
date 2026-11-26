@@ -1,7 +1,7 @@
 import { getAuthTables } from "better-auth/db";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import type { BackfillSteps } from "./canonical-email";
+import type { BackfillStep, BackfillSteps } from "./canonical-email";
 import { BACKFILL_STATE_TABLE, runBackfill, runBackfillSync } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
 import { resolveAuthOptions } from "./create-auth";
@@ -139,25 +139,6 @@ const readDatesRecord = function* readDatesRecord(): BackfillSteps<string | unde
     return typeof cursor === "string" ? cursor : undefined;
 };
 
-const parseDatesState = (raw: string | undefined): DatesState | undefined => {
-    try {
-        return raw === undefined ? undefined : asDatesState(JSON.parse(raw));
-    } catch {
-        return undefined;
-    }
-};
-
-/**
- * Overwrite the record unconditionally with a value no run has read, so a conversion in flight
- * cannot then record itself clean: its compare-and-swap no longer matches.
- */
-const invalidateDatesRecord = (): { params: unknown[]; sql: string } => {
-    return {
-        params: [DATES_STATE, JSON.stringify({ invalidated: crypto.randomUUID() })],
-        sql: `INSERT INTO ${STATE_TABLE} ("name", "cursor") VALUES (?, ?) ON CONFLICT ("name") DO UPDATE SET "cursor" = excluded."cursor"`,
-    };
-};
-
 /**
  * The conversion's statements. With `now`, an automatic run: skipped once a run over the same
  * coverage came back clean more than {@link DATES_GRACE_MS} ago, and recorded when it finishes.
@@ -166,7 +147,7 @@ const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, no
     const tables = yield* presentTables(options);
     const coverage = tables.map((entry) => [entry.table, ...entry.columns]);
     const raw = now === undefined ? undefined : yield* readDatesRecord();
-    const stored = parseDatesState(raw);
+    const stored = raw === undefined ? undefined : asDatesState(JSON.parse(raw));
     const recorded = JSON.stringify(stored?.coverage) === JSON.stringify(coverage) ? stored : undefined;
 
     if (now !== undefined && recorded !== undefined && now - recorded.since >= DATES_GRACE_MS) {
@@ -254,10 +235,18 @@ const convertAuthDatesOnceSync = (exec: (sql: string, params: unknown[]) => Reco
 /**
  * The statements an import or replace runs so the next automatic run converts what it restores: a
  * snapshot can bring back dates an earlier version wrote as ISO strings. Run the DDL before writing
- * any row; the invalidation can join a replace's atomic batch.
+ * any row; the invalidation can join a replace's atomic batch. It overwrites the record with a
+ * value no run has read, so a conversion in flight cannot then record itself clean: its
+ * compare-and-swap no longer matches.
  */
-const datesInvalidation = (): { ddl: { params: unknown[]; sql: string }; invalidate: { params: unknown[]; sql: string } } => {
-    return { ddl: { params: [], sql: STATE_TABLE_DDL }, invalidate: invalidateDatesRecord() };
+const datesInvalidation = (): { ddl: BackfillStep; invalidate: BackfillStep } => {
+    return {
+        ddl: { params: [], sql: STATE_TABLE_DDL },
+        invalidate: {
+            params: [DATES_STATE, JSON.stringify({ invalidated: crypto.randomUUID() })],
+            sql: `INSERT INTO ${STATE_TABLE} ("name", "cursor") VALUES (?, ?) ON CONFLICT ("name") DO UPDATE SET "cursor" = excluded."cursor"`,
+        },
+    };
 };
 
 export type { AuthDateConversion };
