@@ -516,9 +516,11 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
 
         const current = new Map(found.map((row) => [String(row["id"]), row]));
         const unchanged = reported.filter((row) => current.get(row.id)?.["email"] === row.email && current.get(row.id)?.["canonical"] === null);
+        // A row another runner filled after this one read it was never a duplicate; it leaves the count too.
+        const filledSince = reported.filter((row) => current.has(row.id) && current.get(row.id)?.["canonical"] !== null).length;
 
         tally.duplicate(
-            0,
+            -filledSince,
             duplicateRows(
                 unchanged,
                 found.filter((row) => row["canonical"] !== null),
@@ -728,7 +730,10 @@ const fillAdapterPage = async (adapter: BackfillAdapter, rows: { email?: unknown
             where: [{ field: CANONICAL_EMAIL_FIELD, operator: "in", value: [...new Set(left.map((row) => row.canonical))] }],
         });
 
-        tally.duplicate(left.length, duplicateRows(left, holders, CANONICAL_EMAIL_FIELD));
+        const rowsHeld = duplicateRows(left, holders, CANONICAL_EMAIL_FIELD);
+
+        // `duplicateRows` drops a row that holds its own value: filled by another runner, so not a duplicate.
+        tally.duplicate(rowsHeld.length, rowsHeld);
     }
 };
 

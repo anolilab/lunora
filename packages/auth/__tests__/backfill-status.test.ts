@@ -121,6 +121,24 @@ describe("the backfill's duplicate report", () => {
         await expect(backfillCanonicalEmails({ all }, column)).resolves.toStrictEqual({ complete: true, duplicates: 1, rows: [] });
     });
 
+    it("does not count a row another runner filled during the run", async () => {
+        expect.hasAssertions();
+
+        database.exec(`DELETE FROM "user" WHERE "id" = 'twin'`);
+
+        const executor = executorFor(database);
+        const all: typeof executor.all = async (sql, parameters) => {
+            // Another isolate's pass fills the row between this run's page read and its guarded write.
+            if (sql.startsWith("UPDATE")) {
+                database.exec(`UPDATE "user" SET "emailCanonical" = 'élise@example.com' WHERE "id" = 'first'`);
+            }
+
+            return executor.all(sql, parameters);
+        };
+
+        await expect(backfillCanonicalEmails({ all }, column)).resolves.toStrictEqual({ complete: true, duplicates: 0, rows: [] });
+    });
+
     it("completes the run when only the report's holder read fails", async () => {
         expect.hasAssertions();
 
