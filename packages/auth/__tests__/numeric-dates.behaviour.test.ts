@@ -9,7 +9,9 @@ import { lunoraAuthAdapter } from "../src/adapter";
 import { INTERNAL_SECRET_HEADER, LunoraAuthDO, RESOLVE_SESSION_PATH } from "../src/auth-do";
 import type { LunoraAuth, LunoraAuthOptions } from "../src/create-auth";
 import { createAuth, resolveAuthOptions } from "../src/create-auth";
-import { convertAuthDatesToEpochMs } from "../src/dates";
+import { decodeAuthDate } from "../src/date-codec";
+import { convertAuthDatesOnce, convertAuthDatesToEpochMs } from "../src/dates";
+import { authDoSchemaStatements } from "../src/do-schema";
 import { admin } from "../src/plugins";
 import authTables from "../src/schema";
 import type { SqlExecutor } from "../src/sql-store";
@@ -273,6 +275,71 @@ describe("convertAuthDatesToEpochMs — rows written as ISO strings", () => {
     });
 });
 
+describe("convertAuthDatesToEpochMs — edge values", () => {
+    const appOwned = {
+        id: "app-owned",
+        schema: { appGrant: { disableMigration: true, fields: { expiresAt: { required: true, type: "date" } } } },
+    } as const;
+    const withAppTable: LunoraAuthOptions = { ...options, plugins: [...(options.plugins ?? []), appOwned] };
+
+    beforeEach(async () => {
+        database = new DatabaseSync(":memory:");
+        executor = executorFor(database);
+        await runD1GlobalTableMigrations(executor, schema as never);
+        // TEXT affinity, so a number is stored as its digits.
+        database.exec(`CREATE TABLE "appGrant" ("id" TEXT PRIMARY KEY, "expiresAt" TEXT)`);
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    it("keeps a pre-1970 epoch stored as signed digits, and reads it back as that date", async () => {
+        expect.hasAssertions();
+
+        database.prepare(`INSERT INTO "appGrant" ("id", "expiresAt") VALUES ('g1', ?)`).run(-86_400_000);
+
+        expect(storageType("appGrant", "expiresAt", "g1")).toBe("text");
+        await expect(convertAuthDatesToEpochMs(executor, withAppTable)).resolves.toStrictEqual([]);
+        expect((decodeAuthDate((database.prepare(`SELECT "expiresAt" FROM "appGrant"`).get() as { expiresAt: string }).expiresAt) as Date).getTime()).toBe(
+            -86_400_000,
+        );
+    });
+
+    it("refuses a bare time rather than inventing a day for it", async () => {
+        expect.hasAssertions();
+
+        database.prepare(`INSERT INTO "appGrant" ("id", "expiresAt") VALUES ('g1', '12:00:00')`).run();
+
+        await expect(convertAuthDatesToEpochMs(executor, withAppTable)).rejects.toThrow(/appGrant\.expiresAt of row g1 holds "12:00:00"/u);
+    });
+
+    it("skips a finished conversion until the covered tables change", async () => {
+        expect.hasAssertions();
+
+        const statements: string[] = [];
+        const recording: SqlExecutor = {
+            all: (sql, parameters) => {
+                statements.push(sql);
+
+                return executor.all(sql, parameters);
+            },
+            run: (sql, parameters) => executor.run(sql, parameters),
+        };
+
+        await convertAuthDatesOnce(recording, options);
+        statements.length = 0;
+        await convertAuthDatesOnce(recording, options);
+
+        expect(statements.some((sql) => sql.startsWith("SELECT COUNT(*)"))).toBe(false);
+
+        // A plugin table with date columns joins the coverage, so the conversion runs again.
+        database.prepare(`INSERT INTO "appGrant" ("id", "expiresAt") VALUES ('g1', ?)`).run("2020-01-01T00:00:00.123Z");
+
+        await expect(convertAuthDatesOnce(recording, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
+    });
+});
+
 describe("the auth Durable Object converts legacy dates on its cold start", () => {
     const INTERNAL_SECRET = "numeric-dates-internal-secret"; // secret-scanner:allow
 
@@ -287,7 +354,11 @@ describe("the auth Durable Object converts legacy dates on its cold start", () =
 
         const db = new DatabaseSync(":memory:");
 
-        await coldStart(db);
+        // The tables as the earlier version left them, before this version's first cold start.
+        for (const statement of authDoSchemaStatements(resolveAuthOptions(options))) {
+            db.exec(statement);
+        }
+
         db.prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('u1', 'Ada', ?, 0, ?, ?)`).run(
             EMAIL,
             "2020-01-01T00:00:00.123Z",

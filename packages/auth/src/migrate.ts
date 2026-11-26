@@ -9,7 +9,7 @@ import { authCanonicalEmailColumn, backfillCanonicalEmails, backfillCanonicalEma
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { prepareAuthOptions, resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
-import { convertAuthDatesToEpochMs } from "./dates";
+import { convertAuthDatesOnce } from "./dates";
 import { backfillInvitationEmails, backfillInvitationEmailsThroughAdapter, invitationEmailColumns } from "./invitation-email-backfill";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 import { d1Executor } from "./sql-store";
@@ -310,7 +310,7 @@ const convertDatesPass = async (key: object, options: LunoraAuthOptions): Promis
     let run = convertingDates.get(key);
 
     if (run === undefined) {
-        run = convertAuthDatesToEpochMs(d1Executor(database), options)
+        run = convertAuthDatesOnce(d1Executor(database), options)
             .then(
                 () => undefined,
                 (error: unknown) => {

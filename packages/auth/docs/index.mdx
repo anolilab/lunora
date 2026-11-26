@@ -169,7 +169,8 @@ above every number, so an old `expiresAt` never matches `< now`.
 They are converted for you. `ensureMigrated` rewrites them on D1, and the auth Durable
 Object does it on its cold start. Each tries once per isolate: if a value cannot be
 converted, the error is logged with the table, column and row, nothing is changed, and the
-next cold start tries again.
+next cold start tries again. A finished run is recorded in the database, so later cold
+starts skip it with one lookup until a plugin adds date columns.
 
 If your deploy applies the schema with `compileMigrationsSql` and never calls
 `ensureMigrated`, convert them yourself, once, with the same options you pass to

@@ -39,7 +39,7 @@ import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
 import type { CredentialColumns } from "./data-port";
 import { authCredentialColumns, authCredentialTableNames, parentsFirst } from "./data-port";
-import { convertAuthDatesToEpochMs } from "./dates";
+import { convertAuthDatesOnceSync } from "./dates";
 import { handleAuthDiscoveryRequest } from "./discovery";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
@@ -310,16 +310,18 @@ class LunoraAuthDO {
     }
 
     /**
-     * Rewrite the ISO-string dates earlier versions stored as epoch ms. Not awaited: the executor
-     * runs each statement synchronously, so the pass settles in microtasks with no I/O to wait on.
+     * Rewrite the ISO-string dates earlier versions stored as epoch ms, synchronously, so the
+     * request that cold-started the object never reads a row the conversion has not reached.
      * Logged, not thrown: until it succeeds the rows still read correctly, and the next cold
      * start retries it.
      */
     #convertDates(resolved: LunoraAuthOptions): void {
-        convertAuthDatesToEpochMs(doExecutor(this.#storage), resolved).catch((error: unknown) => {
+        try {
+            convertAuthDatesOnceSync((query, parameters) => [...this.#storage.sql.exec(query, ...parameters)], resolved);
+        } catch (error) {
             // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
             console.error("@lunora/auth: converting stored ISO dates to epoch ms stopped; the next cold start retries it.", error);
-        });
+        }
     }
 
     /**

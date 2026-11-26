@@ -7,8 +7,8 @@
  * column on that row fail validation.
  */
 
-/** An epoch-ms number already stored in a TEXT-affinity column reads back as its digits. */
-const EPOCH_DIGITS = /^\d+(?:\.\d+)?$/u;
+/** An epoch-ms number already stored in a TEXT-affinity column reads back as its digits, signed before 1970. */
+const EPOCH_DIGITS = /^-?\d+(?:\.\d+)?$/u;
 
 /**
  * Epoch ms for a value better-auth hands the adapter for a `date` field: a `Date` on writes,

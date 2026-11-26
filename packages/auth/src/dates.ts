@@ -1,20 +1,26 @@
 import { getAuthTables } from "better-auth/db";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
+import type { BackfillSteps } from "./canonical-email";
+import { readBackfillState, runBackfill, runBackfillSync, writeBackfillState } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
 import { resolveAuthOptions } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
 
 /**
- * A cell still holding a date string: text other than plain epoch digits. A
- * TEXT-affinity column stores a number as its digits, and `julianday()` would read those as
- * a day number.
+ * A cell still holding a date string: text other than an epoch number. A TEXT-affinity column
+ * stores a number as its digits (a pre-1970 one with its sign), and `julianday()` would read
+ * those as a day number.
  */
 const isDateText = (column: string): string =>
-    `(typeof(${column}) = 'text' AND NOT (${column} GLOB '[0-9]*' AND ${column} NOT GLOB '*[^0-9.]*' AND ${column} NOT GLOB '*.*.*' AND ${column} NOT GLOB '*.'))`;
+    `(typeof(${column}) = 'text' AND NOT ((${column} GLOB '[0-9]*' OR ${column} GLOB '-[0-9]*') AND substr(${column}, 2) NOT GLOB '*[^0-9.]*' AND ${column} NOT GLOB '*.*.*' AND ${column} NOT GLOB '*.'))`;
 
-/** Date text SQLite can read; `julianday()` is NULL for anything else, the empty string included. */
-const isConvertible = (column: string): string => `(${isDateText(column)} AND julianday(${column}) IS NOT NULL)`;
+/**
+ * Date text this conversion accepts: an ISO-8601 date, optionally with a time, that SQLite can
+ * read. `julianday()` alone would also take a bare time (`12:00:00`) and invent a day for it.
+ */
+const isConvertible = (column: string): string =>
+    `(${isDateText(column)} AND ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' AND julianday(${column}) IS NOT NULL)`;
 
 /** Epoch ms for an ISO-8601 cell, computed by SQLite itself. */
 const toEpochMs = (column: string): string => `CAST(ROUND((julianday(${column}) - 2440587.5) * 86400000) AS INTEGER)`;
@@ -47,24 +53,46 @@ const dateTables = (options: LunoraAuthOptions): DateTable[] =>
         })
         .filter((entry) => entry.columns.length > 0);
 
-const tableExists = async (executor: SqlExecutor, table: string): Promise<boolean> => {
-    const rows = await executor.all(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, [table]);
+/**
+ * The state row recording a finished conversion, in the backfill's state table. Its value is
+ * the tables and columns the run covered, so adding a plugin with date columns runs it again.
+ */
+const DATES_STATE = "dates-epoch-ms";
 
-    return rows.length > 0;
+/** The tables to convert: every Lunora-provisioned one, and the app-managed ones that exist. */
+const presentTables = function* presentTables(options: LunoraAuthOptions): BackfillSteps<DateTable[]> {
+    const tables: DateTable[] = [];
+
+    for (const entry of dateTables(options)) {
+        if (!entry.appManaged) {
+            tables.push(entry);
+
+            continue;
+        }
+
+        const found = yield { params: [entry.table], sql: `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?` };
+
+        if (found.length > 0) {
+            tables.push(entry);
+        }
+    }
+
+    return tables;
 };
 
-/** Throws, naming the first cell of `entry` that holds text SQLite cannot read as a date. */
-const assertConvertible = async (executor: SqlExecutor, entry: DateTable): Promise<void> => {
+/** Throws, naming the first cell of `entry` that holds text this conversion cannot read as a date. */
+const assertConvertible = function* assertConvertible(entry: DateTable): BackfillSteps<void> {
     const checks = entry.columns.map((column) => {
         const quoted = quoteIdentifier(column);
 
-        return { column, sql: `(${isDateText(quoted)} AND julianday(${quoted}) IS NULL)` };
+        return { column, sql: `(${isDateText(quoted)} AND NOT ${isConvertible(quoted)})` };
     });
-    const [row] = await executor.all(
-        `SELECT "id" AS "id", ${checks.map((check, index) => `${check.sql} AS "bad${String(index)}", ${quoteIdentifier(check.column)} AS "value${String(index)}"`).join(", ")} ` +
+    const [row] = yield {
+        params: [],
+        sql:
+            `SELECT "id" AS "id", ${checks.map((check, index) => `${check.sql} AS "bad${String(index)}", ${quoteIdentifier(check.column)} AS "value${String(index)}"`).join(", ")} ` +
             `FROM ${quoteIdentifier(entry.table)} WHERE ${checks.map((check) => check.sql).join(" OR ")} LIMIT 1`,
-        [],
-    );
+    };
 
     if (!row) {
         return;
@@ -76,6 +104,49 @@ const assertConvertible = async (executor: SqlExecutor, entry: DateTable): Promi
     throw new TypeError(
         `convertAuthDatesToEpochMs: ${entry.table}.${column} of row ${String(row["id"])} holds ${JSON.stringify(row[`value${String(index)}`])}, which is not an ISO-8601 date; nothing was converted`,
     );
+};
+
+/** The conversion's statements. With `once`, a run whose recorded coverage still matches does nothing. */
+const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, once: boolean): BackfillSteps<AuthDateConversion[]> {
+    const tables = yield* presentTables(options);
+    const coverage = tables.map((entry) => [entry.table, ...entry.columns]);
+
+    if (once && JSON.stringify(yield* readBackfillState(DATES_STATE)) === JSON.stringify(coverage)) {
+        return [];
+    }
+
+    for (const entry of tables) {
+        yield* assertConvertible(entry);
+    }
+
+    const conversions: AuthDateConversion[] = [];
+
+    for (const entry of tables) {
+        const quoted = entry.columns.map((column) => quoteIdentifier(column));
+        const table = quoteIdentifier(entry.table);
+        const pending = quoted.map((column) => isConvertible(column)).join(" OR ");
+        // Counted before the update rather than returned by it: `RETURNING` would ship one row
+        // per converted record back through the binding.
+        const [count] = yield { params: [], sql: `SELECT COUNT(*) AS "n" FROM ${table} WHERE ${pending}` };
+        const converted = Number(count?.["n"] ?? 0);
+
+        if (converted === 0) {
+            continue;
+        }
+
+        yield {
+            params: [],
+            sql: `UPDATE ${table} SET ${quoted.map((column) => `${column} = CASE WHEN ${isConvertible(column)} THEN ${toEpochMs(column)} ELSE ${column} END`).join(", ")} WHERE ${pending}`,
+        };
+
+        conversions.push({ converted, table: entry.table });
+    }
+
+    if (once) {
+        yield* writeBackfillState(DATES_STATE, coverage);
+    }
+
+    return conversions;
 };
 
 /**
@@ -102,48 +173,20 @@ const assertConvertible = async (executor: SqlExecutor, entry: DateTable): Promi
  * await convertAuthDatesToEpochMs(d1Executor(env.DB), authOptions);
  * ```
  */
-const convertAuthDatesToEpochMs = async (executor: SqlExecutor, options: LunoraAuthOptions): Promise<AuthDateConversion[]> => {
-    const tables: DateTable[] = [];
+const convertAuthDatesToEpochMs = async (executor: SqlExecutor, options: LunoraAuthOptions): Promise<AuthDateConversion[]> =>
+    runBackfill(conversionSteps(options, false), executor);
 
-    for (const entry of dateTables(options)) {
-        // eslint-disable-next-line no-await-in-loop -- one probe per app-managed table, before any check
-        if (!entry.appManaged || (await tableExists(executor, entry.table))) {
-            tables.push(entry);
-        }
-    }
+/**
+ * The conversion `ensureMigrated` and the auth Durable Object run on their own: skipped by one
+ * indexed lookup once a run has finished over the same tables and columns, so a cold start
+ * after the conversion does not scan every date table again.
+ */
+const convertAuthDatesOnce = async (executor: SqlExecutor, options: LunoraAuthOptions): Promise<AuthDateConversion[]> =>
+    runBackfill(conversionSteps(options, true), executor);
 
-    for (const entry of tables) {
-        // eslint-disable-next-line no-await-in-loop -- every table is checked before the first write
-        await assertConvertible(executor, entry);
-    }
-
-    const conversions: AuthDateConversion[] = [];
-
-    for (const entry of tables) {
-        const quoted = entry.columns.map((column) => quoteIdentifier(column));
-        const table = quoteIdentifier(entry.table);
-        const pending = quoted.map((column) => isConvertible(column)).join(" OR ");
-        // Counted before the update rather than returned by it: `RETURNING` would ship one row
-        // per converted record back through the binding.
-        // eslint-disable-next-line no-await-in-loop -- one count per table, in order
-        const [count] = await executor.all(`SELECT COUNT(*) AS "n" FROM ${table} WHERE ${pending}`, []);
-        const converted = Number(count?.["n"] ?? 0);
-
-        if (converted === 0) {
-            continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- one statement per table, in order
-        await executor.run(
-            `UPDATE ${table} SET ${quoted.map((column) => `${column} = CASE WHEN ${isConvertible(column)} THEN ${toEpochMs(column)} ELSE ${column} END`).join(", ")} WHERE ${pending}`,
-            [],
-        );
-
-        conversions.push({ converted, table: entry.table });
-    }
-
-    return conversions;
-};
+/** The same conversion as `convertAuthDatesOnce`, over a synchronous executor, so it finishes before the caller's next statement. */
+const convertAuthDatesOnceSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], options: LunoraAuthOptions): AuthDateConversion[] =>
+    runBackfillSync(conversionSteps(options, true), exec);
 
 export type { AuthDateConversion };
-export { convertAuthDatesToEpochMs };
+export { convertAuthDatesOnce, convertAuthDatesOnceSync, convertAuthDatesToEpochMs };

@@ -80,6 +80,8 @@ describe("convertAuthDatesToEpochMs on workerd SQLite", () => {
         };
 
         await ensureMigrated({ options: migrationOptions });
+        // As if an earlier version had created the tables: no conversion recorded yet.
+        await env.TEST_DB.prepare(`DELETE FROM "__lunora_auth_backfill__" WHERE "name" = 'dates-epoch-ms'`).run();
         await env.TEST_DB.prepare(
             `INSERT INTO "dates_verification" ("id", "identifier", "value", "expiresAt", "createdAt", "updatedAt") VALUES ('v1', 'i', 'x', ?, ?, ?)`,
         )
