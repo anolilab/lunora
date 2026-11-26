@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.278...@lunora/auth@1.0.0-alpha.279) (2026-11-26)
+
+- feat(auth): report canonical-email duplicates by id and expose backfill status (#1716)
+
 ## @lunora/auth [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.277...@lunora/auth@1.0.0-alpha.278) (2026-11-26)
 
 - fix(auth): update better-auth to 1.7.28 (#1715)
