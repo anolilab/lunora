@@ -57,7 +57,7 @@ const hasIssuerColumn = async (executor: SqlExecutor, accountTable: string): Pro
  * **Best-effort**: a database that still carries the column is no worse off than before the
  * attempt, so it logs rather than throws. That also covers the concurrent case, where two
  * isolates both see the column and the loser's `DROP COLUMN` finds it already gone.
- * @returns Whether the column was dropped, so the caller can re-take a cached schema verdict.
+ * @returns Whether the column was dropped.
  */
 const dropLegacyIssuerColumn = async (executor: SqlExecutor, options: LunoraAuthOptions): Promise<boolean> => {
     const { account } = getAuthTablesWithResolvedIndexes(options).tables;
@@ -107,18 +107,32 @@ const dropLegacyIssuerColumn = async (executor: SqlExecutor, options: LunoraAuth
 };
 
 /** The `options` whose issuer cleanup has run in this isolate, whatever its outcome. */
-const issuerChecked = new WeakMap<object, Promise<boolean>>();
+const issuerChecked = new WeakMap<object, Promise<void>>();
 
-/** Run {@link dropLegacyIssuerColumn} once per isolate per `options`; concurrent callers share the attempt. */
-const dropLegacyIssuerOnce = async (key: object, executor: SqlExecutor, options: LunoraAuthOptions): Promise<boolean> => {
+/**
+ * Run {@link dropLegacyIssuerColumn} once per isolate per `options`; concurrent callers share the attempt.
+ *
+ * A drop also re-takes the adapter's schema verdict, which was taken while the required `issuer` column
+ * was still there. better-auth keys it on the D1 binding the executor wraps. Inside the memoised run, so
+ * it happens once rather than on every later call, each of which would re-introspect every auth table.
+ */
+const dropLegacyIssuerOnce = async (key: object, executor: SqlExecutor, options: LunoraAuthOptions): Promise<void> => {
     let run = issuerChecked.get(key);
 
     if (run === undefined) {
-        run = dropLegacyIssuerColumn(executor, options);
+        run = dropLegacyIssuerColumn(executor, options).then((dropped) => {
+            const database = executorDatabase(executor);
+
+            if (dropped && database !== undefined) {
+                invalidateSchemaChecks(database);
+            }
+
+            return undefined;
+        });
         issuerChecked.set(key, run);
     }
 
-    return run;
+    await run;
 };
 
 /** The backfill pass in flight per `options`, so concurrent callers share one rather than racing over the same rows. */
@@ -222,16 +236,7 @@ const convertDatesPass = async (key: object, executor: SqlExecutor, options: Lun
  * was given, so a later `prepareAuthData` with the same object finds them done.
  */
 const prepareAuthDataFor = async (key: object, executor: SqlExecutor, options: LunoraAuthOptions): Promise<void> => {
-    if (await dropLegacyIssuerOnce(key, executor, options)) {
-        // A verdict the adapter's schema check took while the required `issuer` column was still
-        // there is stale now. better-auth keys it on the D1 binding the executor wraps.
-        const database = executorDatabase(executor);
-
-        if (database !== undefined) {
-            invalidateSchemaChecks(database);
-        }
-    }
-
+    await dropLegacyIssuerOnce(key, executor, options);
     await backfillPass(key, async () => backfillThroughExecutor(executor, options));
     await convertDatesPass(key, executor, options);
 };

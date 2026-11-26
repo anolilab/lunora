@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { createSchemaCheck } from "@better-auth/core/db/internal";
 import { runD1GlobalTableMigrations } from "@lunora/d1";
 import type { TableDefinition } from "@lunora/server";
 import { defineSchema } from "@lunora/server";
@@ -196,6 +197,25 @@ describe("prepareAuthData — the data steps without better-auth's migrator", ()
 
         expect(columns).not.toContain("issuer");
         expect(database.prepare(`SELECT name FROM sqlite_master WHERE name = 'account_issuer_accountId_uidx'`).get()).toBeUndefined();
+    });
+
+    it("re-takes the adapter's schema verdict after the drop, and only once", async () => {
+        expect.hasAssertions();
+
+        await provisionSchema(d1Executor(d1));
+        database.exec(`ALTER TABLE "account" ADD COLUMN "issuer" text NOT NULL DEFAULT ''`);
+
+        const find = vi.fn<() => Promise<[]>>(async () => []);
+        const check = createSchemaCheck(find, "database", d1);
+        const runOptions = { ...options };
+
+        await check();
+        await prepareAuthData(d1Executor(d1), runOptions);
+        await check();
+        await prepareAuthData(d1Executor(d1), runOptions);
+        await check();
+
+        expect(find).toHaveBeenCalledTimes(2);
     });
 
     it("logs and leaves the column when the executor cannot drop it atomically", async () => {
