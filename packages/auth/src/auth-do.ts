@@ -310,8 +310,8 @@ class LunoraAuthDO {
     }
 
     /**
-     * Rewrite the ISO-string dates earlier versions stored as epoch ms. The executor runs each
-     * statement synchronously, so the whole pass completes before this request's next await.
+     * Rewrite the ISO-string dates earlier versions stored as epoch ms. Not awaited: the executor
+     * runs each statement synchronously, so the pass settles in microtasks with no I/O to wait on.
      * Logged, not thrown: until it succeeds the rows still read correctly, and the next cold
      * start retries it.
      */
