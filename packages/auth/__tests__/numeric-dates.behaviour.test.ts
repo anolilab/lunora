@@ -6,6 +6,7 @@ import { defineSchema } from "@lunora/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
+import { INTERNAL_SECRET_HEADER, LunoraAuthDO, RESOLVE_SESSION_PATH } from "../src/auth-do";
 import type { LunoraAuth, LunoraAuthOptions } from "../src/create-auth";
 import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import { convertAuthDatesToEpochMs } from "../src/dates";
@@ -13,6 +14,7 @@ import { admin } from "../src/plugins";
 import authTables from "../src/schema";
 import type { SqlExecutor } from "../src/sql-store";
 import { createSqlAuthStore } from "../src/sql-store";
+import createDoStorage from "./helpers/do-storage";
 import { executorFor } from "./helpers/sqlite-auth-db";
 
 /**
@@ -268,5 +270,36 @@ describe("convertAuthDatesToEpochMs — rows written as ISO strings", () => {
         database.prepare(`INSERT INTO "appGrant" ("id", "expiresAt") VALUES ('g1', ?)`).run(LEGACY_EXPIRY);
 
         await expect(convertAuthDatesToEpochMs(executor, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
+    });
+});
+
+describe("the auth Durable Object converts legacy dates on its cold start", () => {
+    const INTERNAL_SECRET = "numeric-dates-internal-secret"; // secret-scanner:allow
+
+    const coldStart = async (db: DatabaseSync): Promise<void> => {
+        const authDo = new LunoraAuthDO({ storage: createDoStorage(db) }, () => options, { internalSecret: INTERNAL_SECRET });
+
+        await authDo.fetch(new Request(`https://example.test${RESOLVE_SESSION_PATH}`, { headers: { [INTERNAL_SECRET_HEADER]: INTERNAL_SECRET } }));
+    };
+
+    it("rewrites ISO strings left by an earlier version as epoch ms", async () => {
+        expect.hasAssertions();
+
+        const db = new DatabaseSync(":memory:");
+
+        await coldStart(db);
+        db.prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('u1', 'Ada', ?, 0, ?, ?)`).run(
+            EMAIL,
+            "2020-01-01T00:00:00.123Z",
+            "2020-01-01T00:00:00.123Z",
+        );
+
+        await coldStart(db);
+
+        expect({ ...(db.prepare(`SELECT "createdAt" FROM "user" WHERE "id" = 'u1'`).get() as object) }).toStrictEqual({
+            createdAt: Date.parse("2020-01-01T00:00:00.123Z"),
+        });
+
+        db.close();
     });
 });

@@ -39,6 +39,7 @@ import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
 import type { CredentialColumns } from "./data-port";
 import { authCredentialColumns, authCredentialTableNames, parentsFirst } from "./data-port";
+import { convertAuthDatesToEpochMs } from "./dates";
 import { handleAuthDiscoveryRequest } from "./discovery";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
@@ -271,6 +272,7 @@ class LunoraAuthDO {
 
             this.#invitationColumns = invitationEmailColumns(resolved);
             this.#backfill();
+            this.#convertDates(resolved);
 
             // The mirror image, and the only column this ever removes. See
             // `legacy-issuer.ts` for what better-auth 1.7.0 added and 1.7.3 reverted.
@@ -305,6 +307,19 @@ class LunoraAuthDO {
             // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
             console.error("@lunora/auth: the canonical-email backfill stopped; the next request resumes it.", error);
         }
+    }
+
+    /**
+     * Rewrite the ISO-string dates earlier versions stored as epoch ms. The executor runs each
+     * statement synchronously, so the whole pass completes before this request's next await.
+     * Logged, not thrown: until it succeeds the rows still read correctly, and the next cold
+     * start retries it.
+     */
+    #convertDates(resolved: LunoraAuthOptions): void {
+        convertAuthDatesToEpochMs(doExecutor(this.#storage), resolved).catch((error: unknown) => {
+            // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+            console.error("@lunora/auth: converting stored ISO dates to epoch ms stopped; the next cold start retries it.", error);
+        });
     }
 
     /**

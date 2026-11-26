@@ -164,8 +164,16 @@ Earlier versions stored these columns as ISO strings. Rows written then still re
 correctly through better-auth, but Lunora's writer refuses them (`VALIDATION_ERROR:
 Expected number`) on any patch, because it validates every column of the row, not only
 the ones you changed. Range filters on them are wrong too: SQLite orders every string
-above every number, so an old `expiresAt` never matches `< now`. Convert them once, with
-the same options you pass to `createAuth`:
+above every number, so an old `expiresAt` never matches `< now`.
+
+They are converted for you. `ensureMigrated` rewrites them on D1, and the auth Durable
+Object does it on its cold start. Each tries once per isolate: if a value cannot be
+converted, the error is logged with the table, column and row, nothing is changed, and the
+next cold start tries again.
+
+If your deploy applies the schema with `compileMigrationsSql` and never calls
+`ensureMigrated`, convert them yourself, once, with the same options you pass to
+`createAuth`:
 
 ```ts
 import { convertAuthDatesToEpochMs, d1Executor } from "@lunora/auth";
@@ -180,8 +188,7 @@ conversion runs in SQLite (D1 or a Durable Object's storage), a few statements p
 however many rows it holds, so it fits in one Worker invocation. A plugin table your app
 manages itself (`disableMigration`) is converted when it exists and skipped when it does
 not. Running it again converts nothing, so a run that stops part-way is finished by
-running it again. Run it once on deploy, before code that filters sessions by expiry
-relies on the old rows.
+running it again.
 
 ## Read `ctx.auth` in functions
 

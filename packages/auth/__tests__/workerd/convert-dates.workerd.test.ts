@@ -6,6 +6,7 @@ import { resolveAuthOptions } from "../../src/create-auth";
 import { convertAuthDatesToEpochMs } from "../../src/dates";
 import { authDoSchemaStatements } from "../../src/do-schema";
 import { doExecutor } from "../../src/do-store";
+import { ensureMigrated } from "../../src/migrate";
 import { d1Executor } from "../../src/sql-store";
 
 /**
@@ -63,5 +64,33 @@ describe("convertAuthDatesToEpochMs on workerd SQLite", () => {
         );
 
         expect(row).toStrictEqual({ digits: 0, iso: 1, millis: Date.parse(LEGACY) });
+    });
+
+    it("runs on D1 as part of ensureMigrated", async () => {
+        expect.assertions(1);
+
+        const migrationOptions: LunoraAuthOptions = {
+            ...options,
+            account: { modelName: "dates_account" },
+            database: env.TEST_DB,
+            rateLimit: { modelName: "dates_rate_limit" },
+            session: { modelName: "dates_session" },
+            user: { modelName: "dates_user" },
+            verification: { modelName: "dates_verification" },
+        };
+
+        await ensureMigrated({ options: migrationOptions });
+        await env.TEST_DB.prepare(
+            `INSERT INTO "dates_verification" ("id", "identifier", "value", "expiresAt", "createdAt", "updatedAt") VALUES ('v1', 'i', 'x', ?, ?, ?)`,
+        )
+            .bind(LEGACY, LEGACY, LEGACY)
+            .run();
+
+        // A fresh options object: the migration and its passes are single-flighted per reference.
+        await ensureMigrated({ options: { ...migrationOptions } });
+
+        await expect(env.TEST_DB.prepare(`SELECT "expiresAt" FROM "dates_verification" WHERE "id" = 'v1'`).first()).resolves.toStrictEqual({
+            expiresAt: Date.parse(LEGACY),
+        });
     });
 });
