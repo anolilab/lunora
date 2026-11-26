@@ -405,68 +405,72 @@ const insertAuthRows = async (
     const dates = datesInvalidation();
 
     // Before the first row, so a failure here leaves the import undone. Repeated after the rows
-    // below, for a date conversion that started while they were being written.
+    // below with a fresh token, for a date conversion that read the record while they were being
+    // written: rewriting the same token would leave its compare-and-swap matching.
     await sql.all(dates.ddl.sql, dates.ddl.params);
     await sql.all(dates.invalidate.sql, dates.invalidate.params);
 
-    for (const [index, { doc, table }] of rows.entries()) {
-        const refusal = importRefusalOf(table, isAuthTable);
+    try {
+        for (const [index, { doc, table }] of rows.entries()) {
+            const refusal = importRefusalOf(table, isAuthTable);
 
-        if (refusal !== undefined) {
-            result.errors.push({ index, message: refusal, table });
-            continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- once per table
-        const known = columns.get(table) ?? (await columnsOf(sql, table));
-
-        columns.set(table, known);
-
-        const decodedRow = decodeRow(doc, table, credentialColumns);
-
-        if ("message" in decodedRow) {
-            result.errors.push({ index, message: decodedRow.message, table });
-            continue;
-        }
-
-        const row = seen.without(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail), table);
-        const names = Object.keys(row).filter((name) => known.includes(name));
-
-        // eslint-disable-next-line no-await-in-loop -- rows go in order, and a holder may be one this import wrote
-        if (await heldByUnfilledRow(sql, row, table, canonicalEmail, known)) {
-            result.conflicts += 1;
-            continue;
-        }
-
-        if (names.length === 0) {
-            result.errors.push({ index, message: `no column of the row exists on "${table}"`, table });
-            continue;
-        }
-
-        try {
-            // eslint-disable-next-line no-await-in-loop -- rows go in order, parents first
-            const written = await sql.all(
-                `INSERT INTO ${quoteIdentifier(table)} (${names.map((name) => quoteIdentifier(name)).join(", ")}) VALUES (${names.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING RETURNING 1 AS "written"`,
-                // eslint-disable-next-line unicorn/no-null -- SQL NULL
-                names.map((name) => row[name] ?? null),
-            );
-
-            if (written.length > 0) {
-                seen.hold(row, table);
-                result.inserted += 1;
-            } else {
-                result.conflicts += 1;
+            if (refusal !== undefined) {
+                result.errors.push({ index, message: refusal, table });
+                continue;
             }
-        } catch (error) {
-            result.errors.push({ index, message: `"${table}": ${safeCause(error)}`, table });
+
+            // eslint-disable-next-line no-await-in-loop -- once per table
+            const known = columns.get(table) ?? (await columnsOf(sql, table));
+
+            columns.set(table, known);
+
+            const decodedRow = decodeRow(doc, table, credentialColumns);
+
+            if ("message" in decodedRow) {
+                result.errors.push({ index, message: decodedRow.message, table });
+                continue;
+            }
+
+            const row = seen.without(withCanonicalEmailValue(decodedRow.row, table, canonicalEmail), table);
+            const names = Object.keys(row).filter((name) => known.includes(name));
+
+            // eslint-disable-next-line no-await-in-loop -- rows go in order, and a holder may be one this import wrote
+            if (await heldByUnfilledRow(sql, row, table, canonicalEmail, known)) {
+                result.conflicts += 1;
+                continue;
+            }
+
+            if (names.length === 0) {
+                result.errors.push({ index, message: `no column of the row exists on "${table}"`, table });
+                continue;
+            }
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- rows go in order, parents first
+                const written = await sql.all(
+                    `INSERT INTO ${quoteIdentifier(table)} (${names.map((name) => quoteIdentifier(name)).join(", ")}) VALUES (${names.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING RETURNING 1 AS "written"`,
+                    // eslint-disable-next-line unicorn/no-null -- SQL NULL
+                    names.map((name) => row[name] ?? null),
+                );
+
+                if (written.length > 0) {
+                    seen.hold(row, table);
+                    result.inserted += 1;
+                } else {
+                    result.conflicts += 1;
+                }
+            } catch (error) {
+                result.errors.push({ index, message: `"${table}": ${safeCause(error)}`, table });
+            }
         }
-    }
 
-    if (canonicalEmail !== undefined) {
-        warnDuplicates(seen.dropped(), canonicalEmail);
+        if (canonicalEmail !== undefined) {
+            warnDuplicates(seen.dropped(), canonicalEmail);
+        }
+    } finally {
+        // Also when a lookup threw part-way: the rows before it are committed.
+        await invalidateAfterImport(sql, datesInvalidation().invalidate);
     }
-
-    await invalidateAfterImport(sql, dates.invalidate);
 
     return result;
 };

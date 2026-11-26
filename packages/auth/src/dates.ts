@@ -68,6 +68,8 @@ const DATES_GRACE_MS = 24 * 60 * 60 * 1000;
 
 interface DatesState {
     coverage: string[][];
+    /** Written by the first clean run after the grace period: later automatic runs skip. */
+    final?: boolean;
     since: number;
 }
 
@@ -177,8 +179,10 @@ const readDatesRecord = function* readDatesRecord(): BackfillSteps<string | unde
 };
 
 /**
- * The conversion's statements. With `now`, an automatic run: skipped once a run over the same
- * coverage came back clean more than {@link DATES_GRACE_MS} ago, and recorded when it finishes.
+ * The conversion's statements. With `now`, an automatic run, recorded when it finishes: skipped
+ * once a run over the same coverage has come back clean after the {@link DATES_GRACE_MS} that
+ * followed the first clean one. That last run is a full one, so ISO strings written late in
+ * the rollout are converted even when no cold start fell inside the grace period.
  *
  * Queries, for `n` date tables of which `k` are app-managed: one probe for those `k` (none
  * when `k` is 0), then for an automatic run the state table's DDL and record read, which alone
@@ -194,7 +198,7 @@ const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, no
     const stored = raw === undefined ? undefined : asDatesState(JSON.parse(raw));
     const recorded = JSON.stringify(stored?.coverage) === JSON.stringify(coverage) ? stored : undefined;
 
-    if (now !== undefined && recorded !== undefined && now - recorded.since >= DATES_GRACE_MS) {
+    if (now !== undefined && recorded?.final === true) {
         return [];
     }
 
@@ -229,7 +233,8 @@ const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, no
     }
 
     if (now !== undefined) {
-        const cursor = JSON.stringify({ coverage, since: recorded?.since ?? now } satisfies DatesState);
+        const since = recorded?.since ?? now;
+        const cursor = JSON.stringify({ coverage, final: now - since >= DATES_GRACE_MS, since } satisfies DatesState);
 
         // Only over the record this run read: a restore that wrote rows meanwhile has replaced it.
         yield raw === undefined

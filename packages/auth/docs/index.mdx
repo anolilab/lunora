@@ -177,7 +177,8 @@ Object does it on its cold start. Each tries once per isolate: if a value cannot
 converted, the error is logged with the table, column and row, nothing is changed, and the
 next cold start tries again. Once a run comes back clean it is recorded in the database, and
 later cold starts keep converting for a day, so rows that isolates still on the earlier version
-write during a gradual deploy are caught too. After that a cold start skips it with one lookup,
+write during a gradual deploy are caught too. The first cold start after that day converts once
+more, and from then on a cold start skips it with a few lookups,
 until a plugin adds date columns or an import or replace restores rows. A restore clears the
 record, so the next cold start converts the restored rows (the auth Durable Object does it on its
 next request). If a gradual deploy runs longer than a day, run `convertAuthDatesToEpochMs` once

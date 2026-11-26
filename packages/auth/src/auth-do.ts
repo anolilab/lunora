@@ -592,7 +592,16 @@ class LunoraAuthDO {
             return this.#readAudit(request);
         }
 
-        await this.#restoreDone;
+        // A restore that registers while this request waits chains onto the barrier it replaces, so
+        // waiting on the current one until it stops changing covers every restore before it.
+        for (let barrier = this.#restoreDone; ; barrier = this.#restoreDone) {
+            // eslint-disable-next-line no-await-in-loop -- re-checked after each wait
+            await barrier;
+
+            if (barrier === this.#restoreDone) {
+                break;
+            }
+        }
 
         if (url.pathname === RESOLVE_SESSION_PATH) {
             return this.#resolveSession(request);

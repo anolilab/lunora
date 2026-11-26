@@ -380,7 +380,12 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
 
             await expect(runAt(start + HOUR_MS, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
 
-            await runAt(start + DAY_MS + HOUR_MS, withAppTable);
+            // Another lands late in the rollout, and no cold start comes before the grace period ends.
+            database.prepare(`INSERT INTO "appGrant" ("id", "expiresAt") VALUES ('g2', '2020-01-01T00:00:00.123Z')`).run();
+
+            await expect(runAt(start + DAY_MS + HOUR_MS, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
+
+            await runAt(start + DAY_MS + 2 * HOUR_MS, withAppTable);
 
             expect(scanned()).toBe(false);
 
@@ -400,7 +405,9 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
             // The probe of the app-managed table, the state DDL and read, its column types, a check per table and the record write.
             expect(statements).toHaveLength(checks + 5);
 
+            // The first run after the grace period is still a full one; the next is skipped.
             await runAt(start + DAY_MS + HOUR_MS, withAppTable);
+            await runAt(start + DAY_MS + 2 * HOUR_MS, withAppTable);
 
             expect(statements).toHaveLength(3);
         });
@@ -410,6 +417,7 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
 
             await runAt(start, withAppTable);
             await runAt(start + DAY_MS + HOUR_MS, withAppTable);
+            await runAt(start + DAY_MS + 2 * HOUR_MS, withAppTable);
 
             expect(scanned()).toBe(false);
 
@@ -471,6 +479,37 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
 
         expect(result).toMatchObject({ errors: [], inserted: 1 });
         expect(logged).toBe(1);
+    });
+
+    it("invalidates the record again with a fresh token after an import, also one that stopped part-way", async () => {
+        expect.hasAssertions();
+
+        const tokens: unknown[] = [];
+        const failingMidway: SqlExecutor = {
+            all: async (sql, parameters) => {
+                if (sql.includes(`"__lunora_auth_backfill__"`) && sql.includes("DO UPDATE")) {
+                    tokens.push(parameters[1]);
+                }
+
+                if (sql === `PRAGMA table_info("user")`) {
+                    throw new Error("D1_ERROR: simulated");
+                }
+
+                return executor.all(sql, parameters);
+            },
+            run: (sql, parameters) => executor.run(sql, parameters),
+        };
+
+        await expect(
+            createSqlAuthDataPort(failingMidway, ["appGrant", "user"]).importRows([
+                { doc: { expiresAt: "2020-01-01T00:00:00.123Z", id: "g1" }, table: "appGrant" },
+                { doc: { id: "u1" }, table: "user" },
+            ]),
+        ).rejects.toThrow("simulated");
+
+        expect(database.prepare(`SELECT "id" FROM "appGrant"`).all()).toHaveLength(1);
+        expect(tokens).toHaveLength(2);
+        expect(tokens[0]).not.toBe(tokens[1]);
     });
 
     it("finds an app-managed table whose stored name differs only in case", async () => {
