@@ -286,6 +286,9 @@ const backfillPass = async (key: object, options: LunoraAuthOptions): Promise<vo
     await run;
 };
 
+/** The date conversion in flight per `options`, so a concurrent caller waits for it rather than passing it. */
+const convertingDates = new WeakMap<object, Promise<void>>();
+
 /** The `options` whose date conversion has run in this isolate, successfully or not. */
 const datesAttempted = new WeakSet<object>();
 
@@ -304,14 +307,25 @@ const convertDatesPass = async (key: object, options: LunoraAuthOptions): Promis
         return;
     }
 
-    datesAttempted.add(key);
+    let run = convertingDates.get(key);
 
-    try {
-        await convertAuthDatesToEpochMs(d1Executor(database), options);
-    } catch (error) {
-        // eslint-disable-next-line no-console -- no injected logger at the migration layer (workerd/Node both capture console)
-        console.error("@lunora/auth: converting stored ISO dates to epoch ms stopped; the next cold start retries it.", error);
+    if (run === undefined) {
+        run = convertAuthDatesToEpochMs(d1Executor(database), options)
+            .then(
+                () => undefined,
+                (error: unknown) => {
+                    // eslint-disable-next-line no-console -- no injected logger at the migration layer (workerd/Node both capture console)
+                    console.error("@lunora/auth: converting stored ISO dates to epoch ms stopped; the next cold start retries it.", error);
+                },
+            )
+            .finally(() => {
+                datesAttempted.add(key);
+                convertingDates.delete(key);
+            });
+        convertingDates.set(key, run);
     }
+
+    await run;
 };
 
 /**
