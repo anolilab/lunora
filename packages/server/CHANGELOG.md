@@ -1,3 +1,7 @@
+## @lunora/server [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.281...@lunora/server@1.0.0-alpha.282) (2026-11-26)
+
+- fix: accept null in where on optional columns; fix the nightly suite (#1711)
+
 ## @lunora/server [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.280...@lunora/server@1.0.0-alpha.281) (2026-11-24)
 
 - fix(advisor): keep table accepts exact and skip CAPTCHA on admin actions (#1690)

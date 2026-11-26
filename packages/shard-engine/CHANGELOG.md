@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.209...@lunora/shard-engine@1.0.0-alpha.210) (2026-11-26)
+
+- fix: accept null in where on optional columns; fix the nightly suite (#1711)
+
 ## @lunora/shard-engine [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.208...@lunora/shard-engine@1.0.0-alpha.209) (2026-11-24)
 
 - perf(shard-engine): read catalog and ledger once per migration pass (#1698)
