@@ -34,7 +34,7 @@ import { AUTH_AUDIT_TABLE } from "./audit";
 import type { CanonicalEmailColumn } from "./canonical-email";
 import { CANONICAL_EMAIL_FIELD, canonicalEmail as foldEmail, foldSafeKey, warnDuplicates, withCanonicalEmailValue } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
-import { forgetAuthDatesConversion } from "./dates";
+import { datesInvalidation } from "./dates";
 import type { SqlExecutor } from "./sql-store";
 
 type Row = Record<string, unknown>;
@@ -370,6 +370,20 @@ const heldByUnfilledRow = async (
 };
 
 /**
+ * The second invalidation of an import, after its rows: they are committed, so a failure here is
+ * logged rather than thrown, which would misreport the import. The record was invalidated before
+ * the first row too, so only a conversion that ran while the rows were written is missed.
+ */
+const invalidateAfterImport = async (sql: AuthSqlReader, invalidate: Statement): Promise<void> => {
+    try {
+        await sql.all(invalidate.sql, invalidate.params);
+    } catch (error) {
+        // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+        console.error("@lunora/auth: could not invalidate the dates-epoch-ms record after an import; run convertAuthDatesToEpochMs.", error);
+    }
+};
+
+/**
  * Insert wire-encoded rows, skipping any that collide with an existing key or
  * unique value. Only columns the table has are written, so a row from a newer
  * plugin set still lands, minus what this schema cannot hold — and never a
@@ -388,6 +402,12 @@ const insertAuthRows = async (
     const result: AuthImportResult = { conflicts: 0, errors: [], inserted: 0 };
     const columns = new Map<string, string[]>();
     const seen = heldCanonical(canonicalEmail);
+    const dates = datesInvalidation();
+
+    // Before the first row, so a failure here leaves the import undone. Repeated after the rows
+    // below, for a date conversion that started while they were being written.
+    await sql.all(dates.ddl.sql, dates.ddl.params);
+    await sql.all(dates.invalidate.sql, dates.invalidate.params);
 
     for (const [index, { doc, table }] of rows.entries()) {
         const refusal = importRefusalOf(table, isAuthTable);
@@ -446,7 +466,7 @@ const insertAuthRows = async (
         warnDuplicates(seen.dropped(), canonicalEmail);
     }
 
-    await forgetAuthDatesConversion(sql);
+    await invalidateAfterImport(sql, dates.invalidate);
 
     return result;
 };
@@ -619,8 +639,12 @@ const replaceAuthRows = async (
         return { deleted: plan.deleted, errors: [], inserted: rows.length };
     }
 
+    const dates = datesInvalidation();
+
     try {
-        await atomic(plan.statements);
+        await sql.all(dates.ddl.sql, dates.ddl.params);
+        // In the same unit as the rows: the restore and the invalidation commit together or not at all.
+        await atomic([...plan.statements, dates.invalidate]);
     } catch (error) {
         return { deleted: 0, errors: [{ index: -1, message: `auth replace rolled back: ${safeCause(error)}`, table: "" }], inserted: 0 };
     }
@@ -628,8 +652,6 @@ const replaceAuthRows = async (
     if (canonicalEmail !== undefined) {
         warnDuplicates(plan.dropped, canonicalEmail);
     }
-
-    await forgetAuthDatesConversion(sql);
 
     return { deleted: plan.deleted, errors: [], inserted: rows.length };
 };

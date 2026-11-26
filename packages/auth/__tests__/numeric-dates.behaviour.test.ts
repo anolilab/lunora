@@ -380,6 +380,58 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
 
             await expect(runAt(start + 2 * DAY_MS, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
         });
+
+        it("never record a run clean when a restore wrote rows while it was running", async () => {
+            expect.hasAssertions();
+
+            const port = createSqlAuthDataPort(executor, ["appGrant"]);
+            // The restore lands as the run is about to record itself, after it has scanned every table.
+            const racing: SqlExecutor = {
+                all: async (sql, parameters) => {
+                    if (sql.includes(`"__lunora_auth_backfill__"`) && (sql.startsWith("UPDATE") || sql.includes("DO NOTHING"))) {
+                        await port.importRows([{ doc: { expiresAt: "2020-01-01T00:00:00.123Z", id: "g1" }, table: "appGrant" }]);
+                    }
+
+                    return executor.all(sql, parameters);
+                },
+                run: (sql, parameters) => executor.run(sql, parameters),
+            };
+
+            vi.setSystemTime(start);
+            await convertAuthDatesOnce(racing, withAppTable);
+
+            // Past the grace period, the run still sees no clean record, so it converts the restored row.
+            await expect(runAt(start + 2 * DAY_MS, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
+        });
+    });
+
+    it("reports a committed import as written when the record cannot be invalidated afterwards", async () => {
+        expect.hasAssertions();
+
+        let invalidations = 0;
+        const failingLate: SqlExecutor = {
+            all: async (sql, parameters) => {
+                if (sql.includes(`"__lunora_auth_backfill__"`) && sql.includes("DO UPDATE")) {
+                    invalidations += 1;
+
+                    if (invalidations === 2) {
+                        throw new Error("D1_ERROR: simulated");
+                    }
+                }
+
+                return executor.all(sql, parameters);
+            },
+            run: (sql, parameters) => executor.run(sql, parameters),
+        };
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const result = await createSqlAuthDataPort(failingLate, ["appGrant"]).importRows([{ doc: { expiresAt: 1, id: "g1" }, table: "appGrant" }]);
+        const logged = error.mock.calls.length;
+
+        error.mockRestore();
+
+        expect(result).toMatchObject({ errors: [], inserted: 1 });
+        expect(logged).toBe(1);
     });
 
     it("finds an app-managed table whose stored name differs only in case", async () => {

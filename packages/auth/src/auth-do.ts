@@ -188,6 +188,12 @@ class LunoraAuthDO {
     /** Whether a restore wrote rows since the date conversion last ran: the next request converts them. */
     #datesPending = false;
 
+    /**
+     * Settles once every import or replace in flight has finished. Auth requests wait for it, so
+     * none reads a restored row before the conversion that runs on the next request has reached it.
+     */
+    #restoreDone: Promise<void> = Promise.resolve();
+
     /** Where `user.emailCanonical` lives physically, known once `#ensureReady` has run. */
     #canonicalEmail: CanonicalEmailColumn | undefined;
 
@@ -461,8 +467,21 @@ class LunoraAuthDO {
             return Response.json({ error: "unauthorized" }, { status: 401 });
         }
 
+        // Settled in the `finally` below once a restore has finished, whatever its outcome.
+        let restored: (() => void) | undefined;
+
         try {
             const body: Record<string, unknown> = await request.json();
+
+            if (body["op"] === "import" || body["op"] === "replace") {
+                const done = Promise.withResolvers<undefined>();
+                const previous = this.#restoreDone;
+
+                restored = () => {
+                    done.resolve(undefined);
+                };
+                this.#restoreDone = previous.then(async () => done.promise);
+            }
 
             const result = await handleMoveRequest(this.#storage, body, {
                 canonicalEmail: () => this.#canonicalEmail,
@@ -489,7 +508,6 @@ class LunoraAuthDO {
             // move's `write`: the move compares each copied row with its source, and a rewrite would read as a collision.
             if (body["op"] === "import" || body["op"] === "replace") {
                 this.#backfillPending = true;
-                this.#datesPending = true;
             }
 
             return Response.json(result);
@@ -508,6 +526,12 @@ class LunoraAuthDO {
             }
 
             return Response.json({ error: body }, { status });
+        } finally {
+            if (restored !== undefined) {
+                // Even when the restore failed part-way: an import commits row by row.
+                this.#datesPending = true;
+                restored();
+            }
         }
     }
 
@@ -560,16 +584,18 @@ class LunoraAuthDO {
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
 
-        if (url.pathname === RESOLVE_SESSION_PATH) {
-            return this.#resolveSession(request);
+        if (url.pathname === MOVE_PATH) {
+            return this.#move(request);
         }
 
         if (url.pathname === READ_AUDIT_PATH) {
             return this.#readAudit(request);
         }
 
-        if (url.pathname === MOVE_PATH) {
-            return this.#move(request);
+        await this.#restoreDone;
+
+        if (url.pathname === RESOLVE_SESSION_PATH) {
+            return this.#resolveSession(request);
         }
 
         const auth = this.#ensureReady();

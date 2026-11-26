@@ -2,7 +2,7 @@ import { getAuthTables } from "better-auth/db";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { BackfillSteps } from "./canonical-email";
-import { readBackfillState, runBackfill, runBackfillSync, writeBackfillState } from "./canonical-email";
+import { BACKFILL_STATE_TABLE, runBackfill, runBackfillSync } from "./canonical-email";
 import type { LunoraAuthOptions } from "./create-auth";
 import { resolveAuthOptions } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
@@ -124,6 +124,40 @@ const assertConvertible = function* assertConvertible(entry: DateTable): Backfil
     );
 };
 
+const STATE_TABLE = quoteIdentifier(BACKFILL_STATE_TABLE);
+
+/** The state table, created if absent: a database that never ran a backfill lacks it. */
+const STATE_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${STATE_TABLE} ("name" TEXT NOT NULL PRIMARY KEY, "cursor" TEXT NOT NULL)`;
+
+/** The record exactly as stored, so a later write can check it is still the one this run read. */
+const readDatesRecord = function* readDatesRecord(): BackfillSteps<string | undefined> {
+    yield { params: [], sql: STATE_TABLE_DDL };
+
+    const [row] = yield { params: [DATES_STATE], sql: `SELECT "cursor" FROM ${STATE_TABLE} WHERE "name" = ?` };
+    const cursor = row?.["cursor"];
+
+    return typeof cursor === "string" ? cursor : undefined;
+};
+
+const parseDatesState = (raw: string | undefined): DatesState | undefined => {
+    try {
+        return raw === undefined ? undefined : asDatesState(JSON.parse(raw));
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Overwrite the record unconditionally with a value no run has read, so a conversion in flight
+ * cannot then record itself clean: its compare-and-swap no longer matches.
+ */
+const invalidateDatesRecord = (): { params: unknown[]; sql: string } => {
+    return {
+        params: [DATES_STATE, JSON.stringify({ invalidated: crypto.randomUUID() })],
+        sql: `INSERT INTO ${STATE_TABLE} ("name", "cursor") VALUES (?, ?) ON CONFLICT ("name") DO UPDATE SET "cursor" = excluded."cursor"`,
+    };
+};
+
 /**
  * The conversion's statements. With `now`, an automatic run: skipped once a run over the same
  * coverage came back clean more than {@link DATES_GRACE_MS} ago, and recorded when it finishes.
@@ -131,7 +165,8 @@ const assertConvertible = function* assertConvertible(entry: DateTable): Backfil
 const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, now?: number): BackfillSteps<AuthDateConversion[]> {
     const tables = yield* presentTables(options);
     const coverage = tables.map((entry) => [entry.table, ...entry.columns]);
-    const stored = now === undefined ? undefined : asDatesState(yield* readBackfillState(DATES_STATE));
+    const raw = now === undefined ? undefined : yield* readDatesRecord();
+    const stored = parseDatesState(raw);
     const recorded = JSON.stringify(stored?.coverage) === JSON.stringify(coverage) ? stored : undefined;
 
     if (now !== undefined && recorded !== undefined && now - recorded.since >= DATES_GRACE_MS) {
@@ -166,7 +201,12 @@ const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, no
     }
 
     if (now !== undefined) {
-        yield* writeBackfillState(DATES_STATE, { coverage, since: recorded?.since ?? now } satisfies DatesState);
+        const cursor = JSON.stringify({ coverage, since: recorded?.since ?? now } satisfies DatesState);
+
+        // Only over the record this run read: a restore that wrote rows meanwhile has replaced it.
+        yield raw === undefined
+            ? { params: [DATES_STATE, cursor], sql: `INSERT INTO ${STATE_TABLE} ("name", "cursor") VALUES (?, ?) ON CONFLICT ("name") DO NOTHING` }
+            : { params: [cursor, DATES_STATE, raw], sql: `UPDATE ${STATE_TABLE} SET "cursor" = ? WHERE "name" = ? AND "cursor" = ?` };
     }
 
     return conversions;
@@ -211,15 +251,14 @@ const convertAuthDatesOnce = async (executor: SqlExecutor, options: LunoraAuthOp
 const convertAuthDatesOnceSync = (exec: (sql: string, params: unknown[]) => Record<string, unknown>[], options: LunoraAuthOptions): AuthDateConversion[] =>
     runBackfillSync(conversionSteps(options, Date.now()), exec);
 
-/** Drop the record of a finished conversion, so the next automatic run converts again. */
-const forgetSteps = function* forgetSteps(): BackfillSteps<void> {
-    // Read first: it creates the state table, which a database that never ran a backfill lacks.
-    yield* readBackfillState(DATES_STATE);
-    yield* writeBackfillState(DATES_STATE, undefined);
+/**
+ * The statements an import or replace runs so the next automatic run converts what it restores: a
+ * snapshot can bring back dates an earlier version wrote as ISO strings. Run the DDL before writing
+ * any row; the invalidation can join a replace's atomic batch.
+ */
+const datesInvalidation = (): { ddl: { params: unknown[]; sql: string }; invalidate: { params: unknown[]; sql: string } } => {
+    return { ddl: { params: [], sql: STATE_TABLE_DDL }, invalidate: invalidateDatesRecord() };
 };
 
-/** After an import or replace: a restored snapshot can bring back dates an earlier version wrote as ISO strings. */
-const forgetAuthDatesConversion = async (sql: Pick<SqlExecutor, "all">): Promise<void> => runBackfill(forgetSteps(), sql);
-
 export type { AuthDateConversion };
-export { convertAuthDatesOnce, convertAuthDatesOnceSync, convertAuthDatesToEpochMs, forgetAuthDatesConversion };
+export { convertAuthDatesOnce, convertAuthDatesOnceSync, convertAuthDatesToEpochMs, datesInvalidation };
