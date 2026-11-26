@@ -16,7 +16,6 @@ import {
     backfillCanonicalEmails,
     backfillCanonicalEmailsThroughAdapter,
     canonicalEmail,
-    MAX_REPORTED_DUPLICATES,
     withCanonicalEmail,
 } from "../src/canonical-email";
 import type { LunoraAuthOptions } from "../src/create-auth";
@@ -182,10 +181,11 @@ describe("canonical email", () => {
         await expect(port.importRows([userRow("a", UPPER), userRow("b", LOWER)])).resolves.toMatchObject({ conflicts: 0, errors: [], inserted: 2 });
 
         expect([canonicalOf("a"), canonicalOf("b")]).toStrictEqual([canonicalEmail(UPPER), null]);
-        expect(warn).toHaveBeenCalledWith(
-            expect.stringContaining("1 user row(s) share an address"),
-            expect.objectContaining({ count: 1, event: "lunora.auth.canonical_email_duplicate" }),
-        );
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 user row(s) share an address"), {
+            count: 1,
+            event: "lunora.auth.canonical_email_duplicate",
+            table: "user",
+        });
 
         warn.mockRestore();
     });
@@ -776,10 +776,11 @@ describe("canonical email on the schema paths", () => {
 
         await expect(backfillCanonicalEmails({ all: cutShortAfter(database, "user", 3) }, column)).rejects.toThrow("Too many API requests");
         // Those rows are behind the saved position: a retry would never report them.
-        expect(warn).toHaveBeenCalledWith(
-            expect.stringContaining("600 user row(s)"),
-            expect.objectContaining({ count: 600, rows: expect.toSatisfy((rows: unknown[]) => rows.length === MAX_REPORTED_DUPLICATES) }),
-        );
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("600 user row(s)"), {
+            count: 600,
+            event: "lunora.auth.canonical_email_duplicate",
+            table: "user",
+        });
 
         const all = vi.fn<SqlExecutor["all"]>(executorFor(database).all);
 

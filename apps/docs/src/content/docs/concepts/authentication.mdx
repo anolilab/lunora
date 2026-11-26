@@ -268,9 +268,9 @@ const { canonicalEmail } = await authBackfillStatus(d1Executor(env.DB), options)
 // canonicalEmail.inProgress a pass stopped part-way and resumes on the next call
 ```
 
-It only reads, and runs at most a handful of statements. The auth Durable
-Object keeps its tables in its own storage, so there the log record is the
-signal.
+It only reads, runs at most a handful of statements, and needs SQLite (D1).
+On Postgres or MySQL, and in the auth Durable Object, which keeps its tables in
+its own storage, the log record is the signal.
 
 ## The client side
 

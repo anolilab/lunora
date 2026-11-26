@@ -432,8 +432,8 @@ const duplicateRows = (skipped: { canonical: string; id: string }[], holders: Re
 };
 
 /**
- * Pages one D1 run fills at most: three queries a page (read, write, position), and a fourth when it skips rows
- * (their holders), so a run leaves most of the
+ * Pages one D1 run fills at most: three queries a page (read, write, position), plus one read of the skipped rows'
+ * holders a run, so a run leaves most of the
  * per-invocation query limit (50 on the Workers Free plan) to the request it shares it with. The rest of a
  * larger table fills over later runs.
  */
@@ -489,6 +489,18 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
     const state = `${column.table}.${column.canonical}`;
     const resumed = yield* readBackfillState(state);
     let after = typeof resumed === "number" ? resumed : 0;
+    // The skipped rows to name in the report; their holders are read once, when the run ends.
+    const reported: { canonical: string; id: string }[] = [];
+    const reportHolders = function* reportHolders(): BackfillSteps<void> {
+        if (reported.length > 0) {
+            const holders = yield {
+                params: [JSON.stringify([...new Set(reported.map((row) => row.canonical))])],
+                sql: `SELECT "id", ${canonical} FROM ${table} WHERE ${canonical} IN (SELECT "value" FROM json_each(?))`,
+            };
+
+            tally.duplicate(0, duplicateRows(reported, holders, column.canonical));
+        }
+    };
 
     for (let page = 0; page < maxPages; page += 1) {
         const rows = yield {
@@ -514,14 +526,8 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
         // A row with an address that is not the page's first for its canonical value, or whose fill the guard refused.
         const left = skippedRows(rows, (row) => filledRids.has((row as Record<string, unknown>)["rid"]));
 
-        if (left.length > 0) {
-            const holders = yield {
-                params: [JSON.stringify([...new Set(left.map((row) => row.canonical))])],
-                sql: `SELECT "id", ${canonical} FROM ${table} WHERE ${canonical} IN (SELECT "value" FROM json_each(?))`,
-            };
-
-            tally.duplicate(left.length, duplicateRows(left, holders, column.canonical));
-        }
+        tally.duplicate(left.length);
+        reported.push(...left.slice(0, MAX_REPORTED_DUPLICATES - reported.length));
 
         const last = rows.at(-1)?.["rid"];
 
@@ -530,6 +536,7 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
                 yield* writeBackfillState(state, undefined);
             }
 
+            yield* reportHolders();
             tally.done();
 
             return;
@@ -538,6 +545,8 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
         after = last;
         yield* writeBackfillState(state, after);
     }
+
+    yield* reportHolders();
 };
 
 /**
@@ -546,13 +555,14 @@ const backfillSteps = function* backfillSteps(column: CanonicalEmailColumn, maxP
  * address keeps it: one that held it before the pass, else the first of the pair the pass read (in
  * `rowid` order, or `id` order through the adapter). `authBackfillStatus` answers the same on demand.
  */
-const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn, rows: DuplicateRow[] = []): void => {
+const warnDuplicates = (duplicates: number, column: CanonicalEmailColumn, rows?: DuplicateRow[]): void => {
     if (duplicates > 0) {
         // eslint-disable-next-line no-console -- no injected logger at the migration layer (workerd/Node both capture console)
         console.warn(
             `@lunora/auth: ${String(duplicates)} user row(s) share an address with another account once case and Unicode form are ignored, ` +
                 `so their "${column.canonical}" stays empty and they are not protected against a further duplicate. Merge or rename them.`,
-            { count: duplicates, event: "lunora.auth.canonical_email_duplicate", rows, table: column.table },
+            // `rows` is left out, not empty, when the caller did not collect them, so an empty list never reads as "none".
+            { count: duplicates, event: "lunora.auth.canonical_email_duplicate", table: column.table, ...(rows === undefined ? {} : { rows }) },
         );
     }
 };
@@ -598,7 +608,8 @@ const backfillCanonicalEmails = async (executor: BackfillExecutor, column: Canon
     try {
         await runBackfill(backfillSteps(column, BACKFILL_MAX_PAGES, tally), executor);
     } finally {
-        warnDuplicates(report.duplicates, column, report.rows);
+        // A run cut short before its end has not read the holders: its rows are unknown, not absent.
+        warnDuplicates(report.duplicates, column, report.rows.length > 0 ? report.rows : undefined);
     }
 
     return report;
@@ -611,7 +622,8 @@ const backfillCanonicalEmailsSync = (exec: (sql: string, params: unknown[]) => R
     try {
         runBackfillSync(backfillSteps(column, BACKFILL_MAX_PAGES_SYNC, tally), exec);
     } finally {
-        warnDuplicates(report.duplicates, column, report.rows);
+        // A run cut short before its end has not read the holders: its rows are unknown, not absent.
+        warnDuplicates(report.duplicates, column, report.rows.length > 0 ? report.rows : undefined);
     }
 
     return report;

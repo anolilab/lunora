@@ -31,13 +31,16 @@ interface AuthBackfillStatus {
 
 /** Whether the backfill named `name` has a saved position. A missing state table means no pass has started. */
 const hasSavedPosition = async (executor: BackfillExecutor, name: string): Promise<boolean> => {
-    try {
-        const rows = await executor.all(`SELECT 1 FROM ${quote(BACKFILL_STATE_TABLE)} WHERE "name" = ?`, [name]);
+    // Checked rather than caught, so a failed read reaches the caller instead of reading as "not in progress".
+    const tables = await executor.all(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, [BACKFILL_STATE_TABLE]);
 
-        return rows.length > 0;
-    } catch {
+    if (tables.length === 0) {
         return false;
     }
+
+    const rows = await executor.all(`SELECT 1 FROM ${quote(BACKFILL_STATE_TABLE)} WHERE "name" = ?`, [name]);
+
+    return rows.length > 0;
 };
 
 /**
@@ -45,9 +48,11 @@ const hasSavedPosition = async (executor: BackfillExecutor, name: string): Promi
  * operator script: how many `user` rows are still unfilled, which of them another account blocks
  * (with that account's id), and whether a pass is part-way.
  *
- * Read-only, and bounded: at most four statements for the canonical email and one for invitations. Use the
- * executor over the database the auth tables live in (`d1Executor(env.DB)`). The auth Durable Object
- * keeps its tables in its own storage, which no executor reaches.
+ * Read-only, and bounded: at most five statements for the canonical email and two for invitations. SQLite
+ * only (it reads `rowid`, `json_each` and `sqlite_master`): use the executor over the D1 database the auth
+ * tables live in (`d1Executor(env.DB)`). Postgres and MySQL, which `ensureMigrated` backfills through
+ * better-auth's adapter, are not covered, and the auth Durable Object keeps its tables in its own
+ * storage, which no executor reaches.
  *
  * ```ts
  * const status = await authBackfillStatus(d1Executor(env.DB), authOptions);
