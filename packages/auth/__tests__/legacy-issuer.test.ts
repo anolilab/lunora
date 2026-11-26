@@ -24,6 +24,12 @@ describe("schemaDeclaresIssuer", () => {
         expect(schemaDeclaresIssuer(["id", "providerId", "accountId", "issuer"])).toBe(true);
     });
 
+    it("claims it in another ASCII case, which SQLite resolves to the same column", () => {
+        expect.assertions(1);
+
+        expect(schemaDeclaresIssuer(["id", "Issuer"])).toBe(true);
+    });
+
     it("disclaims it for the schema better-auth 1.7.3 actually resolves", () => {
         expect.assertions(2);
 
