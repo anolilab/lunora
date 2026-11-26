@@ -52,7 +52,7 @@ import { LunoraError } from "@lunora/errors";
 import type { ColumnValidator, Infer, Validator } from "@lunora/values";
 import { optionalInner, v } from "@lunora/values";
 
-import type { OrderBy, QueryArgs, WhereOperators } from "./data-model";
+import type { ColumnWhere, OrderBy, QueryArgs, WhereOperators } from "./data-model";
 
 /** Default `limit` when the caller doesn't ask for one. */
 const DEFAULT_LIMIT = 25;
@@ -91,7 +91,7 @@ type ListFilterShape<TDocument> = { [K in keyof TDocument & string]?: Validator<
 
 /** The `where` argument: each declared filter column, optionally, as a bare value or an operator object. */
 type ListWhere<F> = {
-    [K in keyof F]?: Infer<NonNullable<F[K]>> | ListFilterOperators<Infer<NonNullable<F[K]>>>;
+    [K in keyof F]?: ColumnWhere<Infer<NonNullable<F[K]>>>;
 };
 
 /** One `orderBy` entry. `direction` defaults to `"asc"`. */
@@ -383,7 +383,11 @@ const defineListArgs =
                 stringFields.add(field);
             }
 
-            whereShape[field] = v.optional(v.union(validator, operatorsValidator(validator, maxInValues)));
+            // An optional column is stored as SQL NULL when unset, so `null` is how a filter asks for that, as on `ctx.db`.
+            // The column's own validator, not its unwrapped inner one, so its refinements still run.
+            const operand = optionalInner(validator) === undefined ? validator : v.union(validator, v.null());
+
+            whereShape[field] = v.optional(v.union(operand, operatorsValidator(operand, maxInValues)));
         }
 
         // With no sortable columns declared the `field` slot must be unsatisfiable —

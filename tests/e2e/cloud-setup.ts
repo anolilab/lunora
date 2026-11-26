@@ -51,11 +51,16 @@ const DEV_VARS_PATH = join(CLOUD_ROOT, ".dev.vars");
  * which the seed needs before an organization can be placed on a cell.
  * `MAIL_FROM` keeps better-auth's send-on-sign-up verification mail from
  * throwing; in dev it is captured, not delivered.
+ * `CREEM_WEBHOOK_SECRET` lets the seed sign the `subscription.active` webhook
+ * that gives its organization the pro plan. Without it the org resolves to the
+ * free plan and the paid tabs render a short upsell, which the shell spec
+ * cannot scroll.
  */
 const DEV_VARS = `# Written by tests/e2e/cloud-setup.ts because none existed. Do not commit.
 LUNORA_ADMIN_TOKEN="cloud-e2e-deterministic-admin-token"
 AUTH_SECRET="cloud-e2e-deterministic-secret-do-not-use-in-prod"
 MAIL_FROM="Lunora Cloud E2E <noreply@lunora.test>"
+CREEM_WEBHOOK_SECRET="cloud-e2e-deterministic-webhook-secret"
 `;
 
 /** Keys whose absence stops the worker booting at all — see {@link DEV_VARS}. */
@@ -67,16 +72,20 @@ const REQUIRED_KEYS = ["AUTH_SECRET", "LUNORA_ADMIN_TOKEN"];
  * Writes the deterministic `.dev.vars` first, but only if the app has none —
  * create-if-absent for the same reason `examples-setup.ts` gives: Vite watches
  * the file, this module is re-imported by every Playwright process, and a
- * write-then-restore cycle restarts the dev server mid-run. A developer's own
- * secrets are left alone; if theirs is missing a required key we skip rather
- * than overwrite it.
+ * write-then-restore cycle restarts the dev server mid-run. One this suite wrote
+ * from an older {@link DEV_VARS} is replaced once, so a checkout does not keep
+ * running on stale vars. A developer's own secrets are left alone; if theirs is
+ * missing a required key we skip rather than overwrite it.
  */
 export const cloudSkipReason = (): string | undefined => {
     if (!existsSync(join(CLOUD_ROOT, "package.json"))) {
         return "apps/cloud is not present in this checkout";
     }
 
-    if (!existsSync(DEV_VARS_PATH)) {
+    const existing = existsSync(DEV_VARS_PATH) ? readFileSync(DEV_VARS_PATH, "utf8") : undefined;
+    const writtenHere = existing?.startsWith(DEV_VARS.slice(0, DEV_VARS.indexOf("\n"))) ?? false;
+
+    if (existing === undefined || (writtenHere && existing !== DEV_VARS)) {
         writeFileSync(DEV_VARS_PATH, DEV_VARS, "utf8");
     }
 

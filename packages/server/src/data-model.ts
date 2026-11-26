@@ -182,6 +182,12 @@ type OneRelationFields<RelT> = {
     [K in keyof RelT]: RelT[K] extends { __field: infer Field extends string; __relationKind: "one" } ? Field : never;
 }[keyof RelT];
 
+/**
+ * The `where` operand for one column. An optional column reads back absent, never `null`, yet it is stored as SQL NULL,
+ * so `null` is how a filter asks for "not set" (`IS NULL`, as `isNull: true` does).
+ */
+export type ColumnWhere<TValue> = undefined extends TValue ? TValue | WhereOperators<TValue | null> | null : TValue | WhereOperators<TValue>;
+
 /** A branded id for table `TName`. Structurally a `string` at runtime. */
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -201,7 +207,7 @@ export interface WhereOperators<T> {
 
 /** A typed `where` tree over a document's columns. */
 export type Where<TDocument> = PathWhere<TDocument> & {
-    [K in keyof TDocument]?: TDocument[K] | WhereOperators<TDocument[K]>;
+    [K in keyof TDocument]?: ColumnWhere<TDocument[K]>;
 } & {
     AND?: Where<TDocument>[];
     NOT?: Where<TDocument>;
@@ -262,7 +268,7 @@ export interface ManyRelationWhere<W> {
  */
 export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = PathWhere<DM[T]> &
     RelationWhere<DM, REL, T> & {
-        [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
+        [K in keyof DM[T]]?: ColumnWhere<DM[T][K]>;
     } & {
         AND?: WhereOf<DM, REL, T>[];
         NOT?: WhereOf<DM, REL, T>;

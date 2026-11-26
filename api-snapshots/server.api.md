@@ -1128,7 +1128,7 @@ interface ListOrderByEntry<O extends string> {
 
 ```ts
 type ListWhere<F> = {
-    [K in keyof F]?: Infer<NonNullable<F[K]>> | ListFilterOperators<Infer<NonNullable<F[K]>>>;
+    [K in keyof F]?: ColumnWhere<Infer<NonNullable<F[K]>>>;
 };
 ```
 
@@ -4069,6 +4069,12 @@ const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S, outbox?: Sc
 type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
 ```
 
+### `ColumnWhere` (type)
+
+```ts
+type ColumnWhere<TValue> = undefined extends TValue ? TValue | WhereOperators<TValue | null> | null : TValue | WhereOperators<TValue>;
+```
+
 ### `DatabaseReaderFacade` (type)
 
 ```ts
@@ -4527,7 +4533,7 @@ type UpsertTargetOf<DM, T extends keyof DM> = ReadonlyArray<keyof DM[T] & string
 
 ```ts
 type Where<TDocument> = PathWhere<TDocument> & {
-    [K in keyof TDocument]?: TDocument[K] | WhereOperators<TDocument[K]>;
+    [K in keyof TDocument]?: ColumnWhere<TDocument[K]>;
 } & {
     AND?: Where<TDocument>[];
     NOT?: Where<TDocument>;
@@ -4539,7 +4545,7 @@ type Where<TDocument> = PathWhere<TDocument> & {
 
 ```ts
 type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = PathWhere<DM[T]> & RelationWhere<DM, REL, T> & {
-    [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
+    [K in keyof DM[T]]?: ColumnWhere<DM[T][K]>;
 } & {
     AND?: WhereOf<DM, REL, T>[];
     NOT?: WhereOf<DM, REL, T>;

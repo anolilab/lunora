@@ -402,13 +402,11 @@ const serverInList =
         }
 
         const tests = wideListTests(engine, reference, parts);
-
-        if (tests.length === 0) {
-            // Every value was NULL: an `IN` over nothing but NULL matches no row.
-            return sql`1 = 0`;
-        }
-
-        const members = tests.length === 1 ? (tests[0] as SQL) : sql`(${sql.join(tests, sql` OR `)})`;
+        // A NULL in the list makes a miss UNKNOWN rather than false, which a `NOT` around the filter must still see.
+        // `1 = NULL` is that UNKNOWN, typed boolean on both engines.
+        const unknown = parts.hasNull ? [sql`1 = NULL`] : [];
+        const terms = [...tests, ...unknown];
+        const members = terms.length === 1 ? (terms[0] as SQL) : sql`(${sql.join(terms, sql` OR `)})`;
 
         return negated ? sql`NOT (${members})` : members;
     };

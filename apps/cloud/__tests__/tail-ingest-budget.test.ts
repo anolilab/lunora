@@ -18,7 +18,9 @@ describe(admitTailLines, () => {
     it("stores an organization's lines within its ceiling, then one notice per batch dropped, then nothing", async () => {
         expect.assertions(4);
 
-        const limiter = new RateLimiter({ config: TAIL_LOG_LIMITS, store: createMemoryStore() });
+        // A frozen clock: the buckets refill continuously (a line every 10ms), so on a slow runner the real clock
+        // admits some of the single lines below and leaves a notice over for the last one.
+        const limiter = new RateLimiter({ config: TAIL_LOG_LIMITS, now: () => 1_700_000_000_000, store: createMemoryStore() });
         let stored = 0;
 
         // 12 full batches: the ceiling holds 12 of them in a minute.

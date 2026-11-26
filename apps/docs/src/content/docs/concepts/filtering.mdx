@@ -101,6 +101,18 @@ terminal (`.collect()`, `.first()`, `.take(n)`, `.unique()`, `.paginate()`).
 Applying `.take(n)` after a filter still reads whatever the index range
 produced, because the predicate has to run before the limit can be counted.
 
+## An optional column that is not set
+
+An optional column (`v.optional(...)`) reads back absent when it has no value, but a `where` asks for
+that state with `null`:
+
+```ts
+await ctx.db.chatFiles.findFirst({ where: { discardingAt: null, storageId } });
+```
+
+`{ discardingAt: { isNull: true } }` says the same thing, and `{ isNull: false }` keeps the rows where the
+column is set. `null` on a column that is neither optional nor nullable is a compile error.
+
 ## Inside an object column
 
 A key with dots reaches into an object column: `"profile.address.city"` is `city` inside `address` inside

@@ -141,6 +141,12 @@ const wideListCase = (target: BackendParityTarget) => async (): Promise<void> =>
     await expect(labelsWhere({ label: { in: [...DECOY_LABELS, "hit"] } })).resolves.toStrictEqual(["hit"]);
     await expect(labelsWhere({ n: { in: [...DECOY_NUMBERS, 7] } })).resolves.toStrictEqual(["hit"]);
     await expect(labelsWhere({ label: { notIn: [...DECOY_LABELS, "hit"] } })).resolves.toStrictEqual(["miss"]);
+
+    // A NULL in the list leaves a miss UNKNOWN, not false, so a NOT around it keeps excluding the row, as a narrow
+    // list does.
+    await expect(labelsWhere({ NOT: { label: { in: ["hit", null] } } })).resolves.toStrictEqual([]);
+    await expect(labelsWhere({ NOT: { label: { in: [...DECOY_LABELS, "hit", null] } } })).resolves.toStrictEqual([]);
+    await expect(labelsWhere({ NOT: { label: { in: Array.from({ length: WIDE }).fill(null) } } })).resolves.toStrictEqual([]);
 };
 
 const severalWideListsCase = (target: BackendParityTarget) => async (): Promise<void> => {
