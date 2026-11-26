@@ -1,7 +1,7 @@
 import type { CustomAdapter } from "better-auth/adapters";
 import { createAdapterFactory } from "better-auth/adapters";
 
-import { decodeAuthDate, encodeAuthDate } from "./dates";
+import { decodeAuthDate, encodeAuthDate } from "./date-codec";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor, doTransactionRunner } from "./do-store";
 import { d1TableInfo, doTableInfo, withAuthSchemaCheck } from "./schema-check";
