@@ -114,7 +114,10 @@ const indexedExpressions = (createIndexSql: string): string => {
  * @param accountColumns Physical column names better-auth's resolved account model declares.
  * @returns `true` when the column is part of the current schema, and so is not the reverted one.
  */
-export const schemaDeclaresIssuer = (accountColumns: Iterable<string>): boolean => [...accountColumns].includes(ISSUER_COLUMN);
+export const schemaDeclaresIssuer = (accountColumns: Iterable<string>): boolean =>
+    // SQLite resolves column names case-insensitively (ASCII), so a declared `Issuer` is the same
+    // column the probe and `DROP COLUMN "issuer"` would hit.
+    [...accountColumns].some((column) => column.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase()) === ISSUER_COLUMN);
 
 /**
  * The names of the indexes referencing the column, read from `sqlite_master` rows.
