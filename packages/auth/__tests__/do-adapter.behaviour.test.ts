@@ -178,9 +178,16 @@ describe("lunoraDoAdapter", () => {
         const d1Backed = createAuth({
             database: lunoraD1Adapter({ prepare: () => undefined } as never),
             plugins: [scim(scimOptions)],
+            advanced: { database: { validateSchema: false } },
+            rateLimit: { enabled: false },
             secret: SECRET,
         });
 
-        await expect(handleAuthRequest(d1Backed, scimRequest("/Users", "GET"))).rejects.toThrow(/native transaction support/iu);
+        const response = await handleAuthRequest(d1Backed, scimRequest("/Users", "GET"));
+
+        expect({ body: await response?.text(), status: response?.status }).toStrictEqual({
+            body: expect.stringMatching(/native transaction support/iu),
+            status: 501,
+        });
     });
 });

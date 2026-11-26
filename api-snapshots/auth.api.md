@@ -3123,7 +3123,9 @@ const registerSSOProvider: <O extends SSOOptions>(options: O) => import("better-
     }>>[];
     metadata: {
         $Infer: {
-            body: Record<string, any> & SSOProviderAdditionalFieldsInput<O>;
+            body: {
+                [x: string]: any;
+            } & SSOProviderAdditionalFieldsInput<O>;
         };
         openapi: {
             operationId: string;

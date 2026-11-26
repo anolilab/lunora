@@ -316,14 +316,21 @@ describe("scim adapter requirement", () => {
 
         // Pins a constraint otherwise rediscovered the hard way: `lunoraD1Adapter` (and
         // `lunoraAuthAdapter` beneath it) is single-table CRUD over `ctx.db`, so the SCIM
-        // plugin rejects it. The rejection is asynchronous — `createAuth` returns and the
-        // plugin fails when the adapter is first resolved — so it surfaces on use.
+        // plugin refuses it: `createAuth` returns, and every SCIM route answers 501. Schema
+        // validation and rate limiting are off so nothing reaches the stub binding first.
         const unsupported = createAuth({
             database: lunoraD1Adapter({ prepare: () => undefined } as never),
             plugins: [scim(scimOptions)],
+            advanced: { database: { validateSchema: false } },
+            rateLimit: { enabled: false },
             secret: SECRET,
         });
 
-        await expect(handleAuthRequest(unsupported, scimRequest("/Users", "GET"))).rejects.toThrow(/native transaction support/iu);
+        const response = await handleAuthRequest(unsupported, scimRequest("/Users", "GET"));
+
+        expect({ body: await response?.text(), status: response?.status }).toStrictEqual({
+            body: expect.stringMatching(/native transaction support/iu),
+            status: 501,
+        });
     });
 });
