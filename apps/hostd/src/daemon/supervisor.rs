@@ -642,7 +642,18 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        assert_eq!(runs(&root), expected);
+        // So the two rollback launches land in either order.
+        let mut seen = runs(&root);
+
+        assert_eq!(seen.len(), expected.len(), "{seen:?}");
+        seen[4..].sort();
+
+        let mut rollback = expected[4..].to_vec();
+
+        rollback.sort();
+
+        assert_eq!(seen[..4], expected[..4]);
+        assert_eq!(seen[4..], rollback[..]);
         assert!(supervisor.is_running("first") && supervisor.is_running("second"));
 
         supervisor.shutdown().await;
