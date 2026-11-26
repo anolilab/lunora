@@ -201,6 +201,22 @@ describe("defineListArgs — contains is string-only", () => {
         expect(parsed.where).toEqual({ nickname: { contains: "bob" } });
     });
 
+    it("accepts null on a v.optional(...) column as the filter for not set", () => {
+        expect.assertions(4);
+
+        const optionalSpec = defineListArgs<{ _creationTime: number; discardingAt?: number; score: number }>()({
+            filter: { discardingAt: v.optional(v.number()), score: v.number() },
+            orderBy: [],
+        });
+        const parseOptional = (raw: Record<string, unknown>) => parseValidatorMap(optionalSpec.args as never, raw, "args");
+
+        expect(parseOptional({ where: { discardingAt: null } }).where).toEqual({ discardingAt: null });
+        expect(parseOptional({ where: { discardingAt: { in: [null, 5], ne: null } } }).where).toEqual({ discardingAt: { in: [null, 5], ne: null } });
+        expect(optionalSpec.toQueryArgs({ where: { discardingAt: null } }).where).toEqual({ discardingAt: null });
+        // A required column is never NULL, so it keeps refusing it.
+        expect(() => parseOptional({ where: { score: null } })).toThrow(ValidationError);
+    });
+
     it("accepts contains on an enum column (a union of string literals)", () => {
         expect.assertions(2);
 

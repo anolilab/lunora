@@ -186,7 +186,7 @@ type OneRelationFields<RelT> = {
  * The `where` operand for one column. An optional column reads back absent, never `null`, yet it is stored as SQL NULL,
  * so `null` is how a filter asks for "not set" (`IS NULL`, as `isNull: true` does).
  */
-type ColumnWhere<TValue> = undefined extends TValue ? TValue | WhereOperators<TValue | null> | null : TValue | WhereOperators<TValue>;
+export type ColumnWhere<TValue> = undefined extends TValue ? TValue | WhereOperators<TValue | null> | null : TValue | WhereOperators<TValue>;
 
 /** A branded id for table `TName`. Structurally a `string` at runtime. */
 export type Id<TName extends string> = string & { readonly __table: TName };

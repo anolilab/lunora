@@ -1128,7 +1128,7 @@ interface ListOrderByEntry<O extends string> {
 
 ```ts
 type ListWhere<F> = {
-    [K in keyof F]?: Infer<NonNullable<F[K]>> | ListFilterOperators<Infer<NonNullable<F[K]>>>;
+    [K in keyof F]?: ColumnWhere<Infer<NonNullable<F[K]>>>;
 };
 ```
 
@@ -4069,6 +4069,12 @@ const withDeferredSchedules: <S extends SchedulerLike>(scheduler: S, outbox?: Sc
 type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
 ```
 
+### `ColumnWhere` (type)
+
+```ts
+type ColumnWhere<TValue> = undefined extends TValue ? TValue | WhereOperators<TValue | null> | null : TValue | WhereOperators<TValue>;
+```
+
 ### `DatabaseReaderFacade` (type)
 
 ```ts
@@ -6561,12 +6567,6 @@ type ColumnPaths<Doc> = {
     ] ? `${K}.${SubPaths<NonNullable<Doc[K]>, [
     ]>}` : never;
 }[keyof Doc & string];
-```
-
-### `ColumnWhere` (type)
-
-```ts
-type ColumnWhere<TValue> = undefined extends TValue ? TValue | WhereOperators<TValue | null> | null : TValue | WhereOperators<TValue>;
 ```
 
 ### `ComposedOut` (type)

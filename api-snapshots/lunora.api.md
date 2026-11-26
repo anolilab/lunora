@@ -7335,6 +7335,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ColumnWhere` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DatabaseReaderFacade` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
