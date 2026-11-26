@@ -176,9 +176,12 @@ await convertAuthDatesToEpochMs(d1Executor(env.DB), authOptions);
 
 It checks every table before it writes anything, and throws on a value that is not an
 ISO-8601 date, naming the table, column and row, without converting anything. The
-conversion runs in SQLite (D1 or a Durable Object's storage), two statements per table
-however many rows it holds, so it fits in one Worker invocation. Running it again converts
-nothing.
+conversion runs in SQLite (D1 or a Durable Object's storage), a few statements per table
+however many rows it holds, so it fits in one Worker invocation. A plugin table your app
+manages itself (`disableMigration`) is converted when it exists and skipped when it does
+not. Running it again converts nothing, so a run that stops part-way is finished by
+running it again. Run it once on deploy, before code that filters sessions by expiry
+relies on the old rows.
 
 ## Read `ctx.auth` in functions
 

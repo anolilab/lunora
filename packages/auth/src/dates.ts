@@ -15,7 +15,7 @@ import type { SqlExecutor } from "./sql-store";
  */
 
 /** An epoch-ms number already stored in a TEXT-affinity column reads back as its digits. */
-const EPOCH_DIGITS = /^-?\d+(?:\.\d+)?$/u;
+const EPOCH_DIGITS = /^\d+(?:\.\d+)?$/u;
 
 /**
  * Epoch ms for a value better-auth hands the adapter for a `date` field: a `Date` on writes,
@@ -58,12 +58,17 @@ const decodeAuthDate = (value: unknown): unknown => {
 };
 
 /**
- * A cell still holding a date string. Digits-only text is an epoch already (a TEXT-affinity
- * column stores a number as its digits), and `julianday()` would read it as a day number.
+ * A cell still holding a date string: text that is not an epoch already. `EPOCH_DIGITS` in
+ * SQL — a TEXT-affinity column stores a number as its digits, and `julianday()` would read
+ * those as a day number.
  */
-const isDateText = (column: string): string => `(typeof(${column}) = 'text' AND ${column} GLOB '*[^0-9.-]*')`;
+const isDateText = (column: string): string =>
+    `(typeof(${column}) = 'text' AND NOT (${column} GLOB '[0-9]*' AND ${column} NOT GLOB '*[^0-9.]*' AND ${column} NOT GLOB '*.*.*' AND ${column} NOT GLOB '*.'))`;
 
-/** Epoch ms for an ISO-8601 cell, computed by SQLite itself; `julianday()` is NULL for anything else. */
+/** Date text SQLite can read; `julianday()` is NULL for anything else, the empty string included. */
+const isConvertible = (column: string): string => `(${isDateText(column)} AND julianday(${column}) IS NOT NULL)`;
+
+/** Epoch ms for an ISO-8601 cell, computed by SQLite itself. */
 const toEpochMs = (column: string): string => `CAST(ROUND((julianday(${column}) - 2440587.5) * 86400000) AS INTEGER)`;
 
 /** One table rewritten by {@link convertAuthDatesToEpochMs}. */
@@ -74,6 +79,8 @@ interface AuthDateConversion {
 }
 
 interface DateTable {
+    /** Owned by the app (`disableMigration`): Lunora never creates it, so it may be absent. */
+    appManaged: boolean;
     columns: string[];
     table: string;
 }
@@ -83,6 +90,7 @@ const dateTables = (options: LunoraAuthOptions): DateTable[] =>
     Object.values(getAuthTables(resolveAuthOptions(options)))
         .map((table) => {
             return {
+                appManaged: table.disableMigrations === true,
                 columns: Object.entries(table.fields)
                     .filter(([, attribute]) => attribute.type === "date")
                     .map(([key, attribute]) => attribute.fieldName ?? key),
@@ -91,12 +99,18 @@ const dateTables = (options: LunoraAuthOptions): DateTable[] =>
         })
         .filter((entry) => entry.columns.length > 0);
 
+const tableExists = async (executor: SqlExecutor, table: string): Promise<boolean> => {
+    const rows = await executor.all(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, [table]);
+
+    return rows.length > 0;
+};
+
 /** Throws, naming the first cell of `entry` that holds text SQLite cannot read as a date. */
 const assertConvertible = async (executor: SqlExecutor, entry: DateTable): Promise<void> => {
     const checks = entry.columns.map((column) => {
         const quoted = quoteIdentifier(column);
 
-        return { column, sql: `(${quoted} = '' OR (${isDateText(quoted)} AND julianday(${quoted}) IS NULL))` };
+        return { column, sql: `(${isDateText(quoted)} AND julianday(${quoted}) IS NULL)` };
     });
     const [row] = await executor.all(
         `SELECT "id" AS "id", ${checks.map((check, index) => `${check.sql} AS "bad${String(index)}", ${quoteIdentifier(check.column)} AS "value${String(index)}"`).join(", ")} ` +
@@ -124,41 +138,60 @@ const assertConvertible = async (executor: SqlExecutor, entry: DateTable): Promi
  * filters on its date columns misbehave: SQLite orders every string above every number, so
  * a legacy `expiresAt` never matches `< now` and always matches `> now`.
  *
- * Pass the same options as `createAuth`, so the plugin tables are covered. The tables must
- * already exist. SQLite only (D1, a Durable Object's storage): the conversion runs in SQL,
- * two statements per table whatever its size, so it stays inside D1's per-invocation query
- * limit. Every table is checked before anything is written: a value that is not an ISO-8601
- * date throws, naming the table, column and row, and no row is changed. Idempotent: a
- * converted cell holds a number, which no later run touches.
+ * Pass the same options as `createAuth`, so the plugin tables are covered. The tables Lunora
+ * provisions must exist; a plugin table the app manages itself (`disableMigration`) is
+ * converted when present and skipped when absent. SQLite only (D1, a Durable Object's
+ * storage): the conversion runs in SQL, a fixed handful of statements per table whatever its
+ * size, so it stays inside D1's per-invocation query limit and returns no rows.
+ *
+ * Every table is checked before anything is written: a value that is not an ISO-8601 date
+ * throws, naming the table, column and row, and no row is changed. The update converts only
+ * text SQLite can still read as a date, so a value written meanwhile is never erased.
+ * Idempotent: a converted cell holds a number, which no later run touches, so a run that
+ * stops part-way is finished by running it again.
  *
  * ```ts
  * await convertAuthDatesToEpochMs(d1Executor(env.DB), authOptions);
  * ```
  */
 const convertAuthDatesToEpochMs = async (executor: SqlExecutor, options: LunoraAuthOptions): Promise<AuthDateConversion[]> => {
-    const tables = dateTables(options);
-    const conversions: AuthDateConversion[] = [];
+    const tables: DateTable[] = [];
+
+    for (const entry of dateTables(options)) {
+        // eslint-disable-next-line no-await-in-loop -- one probe per app-managed table, before any check
+        if (!entry.appManaged || (await tableExists(executor, entry.table))) {
+            tables.push(entry);
+        }
+    }
 
     for (const entry of tables) {
         // eslint-disable-next-line no-await-in-loop -- every table is checked before the first write
         await assertConvertible(executor, entry);
     }
 
+    const conversions: AuthDateConversion[] = [];
+
     for (const entry of tables) {
         const quoted = entry.columns.map((column) => quoteIdentifier(column));
-        // Each cell is converted only while it still holds date text, so a cell another
-        // writer has turned into a number meanwhile keeps that number.
+        const table = quoteIdentifier(entry.table);
+        const pending = quoted.map((column) => isConvertible(column)).join(" OR ");
+        // Counted before the update rather than returned by it: `RETURNING` would ship one row
+        // per converted record back through the binding.
+        // eslint-disable-next-line no-await-in-loop -- one count per table, in order
+        const [count] = await executor.all(`SELECT COUNT(*) AS "n" FROM ${table} WHERE ${pending}`, []);
+        const converted = Number(count?.["n"] ?? 0);
+
+        if (converted === 0) {
+            continue;
+        }
+
         // eslint-disable-next-line no-await-in-loop -- one statement per table, in order
-        const rows = await executor.all(
-            `UPDATE ${quoteIdentifier(entry.table)} SET ${quoted.map((column) => `${column} = CASE WHEN ${isDateText(column)} THEN ${toEpochMs(column)} ELSE ${column} END`).join(", ")} ` +
-                `WHERE ${quoted.map((column) => isDateText(column)).join(" OR ")} ` +
-                `RETURNING "id"`,
+        await executor.run(
+            `UPDATE ${table} SET ${quoted.map((column) => `${column} = CASE WHEN ${isConvertible(column)} THEN ${toEpochMs(column)} ELSE ${column} END`).join(", ")} WHERE ${pending}`,
             [],
         );
 
-        if (rows.length > 0) {
-            conversions.push({ converted: rows.length, table: entry.table });
-        }
+        conversions.push({ converted, table: entry.table });
     }
 
     return conversions;

@@ -207,4 +207,66 @@ describe("convertAuthDatesToEpochMs — rows written as ISO strings", () => {
 
         expect(storageType("user", "createdAt", userId)).toBe("text");
     });
+
+    it("converts a date-only value and refuses a malformed one made of digits and hyphens", async () => {
+        expect.hasAssertions();
+
+        const auth = buildAuth();
+        const userId = await signUp(auth);
+        makeLegacy(userId);
+        database.prepare(`UPDATE "user" SET "createdAt" = '2024-01-01' WHERE "id" = ?`).run(userId);
+        database.prepare(`UPDATE "session" SET "expiresAt" = '2024-13-45' WHERE "userId" = ?`).run(userId);
+
+        await expect(convertAuthDatesToEpochMs(executor, options)).rejects.toThrow(/session\.expiresAt of row .* "2024-13-45"/u);
+
+        database.prepare(`UPDATE "session" SET "expiresAt" = ? WHERE "userId" = ?`).run(LEGACY_EXPIRY, userId);
+        await convertAuthDatesToEpochMs(executor, options);
+
+        expect({ ...(database.prepare(`SELECT "createdAt" FROM "user" WHERE "id" = ?`).get(userId) as object) }).toStrictEqual({
+            createdAt: Date.parse("2024-01-01T00:00:00.000Z"),
+        });
+    });
+
+    it("leaves a value written between the check and the update as it is, rather than erasing it", async () => {
+        expect.hasAssertions();
+
+        const auth = buildAuth();
+        const userId = await signUp(auth);
+        makeLegacy(userId);
+
+        // Another writer lands a malformed value on a nullable date column after the check ran.
+        const racing: SqlExecutor = {
+            all: (sql, parameters) => {
+                if (sql.startsWith(`SELECT COUNT(*)`) && sql.includes(`FROM "user"`)) {
+                    database.prepare(`UPDATE "user" SET "banExpires" = 'garbage' WHERE "id" = ?`).run(userId);
+                }
+
+                return executor.all(sql, parameters);
+            },
+            run: (sql, parameters) => executor.run(sql, parameters),
+        };
+
+        await convertAuthDatesToEpochMs(racing, options);
+
+        const row = database.prepare(`SELECT "createdAt", "banExpires" FROM "user" WHERE "id" = ?`).get(userId) as { banExpires: unknown; createdAt: unknown };
+
+        expect({ ...row }).toStrictEqual({ banExpires: "garbage", createdAt: Date.parse(LEGACY_EXPIRY) });
+    });
+
+    it("skips an absent app-managed plugin table and converts it when present", async () => {
+        expect.hasAssertions();
+
+        const appOwned = {
+            id: "app-owned",
+            schema: { appGrant: { disableMigration: true, fields: { expiresAt: { required: true, type: "date" } } } },
+        } as const;
+        const withAppTable: LunoraAuthOptions = { ...options, plugins: [...(options.plugins ?? []), appOwned] };
+
+        await expect(convertAuthDatesToEpochMs(executor, withAppTable)).resolves.toStrictEqual([]);
+
+        database.exec(`CREATE TABLE "appGrant" ("id" TEXT PRIMARY KEY, "expiresAt" REAL)`);
+        database.prepare(`INSERT INTO "appGrant" ("id", "expiresAt") VALUES ('g1', ?)`).run(LEGACY_EXPIRY);
+
+        await expect(convertAuthDatesToEpochMs(executor, withAppTable)).resolves.toStrictEqual([{ converted: 1, table: "appGrant" }]);
+    });
 });

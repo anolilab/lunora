@@ -18,7 +18,7 @@ const LEGACY = "2020-01-01T00:00:00.123Z";
 
 describe("convertAuthDatesToEpochMs on workerd SQLite", () => {
     it("converts ISO strings to exact epoch ms in a Durable Object's storage", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const stub = env.AUTH_DO.get(env.AUTH_DO.idFromName("convert-dates"));
 
@@ -43,6 +43,14 @@ describe("convertAuthDatesToEpochMs on workerd SQLite", () => {
 
             expect(row).toStrictEqual({ createdAt: Date.parse(LEGACY), updatedAt: 1_700_000_000_000 });
             await expect(convertAuthDatesToEpochMs(executor, options)).resolves.toStrictEqual([]);
+
+            // An app-managed plugin table is probed through `sqlite_master`, which DO storage allows.
+            const appOwned = {
+                id: "app-owned",
+                schema: { appGrant: { disableMigration: true, fields: { expiresAt: { required: true, type: "date" } } } },
+            } as const;
+
+            await expect(convertAuthDatesToEpochMs(executor, { ...options, plugins: [appOwned] })).resolves.toStrictEqual([]);
         });
     });
 
