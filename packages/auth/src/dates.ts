@@ -58,9 +58,9 @@ const decodeAuthDate = (value: unknown): unknown => {
 };
 
 /**
- * A cell still holding a date string: text that is not an epoch already. `EPOCH_DIGITS` in
- * SQL — a TEXT-affinity column stores a number as its digits, and `julianday()` would read
- * those as a day number.
+ * A cell still holding a date string: text that does not match `EPOCH_DIGITS`. A
+ * TEXT-affinity column stores a number as its digits, and `julianday()` would read those as
+ * a day number.
  */
 const isDateText = (column: string): string =>
     `(typeof(${column}) = 'text' AND NOT (${column} GLOB '[0-9]*' AND ${column} NOT GLOB '*[^0-9.]*' AND ${column} NOT GLOB '*.*.*' AND ${column} NOT GLOB '*.'))`;
