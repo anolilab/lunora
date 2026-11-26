@@ -131,9 +131,8 @@ const assertConvertible = function* assertConvertible(entry: DateTable): Backfil
 const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, now?: number): BackfillSteps<AuthDateConversion[]> {
     const tables = yield* presentTables(options);
     const coverage = tables.map((entry) => [entry.table, ...entry.columns]);
-    const matching = (state: DatesState | undefined): DatesState | undefined =>
-        state !== undefined && JSON.stringify(state.coverage) === JSON.stringify(coverage) ? state : undefined;
-    const recorded = now === undefined ? undefined : matching(asDatesState(yield* readBackfillState(DATES_STATE)));
+    const stored = now === undefined ? undefined : asDatesState(yield* readBackfillState(DATES_STATE));
+    const recorded = JSON.stringify(stored?.coverage) === JSON.stringify(coverage) ? stored : undefined;
 
     if (now !== undefined && recorded !== undefined && now - recorded.since >= DATES_GRACE_MS) {
         return [];
