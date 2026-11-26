@@ -1,3 +1,7 @@
+## @lunora/advisor [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.297...@lunora/advisor@1.0.0-alpha.298) (2026-11-26)
+
+- fix(auth): update better-auth to 1.7.28 (#1715)
+
 ## @lunora/advisor [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.296...@lunora/advisor@1.0.0-alpha.297) (2026-11-24)
 
 - fix(advisor): keep table accepts exact and skip CAPTCHA on admin actions (#1690)

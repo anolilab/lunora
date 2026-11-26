@@ -1,3 +1,8 @@
+## @lunora/auth [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.277...@lunora/auth@1.0.0-alpha.278) (2026-11-26)
+
+- fix(auth): update better-auth to 1.7.28 (#1715)
+- fix(auth)!: never drop an account column the app's schema declares (#1714)
+
 ## @lunora/auth [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.276...@lunora/auth@1.0.0-alpha.277) (2026-11-26)
 
 - feat(auth): run the data steps and provision tables without the migrator (#1712)
