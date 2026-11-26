@@ -384,8 +384,8 @@ const defineListArgs =
             }
 
             // An optional column is stored as SQL NULL when unset, so `null` is how a filter asks for that, as on `ctx.db`.
-            const inner = optionalInner(validator);
-            const operand = inner === undefined ? validator : v.union(inner, v.null());
+            // The column's own validator, not its unwrapped inner one, so its refinements still run.
+            const operand = optionalInner(validator) === undefined ? validator : v.union(validator, v.null());
 
             whereShape[field] = v.optional(v.union(operand, operatorsValidator(operand, maxInValues)));
         }

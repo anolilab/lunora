@@ -217,6 +217,20 @@ describe("defineListArgs — contains is string-only", () => {
         expect(() => parseOptional({ where: { score: null } })).toThrow(ValidationError);
     });
 
+    it("keeps the refinements on a v.optional(...) filter column while accepting null", () => {
+        expect.assertions(3);
+
+        const checkedSpec = defineListArgs<{ _creationTime: number; discardingAt?: number }>()({
+            filter: { discardingAt: v.optional(v.number()).check((value) => value === undefined || value >= 0, { message: "not negative" }) },
+            orderBy: [],
+        });
+        const parseChecked = (raw: Record<string, unknown>) => parseValidatorMap(checkedSpec.args as never, raw, "args");
+
+        expect(parseChecked({ where: { discardingAt: null } }).where).toEqual({ discardingAt: null });
+        expect(() => parseChecked({ where: { discardingAt: -1 } })).toThrow(ValidationError);
+        expect(() => parseChecked({ where: { discardingAt: { gt: -1 } } })).toThrow(ValidationError);
+    });
+
     it("accepts contains on an enum column (a union of string literals)", () => {
         expect.assertions(2);
 
