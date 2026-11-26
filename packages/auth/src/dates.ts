@@ -90,6 +90,7 @@ const hasTextAffinity = (declared: string): boolean => !INTEGER_TYPE.test(declar
  * thrown: refusing would also hold back the conversion of every other table.
  */
 const warnTextDateColumns = function* warnTextDateColumns(entry: DateTable): BackfillSteps<void> {
+    // Per table: D1 refuses `pragma_table_info()` joined over `sqlite_master`.
     const declared = yield { params: [], sql: `PRAGMA table_info(${quoteIdentifier(entry.table)})` };
     const textual = entry.columns.filter((column) =>
         declared.some(
@@ -109,51 +110,54 @@ const warnTextDateColumns = function* warnTextDateColumns(entry: DateTable): Bac
     }
 };
 
-/** The tables to convert: every Lunora-provisioned one, and the app-managed ones that exist. */
+/** The tables to convert: every Lunora-provisioned one, and the app-managed ones that exist, found in one statement. */
 const presentTables = function* presentTables(options: LunoraAuthOptions): BackfillSteps<DateTable[]> {
-    const tables: DateTable[] = [];
+    const entries = dateTables(options);
+    const appManaged = entries.filter((entry) => entry.appManaged);
+    const found =
+        appManaged.length === 0
+            ? []
+            : yield {
+                  params: appManaged.map((entry) => entry.table),
+                  sql: `SELECT "name" FROM sqlite_master WHERE "type" = 'table' AND "name" COLLATE NOCASE IN (${appManaged.map(() => "?").join(", ")})`,
+              };
+    const names = new Set(found.map((row) => String(row["name"]).toLowerCase()));
 
-    for (const entry of dateTables(options)) {
-        if (!entry.appManaged) {
-            tables.push(entry);
-
-            continue;
-        }
-
-        const found = yield { params: [entry.table], sql: `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE` };
-
-        if (found.length > 0) {
-            tables.push(entry);
-            yield* warnTextDateColumns(entry);
-        }
-    }
-
-    return tables;
+    return entries.filter((entry) => !entry.appManaged || names.has(entry.table.toLowerCase()));
 };
 
-/** Throws, naming the first cell of `entry` that holds text this conversion cannot read as a date. */
-const assertConvertible = function* assertConvertible(entry: DateTable): BackfillSteps<void> {
+/**
+ * Counts the rows of `entry` still holding convertible date text, and throws instead, naming the
+ * first cell holding text this conversion cannot read as a date. One statement for both.
+ */
+const pendingRows = function* pendingRows(entry: DateTable): BackfillSteps<number> {
     const checks = entry.columns.map((column) => {
         const quoted = quoteIdentifier(column);
 
         return { column, sql: `(${isDateText(quoted)} AND NOT ${isConvertible(quoted)})` };
     });
+    const table = quoteIdentifier(entry.table);
+    const pending = entry.columns.map((column) => isConvertible(quoteIdentifier(column))).join(" OR ");
     const [row] = yield {
         params: [],
         sql:
+            `SELECT (SELECT COUNT(*) FROM ${table} WHERE ${pending}) AS "pending", "bad".* FROM (SELECT 1) LEFT JOIN (` +
             `SELECT "id" AS "id", ${checks.map((check, index) => `${check.sql} AS "bad${String(index)}", ${quoteIdentifier(check.column)} AS "value${String(index)}"`).join(", ")} ` +
-            `FROM ${quoteIdentifier(entry.table)} WHERE ${checks.map((check) => check.sql).join(" OR ")} LIMIT 1`,
+            `FROM ${table} WHERE ${checks.map((check) => check.sql).join(" OR ")} LIMIT 1) AS "bad" ON 1`,
     };
 
-    if (!row) {
-        return;
+    // The join leaves "id" NULL when no row is unconvertible.
+    const id = row?.["id"];
+
+    if (row === undefined || (typeof id !== "string" && typeof id !== "number")) {
+        return Number(row?.["pending"] ?? 0);
     }
 
     const index = checks.findIndex((_, position) => Number(row[`bad${String(position)}`]) === 1);
     const column = checks[index]?.column ?? "?";
 
     throw new TypeError(
-        `convertAuthDatesToEpochMs: ${entry.table}.${column} of row ${String(row["id"])} holds ${JSON.stringify(row[`value${String(index)}`])}, which is not an ISO-8601 date; nothing was converted`,
+        `convertAuthDatesToEpochMs: ${entry.table}.${column} of row ${String(id)} holds ${JSON.stringify(row[`value${String(index)}`])}, which is not an ISO-8601 date; nothing was converted`,
     );
 };
 
@@ -175,6 +179,13 @@ const readDatesRecord = function* readDatesRecord(): BackfillSteps<string | unde
 /**
  * The conversion's statements. With `now`, an automatic run: skipped once a run over the same
  * coverage came back clean more than {@link DATES_GRACE_MS} ago, and recorded when it finishes.
+ *
+ * Queries, for `n` date tables of which `k` are app-managed: one probe for those `k` (none
+ * when `k` is 0), then for an automatic run the state table's DDL and record read, which alone
+ * make up a skipped run; a column-type read per app-managed table, one check per table, an
+ * update per table still holding date text, and the record write. At most `2n + k + 4`, and
+ * `n + k + 4` once the rows are converted. The checks stay one statement per table
+ * so a long plugin list cannot push a statement past D1's 100 KB limit.
  */
 const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, now?: number): BackfillSteps<AuthDateConversion[]> {
     const tables = yield* presentTables(options);
@@ -187,28 +198,31 @@ const conversionSteps = function* conversionSteps(options: LunoraAuthOptions, no
         return [];
     }
 
+    // Every table is checked before any is written.
+    const counts: number[] = [];
+
     for (const entry of tables) {
-        yield* assertConvertible(entry);
+        if (entry.appManaged) {
+            yield* warnTextDateColumns(entry);
+        }
+
+        counts.push(yield* pendingRows(entry));
     }
 
     const conversions: AuthDateConversion[] = [];
 
-    for (const entry of tables) {
-        const quoted = entry.columns.map((column) => quoteIdentifier(column));
-        const table = quoteIdentifier(entry.table);
-        const pending = quoted.map((column) => isConvertible(column)).join(" OR ");
-        // Counted before the update rather than returned by it: `RETURNING` would ship one row
-        // per converted record back through the binding.
-        const [count] = yield { params: [], sql: `SELECT COUNT(*) AS "n" FROM ${table} WHERE ${pending}` };
-        const converted = Number(count?.["n"] ?? 0);
+    for (const [index, entry] of tables.entries()) {
+        const converted = counts[index] ?? 0;
 
         if (converted === 0) {
             continue;
         }
 
+        const quoted = entry.columns.map((column) => quoteIdentifier(column));
+
         yield {
             params: [],
-            sql: `UPDATE ${table} SET ${quoted.map((column) => `${column} = CASE WHEN ${isConvertible(column)} THEN ${toEpochMs(column)} ELSE ${column} END`).join(", ")} WHERE ${pending}`,
+            sql: `UPDATE ${quoteIdentifier(entry.table)} SET ${quoted.map((column) => `${column} = CASE WHEN ${isConvertible(column)} THEN ${toEpochMs(column)} ELSE ${column} END`).join(", ")} WHERE ${quoted.map((column) => isConvertible(column)).join(" OR ")}`,
         };
 
         conversions.push({ converted, table: entry.table });

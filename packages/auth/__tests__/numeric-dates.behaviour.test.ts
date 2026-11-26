@@ -242,12 +242,14 @@ describe("convertAuthDatesToEpochMs — rows written as ISO strings", () => {
 
         // Another writer lands a malformed value on a nullable date column after the check ran.
         const racing: SqlExecutor = {
-            all: (sql, parameters) => {
-                if (sql.startsWith(`SELECT COUNT(*)`) && sql.includes(`FROM "user"`)) {
+            all: async (sql, parameters) => {
+                const rows = await executor.all(sql, parameters);
+
+                if (sql.startsWith(`SELECT (SELECT COUNT(*)`) && sql.includes(`FROM "user"`)) {
                     database.prepare(`UPDATE "user" SET "banExpires" = 'garbage' WHERE "id" = ?`).run(userId);
                 }
 
-                return executor.all(sql, parameters);
+                return rows;
             },
             run: (sql, parameters) => executor.run(sql, parameters),
         };
@@ -351,7 +353,7 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
             };
         };
         /** Whether the last automatic run scanned the tables rather than stopping at its record. */
-        const scanned = (): boolean => statements.some((sql) => sql.startsWith("SELECT COUNT(*)"));
+        const scanned = (): boolean => statements.some((sql) => sql.startsWith("SELECT (SELECT COUNT(*)"));
         const runAt = async (at: number, runOptions: LunoraAuthOptions = options): Promise<unknown> => {
             vi.setSystemTime(at);
             statements.length = 0;
@@ -386,6 +388,21 @@ describe("convertAuthDatesToEpochMs — edge values", () => {
             await runAt(start + 2 * DAY_MS, options);
 
             expect(scanned()).toBe(true);
+        });
+
+        it("stay within a fixed query budget: one statement per table, three once skipped", async () => {
+            expect.hasAssertions();
+
+            await runAt(start, withAppTable);
+
+            const checks = statements.filter((sql) => sql.startsWith("SELECT (SELECT COUNT(*)")).length;
+
+            // The probe of the app-managed table, the state DDL and read, its column types, a check per table and the record write.
+            expect(statements).toHaveLength(checks + 5);
+
+            await runAt(start + DAY_MS + HOUR_MS, withAppTable);
+
+            expect(statements).toHaveLength(3);
         });
 
         it("convert again after an import restores rows an earlier version wrote", async () => {

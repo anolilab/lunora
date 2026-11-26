@@ -298,7 +298,9 @@ const datesAttempted = new WeakSet<object>();
  *
  * Once per isolate, whatever the outcome: the generated worker awaits `ensureMigrated` ahead of
  * every route, so a value that cannot be converted must not cost every request a retry. It is
- * logged, the rows still read correctly, and the next cold start tries again.
+ * logged, the rows still read correctly, and the next cold start tries again. It shares the
+ * invocation's D1 query limit with the backfill: three queries once the grace period is over,
+ * `2n + k + 4` at most for `n` date tables, `k` of them app-managed, during it (see `conversionSteps`).
  */
 const convertDatesPass = async (key: object, options: LunoraAuthOptions): Promise<void> => {
     const { database } = options as { database?: unknown };
