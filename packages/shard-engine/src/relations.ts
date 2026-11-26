@@ -1189,27 +1189,6 @@ const formatColumnPath = (path: ValidationPath): string =>
         })
         .join("");
 
-/** The type of a value, never the value: a row can hold a secret. */
-const typeOf = (value: unknown): string => {
-    if (value === null) {
-        return "null";
-    }
-
-    if (Array.isArray(value)) {
-        return "array";
-    }
-
-    if (value instanceof ArrayBuffer) {
-        return "ArrayBuffer";
-    }
-
-    if (value instanceof Date) {
-        return "object Date";
-    }
-
-    return typeof value;
-};
-
 /**
  * Where on the patch path a failing column came from: the patch, the stored row (the value is the
  * one `previous` holds), or neither, which leaves an update hook (`$onUpdateFn`).
@@ -1229,38 +1208,20 @@ const patchOrigin = (field: string, value: unknown, options: RowValidatorOptions
 };
 
 /**
- * The type tag of a `@lunora/values` `received`: `string "abc"` → `string`. A refinement reports the
- * value it rejected, which a transform may have turned into another type than the input, so the tag
- * comes from the error rather than from the input. A constructor name (`object Date`) is kept.
+ * The type tag of a `@lunora/values` `received`: `string "abc"` → `string`. Taken from the error
+ * rather than by reading the input again: a refinement reports the value it rejected, which a
+ * transform may have made another type than the input; a record-key failure's path names a key,
+ * not a value; and a getter on the input may throw or answer differently a second time. A
+ * constructor name (`object Date`) is kept. An undeclared-keys failure lists the keys in
+ * `received`, which can carry caller text, so it reports the object it rejected.
  */
-const receivedType = (received: string): string => (received.startsWith("object") ? received : (received.split(" ")[0] ?? received));
-
-/** The value at `path` inside `value`, or `undefined` when the path does not resolve. */
-const valueAtPath = (value: unknown, path: ValidationPath): unknown => {
-    let current = value;
-
-    for (const segment of path) {
-        if (typeof current !== "object" || current === null) {
-            return undefined;
-        }
-
-        current = (current as Record<number | string, unknown>)[segment];
+const receivedType = (error: ValidationError): string => {
+    if (error.message.startsWith("object has ")) {
+        return "object";
     }
 
-    return current;
+    return error.received.startsWith("object") ? error.received : (error.received.split(" ")[0] ?? error.received);
 };
-
-/**
- * Restate a column's validation failure for the whole-row check: the table, the column path, the
- * expected kind and the received *type*, and on the patch path whether the patch set the column.
- *
- * A type or refinement failure (`Expected <kind> at <path>, received <value>`) is described from the
- * column's root and quotes a primitive literally. A row can hold a secret, and on the patch path the
- * column may be one the caller never wrote, so that message is rebuilt without the value; its
- * `expected` keeps a `.check()` refinement's reason. Any other message (a Standard Schema issue, an
- * undeclared key) is kept after the column: `@lunora/values` already withholds those under
- * `sensitive`, which is the policy for third-party text everywhere else.
- */
 
 /**
  * A validator's `ValidationError`, recognised by shape: `@lunora/values` is not a runtime
@@ -1273,20 +1234,40 @@ const isValidationError = (error: unknown): error is ValidationError =>
     typeof (error as Partial<ValidationError>).expected === "string" &&
     typeof (error as Partial<ValidationError>).received === "string";
 
+/**
+ * Restate a column's validation failure for the whole-row check: the table, the column path, the
+ * expected kind and the received *type*, and on the patch path where the value came from.
+ *
+ * A type or refinement failure (`Expected <kind> at <path>, received <value>`) is described from the
+ * column's root and quotes a primitive literally. A row can hold a secret, and on the patch path the
+ * column may be one the caller never wrote, so that message is rebuilt without the value; its
+ * `expected` keeps a `.check()` refinement's reason. Any other message (a Standard Schema issue, an
+ * undeclared key) is kept after the column: `@lunora/values` already withholds those under
+ * `sensitive`, which is the policy for third-party text everywhere else.
+ *
+ * The validator's stack frames are kept under the new first line, so a trace still points at the
+ * parser or refinement that failed. The original error is not attached as `cause`: its message
+ * may quote the value.
+ */
 const columnValidationError = (error: ValidationError, field: string, value: unknown, options: RowValidatorOptions): ValidationError => {
     const path = [field, ...error.path];
     const where = `${options.table === undefined ? "" : `${options.table}.`}${formatColumnPath(path)}`;
     // The shape `@lunora/values`' type and refinement failures take, which quotes a primitive literally.
     const quotesValue = error.message.startsWith(`Expected ${error.expected} at `) && error.message.endsWith(`, received ${error.received}`);
-    const received = quotesValue ? receivedType(error.received) : typeOf(valueAtPath(value, error.path));
+    const received = receivedType(error);
     const detail = quotesValue ? `expected ${error.expected}, received ${received}` : error.message;
-    const origin = patchOrigin(field, value, options);
 
     // Built with the thrown error's own class, so the caller's `instanceof ValidationError` (and the
     // transport's 400 mapping) still holds.
     const ValidationErrorClass = error.constructor as typeof ValidationError;
+    const restated = new ValidationErrorClass(`${where}: ${detail}${patchOrigin(field, value, options)}`, { expected: error.expected, path, received });
+    const frames = error.stack?.indexOf("\n    at ") ?? -1;
 
-    return new ValidationErrorClass(`${where}: ${detail}${origin}`, { expected: error.expected, path, received });
+    if (frames !== -1 && error.stack !== undefined) {
+        restated.stack = `${restated.name}: ${restated.message}${error.stack.slice(frames)}`;
+    }
+
+    return restated;
 };
 
 /** Parse one column, restating a validation failure with the column it happened in. */

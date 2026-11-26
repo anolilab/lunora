@@ -24,6 +24,15 @@ const schema = {
                 profile: v.object({ age: v.number().check((value) => value >= 0, "age must not be negative") }),
             },
         },
+        keyed: {
+            indexes: [],
+            shape: {
+                scores: v.record(
+                    v.string().check((key) => key.startsWith("k"), "key must start with k"),
+                    v.number(),
+                ),
+            },
+        },
         hooked: {
             indexes: [],
             shape: {
@@ -119,6 +128,46 @@ describe("ctx.db — whole-row validation errors", () => {
 
         expect(error.message).toBe("parsed.amount: expected amount must be positive, received number");
         expect(error.received).toBe("number");
+    });
+
+    it("reports a rejected record key as the key's type, not its value's", async () => {
+        expect.hasAssertions();
+
+        const error = await rejection(writer.insert("keyed", { scores: { bad: 1 } }));
+
+        expect(error.received).toBe("string");
+        expect(error.message).toMatch(/received string$/u);
+    });
+
+    it("does not read the input again to describe it", async () => {
+        expect.hasAssertions();
+
+        let reads = 0;
+        const profile = {
+            get age(): number {
+                reads += 1;
+
+                if (reads > 1) {
+                    throw new Error("read twice");
+                }
+
+                return -5;
+            },
+        };
+
+        const error = await rejection(writer.insert("accounts", { expiresAt: 1, name: "a", profile }));
+
+        expect(error.message).toBe("accounts.profile.age: expected age must not be negative, received number");
+    });
+
+    it("keeps the validator's stack frames without the value", async () => {
+        expect.hasAssertions();
+
+        const error = await rejection(writer.insert("accounts", { expiresAt: SECRET, name: "a", profile: { age: 1 } }));
+
+        expect(error.stack).toMatch(/^ValidationError: accounts\.expiresAt: expected number, received string\n\s+at /u);
+        expect(error.stack).toMatch(/values/u);
+        expect(error.stack).not.toContain(SECRET);
     });
 
     it("names the table and column on insert too, without the value", async () => {
