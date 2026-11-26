@@ -104,7 +104,7 @@ const dropLegacyIssuerColumn = async (executor: SqlExecutor, options: LunoraAuth
     if (declared === undefined) {
         // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
         console.warn(
-            `@lunora/auth: "${account.modelName}" has an \`issuer\` column that the auth options do not declare. If it is the one better-auth 1.7.0-1.7.2 added, sign-ups fail until it is removed; it is left in place because no schema was passed to tell whether the app declares it. Pass \`prepareAuthData(executor, options, { schema })\` to have it dropped when the schema leaves it out, or run \`legacyIssuerCleanupStatements()\` by hand.`,
+            `@lunora/auth: "${account.modelName}" has an \`issuer\` column that the auth options do not declare. If it is the one better-auth 1.7.0-1.7.2 added, sign-ups fail until it is removed; it is left in place because no schema given to \`prepareAuthData\` declares the "${account.modelName}" table, so it may be the app's. Pass the schema that declares it as \`{ schema }\` to have the column dropped when that schema leaves it out, or run \`legacyIssuerCleanupStatements()\` by hand.`,
         );
 
         return false;

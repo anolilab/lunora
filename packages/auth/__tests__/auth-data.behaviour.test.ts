@@ -13,6 +13,7 @@ import { prepareAuthData } from "../src/auth-data";
 import type { LunoraAuth, LunoraAuthOptions } from "../src/create-auth";
 import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import { convertAuthDatesOnce } from "../src/dates";
+import { inviteOnly } from "../src/invite-only";
 import { admin } from "../src/plugins";
 import authTables from "../src/schema";
 import type { SqlExecutor } from "../src/sql-store";
@@ -328,6 +329,48 @@ describe("prepareAuthData — the data steps without better-auth's migrator", ()
 
         expect(database.prepare(`SELECT "issuer" FROM "account" LIMIT 0`).all()).toStrictEqual([]);
         expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining("legacyIssuerCleanupStatements()"));
+    });
+
+    it("reports rather than drops when the schema passed does not declare the account table", async () => {
+        expect.hasAssertions();
+
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const executor = d1Executor(d1);
+        const withoutAccount = Object.fromEntries(Object.entries(schema.tables).filter(([name]) => name !== "account"));
+
+        await provisionSchema(executor);
+        database.exec(`ALTER TABLE "account" ADD COLUMN "issuer" text NOT NULL DEFAULT ''`);
+
+        await prepareAuthData(executor, { ...options }, { schema: defineSchema(withoutAccount) });
+
+        expect(database.prepare(`SELECT "issuer" FROM "account" LIMIT 0`).all()).toStrictEqual([]);
+        expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining(`declares the "account" table`));
+    });
+
+    it("skips the invitation-email backfill alone, leaving the canonical-email backfill running", async () => {
+        expect.hasAssertions();
+
+        const inviteOptions: LunoraAuthOptions = { ...options, plugins: [admin(), inviteOnly()] };
+        const inviteSchema = defineSchema(
+            Object.fromEntries(
+                Object.entries(authTables(resolveAuthOptions(inviteOptions))).map(([name, table]) => [
+                    name,
+                    (table as unknown as { global: () => TableDefinition }).global(),
+                ]),
+            ),
+        );
+        const executor = d1Executor(d1);
+        const insertUser = `INSERT INTO "user" ("_creationTime", "id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (0, ?, 'Ada', ?, 0, 0, 0)`;
+        const insertInvitation = `INSERT INTO "signUpInvitation" ("_creationTime", "id", "email", "createdAt", "expiresAt") VALUES (0, ?, ?, 0, 0)`;
+
+        await runD1GlobalTableMigrations(executor, inviteSchema as never);
+        database.prepare(insertUser).run("u1", "Ada@Example.com");
+        database.prepare(insertInvitation).run("i1", "Grace@Example.com");
+
+        await prepareAuthData(executor, { ...inviteOptions }, { invitationEmailBackfill: false });
+
+        expect({ ...database.prepare(`SELECT "emailCanonical" FROM "user"`).get() }).toStrictEqual({ emailCanonical: "ada@example.com" });
+        expect({ ...database.prepare(`SELECT "email" FROM "signUpInvitation"`).get() }).toStrictEqual({ email: "Grace@Example.com" });
     });
 
     it("skips the canonical-email and invitation-email backfills on request and still converts dates", async () => {
