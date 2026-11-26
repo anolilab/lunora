@@ -4,7 +4,9 @@ import { createAdapterFactory } from "better-auth/adapters";
 import { decodeAuthDate, encodeAuthDate } from "./date-codec";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor, doTransactionRunner } from "./do-store";
+import { provisionedExecutor } from "./provision";
 import { d1TableInfo, doTableInfo, withAuthSchemaCheck } from "./schema-check";
+import type { SqlExecutor } from "./sql-store";
 import { createSqlAuthStore, d1Executor } from "./sql-store";
 import type { AuthRow, AuthStore } from "./store";
 
@@ -169,12 +171,36 @@ const lunoraAuthAdapter = (store: AuthStore, runInTransaction?: TransactionRunne
  * tables this configuration needs are compared against the ones D1 holds, and a
  * mismatch fails with the table and column named instead of `no such table: …`
  * inside an empty 500. See `schema-check.ts`.
+ *
+ * **`provision`** — for auth tables declared `.global()` in the app's Lunora
+ * schema. Those are created lazily on the first ORM access, and better-auth's SQL
+ * bypasses the ORM, so on a fresh database its first statement (usually the rate
+ * limiter's) fails with `no such table`, and the schema check above caches that
+ * as a mismatch for the isolate. With `provision`, every statement this adapter
+ * sends — the schema check's included — waits until it has run once over the
+ * binding: one catalog read per isolate on a provisioned database. A failed run
+ * is retried by the next statement rather than kept.
+ *
+ * ```ts
+ * lunoraD1Adapter(env.DB, { provision: (exec) => runD1GlobalTableMigrations(exec, schema) });
+ * ```
  */
-const lunoraD1Adapter = (d1: Parameters<typeof d1Executor>[0]): ReturnType<typeof lunoraAuthAdapter> => {
+/** Options for {@link lunoraD1Adapter}. */
+interface LunoraD1AdapterOptions {
+    /**
+     * Create the tables auth uses if they are missing, before its first statement: typically
+     * `(executor) => runD1GlobalTableMigrations(executor, schema)` from `@lunora/d1`. Runs once per
+     * isolate per binding, shared with `prepareAuthData(…, { provision })` over the same binding.
+     */
+    provision?: (executor: SqlExecutor) => Promise<void>;
+}
+
+const lunoraD1Adapter = (d1: Parameters<typeof d1Executor>[0], options: LunoraD1AdapterOptions = {}): ReturnType<typeof lunoraAuthAdapter> => {
     // One executor for both: the check reads the schema through the same seam the
     // store writes through, so it can never be introspecting a different database
     // than the one the adapter is about to emit SQL against.
-    const executor = d1Executor(d1);
+    const raw = d1Executor(d1);
+    const executor = options.provision === undefined ? raw : provisionedExecutor(raw, options.provision);
 
     return withAuthSchemaCheck(lunoraAuthAdapter(createSqlAuthStore(executor)), { database: d1, executor, tableInfo: d1TableInfo });
 };
@@ -199,4 +225,5 @@ const lunoraDoAdapter = (storage: DoStorageLike): ReturnType<typeof lunoraAuthAd
     });
 };
 
+export type { LunoraD1AdapterOptions };
 export { lunoraAuthAdapter, lunoraD1Adapter, lunoraDoAdapter };

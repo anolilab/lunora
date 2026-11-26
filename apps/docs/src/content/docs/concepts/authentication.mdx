@@ -190,11 +190,52 @@ database leave the loser with `table user already exists`, and since this sits
 ahead of the router that 500s every route. `defineApp().auth(...)` does both for
 you.
 
-better-auth owns those tables. Don't also declare `user` / `session` / `account`
-/ `verification` / `rateLimit` in `lunora/schema.ts` — two owners for one table
-means Lunora creates it with its own column layout and better-auth then plans an
-`ALTER TABLE … ADD COLUMN … NOT NULL` that SQLite rejects outright. Lunora's
-`.global()` tables are for your data.
+On this path better-auth owns those tables. Don't also declare `user` / `session`
+/ `account` / `verification` / `rateLimit` in `lunora/schema.ts` — two owners for
+one table means Lunora creates it with its own column layout and better-auth then
+plans an `ALTER TABLE … ADD COLUMN … NOT NULL` that SQLite rejects outright.
+
+### Auth tables in your Lunora schema
+
+The other owner is Lunora: declare `authTables(options)` as `.global()` tables in
+`lunora/schema.ts`, so functions can query and patch them through `ctx.db`. Then
+skip better-auth's migrator entirely, and make two calls instead:
+
+```ts title="src/server/index.ts"
+import { createAuth, d1Executor, handleAuthRequest, lunoraD1Adapter, prepareAuthData } from "@lunora/auth";
+import { runD1GlobalTableMigrations } from "@lunora/d1";
+
+import schema from "../../lunora/schema";
+import { authOptions } from "../../lunora/auth";
+
+const provision = (exec) => runD1GlobalTableMigrations(exec, schema);
+
+export default {
+    async fetch(request, env, ctx) {
+        await prepareAuthData(d1Executor(env.DB), authOptions, { provision });
+
+        const auth = createAuth({ ...authOptions, database: lunoraD1Adapter(env.DB, { provision }) });
+        const authResponse = await handleAuthRequest(auth, request);
+        if (authResponse) return authResponse;
+
+        return worker.fetch(request, env, ctx);
+    },
+};
+```
+
+- `provision` creates the `.global()` tables before auth's first statement.
+  Lunora creates them lazily on first ORM access, and better-auth's SQL bypasses
+  the ORM, so without it a fresh database fails with `no such table: rateLimit`.
+  It runs once per isolate per binding, shared by both calls; on a provisioned
+  database that is one catalog read.
+- `prepareAuthData` runs the data steps `ensureMigrated` runs after the migrator:
+  the reverted `account.issuer` cleanup, the canonical-email and invitation-email
+  backfills, and the ISO-date conversion (`convertAuthDatesOnce`), which keeps
+  converting for a day after its first clean run so dates written by isolates
+  still on an older version during a rollout are caught. None of them fails the
+  request; each logs and resumes later. Call it before building the auth
+  instance, and pass the same long-lived options object every time: the work is
+  memoised on it.
 
 ## The client side
 

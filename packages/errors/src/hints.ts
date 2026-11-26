@@ -120,6 +120,8 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
         "Build a SECOND, migration-only instance over the raw binding — `createMigrationAuth({ ...options, database: env.DB })` (from `@lunora/auth/migrate`) — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.",
         "",
         "To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all.",
+        "",
+        "If the auth tables are declared in your Lunora schema (`authTables(options)` as `.global()` tables), the migrator does not apply: create them with `lunoraD1Adapter(env.DB, { provision })` and run the data steps with `prepareAuthData(d1Executor(env.DB), options)` from `@lunora/auth`.",
     ],
     AUTH_CIMD_FETCH_NOT_PUBLIC:
         'Add "global_fetch_strictly_public" to "compatibility_flags" in wrangler.jsonc, so CIMD metadata fetches cannot reach private addresses. `lunora doctor` reports it as `cimd-fetch-not-strictly-public`.',

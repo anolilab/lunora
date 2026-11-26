@@ -912,6 +912,22 @@ class LunoraAuthHeadersError extends LunoraError {
 type LunoraAuthOptions = BetterAuthOptions;
 ```
 
+### `LunoraD1AdapterOptions` (interface)
+
+```ts
+interface LunoraD1AdapterOptions {
+    provision?: (executor: SqlExecutor) => Promise<void>;
+}
+```
+
+### `PrepareAuthDataOptions` (interface)
+
+```ts
+interface PrepareAuthDataOptions {
+    provision?: (executor: SqlExecutor) => Promise<void>;
+}
+```
+
 ### `ReadAuthAuditOptions` (interface)
 
 ```ts
@@ -1135,6 +1151,12 @@ const canonicalEmail: (email: string) => string;
 const classifyEmail: (email: string, config?: EmailGateConfig) => EmailClassification;
 ```
 
+### `convertAuthDatesOnce` (const)
+
+```ts
+const convertAuthDatesOnce: (executor: SqlExecutor, options: LunoraAuthOptions) => Promise<AuthDateConversion[]>;
+```
+
 ### `convertAuthDatesToEpochMs` (const)
 
 ```ts
@@ -1291,7 +1313,7 @@ const lunoraAuthAdapter: (store: AuthStore, runInTransaction?: TransactionRunner
 ### `lunoraD1Adapter` (const)
 
 ```ts
-const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0]) => ReturnType<typeof lunoraAuthAdapter>;
+const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0], options?: LunoraD1AdapterOptions) => ReturnType<typeof lunoraAuthAdapter>;
 ```
 
 ### `lunoraDoAdapter` (const)
@@ -1304,6 +1326,12 @@ const lunoraDoAdapter: (storage: DoStorageLike) => ReturnType<typeof lunoraAuthA
 
 ```ts
 const matchesWhere: (row: AuthRow, where: ReadonlyArray<AuthWhereClause>) => boolean;
+```
+
+### `prepareAuthData` (const)
+
+```ts
+const prepareAuthData: (executor: SqlExecutor, options: LunoraAuthOptions, settings?: PrepareAuthDataOptions) => Promise<void>;
 ```
 
 ### `pruneSignUpInvitations` (const)
@@ -1388,6 +1416,10 @@ const withEmailGate: (options: BetterAuthOptions, config?: EmailGateHookConfig) 
 ```
 
 ## `@lunora/auth/adapter`
+
+### `LunoraD1AdapterOptions` (interface)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `lunoraAuthAdapter` (const)
 

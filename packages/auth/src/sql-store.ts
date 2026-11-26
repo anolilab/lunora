@@ -1,4 +1,5 @@
 import CREATION_TIME_COLUMN from "./framework-columns";
+import { recordExecutorDatabase } from "./provision";
 import type { AuthRow, AuthStore, AuthWhereClause } from "./store";
 
 /** Double-quote a table/column identifier, escaping embedded quotes. */
@@ -187,7 +188,7 @@ interface D1Like {
  * satisfies it directly (see {@link d1Executor}) and a `node:sqlite` handle does
  * too in tests. `all` runs reads and returns rows; `run` runs writes.
  */
-export interface SqlExecutor {
+interface SqlExecutor {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
 
     /**
@@ -219,7 +220,7 @@ export interface SqlExecutor {
  * (emails, ids, tokens — the credential path); they can differ only for
  * case-insensitive comparison of non-ASCII text.
  */
-export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
+const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
     const selectRows = (model: string, where: ReadonlyArray<AuthWhereClause>): Promise<AuthRow[]> => {
         const fragment = compileWhere(where);
 
@@ -414,13 +415,26 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
     };
 };
 
+/** The executor built for each binding, so every caller over one binding shares it and the memos keyed on it. */
+const d1Executors = new WeakMap<object, SqlExecutor>();
+
 /**
  * Wrap a Cloudflare D1 binding (`env.DB`) as a {@link SqlExecutor}, so
  * `createSqlAuthStore(d1Executor(env.DB))` routes better-auth onto D1 — the same
  * binding Lunora's `.global()` tables use.
+ *
+ * One executor per binding: the binding off `env` lives as long as the isolate,
+ * so the per-isolate work keyed on the executor (`provisionOnce`) runs once
+ * however many requests build an auth instance over it.
  */
-export const d1Executor = (database: D1Like): SqlExecutor => {
-    return {
+const d1Executor = (database: D1Like): SqlExecutor => {
+    const existing = d1Executors.get(database);
+
+    if (existing !== undefined) {
+        return existing;
+    }
+
+    const executor: SqlExecutor = {
         all: async (sql, parameters) => {
             const result = await database
                 .prepare(sql)
@@ -444,4 +458,12 @@ export const d1Executor = (database: D1Like): SqlExecutor => {
                 .run();
         },
     };
+
+    d1Executors.set(database, executor);
+    recordExecutorDatabase(executor, database);
+
+    return executor;
 };
+
+export type { SqlExecutor };
+export { createSqlAuthStore, d1Executor };

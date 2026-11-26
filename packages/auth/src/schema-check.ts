@@ -149,7 +149,8 @@ const reportFindings = (findings: ReadonlyArray<SchemaFinding>): void => {
         ...findings.map((finding) => `  - ${formatSchemaFinding(finding, "database")}`),
         "Fix the schema, not the adapter. better-auth's own tables are created by `ensureMigrated(...)` or by",
         "`compileMigrationsSql(...)` at deploy time; tables you declared yourself come from `authTables(options)`",
-        "in `lunora/schema.ts` plus `lunora migrate`. `npx auth migrate` does not apply to a Lunora app.",
+        "in `lunora/schema.ts` plus `lunora migrate`, or, for `.global()` tables on a fresh database,",
+        "`lunoraD1Adapter(env.DB, { provision })`. `npx auth migrate` does not apply to a Lunora app.",
     ];
 
     // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)

@@ -273,9 +273,15 @@ const convertAuthDatesToEpochMs = async (executor: SqlExecutor, options: LunoraA
     runBackfill(conversionSteps(options), executor);
 
 /**
- * The conversion `ensureMigrated` and the auth Durable Object run on their own: skipped by one
- * indexed lookup once the data has stayed converted through the grace period, so a cold start
- * long after the upgrade does not scan every date table again.
+ * The recorded form of {@link convertAuthDatesToEpochMs}: the run `ensureMigrated`, `prepareAuthData`
+ * and the auth Durable Object make on their own, and the one to call on every cold start.
+ *
+ * Each run records its coverage (tables and date columns) and when a run over it first came back
+ * clean, in the backfill state table. Runs keep converting for 24 hours after that, which catches
+ * ISO dates written by isolates still on an older version during a rollout; the first clean run
+ * after it marks the record final, and from then on a run is one indexed lookup. Adding a plugin
+ * with date columns changes the coverage and starts over. An import or replace through the data
+ * port invalidates the record, so restored rows are converted too.
  */
 const convertAuthDatesOnce = async (executor: SqlExecutor, options: LunoraAuthOptions): Promise<AuthDateConversion[]> =>
     runBackfill(conversionSteps(options, Date.now()), executor);
