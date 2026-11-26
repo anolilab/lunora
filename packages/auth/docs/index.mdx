@@ -151,6 +151,35 @@ it, and sign-up invitations are stored in the same form.
   `email` is kept. The auth data port's own import and restore recompute the value from
   `email`.
 
+## Dates are stored as epoch milliseconds
+
+`authTables(...)` declares every better-auth date column (`user.createdAt`,
+`session.expiresAt`, `account.accessTokenExpiresAt`, `user.banExpires`, the organization
+and invitation dates, and so on) as `v.date()`, an epoch-millisecond number. The adapters
+store exactly that, and hand better-auth a `Date` when they read the row back. A
+`ctx.db.patch("user", id, { role })` from your own mutation then validates the whole row
+against the schema and accepts it.
+
+Earlier versions stored these columns as ISO strings. Rows written then still read
+correctly through better-auth, but Lunora's writer refuses them (`VALIDATION_ERROR:
+Expected number`) on any patch, because it validates every column of the row, not only
+the ones you changed. Range filters on them are wrong too: SQLite orders every string
+above every number, so an old `expiresAt` never matches `< now`. Convert them once, with
+the same options you pass to `createAuth`:
+
+```ts
+import { convertAuthDatesToEpochMs, d1Executor } from "@lunora/auth";
+
+await convertAuthDatesToEpochMs(d1Executor(env.DB), authOptions);
+// → [{ table: "user", converted: 1204 }, { table: "session", converted: 3811 }, …]
+```
+
+It checks every table before it writes anything, and throws on a value that is not an
+ISO-8601 date, naming the table, column and row, without converting anything. The
+conversion runs in SQLite (D1 or a Durable Object's storage), two statements per table
+however many rows it holds, so it fits in one Worker invocation. Running it again converts
+nothing.
+
 ## Read `ctx.auth` in functions
 
 The runtime resolves the inbound session and populates `ctx.auth` on every

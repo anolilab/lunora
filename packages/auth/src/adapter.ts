@@ -1,6 +1,7 @@
 import type { CustomAdapter } from "better-auth/adapters";
 import { createAdapterFactory } from "better-auth/adapters";
 
+import { decodeAuthDate, encodeAuthDate } from "./dates";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor, doTransactionRunner } from "./do-store";
 import { d1TableInfo, doTableInfo, withAuthSchemaCheck } from "./schema-check";
@@ -111,11 +112,19 @@ const lunoraAuthAdapter = (store: AuthStore, runInTransaction?: TransactionRunne
                     // transaction *function* here and refuse the adapter otherwise.
                     transaction: transaction(options),
                     // Conservative flags so the adapter is store-agnostic: better-auth
-                    // serializes dates/booleans/json to primitives (string/number) before a
-                    // write and parses them back after a read, so a store — in-memory or
-                    // SQL — only ever handles primitives, never schema-aware codecs.
+                    // serializes booleans/json to primitives before a write and parses them
+                    // back after a read, so a store — in-memory or SQL — only ever handles
+                    // primitives, never schema-aware codecs.
                     supportsBooleans: false,
-                    supportsDates: false,
+                    // Dates are the exception: better-auth would serialise them as ISO
+                    // strings, while `authTables` declares them `v.date()` (epoch ms) and
+                    // Lunora re-validates the whole row on every `ctx.db.patch`. So they
+                    // reach the transforms below as `Date`s and are stored as numbers.
+                    // The where-clause path runs the same input transform, so a range
+                    // filter binds a number against a number.
+                    supportsDates: true,
+                    customTransformInput: ({ data, fieldAttributes }): unknown => (fieldAttributes.type === "date" ? encodeAuthDate(data) : (data as unknown)),
+                    customTransformOutput: ({ data, fieldAttributes }): unknown => (fieldAttributes.type === "date" ? decodeAuthDate(data) : (data as unknown)),
                     supportsJSON: false,
                     supportsNumericIds: false,
                 },

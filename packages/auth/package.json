@@ -146,6 +146,7 @@
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/config": "^1.0.0-alpha.469",
+        "@lunora/d1": "^1.0.0-alpha.242",
         "@lunora/runtime": "^1.0.0-alpha.301",
         "@lunora/server": "^1.0.0-alpha.279",
         "@types/better-sqlite3": "catalog:tooling",
