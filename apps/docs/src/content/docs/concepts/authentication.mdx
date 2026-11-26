@@ -218,7 +218,7 @@ let options;
 export default {
     async fetch(request, env, ctx) {
         options ??= authOptions(env);
-        await prepareAuthData(d1Executor(env.DB), options, { provision });
+        await prepareAuthData(d1Executor(env.DB), options, { provision, schema });
 
         const auth = createAuth({ ...options, database: lunoraD1Adapter(env.DB, { provision }) });
         const authResponse = await handleAuthRequest(auth, request);
@@ -234,14 +234,19 @@ export default {
   the ORM, so without it a fresh database fails with `no such table: rateLimit`.
   It runs once per isolate per binding, shared by both calls; on a provisioned
   database that is one catalog read.
-- `prepareAuthData` runs the data steps `ensureMigrated` runs after the migrator:
-  the reverted `account.issuer` cleanup, the canonical-email and invitation-email
-  backfills, and the ISO-date conversion (`convertAuthDatesOnce`), which keeps
-  converting for a day after its first clean run so dates written by isolates
-  still on an older version during a rollout are caught. None of them fails the
-  request; each logs and resumes later. Call it before building the auth
-  instance, and pass the same long-lived options object every time: the work is
-  memoised on it.
+- `prepareAuthData` runs the data steps `ensureMigrated` runs after the migrator
+  (table below). None of them fails the request; each logs and resumes later.
+  Call it before building the auth instance, and pass the same long-lived
+  options object and settings every time: the work is memoised on them.
+- `schema` lets the `account.issuer` cleanup see the columns your schema
+  declares. Without it the cleanup never drops anything.
+
+| Step                                     | Reads                                        | Writes                                                                                                                                   | Destructive | Skip with                        | How to check it                                                                                                    |
+| ---------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `account.issuer` cleanup                 | the account table's columns and indexes      | drops `issuer` and the indexes over it, only when `schema` declares the account table without `issuer`                                   | yes         | omit `schema`                    | a present but undeclared column is logged with `legacyIssuerCleanupStatements()` as the fix                        |
+| Canonical-email backfill                 | `user` rows whose `emailCanonical` is `NULL` | fills `emailCanonical`; an address another account already holds stays `NULL` and is counted in a warning                                | no          | `canonicalEmailBackfill: false`  | `SELECT count(*) FROM "user" WHERE "emailCanonical" IS NULL`; the resume position is in `__lunora_auth_backfill__` |
+| Invitation-email backfill                | `signUpInvitation` rows                      | rewrites `email` to its canonical form; a clash with another invitation is left unchanged and logged by id                               | no          | `invitationEmailBackfill: false` | the warning lists the ids; position in `__lunora_auth_backfill__`                                                  |
+| Date conversion (`convertAuthDatesOnce`) | date columns of the auth tables              | rewrites ISO-string dates as epoch ms, and keeps converting for a day after the first clean run so a rollout's older isolates are caught | no          | not skippable                    | its record in `__lunora_auth_backfill__` holds the first clean run                                                 |
 
 ## The client side
 

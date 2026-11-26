@@ -3,7 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import { createSchemaCheck, getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
 import { runD1GlobalTableMigrations } from "@lunora/d1";
 import type { TableDefinition } from "@lunora/server";
-import { defineSchema } from "@lunora/server";
+import { defineSchema, defineTable } from "@lunora/server";
+import { v } from "@lunora/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { convertAuthDatesOnce as exportedConvertAuthDatesOnce, prepareAuthData as exportedPrepareAuthData } from "../src";
@@ -206,7 +207,7 @@ describe("prepareAuthData — the data steps without better-auth's migrator", ()
         database.exec(`ALTER TABLE "account" ADD COLUMN "issuer" text NOT NULL DEFAULT ''`);
         database.exec(`CREATE UNIQUE INDEX "account_issuer_accountId_uidx" ON "account" ("issuer", "accountId")`);
 
-        await prepareAuthData(d1Executor(d1), { ...options });
+        await prepareAuthData(d1Executor(d1), { ...options }, { schema });
 
         const columns = database
             .prepare(`SELECT name FROM pragma_table_info('account')`)
@@ -228,9 +229,9 @@ describe("prepareAuthData — the data steps without better-auth's migrator", ()
         const runOptions = { ...options };
 
         await check();
-        await prepareAuthData(d1Executor(d1), runOptions);
+        await prepareAuthData(d1Executor(d1), runOptions, { schema });
         await check();
-        await prepareAuthData(d1Executor(d1), runOptions);
+        await prepareAuthData(d1Executor(d1), runOptions, { schema });
         await check();
 
         expect(find).toHaveBeenCalledTimes(2);
@@ -248,8 +249,8 @@ describe("prepareAuthData — the data steps without better-auth's migrator", ()
 
             other.exec(`ALTER TABLE "account" ADD COLUMN "issuer" text NOT NULL DEFAULT ''`);
 
-            await prepareAuthData(d1Executor(d1), runOptions);
-            await prepareAuthData(d1Executor(otherD1), runOptions);
+            await prepareAuthData(d1Executor(d1), runOptions, { schema });
+            await prepareAuthData(d1Executor(otherD1), runOptions, { schema });
 
             expect(other.prepare(`SELECT name FROM pragma_table_info('account') WHERE name = 'issuer'`).get()).toBeUndefined();
         } finally {
@@ -272,9 +273,9 @@ describe("prepareAuthData — the data steps without better-auth's migrator", ()
             throw new Error("schema unreadable");
         });
 
-        await expect(prepareAuthData(executor, runOptions)).resolves.toBeUndefined();
+        await expect(prepareAuthData(executor, runOptions, { schema })).resolves.toBeUndefined();
 
-        await prepareAuthData(executor, runOptions);
+        await prepareAuthData(executor, runOptions, { schema });
 
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("the next call retries it"), expect.any(Error));
         expect(database.prepare(`SELECT name FROM pragma_table_info('account') WHERE name = 'issuer'`).get()).toBeUndefined();
@@ -289,9 +290,65 @@ describe("prepareAuthData — the data steps without better-auth's migrator", ()
         await provisionSchema(executor);
         database.exec(`ALTER TABLE "account" ADD COLUMN "issuer" text NOT NULL DEFAULT ''`);
 
-        await prepareAuthData({ all: executor.all, run: executor.run }, { ...options });
+        await prepareAuthData({ all: executor.all, run: executor.run }, { ...options }, { schema });
 
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("has no `batch`"));
         expect(database.prepare(`SELECT "issuer" FROM "account" LIMIT 0`).all()).toStrictEqual([]);
+    });
+
+    it("keeps an `account.issuer` column the app's schema declares, with or without `batch`", async () => {
+        expect.hasAssertions();
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        const { shape } = authTables(resolveAuthOptions(options))["account"] as TableDefinition;
+        const account = defineTable({ ...shape, issuer: v.optional(v.string()) }) as unknown as { global: () => TableDefinition };
+        const appSchema = defineSchema({ ...schema.tables, account: account.global() });
+        const executor = d1Executor(d1);
+
+        await provisionSchema(executor);
+        database.exec(`ALTER TABLE "account" ADD COLUMN "issuer" text`);
+
+        await prepareAuthData(executor, { ...options }, { schema: appSchema });
+        await prepareAuthData({ all: executor.all, run: executor.run }, { ...options }, { schema: appSchema });
+
+        expect(database.prepare(`SELECT "issuer" FROM "account" LIMIT 0`).all()).toStrictEqual([]);
+        expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it("reports an undeclared `account.issuer` column instead of dropping it when no schema is passed", async () => {
+        expect.hasAssertions();
+
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const executor = d1Executor(d1);
+
+        await provisionSchema(executor);
+        database.exec(`ALTER TABLE "account" ADD COLUMN "issuer" text NOT NULL DEFAULT ''`);
+
+        await prepareAuthData(executor, { ...options });
+
+        expect(database.prepare(`SELECT "issuer" FROM "account" LIMIT 0`).all()).toStrictEqual([]);
+        expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining("legacyIssuerCleanupStatements()"));
+    });
+
+    it("skips the canonical-email and invitation-email backfills on request and still converts dates", async () => {
+        expect.hasAssertions();
+
+        const runOptions = { ...options };
+        const userId = await signUp(buildAuth(provisionSchema), "ada@example.com");
+
+        database.prepare(`UPDATE "user" SET "createdAt" = ?, "emailCanonical" = NULL WHERE "id" = ?`).run(LEGACY_DATE, userId);
+
+        await prepareAuthData(d1Executor(d1), runOptions, { canonicalEmailBackfill: false, invitationEmailBackfill: false });
+
+        const row = database.prepare(`SELECT "createdAt", "emailCanonical" FROM "user" WHERE "id" = ?`).get(userId) as Record<string, unknown>;
+
+        expect({ ...row }).toStrictEqual({ createdAt: Date.parse(LEGACY_DATE), emailCanonical: null });
+
+        // A skipped backfill is not marked done: a later call that enables it still fills the row.
+        await prepareAuthData(d1Executor(d1), runOptions);
+
+        expect((database.prepare(`SELECT "emailCanonical" FROM "user" WHERE "id" = ?`).get(userId) as { emailCanonical: unknown }).emailCanonical).toBe(
+            "ada@example.com",
+        );
     });
 });

@@ -427,6 +427,16 @@ interface AuthDataPortLike {
 }
 ```
 
+### `AuthDataSchema` (interface)
+
+```ts
+interface AuthDataSchema {
+    readonly tables: Readonly<Record<string, {
+        readonly shape: Readonly<Record<string, unknown>>;
+    }>>;
+}
+```
+
 ### `AuthDateConversion` (interface)
 
 ```ts
@@ -924,7 +934,10 @@ interface LunoraD1AdapterOptions {
 
 ```ts
 interface PrepareAuthDataOptions {
+    canonicalEmailBackfill?: boolean;
+    invitationEmailBackfill?: boolean;
     provision?: (executor: SqlExecutor) => Promise<void>;
+    schema?: AuthDataSchema;
 }
 ```
 

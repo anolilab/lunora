@@ -35,9 +35,11 @@
  * path, so every input is read from the live database or from better-auth's own resolved
  * schema. A heuristic that is merely usually right is not good enough:
  *
- * Whether the column is *ours to drop* is decided by better-auth's current schema rather
- * than by its name ({@link schemaDeclaresIssuer}), and which indexes block the drop is read
- * from `sqlite_master` rather than reconstructed ({@link indexesReferencingIssuer}).
+ * Whether the column is *ours to drop* is decided by the declared schema rather than by its
+ * name ({@link schemaDeclaresIssuer}). That is better-auth's resolved schema where its migrator
+ * or the Durable Object built the tables from it, and the app's Lunora schema as well for
+ * `prepareAuthData`, which never drops without one. Which indexes block the drop is read from
+ * `sqlite_master` rather than reconstructed ({@link indexesReferencingIssuer}).
  *
  * ## Deleting this module
  *
