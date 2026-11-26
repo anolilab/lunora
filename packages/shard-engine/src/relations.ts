@@ -1190,16 +1190,17 @@ const formatColumnPath = (path: ValidationPath): string =>
         .join("");
 
 /**
- * Where on the patch path a failing column came from: the patch, the stored row (the value is the
- * one `previous` holds), or neither, which leaves an update hook (`$onUpdateFn`).
+ * Where on the patch path a failing column came from: the server (a `.serverDefault()` column the
+ * patch named, which `applyOnUpdate` overwrote), the patch, the stored row (the value is the one
+ * `previous` holds), or neither, which leaves an update hook (`$onUpdateFn`).
  */
-const patchOrigin = (field: string, value: unknown, options: RowValidatorOptions): string => {
+const patchOrigin = (field: string, value: unknown, serverDefault: boolean, options: RowValidatorOptions): string => {
     if (options.patched === undefined) {
         return "";
     }
 
     if (options.patched.has(field)) {
-        return " (set by this patch)";
+        return serverDefault ? " (set by the column's server default, which replaces what this patch sent)" : " (set by this patch)";
     }
 
     return Object.is(options.previous?.()?.[field], value)
@@ -1249,7 +1250,12 @@ const isValidationError = (error: unknown): error is ValidationError =>
  * parser or refinement that failed. The original error is not attached as `cause`: its message
  * may quote the value.
  */
-const columnValidationError = (error: ValidationError, field: string, value: unknown, options: RowValidatorOptions): ValidationError => {
+const columnValidationError = (
+    error: ValidationError,
+    column: { field: string; serverDefault: boolean; value: unknown },
+    options: RowValidatorOptions,
+): ValidationError => {
+    const { field, serverDefault, value } = column;
     const path = [field, ...error.path];
     const where = `${options.table === undefined ? "" : `${options.table}.`}${formatColumnPath(path)}`;
     // The shape `@lunora/values`' type and refinement failures take, which quotes a primitive literally.
@@ -1260,7 +1266,11 @@ const columnValidationError = (error: ValidationError, field: string, value: unk
     // Built with the thrown error's own class, so the caller's `instanceof ValidationError` (and the
     // transport's 400 mapping) still holds.
     const ValidationErrorClass = error.constructor as typeof ValidationError;
-    const restated = new ValidationErrorClass(`${where}: ${detail}${patchOrigin(field, value, options)}`, { expected: error.expected, path, received });
+    const restated = new ValidationErrorClass(`${where}: ${detail}${patchOrigin(field, value, serverDefault, options)}`, {
+        expected: error.expected,
+        path,
+        received,
+    });
     const frames = error.stack?.indexOf("\n    at ") ?? -1;
 
     if (frames !== -1 && error.stack !== undefined) {
@@ -1271,11 +1281,15 @@ const columnValidationError = (error: ValidationError, field: string, value: unk
 };
 
 /** Parse one column, restating a validation failure with the column it happened in. */
-const parseColumn = (parse: (value: unknown) => unknown, field: string, value: unknown, options: RowValidatorOptions): unknown => {
+const parseColumn = (
+    parse: (value: unknown) => unknown,
+    column: { field: string; serverDefault: boolean; value: unknown },
+    options: RowValidatorOptions,
+): unknown => {
     try {
-        return parse(value);
+        return parse(column.value);
     } catch (error) {
-        throw isValidationError(error) ? columnValidationError(error, field, value, options) : error;
+        throw isValidationError(error) ? columnValidationError(error, column, options) : error;
     }
 };
 
@@ -1350,7 +1364,11 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
 
         // Re-parse the field; the validator's own ValidationError carries the
         // refinement message and propagates up to the caller unchanged.
-        const result = parseColumn((input) => validator.parse?.(input), field, document[field], options);
+        const result = parseColumn(
+            (input) => validator.parse?.(input),
+            { field, serverDefault: validator._meta?.column?.serverDefault !== undefined, value: document[field] },
+            options,
+        );
 
         if (fromColumn) {
             parsed ??= { ...document };

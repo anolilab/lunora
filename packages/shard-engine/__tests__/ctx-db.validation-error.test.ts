@@ -12,6 +12,9 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * the patch set it — and never quote the value, which may be a secret.
  */
 
+/** Whether the server default stamps a valid value: on for the insert, off for the patch. */
+const stamp = { valid: true };
+
 const SECRET = "2020-01-01T00:00:00.000Z-secret";
 
 const schema = {
@@ -31,6 +34,13 @@ const schema = {
                     v.string().check((key) => key.startsWith("k"), "key must start with k"),
                     v.number(),
                 ),
+            },
+        },
+        stamped: {
+            indexes: [],
+            shape: {
+                name: v.string(),
+                owner: v.string().serverDefault(() => (stamp.valid ? "server" : (42 as unknown as string))),
             },
         },
         hooked: {
@@ -119,6 +129,19 @@ describe("ctx.db — whole-row validation errors", () => {
         const error = await rejection(writer.patch("hooked", id, { name: "b" }));
 
         expect(error.message).toBe("hooked.score: expected number, received string (not set by this patch: an update hook assigned it)");
+    });
+
+    it("blames the server default, not the patch, for a value the server stamped over it", async () => {
+        expect.hasAssertions();
+
+        stamp.valid = true;
+
+        const id = await writer.insert("stamped", { name: "a", owner: "mine" });
+
+        stamp.valid = false;
+        const error = await rejection(writer.patch("stamped", id, { owner: "mine" }));
+
+        expect(error.message).toBe("stamped.owner: expected string, received number (set by the column's server default, which replaces what this patch sent)");
     });
 
     it("reports the type a refinement rejected after a transform, not the input's", async () => {
