@@ -3,6 +3,18 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-26T13:35:16.679Z",
+      "key": "@lunora/shard-engine@1.0.0-alpha.210"
+    },
+    {
+      "at": "2026-11-26T13:35:16.679Z",
+      "key": "@lunora/hyperdrive@1.0.0-alpha.233"
+    },
+    {
+      "at": "2026-11-26T13:35:16.679Z",
+      "key": "@lunora/server@1.0.0-alpha.282"
+    },
+    {
       "at": "2026-11-26T13:12:21.103Z",
       "key": "@lunora/auth@1.0.0-alpha.276"
     },
@@ -389,20 +401,8 @@
     {
       "at": "2026-11-23T11:13:42.967Z",
       "key": "@lunora/runtime@1.0.0-alpha.295"
-    },
-    {
-      "at": "2026-11-23T10:27:06.931Z",
-      "key": "@lunora/codegen@1.0.0-alpha.430"
-    },
-    {
-      "at": "2026-11-23T10:27:06.931Z",
-      "key": "@lunora/do@1.0.0-alpha.291"
-    },
-    {
-      "at": "2026-11-23T10:27:06.931Z",
-      "key": "@lunora/sql-store@1.0.0-alpha.241"
     }
   ],
-  "updatedAt": "2026-11-26T13:12:21.104Z",
+  "updatedAt": "2026-11-26T13:35:16.680Z",
   "version": 1
 }
