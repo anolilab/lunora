@@ -1,3 +1,7 @@
+## @lunora/errors [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.92...@lunora/errors@1.0.0-alpha.93) (2026-11-26)
+
+- feat(auth): run the data steps and provision tables without the migrator (#1712)
+
 ## @lunora/errors [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.91...@lunora/errors@1.0.0-alpha.92) (2026-11-20)
 
 - feat(cloud)!: lunora cloud control plane on workers for platforms (#85)

@@ -1,3 +1,8 @@
+## @lunora/auth [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.276...@lunora/auth@1.0.0-alpha.277) (2026-11-26)
+
+- feat(auth): run the data steps and provision tables without the migrator (#1712)
+- fix(shard-engine): name the table and column in a row validation error (#1713)
+
 ## @lunora/auth [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.275...@lunora/auth@1.0.0-alpha.276) (2026-11-26)
 
 - fix(auth): store better-auth dates as epoch ms (#1710)

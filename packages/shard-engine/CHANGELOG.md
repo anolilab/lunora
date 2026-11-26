@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.210...@lunora/shard-engine@1.0.0-alpha.211) (2026-11-26)
+
+- fix(shard-engine): name the table and column in a row validation error (#1713)
+
 ## @lunora/shard-engine [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.209...@lunora/shard-engine@1.0.0-alpha.210) (2026-11-26)
 
 - fix: accept null in where on optional columns; fix the nightly suite (#1711)
