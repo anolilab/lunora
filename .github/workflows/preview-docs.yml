@@ -34,8 +34,11 @@
 "permissions": {}
 
 "jobs":
-    "deploy":
-        "name": "Deploy the preview"
+    # The label list in the event payload is what the label was when the event fired. A run
+    # can wait in the queue behind the destroy of a later `unlabeled` event and start after
+    # it, so the live list decides, or that run would deploy the preview back.
+    "label":
+        "name": "Check the label"
         "if": >-
             github.repository == 'anolilab/lunora'
             && github.event.pull_request.head.repo.full_name == github.repository
@@ -43,6 +46,33 @@
             && github.event.action != 'unlabeled'
             && contains(github.event.pull_request.labels.*.name, 'preview-docs')
             && (github.event.action != 'labeled' || github.event.label.name == 'preview-docs')
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 5
+        "permissions":
+            "pull-requests": "read"
+        "outputs":
+            "preview": "${{ steps.live.outputs.preview }}"
+        "steps":
+            - "name": "Read the pull request's current labels"
+              "id": "live"
+              "env":
+                  "GH_TOKEN": "${{ github.token }}"
+                  "PR": "${{ github.event.pull_request.number }}"
+              "run": |
+                  set -euo pipefail
+
+                  labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --paginate --jq '.[].name')"
+
+                  if grep -qx 'preview-docs' <<< "${labels}"; then
+                      echo "preview=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "preview=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+    "deploy":
+        "name": "Deploy the preview"
+        "needs": "label"
+        "if": "needs.label.outputs.preview == 'true'"
         "permissions":
             "contents": "read"
             "deployments": "write"
@@ -116,14 +146,16 @@
               "with":
                   "egress-policy": "audit"
 
-            # The code that deployed it: the stage's resource list comes from
-            # `alchemy.run.ts`, and the merge ref of a merged pull request is gone. The
-            # head ref, unlike the head branch, survives a squash merge that deletes the branch.
+            # The base branch, not the pull request: a destroy holds the preview account's
+            # token, so it runs reviewed code only. It is also the one entrypoint with the
+            # persistent state store that every deploy uses, which a pull request that
+            # branched before that store existed does not have, and it survives the head
+            # branch being deleted. Destroy deletes what the stage's state lists.
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "persist-credentials": "false"
-                  "ref": "refs/pull/${{ github.event.pull_request.number }}/head"
+                  "ref": "${{ github.event.pull_request.base.ref }}"
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
@@ -151,6 +183,30 @@
                   "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"
               "run": |
                   pnpm exec alchemy destroy --stage "$STAGE"
+
+            # `alchemy destroy` exits 0 even when the deletion failed (it catches the error
+            # and calls process.exit(0)), so the exit status proves nothing. Ask the state
+            # store what is left: a failure here keeps the "destroyed" comment from being
+            # posted, and unlabelling and relabelling or reopening retries the deletion.
+            - "name": "Check that the stage is empty"
+              "working-directory": "apps/docs"
+              "env":
+                  "CI": "true"
+                  "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+                  "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+                  "ALCHEMY_PASSWORD": "${{ secrets.ALCHEMY_PASSWORD }}"
+                  "ALCHEMY_STATE_TOKEN": "${{ secrets.ALCHEMY_STATE_TOKEN }}"
+                  "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"
+              "run": |
+                  set -euo pipefail
+
+                  remaining="$(pnpm exec alchemy state list --stage "${STAGE}" | grep -F "/${STAGE}/" || true)"
+
+                  if [ -n "${remaining}" ]; then
+                      echo "::error::The destroy left resources in stage ${STAGE}:"
+                      echo "${remaining}"
+                      exit 1
+                  fi
 
             - "name": "Update the comment"
               "uses": "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" # v9.0.0
