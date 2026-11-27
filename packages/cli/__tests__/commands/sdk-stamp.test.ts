@@ -24,6 +24,16 @@ describe("sdk stamp", () => {
         writeFileSync(join(outputDirectory, relativePath), contents, "utf8");
     };
 
+    /**
+     * Makes `alias` a second name for `relativePath`. A case-insensitive filesystem already does that
+     * for a case-only difference, so the hard link is made only where the disk keeps the names apart.
+     */
+    const makeAlias = (relativePath: string, alias: string): void => {
+        if (!existsSync(join(outputDirectory, alias))) {
+            linkSync(join(outputDirectory, relativePath), join(outputDirectory, alias));
+        }
+    };
+
     const writeRawStamp = (document: unknown): void => {
         writeFileSync(join(outputDirectory, STAMP_FILE), JSON.stringify(document), "utf8");
     };
@@ -228,10 +238,8 @@ describe("sdk stamp", () => {
         it("keeps the file the new run wrote when a previous entry is another name for it", () => {
             expect.assertions(2);
 
-            // A case-insensitive filesystem makes `Models.dart` and `models.dart` one file;
-            // a hard link reproduces that on any filesystem.
             writeOutput("lib/models.dart");
-            linkSync(join(outputDirectory, "lib/models.dart"), join(outputDirectory, "lib/Models.dart"));
+            makeAlias("lib/models.dart", "lib/Models.dart");
 
             const result = pruneStale(outputDirectory, previous([], ["lib/Models.dart"]), { generatedFiles: ["lib/models.dart"], transportFiles: [] });
 
