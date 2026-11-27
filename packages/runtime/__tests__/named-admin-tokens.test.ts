@@ -705,6 +705,52 @@ describe("named admin tokens", () => {
         expect(JSON.stringify(rows)).not.toContain(token);
     });
 
+    it("records a named token's refusal on a root-only audited route as a failure row under its name", async () => {
+        expect.assertions(2);
+
+        const { namespace } = fakeShards();
+        const rows: unknown[] = [];
+        const worker = createBareWorker({
+            adminRevocations: fakeRevocations(),
+            adminToken: ROOT,
+            authAdmin: {
+                impersonateUser: async () => {
+                    return { expiresAt: 1, token: "tok_u1", user: { id: "u1" } };
+                },
+                listSessions: async () => {
+                    return { rows: [], total: 0 };
+                },
+                listUsers: async () => {
+                    return { rows: [], total: 0 };
+                },
+            },
+            authAuditWriter: {
+                write: async (entry) => {
+                    rows.push(entry);
+                },
+            },
+            functions: REGISTRY,
+            shardDO: namespace,
+        });
+        const created = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "oncall" }), method: "POST" });
+        const { token } = await created.json<{ token: string }>();
+
+        await expect(
+            errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/auth/users/impersonate`, token, { body: JSON.stringify({ userId: "u1" }), method: "POST" })),
+        ).resolves.toBe("ADMIN_ROOT_REQUIRED");
+
+        // No body is read before the refusal, so the row names no target.
+        expect(rows).toStrictEqual([
+            {
+                actorId: "admin:token:oncall",
+                detail: { code: "ADMIN_ROOT_REQUIRED", path: "/_lunora/admin/auth/users/impersonate" },
+                event: "admin-impersonate-start",
+                outcome: "failure",
+                ts: expect.any(Number),
+            },
+        ]);
+    });
+
     it("never records a token named root as the root credential", async () => {
         expect.assertions(1);
 
