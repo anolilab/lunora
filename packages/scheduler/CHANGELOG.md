@@ -1,3 +1,7 @@
+## @lunora/scheduler [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.174...@lunora/scheduler@1.0.0-alpha.175) (2026-11-27)
+
+- fix(scheduler)!: scope a fixed dedupKey by user and function (#1722)
+
 ## @lunora/scheduler [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.173...@lunora/scheduler@1.0.0-alpha.174) (2026-11-24)
 
 - fix(scheduler): stop a workpool exceeding its concurrency cap (#1655)

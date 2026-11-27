@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.304...@lunora/runtime@1.0.0-alpha.305) (2026-11-27)
+
+- fix(scheduler)!: scope a fixed dedupKey by user and function (#1722)
+
 ## @lunora/runtime [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.303...@lunora/runtime@1.0.0-alpha.304) (2026-11-27)
 
 - security(runtime)!: audit failed admin auth operations (#1723)

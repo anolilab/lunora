@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.444](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.443...@lunora/codegen@1.0.0-alpha.444) (2026-11-27)
+
+- fix(scheduler)!: scope a fixed dedupKey by user and function (#1722)
+
 ## @lunora/codegen [1.0.0-alpha.443](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.442...@lunora/codegen@1.0.0-alpha.443) (2026-11-25)
 
 - feat(payment)!: add getSubscriptionStatus, a live provider read (#1706)

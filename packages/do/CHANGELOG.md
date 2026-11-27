@@ -1,3 +1,7 @@
+## @lunora/do [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.296...@lunora/do@1.0.0-alpha.297) (2026-11-27)
+
+- fix(scheduler)!: scope a fixed dedupKey by user and function (#1722)
+
 ## @lunora/do [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.295...@lunora/do@1.0.0-alpha.296) (2026-11-24)
 
 - fix(do)!: stop subscribers being rate-limited for other users' writes (#1661)

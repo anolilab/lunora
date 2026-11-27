@@ -1,3 +1,7 @@
+## @lunora/platform-node [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.225...@lunora/platform-node@1.0.0-alpha.226) (2026-11-27)
+
+- fix(scheduler)!: scope a fixed dedupKey by user and function (#1722)
+
 ## @lunora/platform-node [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.224...@lunora/platform-node@1.0.0-alpha.225) (2026-11-23)
 
 - fix(scheduler): run a job scheduled under an id that already fired (#1652)

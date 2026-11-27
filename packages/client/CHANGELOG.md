@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.306](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.305...@lunora/client@1.0.0-alpha.306) (2026-11-27)
+
+- fix(scheduler)!: scope a fixed dedupKey by user and function (#1722)
+
 ## @lunora/client [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.304...@lunora/client@1.0.0-alpha.305) (2026-11-27)
 
 - fix(client)!: report per-shard connection status (#1721)

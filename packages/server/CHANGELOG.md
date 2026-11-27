@@ -1,3 +1,7 @@
+## @lunora/server [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.282...@lunora/server@1.0.0-alpha.283) (2026-11-27)
+
+- fix(scheduler)!: scope a fixed dedupKey by user and function (#1722)
+
 ## @lunora/server [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.281...@lunora/server@1.0.0-alpha.282) (2026-11-26)
 
 - fix: accept null in where on optional columns; fix the nightly suite (#1711)

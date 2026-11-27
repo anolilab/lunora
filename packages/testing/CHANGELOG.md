@@ -1,3 +1,7 @@
+## @lunora/testing [1.0.0-alpha.343](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.342...@lunora/testing@1.0.0-alpha.343) (2026-11-27)
+
+- fix(scheduler)!: scope a fixed dedupKey by user and function (#1722)
+
 ## @lunora/testing [1.0.0-alpha.342](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.341...@lunora/testing@1.0.0-alpha.342) (2026-11-23)
 
 - fix: keep migrate generate from overwriting, make presence follow room changes (#1643)
