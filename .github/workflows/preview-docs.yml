@@ -200,7 +200,10 @@
               "run": |
                   set -euo pipefail
 
-                  remaining="$(pnpm exec alchemy state list --stage "${STAGE}" | grep -F "/${STAGE}/" || true)"
+                  # Its own command, so a failed listing fails the step. Only the grep may
+                  # find nothing, which is the success case.
+                  listing="$(pnpm exec alchemy state list --stage "${STAGE}")"
+                  remaining="$(grep -F "/${STAGE}/" <<< "${listing}" || true)"
 
                   if [ -n "${remaining}" ]; then
                       echo "::error::The destroy left resources in stage ${STAGE}:"
