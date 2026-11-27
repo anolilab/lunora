@@ -1551,6 +1551,37 @@ describe("applyWebhookAction — a lost dispute beside refunds", () => {
         expect(session?.state).toBe("refunded");
     });
 
+    it("books a lost dispute whose sum with the stored refunds passes the capture, capped at the capture", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, refundTotal("evt_refund", 80));
+
+        const result = await applyWebhookAction(store, disputeLost("evt_dispute"));
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(result).toStrictEqual({ applied: true, reason: "ok" });
+        expect(session?.refundedAmount.minorUnits).toBe(100n);
+        expect(session?.disputedAmount?.minorUnits).toBe(30n);
+        expect(session?.state).toBe("refunded");
+    });
+
+    it("still refuses an ordinary refund delta whose sum with the stored refunds passes the capture", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, refundTotal("evt_refund", 80));
+
+        const result = await applyWebhookAction(store, { ...disputeLost("evt_refund_delta"), refundId: "re_2", reversal: undefined });
+
+        expect(result.reason).toBe("invalid_refund_amount");
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(80n);
+    });
+
     it("still refuses a refund total that alone exceeds the capture", async () => {
         expect.assertions(2);
 

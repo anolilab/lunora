@@ -122,6 +122,16 @@ export const localRefundKey = (sessionId: string, refundId: string | undefined, 
 export const LOCAL_REFUND_CLAIM_TYPE = "marker.local_refund";
 
 /**
+ * Set beside a {@link localRefundKey} marker before `refundPayment` claims it, and cleared once its ledger write
+ * has ended. A confirming webhook that finds the refund claimed while this stands must not be acknowledged as a
+ * duplicate: if that write then fails, the marker is given back and only a redelivery can book the money.
+ */
+export const localRefundWritingKey = (marker: string): string => `${marker}:writing`;
+
+/** Claim `type` recorded for a {@link localRefundWritingKey} marker. */
+export const LOCAL_REFUND_WRITING_CLAIM_TYPE = "marker.local_refund_writing";
+
+/**
  * Whether re-forwarding a recorded usage event to `provider` is safe, i.e. whether the key travels.
  *
  * `reconcile`'s usage sweep exists to retry a forward that failed — but a row can be unreported

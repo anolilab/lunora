@@ -890,6 +890,53 @@ describe("createPayment", () => {
         });
     });
 
+    it("leaves a refund to a webhook that landed during its failed ledger write, by not acknowledging that webhook", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        const confirming: WebhookAction = {
+            amount: money(300, "USD"),
+            eventId: "evt_ok",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "ord_1",
+            type: "payment.refunded",
+        };
+        let inFlight: Promise<unknown> | undefined;
+        // The confirming webhook lands while the facade writes the ledger, and every guarded write loses.
+        const losing = Object.assign(Object.create(store) as object, {
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) => {
+                if (guard === undefined) {
+                    return store.upsertPaymentSession(session);
+                }
+
+                inFlight ??= applyWebhookAction(store, confirming);
+                await inFlight;
+
+                return false;
+            },
+        }) as PaymentStore;
+        const refundPayment = vi.fn<PaymentAdapter["refundPayment"]>(async () => {
+            return { ...polarSession, refundedAmount: money(300, "USD"), refundId: "ref_1" };
+        });
+        const payment = createPayment({
+            adapter: fakeAdapter({ identifier: "polar", refundPayment }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store: losing,
+        });
+
+        await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+        // Answered with a retry rather than a final 200, so the provider's redelivery books the money.
+        await expect(inFlight).resolves.toStrictEqual({ applied: false, reason: "orphaned" });
+        await expect(applyWebhookAction(store, confirming)).resolves.toStrictEqual({ applied: true, reason: "ok" });
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
+    });
+
     it("records the refund it issued, so a second refund never reaches the provider", async () => {
         expect.assertions(4);
 

@@ -7,7 +7,15 @@
  * that reports `"orphaned"`, which the HTTP layer answers with a 500 for ONE bounded redelivery.
  */
 import { LunoraPaymentError } from "./errors";
-import { heldRefundIdOf, LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundHeldKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
+import {
+    heldRefundIdOf,
+    LOCAL_REFUND_CLAIM_TYPE,
+    localRefundKey,
+    localRefundWritingKey,
+    pendingRefundHeldKey,
+    pendingRefundKey,
+    refundNeedsPendingGuard,
+} from "./idempotency";
 import { addMoney, compareMoney, disputedAmountOf, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -71,6 +79,12 @@ interface RefundFold {
      * row, or the claim outlives the fold it stands for and the provider's retry books nothing.
      */
     readonly release: () => Promise<void>;
+
+    /**
+     * The claim is `refundPayment`'s, and its ledger write has not ended. That write can still fail and give
+     * the claim back, so the event is retried rather than acknowledged as `booked`.
+     */
+    readonly writing?: boolean;
 }
 
 const noRelease = async (): Promise<void> => {};
@@ -111,6 +125,10 @@ const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existi
 
     const key = localRefundKey(action.sessionId, action.refundId, action.amount);
     const unclaimed = await store.markEventProcessed(action.provider, key, LOCAL_REFUND_CLAIM_TYPE);
+
+    if (!unclaimed && (await store.getEventClaim(action.provider, localRefundWritingKey(key))) !== undefined) {
+        return { booked: false, release: noRelease, writing: true };
+    }
 
     if (action.refundId === undefined) {
         await store.releaseEvent(action.provider, key);
@@ -211,7 +229,10 @@ const refundedTotalFor = (base: PaymentSession, action: WebhookAction): Money | 
     const prospective = addMoney(base.refundedAmount, action.amount);
 
     if (compareMoney(prospective, base.capturedAmount) > 0) {
-        return undefined;
+        // A lost dispute has already taken the money back, so refusing it would acknowledge the webhook and
+        // record it nowhere; it is capped at the capture as the absolute branch caps the same sum. An ordinary
+        // refund past the capture is still refused, and so is a dispute that alone exceeds it.
+        return action.reversal === "dispute" && compareMoney(action.amount, base.capturedAmount) <= 0 ? base.capturedAmount : undefined;
     }
 
     return prospective;
@@ -334,6 +355,16 @@ const applyPaymentTo = async (
     refund: RefundFold | undefined,
     now: number,
 ): Promise<ApplyResult | undefined> => {
+    if (refund?.booked) {
+        return { applied: false, reason: "duplicate" };
+    }
+
+    // Answered like an out-of-order event: the claim is released and the provider redelivers once, by which
+    // time the facade's write has either booked the refund or given its claim back.
+    if (refund?.writing) {
+        return { applied: false, reason: "orphaned" };
+    }
+
     const fromState: PaymentState = existing?.state ?? "initiated";
     const currency = action.amount?.currency ?? existing?.amount.currency ?? "USD";
     const resolvedAction = paymentAction === "refund" ? resolveRefundAction(existing, action) : paymentAction;
@@ -445,10 +476,6 @@ const applyPayment = async (
 
             // eslint-disable-next-line no-await-in-loop -- once per event, see `refund` above
             refund ??= paymentAction === "refund" ? await foldRefundOnce(store, action, adoption.session) : undefined;
-
-            if (refund?.booked) {
-                return { applied: false, reason: "duplicate" };
-            }
 
             // eslint-disable-next-line no-await-in-loop -- see the read above
             const result = await applyPaymentTo(store, { ...action, sessionId }, paymentAction, adoption.session, refund, now);
