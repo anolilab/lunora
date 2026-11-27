@@ -145,7 +145,7 @@
                   "ALCHEMY_PASSWORD": "${{ secrets.ALCHEMY_PASSWORD }}"
                   "ALCHEMY_STATE_TOKEN": "${{ secrets.ALCHEMY_STATE_TOKEN }}"
                   "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"
-              "run": 'pnpm exec alchemy destroy --stage "$STAGE"'
+              "run": "pnpm exec alchemy destroy --stage \"$STAGE\""
 
             - "name": "Update the comment"
               "uses": "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" # v9.0.0

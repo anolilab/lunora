@@ -41,7 +41,7 @@
             - "shared/**"
             - "pnpm-lock.yaml"
             - "pnpm-workspace.yaml"
-    "workflow_dispatch":
+    "workflow_dispatch": {}
     "workflow_call":
         "inputs":
             "environment":
@@ -157,7 +157,7 @@
                   "VITE_PUBLIC_POSTHOG_PROJECT_TOKEN": "${{ vars.VITE_PUBLIC_POSTHOG_PROJECT_TOKEN }}"
               # `--adopt` takes over a `lunora-docs` Worker created outside alchemy, which
               # the first run needs; later runs find it in the state and ignore the flag.
-              "run": 'pnpm exec alchemy deploy --stage "$STAGE" --adopt'
+              "run": "pnpm exec alchemy deploy --stage \"$STAGE\" --adopt"
 
             # A deploy that "succeeds" is not a working site: prerendering runs in workerd
             # and leaves a route out silently when it breaks there. So call the new
