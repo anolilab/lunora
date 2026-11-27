@@ -117,12 +117,13 @@
                   "egress-policy": "audit"
 
             # The code that deployed it: the stage's resource list comes from
-            # `alchemy.run.ts`, and the merge ref of a merged pull request is gone.
+            # `alchemy.run.ts`, and the merge ref of a merged pull request is gone. The
+            # head ref, unlike the head branch, survives a squash merge that deletes the branch.
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "persist-credentials": "false"
-                  "ref": "${{ github.event.pull_request.head.sha }}"
+                  "ref": "refs/pull/${{ github.event.pull_request.number }}/head"
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
@@ -148,7 +149,8 @@
                   "ALCHEMY_PASSWORD": "${{ secrets.ALCHEMY_PASSWORD }}"
                   "ALCHEMY_STATE_TOKEN": "${{ secrets.ALCHEMY_STATE_TOKEN }}"
                   "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"
-              "run": "pnpm exec alchemy destroy --stage \"$STAGE\""
+              "run": |
+                  pnpm exec alchemy destroy --stage "$STAGE"
 
             - "name": "Update the comment"
               "uses": "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" # v9.0.0
