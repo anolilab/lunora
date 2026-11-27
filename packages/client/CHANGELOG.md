@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.304...@lunora/client@1.0.0-alpha.305) (2026-11-27)
+
+- fix(client)!: report per-shard connection status (#1721)
+
 ## @lunora/client [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.303...@lunora/client@1.0.0-alpha.304) (2026-11-24)
 
 - fix(client): keep writes composed before the session resolves (#1689)

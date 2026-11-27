@@ -1,3 +1,7 @@
+## @lunora/vue [1.0.0-alpha.325](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.324...@lunora/vue@1.0.0-alpha.325) (2026-11-27)
+
+- fix(client)!: report per-shard connection status (#1721)
+
 ## @lunora/vue [1.0.0-alpha.324](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.323...@lunora/vue@1.0.0-alpha.324) (2026-11-23)
 
 - fix: keep migrate generate from overwriting, make presence follow room changes (#1643)

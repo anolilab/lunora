@@ -1,3 +1,7 @@
+## @lunora/angular [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.273...@lunora/angular@1.0.0-alpha.274) (2026-11-27)
+
+- fix(client)!: report per-shard connection status (#1721)
+
 ## @lunora/angular [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.272...@lunora/angular@1.0.0-alpha.273) (2026-11-23)
 
 - fix: keep migrate generate from overwriting, make presence follow room changes (#1643)

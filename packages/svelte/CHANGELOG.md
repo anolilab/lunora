@@ -1,3 +1,7 @@
+## @lunora/svelte [1.0.0-alpha.324](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.323...@lunora/svelte@1.0.0-alpha.324) (2026-11-27)
+
+- fix(client)!: report per-shard connection status (#1721)
+
 ## @lunora/svelte [1.0.0-alpha.323](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.322...@lunora/svelte@1.0.0-alpha.323) (2026-11-23)
 
 - fix: keep migrate generate from overwriting, make presence follow room changes (#1643)
