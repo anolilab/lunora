@@ -271,6 +271,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 // the facade issued, so `dispute_id` stands in: distinct from every refund id, it can
                 // never consume a marker and have its reversal silently dropped.
                 refundId: readString(object, "refund_id") ?? readString(object, "dispute_id"),
+                ...(eventType === "dispute.lost" ? { reversal: "dispute" as const } : {}),
                 sessionId: readString(object, "payment_id"),
                 type: "payment.refunded",
             };

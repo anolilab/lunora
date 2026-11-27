@@ -787,7 +787,7 @@ describe("stripe adapter", () => {
     });
 
     it("reverses a captured payment when a chargeback is lost (regression)", async () => {
-        expect.assertions(4);
+        expect.assertions(6);
 
         const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
@@ -814,6 +814,7 @@ describe("stripe adapter", () => {
 
         expect(lost.type).toBe("payment.refunded");
         expect(lost.sessionId).toBe("pi_1");
+        expect(lost.reversal).toBe("dispute");
 
         const store = new MemoryPaymentStore();
 
@@ -824,6 +825,7 @@ describe("stripe adapter", () => {
 
         expect(row?.state).toBe("refunded");
         expect(row?.refundedAmount).toStrictEqual(money(5000n, "usd"));
+        expect(row?.disputedAmount).toStrictEqual(money(5000n, "usd"));
     });
 
     it("leaves a won or still-open dispute alone", async () => {

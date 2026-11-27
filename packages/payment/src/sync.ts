@@ -8,7 +8,7 @@
  */
 import { LunoraPaymentError } from "./errors";
 import { heldRefundIdOf, LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundHeldKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
-import { addMoney, compareMoney, maxMoney, zeroMoney } from "./money";
+import { addMoney, compareMoney, disputedAmountOf, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentAction, SubscriptionAction } from "./state-machine";
@@ -188,15 +188,14 @@ const refundedTotalFor = (base: PaymentSession, action: WebhookAction): Money | 
         return undefined;
     }
 
-    // `max` rather than `+` because an absolute total already includes every earlier refund. It does
-    // NOT include a lost-dispute reversal, which is a `"delta"` this same field accumulated: a
-    // dispute lost for 30 followed by a refund of 20 resolves to `max(20, 30) = 30`, understating the
-    // 50 that actually left. Unreachable on Stripe — it refuses to refund a charge with a lost
-    // dispute, so that order never happens, and the reverse (refund 20, then dispute 30) adds to 50
-    // correctly. Kept as a `max` on purpose: the alternative over-counts every ordinary re-delivered
-    // cumulative total, which is reachable. If Stripe ever allows a refund after a lost dispute, this
-    // is the line that has to change.
-    const prospective = action.amountKind === "absolute" ? maxMoney(action.amount, base.refundedAmount) : addMoney(base.refundedAmount, action.amount);
+    // `max` rather than `+` because an absolute total already includes every earlier refund, so a
+    // re-delivered or stale one adds nothing. It counts refunds only, though, while the stored total
+    // also holds every lost dispute: the disputes are added back before the two are compared, or a
+    // dispute of 30 then a refund total of 20 would resolve to 30 instead of 50.
+    const prospective =
+        action.amountKind === "absolute"
+            ? maxMoney(addMoney(action.amount, disputedAmountOf(base)), base.refundedAmount)
+            : addMoney(base.refundedAmount, action.amount);
 
     if (compareMoney(prospective, base.capturedAmount) > 0) {
         return undefined;
@@ -223,6 +222,12 @@ const resolveRefundAction = (existing: PaymentSession | undefined, action: Webho
 /** The refunded total once `resolvedAction` applies, or `undefined` when its amount cannot be booked. */
 const refundedAfter = (base: PaymentSession, action: WebhookAction, resolvedAction: PaymentAction): Money | undefined =>
     (resolvedAction === "partial_refund" || resolvedAction === "refund") && action.amount ? refundedTotalFor(base, action) : base.refundedAmount;
+
+/** A lost dispute books its amount into the row's dispute total as well as the refunded total. */
+const disputedAfter = (base: PaymentSession, action: WebhookAction, resolvedAction: PaymentAction): Pick<PaymentSession, "disputedAmount"> =>
+    action.reversal === "dispute" && action.amount && (resolvedAction === "partial_refund" || resolvedAction === "refund")
+        ? { disputedAmount: addMoney(disputedAmountOf(base), action.amount) }
+        : {};
 
 /**
  * A capture names the owner a subscription event may lack. Adopt it into an EXISTING blank row (the
@@ -386,9 +391,11 @@ const applyPayment = async (
         return { applied: false, reason: "invalid_refund_amount" };
     }
 
+    const disputed = disputedAfter(base, action, resolvedAction);
+
     const unstorable = await writeSession(
         store,
-        { ...base, capturedAmount, referenceId: ownerOf(base.referenceId, action.referenceId), refundedAmount, state: toState, updatedAt: now },
+        { ...base, capturedAmount, ...disputed, referenceId: ownerOf(base.referenceId, action.referenceId), refundedAmount, state: toState, updatedAt: now },
         refund,
     );
 

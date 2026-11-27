@@ -940,6 +940,31 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ refundedAmount: money(250n, "USD") });
     });
 
+    it("round-trips a session's dispute total through a column the schema accepts, and reads a row without it as no dispute", async () => {
+        expect.assertions(4);
+
+        const db = makeValidatingDb();
+        const store = createDatabasePaymentStore(db);
+
+        await store.upsertPaymentSession(session);
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ disputedAmount: undefined });
+
+        await store.upsertPaymentSession({ ...session, disputedAmount: money(300, "USD"), refundedAmount: money(500, "USD"), state: "partially_refunded" });
+
+        const { rows } = await db.findMany("payment_sessions", {});
+
+        expect(rows.map((row) => row["disputedMinor"])).toStrictEqual([300]);
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({
+            disputedAmount: money(300n, "USD"),
+            refundedAmount: money(500n, "USD"),
+        });
+
+        const written = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(written?.disputedAmount?.minorUnits).toBe(300n);
+    });
+
     it("stores the largest safe amount exactly and refuses one that would round", async () => {
         expect.assertions(4);
 

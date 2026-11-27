@@ -1453,3 +1453,84 @@ describe("applyWebhookAction on a value the store cannot hold", () => {
         },
     );
 });
+
+describe("applyWebhookAction — a lost dispute beside refunds", () => {
+    const capture: WebhookAction = {
+        amount: money(100, "USD"),
+        eventId: "evt_capture",
+        provider: "stripe",
+        referenceId: "user_1",
+        sessionId: "pi_1",
+        type: "payment.captured",
+    };
+
+    const disputeLost = (eventId: string): WebhookAction => {
+        return { amount: money(30, "USD"), eventId, provider: "stripe", refundId: "dp_1", reversal: "dispute", sessionId: "pi_1", type: "payment.refunded" };
+    };
+
+    const refundTotal = (eventId: string, minorUnits: number): WebhookAction => {
+        return { amount: money(minorUnits, "USD"), amountKind: "absolute", eventId, provider: "stripe", sessionId: "pi_1", type: "payment.refunded" };
+    };
+
+    it("adds a refund total reported after a lost dispute to the dispute", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, disputeLost("evt_dispute"));
+        await applyWebhookAction(store, refundTotal("evt_refund", 20));
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.refundedAmount.minorUnits).toBe(50n);
+        expect(session?.disputedAmount?.minorUnits).toBe(30n);
+        expect(session?.state).toBe("partially_refunded");
+    });
+
+    it("ends at the same totals when the refund lands before the dispute", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, refundTotal("evt_refund", 20));
+        await applyWebhookAction(store, disputeLost("evt_dispute"));
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.refundedAmount.minorUnits).toBe(50n);
+        expect(session?.disputedAmount?.minorUnits).toBe(30n);
+    });
+
+    it("books a redelivered dispute under a fresh event id once", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, disputeLost("evt_dispute"));
+        await applyWebhookAction(store, refundTotal("evt_refund", 20));
+
+        const again = await applyWebhookAction(store, disputeLost("evt_dispute_again"));
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(again.reason).toBe("duplicate");
+        expect(session?.refundedAmount.minorUnits).toBe(50n);
+        expect(session?.disputedAmount?.minorUnits).toBe(30n);
+    });
+
+    it("keeps a refund out of the dispute total", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, refundTotal("evt_refund", 20));
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.refundedAmount.minorUnits).toBe(20n);
+        expect(session?.disputedAmount).toBeUndefined();
+    });
+});

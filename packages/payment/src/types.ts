@@ -69,10 +69,18 @@ export interface PaymentSession {
     readonly amount: Money;
     readonly capturedAmount: Money;
     readonly createdAt: number;
+
+    /**
+     * The part of {@link PaymentSession.refundedAmount} that lost disputes reversed; absent means
+     * none. Kept apart because every refunded total a provider reports counts refunds only, so a
+     * provider total compares with the ledger only once this is added to it.
+     */
+    readonly disputedAmount?: Money;
     /** Provider-side payment / intent / session id. */
     readonly id: string;
     readonly provider: ProviderId;
     readonly referenceId: string;
+    /** Everything reversed on this payment: refunds plus lost disputes. */
     readonly refundedAmount: Money;
     /** Store-maintained write counter, absent on rows written before it existed. Ignored on write. */
     readonly revision?: number;
@@ -385,8 +393,8 @@ export interface RefundResult extends PaymentSession {
 
     /**
      * The provider's CUMULATIVE refunded-to-date total after this refund, when its response carries
-     * one (Stripe's charge `amount_refunded`). The facade then records `max(stored, refundedTotal)`
-     * rather than adding this refund to the stored total — the provider's own `charge.refunded` can
+     * one (Stripe's charge `amount_refunded`). The facade then records
+     * `max(stored, refundedTotal + disputed)` rather than adding this refund to the stored total — the provider's own `charge.refunded` can
      * land mid-call and book this refund first. Absent on a per-refund (delta) provider.
      */
     readonly refundedTotal?: Money;
@@ -502,6 +510,12 @@ export interface WebhookAction {
      * confirmation.
      */
     readonly refundId?: string;
+
+    /**
+     * Set on a `payment.refunded` whose amount is a lost dispute rather than a refund. The sync layer
+     * books it into {@link PaymentSession.disputedAmount} as well as the refunded total.
+     */
+    readonly reversal?: "dispute";
     readonly sessionId?: string;
     readonly subscriptionId?: string;
     readonly type: WebhookActionType;

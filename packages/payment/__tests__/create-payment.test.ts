@@ -1446,6 +1446,30 @@ describe("createPayment", () => {
             await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
         });
 
+        it("books a settled refund on top of a lost dispute the provider's refund list cannot show", async () => {
+            expect.assertions(2);
+
+            const { payment, providerRefunds, store } = await settleSetup("dodopayments");
+
+            await applyWebhookAction(store, {
+                amount: money(300, "USD"),
+                eventId: "evt_dispute",
+                provider: "dodopayments",
+                refundId: "dp_1",
+                reversal: "dispute",
+                sessionId: "ord_1",
+                type: "payment.refunded",
+            });
+            await payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+            providerRefunds.push({ amount: money(200, "USD"), refundId: "ref_1", status: "succeeded" });
+
+            await expect(payment.settlePendingRefund({ sessionId: "ord_1" })).resolves.toMatchObject({
+                refundedAmount: money(500, "USD"),
+                state: "partially_refunded",
+            });
+            await expect(store.getPaymentSession("dodopayments", "ord_1")).resolves.toMatchObject({ disputedAmount: money(300, "USD") });
+        });
+
         it.each([
             ["failed", [{ amount: money(1000, "USD"), refundId: "ref_1", status: "failed" }]],
             ["absent", []],
@@ -2912,6 +2936,34 @@ describe("createPayment — bug-hunt regressions", () => {
         await payment.refundPayment({ amount: money(30, "USD"), sessionId: "pi_1" });
 
         await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ refundedAmount: money(30, "USD") });
+    });
+
+    it("adds the row's lost dispute to an absolute provider's cumulative refund total", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession({
+            ...paymentSession("user_1"),
+            disputedAmount: money(300, "USD"),
+            refundedAmount: money(300, "USD"),
+            state: "partially_refunded",
+        });
+
+        const adapter = fakeAdapter({
+            refundPayment: async () => {
+                // Stripe's `amount_refunded` counts this refund of 200 and no dispute.
+                return { ...paymentSession("user_1"), refundedAmount: money(200, "USD"), refundedTotal: money(200, "USD"), refundId: "re_1" };
+            },
+        });
+        const payment = createPayment({ adapter, ...owned, store });
+
+        await payment.refundPayment({ amount: money(200, "USD"), sessionId: "pi_1" });
+
+        const stored = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(stored?.refundedAmount.minorUnits).toBe(500n);
+        expect(stored?.disputedAmount?.minorUnits).toBe(300n);
     });
 
     it("acknowledges a stale subscription event with 200 and leaves the row alone", async () => {

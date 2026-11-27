@@ -55,6 +55,7 @@ export interface Doc_payment_sessions {
     capturedMinor: number;
     createdAt: number;
     currency: string;
+    disputedMinor?: number;
     provider: string;
     providerSessionId: string;
     referenceId: string;
@@ -211,6 +212,7 @@ export interface Insert_payment_sessions {
     capturedMinor: number;
     createdAt: number;
     currency: string;
+    disputedMinor?: number;
     provider: string;
     providerSessionId: string;
     referenceId: string;

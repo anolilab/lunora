@@ -24,7 +24,7 @@ import {
     pendingRefundKey,
     refundNeedsPendingGuard,
 } from "./idempotency";
-import { addMoney, compareMoney, isZeroMoney, maxMoney, subtractMoney, zeroMoney } from "./money";
+import { addMoney, compareMoney, disputedAmountOf, isZeroMoney, maxMoney, subtractMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import { SUBSCRIPTION_TERMINAL_STATES } from "./state-machine";
@@ -761,8 +761,9 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         }
 
         // The provider's total is absolute, so the ledger becomes the larger of the two rather than gaining a delta:
-        // a reconcile that already wrote that total (it books no per-refund markers) is not counted twice. The
-        // write is guarded on the revision it read, and re-read when a reconcile or a webhook landed in between.
+        // a reconcile that already wrote that total (it books no per-refund markers) is not counted twice. It counts
+        // refunds only, so the row's lost disputes are added to it first. The write is guarded on the revision it
+        // read, and re-read when a reconcile or a webhook landed in between.
         for (let attempt = 0; attempt < SETTLE_WRITE_ATTEMPTS; attempt += 1) {
             // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row the last one lost to
             const fresh = await store.getPaymentSession(adapter.identifier, sessionId);
@@ -771,11 +772,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 return { booked: 0, unrecorded: true };
             }
 
-            if (compareMoney(providerTotal, fresh.refundedAmount) <= 0) {
+            const reversed = addMoney(providerTotal, disputedAmountOf(fresh));
+
+            if (compareMoney(reversed, fresh.refundedAmount) <= 0) {
                 return { booked: 0, unrecorded: false };
             }
 
-            const total = compareMoney(providerTotal, fresh.capturedAmount) > 0 ? fresh.capturedAmount : providerTotal;
+            const total = compareMoney(reversed, fresh.capturedAmount) > 0 ? fresh.capturedAmount : reversed;
             const next: PaymentSession = {
                 ...fresh,
                 refundedAmount: total,
@@ -1243,12 +1246,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 }
 
                 try {
-                    // Against the re-read row; an absolute provider's cumulative total may already include this refund.
+                    // Against the re-read row; an absolute provider's cumulative total may already include this refund,
+                    // and counts no lost dispute, so the row's are added to it.
                     return await persistSession(existing, (fresh) => {
                         const prospective =
                             issuedRefund.refundedTotal === undefined
                                 ? addMoney(fresh.refundedAmount, booked)
-                                : maxMoney(fresh.refundedAmount, issuedRefund.refundedTotal);
+                                : maxMoney(fresh.refundedAmount, addMoney(issuedRefund.refundedTotal, disputedAmountOf(fresh)));
                         // The money has already moved, so a total past the capture (two racing refunds
                         // the provider settled between them) is recorded as fully refunded, not thrown.
                         const total = compareMoney(prospective, fresh.capturedAmount) > 0 ? fresh.capturedAmount : prospective;

@@ -530,7 +530,7 @@ describe("dodopayments adapter", () => {
     });
 
     it("normalizes a refund.succeeded webhook to a refund", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
@@ -541,10 +541,12 @@ describe("dodopayments adapter", () => {
         expect(action.amount?.minorUnits).toBe(1000n);
         // Per-refund identity, so the sync layer can tell this event from a same-amount sibling.
         expect(action.refundId).toBe("ref_1");
+        // A refund, so it stays out of the session's dispute total.
+        expect(action.reversal).toBeUndefined();
     });
 
     it("treats a lost chargeback as a funds reversal, not an unhandled event (regression)", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const adapter = createDodoPaymentsAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
@@ -557,6 +559,7 @@ describe("dodopayments adapter", () => {
         expect(action.type).toBe("payment.refunded");
         expect(action.amount?.minorUnits).toBe(2500n);
         expect(action.sessionId).toBe("pay_1");
+        expect(action.reversal).toBe("dispute");
     });
 
     it("carries no amount for a non-integer dispute amount rather than guess its unit", async () => {

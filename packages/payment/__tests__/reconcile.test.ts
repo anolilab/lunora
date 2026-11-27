@@ -971,3 +971,85 @@ describe("reconcile", () => {
         await expect(store.listUnreportedUsage("stripe", 10, failedAt + 30_000)).resolves.toStrictEqual([]);
     });
 });
+
+describe("reconcile — a lost dispute beside refunds", () => {
+    // Dodo's snapshot sums `refunds[]` only: a lost dispute never appears in it.
+    const disputed = {
+        amount: money(100, "USD"),
+        capturedAmount: money(100, "USD"),
+        createdAt: 5,
+        disputedAmount: money(30, "USD"),
+        id: "pay_1",
+        provider: "dodopayments" as const,
+        referenceId: "user_1",
+        refundedAmount: money(30, "USD"),
+        state: "partially_refunded" as const,
+        updatedAt: 5,
+    };
+
+    const snapshotAdapter = (refundedMinor: number, state: "captured" | "partially_refunded" | "refunded"): PaymentAdapter =>
+        ({
+            getPaymentStatus: async () => {
+                return { ...disputed, disputedAmount: undefined, referenceId: "", refundedAmount: money(refundedMinor, "USD"), state };
+            },
+            identifier: "dodopayments",
+        }) as unknown as PaymentAdapter;
+
+    it("adds the provider's refund total to the booked dispute", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(disputed);
+        await reconcile({ adapter: snapshotAdapter(20, "partially_refunded"), paymentSessionIds: ["pay_1"], singleSubscriptionPerReference: false, store });
+
+        const merged = await store.getPaymentSession("dodopayments", "pay_1");
+
+        expect(merged?.refundedAmount.minorUnits).toBe(50n);
+        expect(merged?.disputedAmount?.minorUnits).toBe(30n);
+        expect(merged?.state).toBe("partially_refunded");
+    });
+
+    it("keeps the dispute when the provider reports no refund", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(disputed);
+        await reconcile({ adapter: snapshotAdapter(0, "captured"), paymentSessionIds: ["pay_1"], singleSubscriptionPerReference: false, store });
+
+        const merged = await store.getPaymentSession("dodopayments", "pay_1");
+
+        expect(merged?.refundedAmount.minorUnits).toBe(30n);
+        expect(merged?.disputedAmount?.minorUnits).toBe(30n);
+        expect(merged?.state).toBe("partially_refunded");
+    });
+
+    it("labels a total that reaches the captured amount refunded", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(disputed);
+        await reconcile({ adapter: snapshotAdapter(70, "partially_refunded"), paymentSessionIds: ["pay_1"], singleSubscriptionPerReference: false, store });
+
+        const merged = await store.getPaymentSession("dodopayments", "pay_1");
+
+        expect(merged?.refundedAmount.minorUnits).toBe(100n);
+        expect(merged?.state).toBe("refunded");
+    });
+
+    it("caps a refund total plus the dispute at the captured amount", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(disputed);
+        await reconcile({ adapter: snapshotAdapter(80, "partially_refunded"), paymentSessionIds: ["pay_1"], singleSubscriptionPerReference: false, store });
+
+        const merged = await store.getPaymentSession("dodopayments", "pay_1");
+
+        expect(merged?.refundedAmount.minorUnits).toBe(100n);
+        expect(merged?.state).toBe("refunded");
+    });
+});

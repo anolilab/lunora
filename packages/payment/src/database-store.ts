@@ -8,10 +8,10 @@
  * domain ⇄ row mapping (money split into `amountMinor` + `currency`, id ⇄ `provider<Thing>Id`).
  */
 import { LunoraPaymentError } from "./errors";
-import { money } from "./money";
+import { isZeroMoney, money } from "./money";
 import type { PaymentStore, RevisionGuard } from "./store";
 import { foldUsage } from "./store";
-import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
+import type { Customer, Money, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
 import { usageFirstDueAt } from "./usage-due";
 
 /**
@@ -135,9 +135,13 @@ const readMinorUnits = (row: PaymentRow, key: string): bigint => {
         }
     }
 
-    // Every money column is required, so an absent one is a malformed row, not zero money.
+    // A required money column that is absent is a malformed row, not zero money.
     throw new LunoraPaymentError("VALIDATION_ERROR", `payment store: \`${key}\` is missing`);
 };
+
+/** An optional money column: absent (a row written before the column existed) reads as `undefined`. */
+const readOptionalMoney = (row: PaymentRow, key: string, currency: string): Money | undefined =>
+    row[key] === undefined || row[key] === null ? undefined : money(readMinorUnits(row, key), currency);
 
 /**
  * Domain minor units → the `v.number()` money column. A double is exact only up to 2^53, so an
@@ -191,6 +195,9 @@ const sessionToRow = (session: PaymentSession): Record<string, unknown> => {
         capturedMinor: toMinorUnitsColumn(session.capturedAmount.minorUnits, "capturedMinor"),
         createdAt: session.createdAt,
         currency: session.amount.currency,
+        ...(session.disputedAmount === undefined || isZeroMoney(session.disputedAmount)
+            ? {}
+            : { disputedMinor: toMinorUnitsColumn(session.disputedAmount.minorUnits, "disputedMinor") }),
         provider: session.provider,
         providerSessionId: session.id,
         referenceId: session.referenceId,
@@ -208,6 +215,7 @@ const rowToSession = (row: PaymentRow): PaymentSession => {
         amount: money(readMinorUnits(row, "amountMinor"), currency),
         capturedAmount: money(readMinorUnits(row, "capturedMinor"), currency),
         createdAt: readNumber(row, "createdAt"),
+        disputedAmount: readOptionalMoney(row, "disputedMinor", currency),
         id: readString(row, "providerSessionId"),
         provider: readString(row, "provider") as ProviderId,
         referenceId: readString(row, "referenceId"),

@@ -485,6 +485,7 @@ interface PaymentSession {
     readonly amount: Money;
     readonly capturedAmount: Money;
     readonly createdAt: number;
+    readonly disputedAmount?: Money;
     readonly id: string;
     readonly provider: ProviderId;
     readonly referenceId: string;
@@ -796,6 +797,7 @@ interface WebhookAction {
     readonly raw?: unknown;
     readonly referenceId?: string;
     readonly refundId?: string;
+    readonly reversal?: "dispute";
     readonly sessionId?: string;
     readonly subscriptionId?: string;
     readonly type: WebhookActionType;
