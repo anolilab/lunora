@@ -56,8 +56,11 @@ interface TabCoordinatorOptions {
      * A follower drops the frame when `identity` is present and doesn't match
      * its own; an **absent** `identity` (mixed-version leader) is accepted —
      * today's behavior, and the channel split already separates version groups.
+     *
+     * `shards` is the leader's per-shard status (shard key → status), absent from a
+     * mixed-version leader. It is sent whenever it changes, even with the aggregate unchanged.
      */
-    onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
+    onConnectionStatus?: (status: ConnectionStatus, identity?: string | null, shards?: Record<string, ConnectionStatus>) => void;
 
     /**
      * Called when the leader broadcasts a subscription error.
@@ -155,7 +158,7 @@ type WsLeaderMessage =
           tabId: string;
           type: "subscription-settled";
       }
-    | { identity?: string | null; status: ConnectionStatus; tabId: string; type: "connection-status" };
+    | { identity?: string | null; shards?: Record<string, ConnectionStatus>; status: ConnectionStatus; tabId: string; type: "connection-status" };
 
 type TabCoordinatorMessage = WsFollowerMessage | WsLeaderMessage;
 
@@ -211,7 +214,7 @@ class TabCoordinator {
     /** Callbacks set via constructor options. */
     private readonly onBecomeLeader: (() => void) | undefined;
     private readonly onStopBeingLeader: (() => void) | undefined;
-    private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null) => void) | undefined;
+    private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null, shards?: Record<string, ConnectionStatus>) => void) | undefined;
     private readonly onSubscriptionData:
         | ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void)
         | undefined;
@@ -479,19 +482,19 @@ class TabCoordinator {
     }
 
     /**
-     * Broadcast this tab's aggregate `ConnectionStatus` to follower tabs, so
+     * Broadcast this tab's aggregate `ConnectionStatus` and each shard's to follower tabs, so
      * they can mirror a truthful status without a socket of their own (see
      * `LunoraClient.computeStatus`/`emitConnectionStatus`). `identity` is this
      * tab's own `identityFingerprint()` — see `broadcastSubscriptionData`'s
      * docblock for the same round-tripping rule. Only the leader should call
      * this.
      */
-    public broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void {
+    public broadcastConnectionStatus(status: ConnectionStatus, shards: Record<string, ConnectionStatus>, identity?: string | null): void {
         if (!this.leader) {
             return;
         }
 
-        this.broadcast({ type: "connection-status", tabId: this.tabId, status, ...(identity === undefined ? {} : { identity }) });
+        this.broadcast({ type: "connection-status", tabId: this.tabId, shards, status, ...(identity === undefined ? {} : { identity }) });
     }
 
     // -----------------------------------------------------------------------
@@ -580,7 +583,7 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onConnectionStatus?.(message.status, message.identity);
+                this.onConnectionStatus?.(message.status, message.identity, message.shards);
 
                 break;
             }

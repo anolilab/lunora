@@ -16,7 +16,7 @@ import {
 
 /** A host whose every operation is a recorded fake, with a leader mirror the test can read. */
 const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<LeaderMirror> = {}) => {
-    const leader: LeaderMirror = { status: undefined, wasEverConnected: false, ...mirror };
+    const leader: LeaderMirror = { shards: new Map(), status: undefined, wasEverConnected: false, ...mirror };
     const host: TabLeadershipHost = {
         ackAndAdvanceCursor: vi.fn<(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined) => void>(),
         activeShapes: vi.fn<() => ShapeSubscriptionState[]>(() => []),

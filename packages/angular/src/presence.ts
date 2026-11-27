@@ -192,7 +192,7 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
             // the row instantly on socket drop.
             const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
             const releaseRow = holdPresenceRow(client, { roomId: room, sessionId, shardKey });
-            const stopRejoin = onReconnected(client, sendHeartbeat);
+            const stopRejoin = onReconnected(client, shardKey, sendHeartbeat);
 
             // Heartbeat immediately on mount, and at once for a new room.
             sendHeartbeat();

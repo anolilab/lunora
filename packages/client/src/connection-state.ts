@@ -297,8 +297,33 @@ const flushPendingStreams = (conn: ShardConnection): void => {
  * `polling` outranks `connecting`: while the fallback is running a reconnect is
  * still armed in the background, and reporting that attempt would flicker the
  * indicator between two states while data is in fact arriving on the slow path.
+ *
+ * One shard's status (`shardConnectionStatus`) uses the same values for that shard's
+ * connection alone.
  */
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
+
+/** One connection's {@link ConnectionStatus}, in the precedence the aggregate uses. */
+const connectionStatusOf = (conn: ShardConnection): ConnectionStatus => {
+    if (conn.wsState === "open") {
+        return "connected";
+    }
+
+    if (conn.polling.isPolling()) {
+        return "polling";
+    }
+
+    return conn.wsState === "connecting" ? "connecting" : "offline";
+};
+
+/** The aggregate across connections: the first of these any connection reports, else `offline`. */
+const AGGREGATE_STATUS_ORDER: ReadonlyArray<ConnectionStatus> = ["connected", "polling", "connecting"];
+
+const sameShardStatuses = (a: Readonly<Record<string, ConnectionStatus>>, b: Readonly<Record<string, ConnectionStatus>>): boolean => {
+    const keys = Object.keys(a);
+
+    return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key]);
+};
 
 /**
  * Shared one-shot decoder for binary WS frames. `TextDecoder` is stateless for a
@@ -320,6 +345,6 @@ const decodeServerFrame = (raw: unknown): string | undefined => {
     return undefined;
 };
 
-export { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn };
+export { AGGREGATE_STATUS_ORDER, connectionKey, connectionStatusOf, decodeServerFrame, flushPendingStreams, isLiveStatus, sameShardStatuses, sendOn };
 
 export type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState };

@@ -188,7 +188,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         // holder.
         const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
         const releaseRow = holdPresenceRow(client, { roomId: room, sessionId, shardKey });
-        const stopRejoin = onReconnected(client, sendHeartbeat);
+        const stopRejoin = onReconnected(client, shardKey, sendHeartbeat);
 
         let unsubscribe: (() => void) | undefined;
         let disposed = false;

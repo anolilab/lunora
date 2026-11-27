@@ -251,6 +251,18 @@ const SyncBadge = () => {
 <span data-status={$status}>{$status === "connected" ? "Live" : "Offline"}</span>
 ```
 
+The aggregate reads `connected` while any one socket is open, so in a sharded app
+it does not move when a single shard's socket drops and reconnects. To follow one
+shard, ask the client directly (the adapters expose only the aggregate):
+
+```ts
+client.shardConnectionStatus("room-42"); // that shard's socket alone; "idle" when the client holds none
+const off = client.onShardConnectionStatus("room-42", (status) => render(status));
+```
+
+Omitting the shard key, or passing `""`, names the default shard. Presence uses
+this to re-send its heartbeat as soon as its own room's shard reconnects.
+
 ## Boot with no network (the app shell)
 
 The client renders cached reads on boot, but the browser still has to fetch your

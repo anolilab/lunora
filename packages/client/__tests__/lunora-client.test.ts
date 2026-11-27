@@ -4348,6 +4348,81 @@ describe("lunoraClient", () => {
             client.close();
         });
 
+        it("reports one shard's drop and reconnect to that shard's listeners only", async () => {
+            expect.assertions(7);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            try {
+                client.subscribe(fnRef("a:b"), {}, () => undefined, { shardKey: "a" });
+                client.subscribe(fnRef("a:b"), {}, () => undefined, { shardKey: "b" });
+                await vi.advanceTimersByTimeAsync(0);
+
+                const [socketA, socketB] = sockets;
+
+                socketA?.open();
+                socketB?.open();
+
+                const seenA: string[] = [];
+                const seenB: string[] = [];
+                const seenAggregate: string[] = [];
+
+                client.onShardConnectionStatus("a", (status) => seenA.push(status));
+                client.onShardConnectionStatus("b", (status) => seenB.push(status));
+                client.onConnectionStatus((status) => seenAggregate.push(status));
+
+                expect(client.shardConnectionStatus("unknown")).toBe("idle");
+
+                socketA?.triggerClose();
+
+                expect(client.shardConnectionStatus("a")).toBe("offline");
+
+                await vi.advanceTimersByTimeAsync(10);
+                sockets.at(-1)?.open();
+
+                expect(client.shardConnectionStatus("a")).toBe("connected");
+                expect(seenA[0]).toBe("connected");
+                expect(seenA.slice(1)).toStrictEqual(["offline", "connecting", "connected"]);
+                // Heard only at subscribe: the other shard and the aggregate never left `"connected"`.
+                expect(seenB).toStrictEqual(["connected"]);
+                expect(seenAggregate).toStrictEqual(["connected"]);
+            } finally {
+                client.close();
+                vi.useRealTimers();
+            }
+        });
+
+        it("treats an absent shard key as the root shard and stops after unsubscribe", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const seen: string[] = [];
+            const unsubscribe = client.onShardConnectionStatus("", (status) => seen.push(status));
+
+            client.subscribe(fnRef("a:b"), {}, () => undefined);
+
+            expect(client.shardConnectionStatus()).toBe("connecting");
+
+            unsubscribe();
+            latestSocket().open();
+
+            expect(seen).toStrictEqual(["idle", "connecting"]);
+
+            client.close();
+        });
+
         it("stops notifying after unsubscribe", () => {
             expect.assertions(1);
 

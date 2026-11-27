@@ -166,7 +166,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
             // when either tears down.
             const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
             const releaseRow = holdPresenceRow(client, { roomId: room, sessionId, shardKey });
-            const stopRejoin = onReconnected(client, sendHeartbeat);
+            const stopRejoin = onReconnected(client, shardKey, sendHeartbeat);
 
             return () => {
                 mounted = false;

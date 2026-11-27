@@ -15,7 +15,7 @@
  * the row's TTL, so a failure only settles the write.
  *
  * The same file counts the holders of a presence row ({@link holdPresenceRow}) and re-sends a room's
- * heartbeat when the connection comes back ({@link onReconnected}).
+ * heartbeat when its shard's connection comes back ({@link onReconnected}).
  *
  * Shared by the framework adapters' presence helpers. Like the sibling `shared/*` helpers this is
  * deliberately **not** a package: consumers import it by relative path and the bundler inlines it.
@@ -128,23 +128,22 @@ const holdPresenceRow = (client: object, row: PresenceRow): (() => boolean) => {
     };
 };
 
-interface ConnectionStatusSource {
-    onConnectionStatus: (listener: (status: string) => void) => () => void;
+interface ShardConnectionStatusSource {
+    onShardConnectionStatus: (shardKey: string | undefined, listener: (status: string) => void) => () => void;
 }
 
 /**
- * Call `rejoin` each time the client's connection becomes `"connected"` after it was not. Heartbeats are sent
- * online-only (a replayed one could mark a room since left), so one due while the socket reconnects is dropped,
- * and the server's disconnect hook has already removed the row: without this the session stays missing until the
- * next interval tick. The client sets the socket open before it reports `"connected"`, so a heartbeat sent from
- * here is accepted. The status is the client's aggregate: a room's shard reconnecting while another shard's socket
- * stays open reports no change, and that room waits for its next tick. Returns the stop.
+ * Call `rejoin` each time the connection of the room's shard becomes `"connected"` after it was not. Heartbeats
+ * are sent online-only (a replayed one could mark a room since left), so one due while the socket reconnects is
+ * dropped, and the server's disconnect hook has already removed the row: without this the session stays missing
+ * until the next interval tick. The client sets the socket open before it reports `"connected"`, so a heartbeat
+ * sent from here is accepted. Returns the stop.
  */
-const onReconnected = (client: ConnectionStatusSource, rejoin: () => void): (() => void) => {
+const onReconnected = (client: ShardConnectionStatusSource, shardKey: string | undefined, rejoin: () => void): (() => void) => {
     let previous: string | undefined;
 
     // The listener hears the current status at once: that first report is the baseline, not a reconnect.
-    return client.onConnectionStatus((status) => {
+    return client.onShardConnectionStatus(shardKey, (status) => {
         const wasDown = previous !== undefined && previous !== "connected";
 
         previous = status;
