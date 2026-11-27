@@ -12,12 +12,12 @@
 - `packages/payment/src/sync.ts`:
     - `writeSession(store, session, refund)`: `await store.upsertPaymentSession(session);` with no second argument.
     - `applyPayment`: `let existing = await store.getPaymentSession(action.provider, action.sessionId);`, then `adoptOrphanSession`, `adoptOrphanSubscription`, `foldRefundOnce` (takes a refund marker; `refund.release()` gives it back), the state-machine step, `refundedAfter`, `disputedAfter`, then `writeSession`.
-- The store already supports the guard: `packages/payment/src/store.ts` `upsertPaymentSession: (session, guard?: RevisionGuard) => Promise<boolean>` and `interface RevisionGuard { readonly ifRevision: number | undefined }` (`undefined` means "the row must not exist yet"; check that this is how both `applyRevisioned` in `store.ts` and `upsertRevisioned` in `database-store.ts` treat it, and STOP if not).
+- The store already supports the guard: `packages/payment/src/store.ts` `upsertPaymentSession: (session, guard?: RevisionGuard) => Promise<boolean>` and `interface RevisionGuard { readonly ifRevision: number | undefined }` Both `applyRevisioned` in `store.ts` and `upsertRevisioned` in `database-store.ts` compare the stored row's `revision` with `guard.ifRevision`, so `ifRevision: undefined` matches a missing row **and** an existing row written before the counter existed (no `revision`). Read both to confirm.
 - The pattern to follow: `bookSettledRefunds` in `packages/payment/src/create-payment.ts` (the loop over `SETTLE_WRITE_ATTEMPTS` that re-reads the row and writes with `{ ifRevision: fresh.revision }`), and the subscription write in `sync.ts` (`{ ifRevision: existing.revision }`).
 
 ## What to do
 
-1. Make the session write in `applyPayment` conditional on the revision of the row it read (`existing?.revision`, and "must not exist" for a new row).
+1. Make the session write in `applyPayment` conditional on the revision of the row it read: `{ ifRevision: existing?.revision }`. That is `undefined` both for a row that did not exist and for a legacy row with no revision; the store bumps the revision on every write, so a concurrent write still makes either guard fail.
 2. When the guard refuses the write, re-read the row and recompute everything derived from it (state transition, `capturedAmount`, `refundedAmount`, `disputedAmount`, owner adoption) before writing again, for a bounded number of attempts. Give up by throwing, so the provider redelivers; never write unguarded as a fallback.
 3. Decide, from the code, what happens to the refund marker across a retry: the marker taken by `foldRefundOnce` must be taken once per event, not once per attempt, and must be released on every path that ends without a write. Explain the choice in the report.
 4. `adoptOrphanSession` writes too. Check whether it needs the same guard, and whether its write changes the revision the final write must be guarded on (re-read after it if so).
@@ -42,7 +42,7 @@ Each must fail with the guard removed. If `sync.properties.test.ts` models payme
 
 ## STOP and report if
 
-- a guarded insert of a new row cannot be expressed with the existing `RevisionGuard`;
+- two first writes for a row that does not exist can both pass an `ifRevision: undefined` guard in either store (write the test first; if it shows that, report it rather than changing the store interface);
 - the recompute needs the event-level idempotency claim (taken by the caller of `applyPayment`) to be released and retaken;
 - the fix needs a change to the `PaymentStore` interface.
 
