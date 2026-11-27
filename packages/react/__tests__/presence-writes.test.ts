@@ -42,21 +42,30 @@ describe(holdPresenceRow, () => {
 });
 
 describe(onReconnected, () => {
-    const statusSource = (initial: string): { emit: (status: string) => void; onConnectionStatus: (listener: (status: string) => void) => () => void } => {
-        const listeners = new Set<(status: string) => void>();
+    const statusSource = (
+        initial: string,
+    ): {
+        emit: (status: string, shardKey?: string) => void;
+        onShardConnectionStatus: (shardKey: string | undefined, listener: (status: string) => void) => () => void;
+    } => {
+        const listeners = new Set<{ listener: (status: string) => void; shard: string }>();
 
         return {
-            emit: (status) => {
-                for (const listener of listeners) {
-                    listener(status);
+            emit: (status, shardKey) => {
+                for (const entry of listeners) {
+                    if (entry.shard === (shardKey ?? "")) {
+                        entry.listener(status);
+                    }
                 }
             },
-            onConnectionStatus: (listener) => {
-                listeners.add(listener);
+            onShardConnectionStatus: (shardKey, listener) => {
+                const entry = { listener, shard: shardKey ?? "" };
+
+                listeners.add(entry);
                 listener(initial);
 
                 return () => {
-                    listeners.delete(listener);
+                    listeners.delete(entry);
                 };
             },
         };
@@ -67,7 +76,7 @@ describe(onReconnected, () => {
 
         const source = statusSource("connected");
         let rejoins = 0;
-        const stop = onReconnected(source, () => {
+        const stop = onReconnected(source, undefined, () => {
             rejoins += 1;
         });
 
@@ -95,10 +104,30 @@ describe(onReconnected, () => {
         const source = statusSource("connecting");
         let rejoins = 0;
 
-        onReconnected(source, () => {
+        onReconnected(source, undefined, () => {
             rejoins += 1;
         });
         source.emit("connected");
+
+        expect(rejoins).toBe(1);
+    });
+
+    it("ignores another shard's reconnect", () => {
+        expect.assertions(2);
+
+        const source = statusSource("connected");
+        let rejoins = 0;
+
+        onReconnected(source, "room-shard", () => {
+            rejoins += 1;
+        });
+        source.emit("connecting", "other-shard");
+        source.emit("connected", "other-shard");
+
+        expect(rejoins).toBe(0);
+
+        source.emit("connecting", "room-shard");
+        source.emit("connected", "room-shard");
 
         expect(rejoins).toBe(1);
     });

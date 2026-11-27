@@ -48,8 +48,8 @@ interface ParityClient {
     mutation: MutationMock;
     /** The `args` of the next `mutation` call on `ref`: a milestone to await. */
     nextMutation: (ref: string) => Promise<unknown>;
-    /** Report a new aggregate connection status to every `onConnectionStatus` listener. */
-    setStatus: (status: string) => void;
+    /** Report a new status for one shard to its `onShardConnectionStatus` listeners; the aggregate stays `"connected"`. */
+    setShardStatus: (shardKey: string | undefined, status: string) => void;
     subscribeCalls: SubscribeCall[];
 }
 
@@ -108,8 +108,8 @@ const createParityClient = (): ParityClient => {
 
         return undefined;
     });
-    const statusListeners = new Set<(status: string) => void>();
-    let status = "connected";
+    const shardStatusListeners = new Set<{ listener: (status: string) => void; shard: string }>();
+    const shardStatuses = new Map<string, string>();
 
     const subscribe = (ref: FakeRef, args: unknown, callback: (value: unknown) => void, options?: SubscribeCall["options"]): (() => void) => {
         const call: SubscribeCall = { args, options, ref: ref.__lunoraRef, unsubscribed: false };
@@ -143,16 +143,24 @@ const createParityClient = (): ParityClient => {
         isReady: true,
         mutation,
         onAuthTokenChange: () => () => undefined,
-        // Like the real client: the listener hears the current status at once, then every change.
+        // Another shard's socket stays open throughout, so the aggregate never moves.
         onConnectionStatus: (listener: (next: string) => void) => {
-            statusListeners.add(listener);
-            listener(status);
+            listener("connected");
 
-            return () => {
-                statusListeners.delete(listener);
-            };
+            return () => undefined;
         },
         onIdentityChange: () => () => undefined,
+        // Like the real client: the listener hears the shard's current status at once, then every change.
+        onShardConnectionStatus: (shardKey: string | undefined, listener: (next: string) => void) => {
+            const entry = { listener, shard: shardKey ?? "" };
+
+            shardStatusListeners.add(entry);
+            listener(shardStatuses.get(entry.shard) ?? "connected");
+
+            return () => {
+                shardStatusListeners.delete(entry);
+            };
+        },
         // A held value stands for an already-open subscription's `lastValue`.
         peekActiveQuerySnapshot: (functionPath: string, args?: unknown, shardKey?: string) => {
             const key = keyOf(functionPath, args, shardKey);
@@ -188,11 +196,15 @@ const createParityClient = (): ParityClient => {
             new Promise((resolve) => {
                 mutationWaiters.push({ ref, resolve });
             }),
-        setStatus: (next) => {
-            status = next;
+        setShardStatus: (shardKey, next) => {
+            const shard = shardKey ?? "";
 
-            for (const listener of statusListeners) {
-                listener(next);
+            shardStatuses.set(shard, next);
+
+            for (const entry of shardStatusListeners) {
+                if (entry.shard === shard) {
+                    entry.listener(next);
+                }
             }
         },
         subscribeCalls,
@@ -359,11 +371,17 @@ const presenceRejoinsOnReconnect = async (driver: AdapterDriver): Promise<void> 
     const atMount = beats();
     const rejoined = fake.nextMutation(PRESENCE.heartbeat.__lunoraRef);
 
-    fake.setStatus("connecting");
+    // Another shard's reconnect leaves this room's row in place.
+    fake.setShardStatus("other-shard", "connecting");
+    fake.setShardStatus("other-shard", "connected");
 
     expect(beats()).toBe(atMount);
 
-    fake.setStatus("connected");
+    fake.setShardStatus(undefined, "connecting");
+
+    expect(beats()).toBe(atMount);
+
+    fake.setShardStatus(undefined, "connected");
 
     // Sent in the listener's own tick, so a missing rejoin fails here rather than by timing out below.
     expect(beats()).toBe(atMount + 1);
@@ -374,8 +392,8 @@ const presenceRejoinsOnReconnect = async (driver: AdapterDriver): Promise<void> 
 
     mounted.dispose();
 
-    fake.setStatus("connecting");
-    fake.setStatus("connected");
+    fake.setShardStatus(undefined, "connecting");
+    fake.setShardStatus(undefined, "connected");
 
     expect(beats()).toBe(atMount + 1);
 };
@@ -390,7 +408,7 @@ const scenarios: Scenario[] = [
     { name: "query forwards shardKey to client.subscribe unchanged", run: queryForwardsShardKey },
     { name: "presence sends leave only when the last holder of a room and session is torn down", run: presenceLeavesWithItsLastHolder },
     { name: "presence holders of different sessions leave independently", run: presenceSessionsLeaveIndependently },
-    { name: "presence heartbeats once when the connection is open again, and not after dispose", run: presenceRejoinsOnReconnect },
+    { name: "presence heartbeats once when its shard's connection is open again, and not after dispose", run: presenceRejoinsOnReconnect },
 ];
 
 export type { AdapterDriver, FakeRef, Mounted, ParityClient, Scenario, WireError };

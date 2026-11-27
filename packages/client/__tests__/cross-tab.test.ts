@@ -24,7 +24,13 @@ type RawLeaderMessage =
           tabId: string;
           type: "subscription-settled";
       }
-    | { identity?: string | null; status: "connected" | "connecting" | "idle" | "offline"; tabId: string; type: "connection-status" };
+    | {
+          identity?: string | null;
+          shards?: Record<string, "connected" | "connecting" | "idle" | "offline">;
+          status: "connected" | "connecting" | "idle" | "offline";
+          tabId: string;
+          type: "connection-status";
+      };
 
 const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
@@ -969,6 +975,99 @@ describe("lunoraClient — follower connection-status mirror + offline-queue gat
         } finally {
             rogue.close();
             client.close();
+        }
+    });
+
+    it("a follower's shard status follows the leader's per-shard map while the aggregate stays connected", async () => {
+        expect.assertions(4);
+
+        const client = new LunoraClient({
+            crossTabSync: true,
+            fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: {} })),
+            url: "https://app.example",
+        });
+        const rogue = new BroadcastChannel(clientChannel(client));
+        const seenA: string[] = [];
+        const seenB: string[] = [];
+        const seenAggregate: string[] = [];
+
+        client.onShardConnectionStatus("a", (status) => seenA.push(status));
+        client.onShardConnectionStatus("b", (status) => seenB.push(status));
+        client.onConnectionStatus((status) => seenAggregate.push(status));
+
+        const send = async (shards: Record<string, "connected" | "connecting" | "offline">): Promise<void> => {
+            rogue.postMessage({ shards, status: "connected", tabId: "leader-tab", type: "connection-status" } satisfies RawLeaderMessage);
+            await heard(clientBus(client), ofType("connection-status"));
+        };
+
+        try {
+            await send({ a: "connected", b: "connected" });
+            await send({ a: "offline", b: "connected" });
+            await send({ a: "connecting", b: "connected" });
+            await send({ a: "connected", b: "connected" });
+
+            expect(seenA).toStrictEqual(["idle", "connected", "offline", "connecting", "connected"]);
+            expect(seenB).toStrictEqual(["idle", "connected"]);
+            expect(seenAggregate).toStrictEqual(["idle", "connected"]);
+            expect(client.shardConnectionStatus("unreported")).toBe("idle");
+        } finally {
+            rogue.close();
+            client.close();
+        }
+    });
+
+    it("a leader broadcasts one shard's reconnect with the aggregate unchanged, and replays the map to a late tab", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const client = new LunoraClient({
+            crossTabSync: true,
+            fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: {} })),
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createFrameWebSocket([]),
+        });
+        const probe = new BroadcastChannel(clientChannel(client));
+        const broadcasts: { shards?: Record<string, string>; status: string }[] = [];
+
+        probe.addEventListener("message", (event: MessageEvent<{ shards?: Record<string, string>; status: string; type?: string }>) => {
+            if (event.data.type === "connection-status") {
+                broadcasts.push({ shards: event.data.shards, status: event.data.status });
+            }
+        });
+
+        try {
+            client.subscribe(fnRef("q:list"), {}, () => undefined, { shardKey: "a" });
+            client.subscribe(fnRef("q:list"), {}, () => undefined, { shardKey: "b" });
+            await vi.advanceTimersByTimeAsync(3100);
+
+            expect(client.shardConnectionStatus("a")).toBe("connected");
+
+            broadcasts.length = 0;
+
+            // White-box: drop shard a's socket the way the network would.
+            const { connections } = client as unknown as { connections: Map<string, { socket?: WebSocket }> };
+
+            connections.get("a")?.socket?.close();
+            await vi.advanceTimersByTimeAsync(20);
+            await drained(probe);
+
+            expect(broadcasts).toStrictEqual([
+                { shards: { a: "offline", b: "connected" }, status: "connected" },
+                { shards: { a: "connecting", b: "connected" }, status: "connected" },
+                { shards: { a: "connected", b: "connected" }, status: "connected" },
+            ]);
+
+            broadcasts.length = 0;
+            probe.postMessage({ tabId: "zzz-newcomer", ts: Date.now(), type: "claim-leadership" } satisfies RawMessage);
+            await heard(probe, ofType("connection-status"));
+
+            expect(broadcasts).toStrictEqual([{ shards: { a: "connected", b: "connected" }, status: "connected" }]);
+        } finally {
+            probe.close();
+            client.close();
+            vi.useRealTimers();
         }
     });
 

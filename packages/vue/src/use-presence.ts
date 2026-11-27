@@ -169,7 +169,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
             // doesn't clobber this one's context when either unmounts.
             const releaseConnectionContext = client.acquireConnectionContext({ roomId: room, sessionId }, { shardKey });
             const releaseRow = holdPresenceRow(client, { roomId: room, sessionId, shardKey });
-            const stopRejoin = onReconnected(client, sendHeartbeat);
+            const stopRejoin = onReconnected(client, shardKey, sendHeartbeat);
 
             let unsubscribe: (() => void) | undefined;
 

@@ -25,6 +25,9 @@ const claimsAllow = (host: TabLeadershipHost, holdKey: string, claims: string | 
  * the current leader, so a stale mirror never survives a leadership change.
  */
 export interface LeaderMirror {
+    /** Each shard's status as the leader last reported it; a shard it did not report is `"idle"`. */
+    shards: ReadonlyMap<string, ConnectionStatus>;
+
     status: ConnectionStatus | undefined;
 
     /**
@@ -138,6 +141,7 @@ export const onStopBeingLeader = (host: TabLeadershipHost): void => {
 
     const mirror = host.leader;
 
+    mirror.shards = new Map();
     mirror.status = undefined;
     mirror.wasEverConnected = false;
 
@@ -161,7 +165,12 @@ export const onStopBeingLeader = (host: TabLeadershipHost): void => {
  * reachable, because they replay over HTTP and need no socket of this tab; one guarded by a
  * snapshot waits for the leader's next relay, which is the answer its socket gives.
  */
-export const onLeaderStatus = (host: TabLeadershipHost, status: ConnectionStatus, identity: string | null | undefined): void => {
+export const onLeaderStatus = (
+    host: TabLeadershipHost,
+    status: ConnectionStatus,
+    identity: string | null | undefined,
+    shards?: Readonly<Record<string, ConnectionStatus>>,
+): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
         return;
     }
@@ -169,6 +178,7 @@ export const onLeaderStatus = (host: TabLeadershipHost, status: ConnectionStatus
     const mirror = host.leader;
     const transitioned = isLiveTransition(mirror.status, status);
 
+    mirror.shards = new Map(Object.entries(shards ?? {}));
     mirror.status = status;
 
     if (status === "connected") {
@@ -184,7 +194,7 @@ export const onLeaderStatus = (host: TabLeadershipHost, status: ConnectionStatus
 };
 
 /**
- * A new tab announced itself. The leader restates its status directly, because
+ * A new tab announced itself. The leader restates its status, per-shard map included, directly, because
  * `emitConnectionStatus` skips an unchanged value. Without this, a late follower would
  * sit on `undefined` and show `"idle"` while the app is live.
  */

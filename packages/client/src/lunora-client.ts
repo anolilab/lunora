@@ -34,7 +34,16 @@ import {
 } from "./client-tuning";
 import { deriveWsUrl, joinUrl, parseSocketUrl, serializeSocketUrl } from "./client-urls";
 import type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState } from "./connection-state";
-import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
+import {
+    AGGREGATE_STATUS_ORDER,
+    connectionKey,
+    connectionStatusOf,
+    decodeServerFrame,
+    flushPendingStreams,
+    isLiveStatus,
+    sameShardStatuses,
+    sendOn,
+} from "./connection-state";
 import { TabCoordinator } from "./cross-tab";
 import { resolveDataPayload, UNMERGEABLE_DELTA } from "./delta-merge";
 import { isAuthReplayFailure, TransportError } from "./errors";
@@ -942,7 +951,7 @@ class LunoraClient {
     private tabCoordinator: TabCoordinator | undefined;
 
     /**
-     * The leader's last-broadcast aggregate {@link ConnectionStatus}, mirrored
+     * The leader's last-broadcast aggregate {@link ConnectionStatus} and per-shard map, mirrored
      * on a follower tab — which owns no `ShardConnection` of its own to
      * compute a status from (see `computeStatus`). `undefined` until the
      * leader's first broadcast (falls back to `"idle"`), and reset back to
@@ -950,7 +959,7 @@ class LunoraClient {
      * leader (becomes leader itself, or the leader changes), so a stale
      * mirror from a previous leader never survives a leadership change.
      */
-    private readonly leader: LeaderMirror = { status: undefined, wasEverConnected: false };
+    private readonly leader: LeaderMirror = { shards: new Map(), status: undefined, wasEverConnected: false };
 
     /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
     private readonly connections = new Map<string, ShardConnection>();
@@ -1158,6 +1167,18 @@ class LunoraClient {
 
     /** Subscribers to aggregate connection-status changes (see `onConnectionStatus`). */
     private readonly statusListeners = new Listeners<ConnectionStatus>();
+
+    /** Subscribers to one shard's connection status, keyed by `shardKey ?? ""` (see `onShardConnectionStatus`). */
+    private readonly shardStatusListeners = new Map<string, Listeners<ConnectionStatus>>();
+
+    /** The status each listened-to shard last reported, so a socket transition on another shard notifies nobody here. */
+    private readonly lastShardStatus = new Map<string, ConnectionStatus>();
+
+    /**
+     * The per-shard map this tab last sent its followers. A shard can reconnect while another shard's socket keeps the
+     * aggregate `"connected"`, so the leader re-broadcasts on a change of this map as well as of the aggregate.
+     */
+    private lastBroadcastShards: Readonly<Record<string, ConnectionStatus>> = {};
 
     /** Room handles' held-send flushers, keyed by the shard connection they send on. */
     private readonly roomFlushes = new Map<string, Set<() => void>>();
@@ -2736,6 +2757,45 @@ class LunoraClient {
     }
 
     /**
+     * Current status of the one socket for `shardKey` (`undefined` and `""` are the same shard). `"idle"` when
+     * the client holds no connection for it. Unlike {@link connectionStatus}, a drop on this shard shows here even
+     * while another shard's socket stays open.
+     */
+    public shardConnectionStatus(shardKey?: string): ConnectionStatus {
+        return this.computeShardStatus(shardKey ?? "");
+    }
+
+    /**
+     * Subscribe to one shard's connection-status changes (see {@link shardConnectionStatus}). Invokes `listener`
+     * immediately with the current status, then on every transition of that shard only. Returns an unsubscribe
+     * function.
+     */
+    public onShardConnectionStatus(shardKey: string | undefined, listener: (status: ConnectionStatus) => void): Unsubscribe {
+        const key = shardKey ?? "";
+        let listeners = this.shardStatusListeners.get(key);
+
+        if (listeners === undefined) {
+            listeners = new Listeners<ConnectionStatus>();
+            this.shardStatusListeners.set(key, listeners);
+            this.lastShardStatus.set(key, this.computeShardStatus(key));
+        }
+
+        const remove = listeners.add(listener);
+        const registry = listeners;
+
+        listener(this.computeShardStatus(key));
+
+        return () => {
+            remove();
+
+            if (registry.size === 0 && this.shardStatusListeners.get(key) === registry) {
+                this.shardStatusListeners.delete(key);
+                this.lastShardStatus.delete(key);
+            }
+        };
+    }
+
+    /**
      * Whether the client is caught up: a live connection, every subscription
      * answered by the server, and no write waiting in the offline queue. Use this
      * rather than `connectionStatus() === "connected"` for a "synced" indicator —
@@ -4087,6 +4147,8 @@ class LunoraClient {
         // The client is terminal after close(), so nothing should fire these.
         this.authTokenListeners.clear();
         this.statusListeners.clear();
+        this.shardStatusListeners.clear();
+        this.lastShardStatus.clear();
         this.tokenExpiredListeners.clear();
         this.identityChangeListeners.clear();
         this.mutationSettledListeners.clear();
@@ -4477,7 +4539,9 @@ class LunoraClient {
             awaitLeaderAnswers: () => {
                 this.awaitLeaderAnswers();
             },
-            broadcastStatus: (status, identity) => this.tabCoordinator?.broadcastConnectionStatus(status, identity),
+            broadcastStatus: (status, identity) => {
+                this.broadcastConnectionStatus(status, identity);
+            },
             closeConnections: () => {
                 for (const [key, conn] of this.connections) {
                     this.teardownConnection(conn);
@@ -4523,8 +4587,8 @@ class LunoraClient {
             onStopBeingLeader: () => {
                 onStopBeingLeader(leadership);
             },
-            onConnectionStatus: (status, identity) => {
-                onLeaderStatus(leadership, status, identity);
+            onConnectionStatus: (status, identity, shards) => {
+                onLeaderStatus(leadership, status, identity, shards);
             },
             onSubscriptionData: (key, data, cursor, epoch, identity, claims) => {
                 onFollowerSubscriptionData(leadership, key, data, cursor, epoch, identity, claims);
@@ -5646,30 +5710,42 @@ class LunoraClient {
             return this.leader.status ?? "idle";
         }
 
-        const conns = [...this.connections.values()];
+        const statuses = new Set([...this.connections.values()].map((conn) => connectionStatusOf(conn)));
 
-        if (conns.length === 0) {
+        if (statuses.size === 0) {
             return "idle";
         }
 
-        if (conns.some((conn) => conn.wsState === "open")) {
-            return "connected";
-        }
-
-        // Ahead of `connecting`: a polling connection always has a reconnect
-        // armed too, and reporting that attempt would flicker the indicator
-        // between two states while data is in fact arriving over HTTP.
-        if (conns.some((conn) => conn.polling.isPolling())) {
-            return "polling";
-        }
-
-        if (conns.some((conn) => conn.wsState === "connecting")) {
-            return "connecting";
-        }
-
-        // Sockets exist but none is open or actively connecting — i.e. all are
+        // Sockets exist but none is open, polling or actively connecting — i.e. all are
         // down between reconnect attempts.
-        return "offline";
+        return AGGREGATE_STATUS_ORDER.find((status) => statuses.has(status)) ?? "offline";
+    }
+
+    /** One shard's status: what {@link computeStatus} would report were this shard the client's only connection. */
+    private computeShardStatus(key: string): ConnectionStatus {
+        if (this.tabCoordinator && !this.tabCoordinator.isLeader()) {
+            return this.leader.shards.get(key) ?? "idle";
+        }
+
+        const conn = this.connections.get(key);
+
+        return conn === undefined ? "idle" : connectionStatusOf(conn);
+    }
+
+    /** Every connection's status, the per-shard map a leader sends its followers. */
+    private shardStatuses(): Record<string, ConnectionStatus> {
+        return Object.fromEntries([...this.connections].map(([key, conn]) => [key, connectionStatusOf(conn)]));
+    }
+
+    private broadcastConnectionStatus(status: ConnectionStatus, identity: string | null): void {
+        if (!this.tabCoordinator?.isLeader()) {
+            return;
+        }
+
+        const shards = this.shardStatuses();
+
+        this.lastBroadcastShards = shards;
+        this.tabCoordinator.broadcastConnectionStatus(status, shards, identity);
     }
 
     /**
@@ -5892,20 +5968,27 @@ class LunoraClient {
         // A reconnect un-acks subscriptions without necessarily moving the aggregate status.
         this.emitSyncStatus();
 
-        if (next === this.lastStatus) {
-            return;
+        // Before the aggregate's comparison: one shard can drop and reopen while another keeps it `"connected"`.
+        for (const [key, listeners] of this.shardStatusListeners) {
+            const shardNext = this.computeShardStatus(key);
+
+            if (shardNext !== this.lastShardStatus.get(key)) {
+                this.lastShardStatus.set(key, shardNext);
+                listeners.emit(shardNext);
+            }
         }
 
-        this.lastStatus = next;
+        const changed = next !== this.lastStatus;
 
-        this.statusListeners.emit(next);
+        if (changed) {
+            this.lastStatus = next;
+            this.statusListeners.emit(next);
+        }
 
-        // Mirror our own aggregate status to follower tabs, which have no
-        // socket of their own to compute it from (see `computeStatus`). A
-        // no-op on a follower or single-tab client — `broadcastConnectionStatus`
-        // itself gates on `isLeader()`.
-        if (this.tabCoordinator?.isLeader()) {
-            this.tabCoordinator.broadcastConnectionStatus(next, this.identityFingerprint());
+        // Mirror our own status to follower tabs, which have no socket of their own
+        // to compute it from (see `computeStatus`). A no-op on a follower or single-tab client.
+        if (this.tabCoordinator?.isLeader() && (changed || !sameShardStatuses(this.shardStatuses(), this.lastBroadcastShards))) {
+            this.broadcastConnectionStatus(next, this.identityFingerprint());
         }
     }
 

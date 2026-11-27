@@ -240,7 +240,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     useEffect(() => {
         const release = client.acquireConnectionContext({ roomId, sessionId: generatedSessionId }, { shardKey });
         const releaseRow = holdPresenceRow(client, { roomId, sessionId: generatedSessionId, shardKey });
-        const stopRejoin = onReconnected(client, sendHeartbeat);
+        const stopRejoin = onReconnected(client, shardKey, sendHeartbeat);
 
         return () => {
             stopRejoin();

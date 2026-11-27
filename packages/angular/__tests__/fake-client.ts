@@ -163,6 +163,12 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
                 }
             };
         },
+        // One shard reports the aggregate: the fake has a single socket. Presence's rejoin is covered by the parity scenarios.
+        onShardConnectionStatus: (_shardKey: string | undefined, listener: (next: ConnectionStatus) => void): Unsubscribe => {
+            listener(status);
+
+            return () => undefined;
+        },
         setAuthToken: (token: string | null, subject?: string | null) => {
             if (subject !== undefined) {
                 authSubject = subject;

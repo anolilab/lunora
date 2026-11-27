@@ -180,6 +180,12 @@ const createMockClient = (
         mutation: mutationFunction,
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
+        // One shard reports the aggregate: the mock has a single socket. Presence's rejoin is covered by the parity scenarios.
+        onShardConnectionStatus: (_shardKey: string | undefined, listener: (next: ConnectionStatus) => void): Unsubscribe => {
+            listener(status);
+
+            return () => undefined;
+        },
         identityEpoch: () => 0,
         isCrossTabFollower: () => follower,
         onIdentityChange: (): Unsubscribe => () => undefined,

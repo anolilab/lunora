@@ -622,6 +622,8 @@ class LunoraClient {
     onTokenExpired(listener: () => void): Unsubscribe;
     connectionStatus(): ConnectionStatus;
     onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe;
+    shardConnectionStatus(shardKey?: string): ConnectionStatus;
+    onShardConnectionStatus(shardKey: string | undefined, listener: (status: ConnectionStatus) => void): Unsubscribe;
     syncStatus(): SyncStatus;
     onSyncStatus(listener: (status: SyncStatus) => void): Unsubscribe;
     pendingCount(): number;
@@ -1447,7 +1449,7 @@ class TabCoordinator {
     broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string): void;
     broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null, claims?: string): void;
     broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string): void;
-    broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
+    broadcastConnectionStatus(status: ConnectionStatus, shards: Record<string, ConnectionStatus>, identity?: string | null): void;
 }
 ```
 
@@ -3083,7 +3085,7 @@ interface TabCoordinatorOptions {
     heartbeatInterval?: number;
     leaderTimeout?: number;
     onBecomeLeader?: () => void;
-    onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
+    onConnectionStatus?: (status: ConnectionStatus, identity?: string | null, shards?: Record<string, ConnectionStatus>) => void;
     onLeaderClaimAnswered?: () => void;
     onStopBeingLeader?: () => void;
     onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void;
