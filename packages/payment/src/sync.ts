@@ -7,15 +7,7 @@
  * that reports `"orphaned"`, which the HTTP layer answers with a 500 for ONE bounded redelivery.
  */
 import { LunoraPaymentError } from "./errors";
-import {
-    heldRefundIdOf,
-    LOCAL_REFUND_CLAIM_TYPE,
-    localRefundKey,
-    localRefundWritingKey,
-    pendingRefundHeldKey,
-    pendingRefundKey,
-    refundNeedsPendingGuard,
-} from "./idempotency";
+import { heldRefundIdOf, LOCAL_REFUND_CLAIM_TYPE, localRefundKey, pendingRefundHeldKey, pendingRefundKey, refundNeedsPendingGuard } from "./idempotency";
 import { addMoney, compareMoney, disputedAmountOf, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -79,12 +71,6 @@ interface RefundFold {
      * row, or the claim outlives the fold it stands for and the provider's retry books nothing.
      */
     readonly release: () => Promise<void>;
-
-    /**
-     * The claim is `refundPayment`'s, and its ledger write has not ended. That write can still fail and give
-     * the claim back, so the event is retried rather than acknowledged as `booked`.
-     */
-    readonly writing?: boolean;
 }
 
 const noRelease = async (): Promise<void> => {};
@@ -125,10 +111,6 @@ const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existi
 
     const key = localRefundKey(action.sessionId, action.refundId, action.amount);
     const unclaimed = await store.markEventProcessed(action.provider, key, LOCAL_REFUND_CLAIM_TYPE);
-
-    if (!unclaimed && (await store.getEventClaim(action.provider, localRefundWritingKey(key))) !== undefined) {
-        return { booked: false, release: noRelease, writing: true };
-    }
 
     if (action.refundId === undefined) {
         await store.releaseEvent(action.provider, key);
@@ -357,12 +339,6 @@ const applyPaymentTo = async (
 ): Promise<ApplyResult | undefined> => {
     if (refund?.booked) {
         return { applied: false, reason: "duplicate" };
-    }
-
-    // Answered like an out-of-order event: the claim is released and the provider redelivers once, by which
-    // time the facade's write has either booked the refund or given its claim back.
-    if (refund?.writing) {
-        return { applied: false, reason: "orphaned" };
     }
 
     const fromState: PaymentState = existing?.state ?? "initiated";

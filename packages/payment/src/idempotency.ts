@@ -122,14 +122,20 @@ export const localRefundKey = (sessionId: string, refundId: string | undefined, 
 export const LOCAL_REFUND_CLAIM_TYPE = "marker.local_refund";
 
 /**
- * Set beside a {@link localRefundKey} marker before `refundPayment` claims it, and cleared once its ledger write
- * has ended. A confirming webhook that finds the refund claimed while this stands must not be acknowledged as a
- * duplicate: if that write then fails, the marker is given back and only a redelivery can book the money.
+ * Marker for a refund on `sessionId` the provider may have issued and the ledger may not hold yet.
+ *
+ * Claimed by `refundPayment` before it calls a provider that can list its refunds, and lifted only once no
+ * refund of that call is left off the ledger: the provider refused it, answered `pending` (the pending hold
+ * carries it from there), or the row write took it. Every other way out — a failed ledger write, a lost
+ * answer, a stopped isolate — leaves it standing, so nothing has to succeed for the session to stay blocked.
+ * The next `refundPayment` or `settlePendingRefund` takes it over and books the provider's settled refunds
+ * before any further refund is issued. A confirming webhook acknowledged as a duplicate meanwhile loses
+ * nothing: the provider's list is what books the money.
  */
-export const localRefundWritingKey = (marker: string): string => `${marker}:writing`;
+export const unbookedRefundKey = (sessionId: string): string => `unbooked-refund:${sessionId}`;
 
-/** Claim `type` recorded for a {@link localRefundWritingKey} marker. */
-export const LOCAL_REFUND_WRITING_CLAIM_TYPE = "marker.local_refund_writing";
+/** Claim `type` prefix for an {@link unbookedRefundKey} marker; the claim appends the token of the call that holds it. */
+export const UNBOOKED_REFUND_CLAIM_TYPE = "marker.unbooked_refund";
 
 /**
  * Whether re-forwarding a recorded usage event to `provider` is safe, i.e. whether the key travels.
