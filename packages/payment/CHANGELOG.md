@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.281...@lunora/payment@1.0.0-alpha.282) (2026-11-27)
+
+- fix(payment): stop concurrent events overwriting a payment row (#1727)
+
 ## @lunora/payment [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.280...@lunora/payment@1.0.0-alpha.281) (2026-11-27)
 
 - fix: address review findings on the dispute, audit and sdk-stamp changes (#1724)
