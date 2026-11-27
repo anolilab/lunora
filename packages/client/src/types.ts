@@ -1198,7 +1198,11 @@ export interface ScheduleRecord {
 
     /** The key every dispatch of this job is deduped on at its receiver (absent on a record scheduled before it was stored). */
     dedupKey?: string;
-    /** The scheduling user's dedup scope (32 hex characters of SHA-256 over their user id); absent when no user scheduled the job. */
+
+    /**
+     * The scheduling user's dedup scope: 32 hex characters of an unsalted SHA-256 over their user id.
+     * Not a secret: a reader who knows a user id can recompute it. Absent when no user scheduled the job.
+     */
     dedupScope?: string;
     enqueuedAt: number;
     /** Why the job was dead-lettered. Set on a parked record. */

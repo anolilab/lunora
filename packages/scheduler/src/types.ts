@@ -191,8 +191,9 @@ export interface ScheduleRecord {
     dedupKey?: string;
 
     /**
-     * The scheduling user's dedup scope: the first 32 hex characters of SHA-256 over their user id,
-     * so the raw id is never stored here. A function target's receiver folds it into the shard
+     * The scheduling user's dedup scope: the first 32 hex characters of an unsalted SHA-256 over
+     * their user id. It keeps the raw id out of the scheduler's storage but is not a secret: a reader
+     * who knows a user id can recompute it. A function target's receiver folds it into the shard
      * mutation id. Absent for a job no user scheduled (cron, server code).
      */
     dedupScope?: string;

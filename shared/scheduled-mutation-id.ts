@@ -7,8 +7,10 @@
  * `dedupKey` spent verbatim would let two users, or two functions, answer each other's job from the
  * replay row. The id is therefore a digest of (target function, scheduling user's scope, key).
  *
- * The scope is a truncated digest of the user id, so the scheduler never stores the raw id. Like
- * `shared/dedup-key.ts`, not a package: keep it zero-dependency.
+ * The scope is an unsalted, truncated digest of the user id. It keeps the raw id out of the
+ * scheduler's storage, but it is not a secret: anyone who can read a record's scope and knows or
+ * guesses a user id can recompute it and confirm the match. Like `shared/dedup-key.ts`, not a
+ * package: keep it zero-dependency.
  */
 
 const DEDUP_SCOPE_PATTERN = /^[\da-f]{32}$/u;
@@ -23,7 +25,10 @@ const sha256Hex = async (input: string): Promise<string> => {
 
 const isDedupScope = (candidate: unknown): candidate is string => typeof candidate === "string" && DEDUP_SCOPE_PATTERN.test(candidate);
 
-/** The scheduling user's dedup scope: the first 32 hex characters of SHA-256 over the user id. */
+/**
+ * The scheduling user's dedup scope: the first 32 hex characters of an unsalted SHA-256 over the
+ * user id. Not a secret: a reader who knows a user id can recompute it.
+ */
 const dedupScopeOf = async (userId: string): Promise<string> => (await sha256Hex(userId)).slice(0, 32);
 
 /**
