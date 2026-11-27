@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.511](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.510...@lunora/cli@1.0.0-alpha.511) (2026-11-27)
+
+- fix: address review findings on the dispute, audit and sdk-stamp changes (#1724)
+
 ## @lunora/cli [1.0.0-alpha.510](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.509...@lunora/cli@1.0.0-alpha.510) (2026-11-24)
 
 - security(cli)!: keep env push from uploading dev secrets to production (#1662)

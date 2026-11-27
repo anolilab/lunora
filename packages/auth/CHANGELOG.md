@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.281...@lunora/auth@1.0.0-alpha.282) (2026-11-27)
+
+- fix: address review findings on the dispute, audit and sdk-stamp changes (#1724)
+
 ## @lunora/auth [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.280...@lunora/auth@1.0.0-alpha.281) (2026-11-27)
 
 - security(runtime)!: audit failed admin auth operations (#1723)

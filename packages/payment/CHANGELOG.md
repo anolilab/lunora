@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.280...@lunora/payment@1.0.0-alpha.281) (2026-11-27)
+
+- fix: address review findings on the dispute, audit and sdk-stamp changes (#1724)
+
 ## @lunora/payment [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.279...@lunora/payment@1.0.0-alpha.280) (2026-11-27)
 
 - fix(payment): count a lost dispute and a refund on one payment (#1719)
