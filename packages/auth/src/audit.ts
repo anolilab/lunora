@@ -601,8 +601,10 @@ const createAuthAuditReader = (executor: SqlExecutor): AuthAuditReader => {
 /**
  * The audit write plane the runtime's `authAuditWriter` option accepts. The worker's admin plane calls
  * better-auth's adapter directly, so its operations never pass through {@link appendAuthAuditEntry}'s
- * better-auth hook; the admin routes record them through this instead. A revoke or delete of one row refuses when
- * nothing matches and records nothing; revoking all of a user's sessions is recorded even when there were none.
+ * better-auth hook; the admin routes record them through this instead. An authenticated admin's refused or failed
+ * mutation is recorded as a `failure` row with its error code, and the ids it named are stored as keyed digests,
+ * since a revoke of a row that does not exist can name a pasted key. Revoking all of a user's sessions is recorded
+ * even when there were none.
  */
 interface AuthAuditWriter {
     write: (entry: AppendAuthAuditEntry) => Promise<void>;
@@ -613,10 +615,12 @@ interface AuthAuditWriter {
  * so admin-plane rows land in the same `__lunora_auth_audit__` table the hook writes, with the same
  * `detail` redaction. Pass the auth instance and, when its `hooks.after` is the audit hook (directly or
  * through `withAuthAudit`), each row also goes through that hook's `retention`, `redactDetail` and
- * `onRecord`, so a SIEM tap sees the admin plane as well as sign-ins.
+ * `onRecord`, so a SIEM tap sees the admin plane as well as sign-ins. A failure row's ids are digested under the
+ * instance's `secret`, as the hook digests them; without an instance they are dropped.
  */
-const createAuthAuditWriter = (executor: SqlExecutor, auth?: { options: { hooks?: { after?: unknown } } } | null): AuthAuditWriter => {
+const createAuthAuditWriter = (executor: SqlExecutor, auth?: { options: { hooks?: { after?: unknown }; secret?: string } } | null): AuthAuditWriter => {
     const after = auth?.options.hooks?.after;
+    const hashKey = auth?.options.secret;
     const config = typeof after === "function" ? auditHookConfigOf(after) : undefined;
 
     // An after hook it cannot read is one the app composed around the audit hook, or a different hook entirely: admin
@@ -630,7 +634,13 @@ const createAuthAuditWriter = (executor: SqlExecutor, auth?: { options: { hooks?
 
     return {
         write: async (entry) => {
-            const persisted = await appendAuthAuditEntry(executor, entry, { redactDetail: config?.redactDetail, retention: config?.retention });
+            // appendAuthAuditEntry keeps a direct caller's failure ids when it has no key; this writer's ids come from
+            // admin request bodies, so without a key there is nothing safe to store.
+            const scoped =
+                entry.outcome === "failure" && hashKey === undefined && entry.detail !== undefined
+                    ? { ...entry, detail: Object.fromEntries(Object.entries(entry.detail).filter(([name]) => !IDENTIFIER_DETAIL_KEYS.has(name))) }
+                    : entry;
+            const persisted = await appendAuthAuditEntry(executor, scoped, { hashKey, redactDetail: config?.redactDetail, retention: config?.retention });
 
             try {
                 await config?.onRecord?.(persisted);

@@ -1,10 +1,14 @@
+import { DatabaseSync } from "node:sqlite";
+
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import { lunoraAuthAdapter } from "../../auth/src/adapter";
 import { createAuthAdmin } from "../../auth/src/admin";
+import { createAuthAuditReader, createAuthAuditWriter } from "../../auth/src/audit";
 import { createAuth } from "../../auth/src/create-auth";
 import { apiKey, passkey } from "../../auth/src/plugins";
+import type { SqlExecutor } from "../../auth/src/sql-store";
 import { createMemoryAuthStore } from "../../auth/src/store";
 import type { AuthAdmin, AuthAuditWrite, AuthAuditWriter, ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
@@ -380,6 +384,21 @@ describe("createWorker — auth admin mutation endpoints", () => {
     });
 });
 
+/** The real `@lunora/auth` writer over an in-memory database, read back through its reader: what the trail stores. */
+const sqliteTrail = (auth: Parameters<typeof createAuthAuditWriter>[1]): { read: () => Promise<unknown[]>; writer: AuthAuditWriter } => {
+    const database = new DatabaseSync(":memory:");
+    const executor: SqlExecutor = {
+        all: (sql, parameters) => Promise.resolve(database.prepare(sql).all(...(parameters as never[])) as Record<string, unknown>[]),
+        run: (sql, parameters) => {
+            database.prepare(sql).run(...(parameters as never[]));
+
+            return Promise.resolve();
+        },
+    };
+
+    return { read: () => createAuthAuditReader(executor).read({}), writer: createAuthAuditWriter(executor, auth) };
+};
+
 /** A writer that keeps every row it is handed, so a test can read what the trail would hold. */
 const recordingWriter = (): AuthAuditWriter & { rows: AuthAuditWrite[] } => {
     const rows: AuthAuditWrite[] = [];
@@ -461,35 +480,33 @@ describe("createWorker — auth admin audit trail", () => {
         ]);
     });
 
-    it("writes no row for a revoke of an api key that does not exist, so the id it named is never stored", async () => {
-        expect.assertions(2);
+    it.each([
+        ["api key", [apiKey()], "api-keys/delete", "apiKeyId", "api-key-delete", "API_KEY_NOT_FOUND"],
+        ["passkey", [passkey()], "passkeys/delete", "passkeyId", "passkey-remove", "PASSKEY_NOT_FOUND"],
+        ["session", [], "sessions/revoke", "sessionId", "admin-session-revoke", "SESSION_NOT_FOUND"],
+    ])("answers 404 for a revoke naming a missing %s and records a failure row without the id it named", async (_kind, plugins, route, field, event, code) => {
+        expect.assertions(3);
 
-        // The real plane, so the revoke answers as @lunora/auth does for an id that matches no key.
-        const plane = createAuthAdmin(
-            createAuth({ baseURL: "http://localhost", database: lunoraAuthAdapter(createMemoryAuthStore()), plugins: [apiKey()], secret: "x".repeat(32) }),
-        );
-        const writer = recordingWriter();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+        // The real plane and writer, so the revoke answers as @lunora/auth does for an id that matches nothing, and the
+        // row is what the trail would store. The id stands in for a key pasted into the wrong field.
+        const auth = createAuth({ baseURL: "http://localhost", database: lunoraAuthAdapter(createMemoryAuthStore()), plugins, secret: "x".repeat(32) });
+        const named = "f".repeat(64);
+        const trail = sqliteTrail(auth);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: createAuthAdmin(auth), authAuditWriter: trail.writer, shardDO: noopNamespace });
 
-        const response = await worker.fetch(post(`${AUTH}/api-keys/delete`, { apiKeyId: "f".repeat(64) }), {}, fakeContext);
-
-        expect(response.status).toBe(404);
-        expect(writer.rows).toStrictEqual([]);
-    });
-
-    it("answers 404 and writes no row for a revoke of a passkey that does not exist", async () => {
-        expect.assertions(2);
-
-        const plane = createAuthAdmin(
-            createAuth({ baseURL: "http://localhost", database: lunoraAuthAdapter(createMemoryAuthStore()), plugins: [passkey()], secret: "x".repeat(32) }),
-        );
-        const writer = recordingWriter();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
-
-        const response = await worker.fetch(post(`${AUTH}/passkeys/delete`, { passkeyId: "f".repeat(64) }), {}, fakeContext);
+        const response = await worker.fetch(post(`${AUTH}/${route}`, { [field]: named }), {}, fakeContext);
+        const rows = await trail.read();
 
         expect(response.status).toBe(404);
-        expect(writer.rows).toStrictEqual([]);
+        expect(rows).toStrictEqual([
+            expect.objectContaining({
+                actorId: "admin:root",
+                detail: expect.objectContaining({ code, path: `/_lunora/admin/auth/${route}` }),
+                event,
+                outcome: "failure",
+            }),
+        ]);
+        expect(JSON.stringify(rows)).not.toContain(named);
     });
 
     it("records a revoked invitation under the address the plane revoked, and a new organization's owner", async () => {
@@ -720,7 +737,7 @@ describe("createWorker — auth admin audit trail", () => {
         expect(writer.rows).toHaveLength(0);
     });
 
-    it("records nothing when the operation fails", async () => {
+    it("records one failure row with the error code when the operation fails", async () => {
         expect.assertions(2);
 
         const plane = auditedAuthAdmin();
@@ -735,6 +752,52 @@ describe("createWorker — auth admin audit trail", () => {
         const response = await worker.fetch(post(`${AUTH}/users/ban`, { userId: "u1" }), {}, fakeContext);
 
         expect(response.status).toBe(404);
+        expect(writer.rows).toStrictEqual([
+            {
+                actorId: "admin:root",
+                detail: { code: "USER_NOT_FOUND", path: "/_lunora/admin/auth/users/ban", targetUserId: "u1" },
+                event: "admin-user-ban",
+                outcome: "failure",
+                ts: expect.any(Number),
+            },
+        ]);
+    });
+
+    it("records a backend failure as a 500 failure row without the backend's message", async () => {
+        expect.assertions(3);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const plane = auditedAuthAdmin();
+
+        vi.mocked(plane.banUser as NonNullable<AuthAdmin["banUser"]>).mockImplementationOnce(async () => {
+            throw Object.assign(new Error("D1_ERROR: no such table: user_internal"), { code: "D1_ERROR" });
+        });
+
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, authAuditWriter: writer, shardDO: noopNamespace });
+
+        const response = await worker.fetch(post(`${AUTH}/users/ban`, { userId: "u1" }), {}, fakeContext);
+
+        error.mockRestore();
+
+        expect(response.status).toBe(500);
+        expect(writer.rows).toStrictEqual([expect.objectContaining({ detail: expect.objectContaining({ code: "D1_ERROR" }), outcome: "failure" })]);
+        expect(JSON.stringify(writer.rows)).not.toContain("user_internal");
+    });
+
+    it("records nothing for a request without an admin credential", async () => {
+        expect.assertions(2);
+
+        const writer = recordingWriter();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: auditedAuthAdmin(), authAuditWriter: writer, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request(`${AUTH}/users/ban`, { body: JSON.stringify({ userId: "u1" }), headers: { "content-type": "application/json" }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(403);
         expect(writer.rows).toHaveLength(0);
     });
 
@@ -776,6 +839,35 @@ describe("createWorker — auth admin audit trail", () => {
 
         expect(response.status).toBe(200);
         expect(plane.banUser).toHaveBeenCalledWith(expect.objectContaining({ userId: "u1" }));
+        expect(error).toHaveBeenCalledWith("[lunora] auth admin audit write failed:", expect.any(Error));
+
+        error.mockRestore();
+    });
+
+    it("answers a failed operation with its own error when the audit write fails too", async () => {
+        expect.assertions(2);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const plane = auditedAuthAdmin();
+
+        vi.mocked(plane.banUser as NonNullable<AuthAdmin["banUser"]>).mockImplementationOnce(async () => {
+            throw new LunoraError("USER_NOT_FOUND", "nope");
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            authAdmin: plane,
+            authAuditWriter: {
+                write: async () => {
+                    throw new Error("D1 unavailable");
+                },
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(post(`${AUTH}/users/ban`, { userId: "u1" }), {}, fakeContext);
+
+        expect(response.status).toBe(404);
         expect(error).toHaveBeenCalledWith("[lunora] auth admin audit write failed:", expect.any(Error));
 
         error.mockRestore();

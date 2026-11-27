@@ -304,24 +304,56 @@ interface AuditOrigin {
     userAgent: string | undefined;
 }
 
-/** The row a successful mutation records: who acted, from where, on which ids, through which route. */
+/** The allow-listed ids the request named, under their detail keys. */
+const requestedIds = (input: unknown): Record<string, string> => {
+    const ids: Record<string, string> = {};
+
+    for (const [inputField, detailKey] of AUDIT_INPUT_IDS) {
+        const value = stringField(input, inputField);
+
+        if (value !== undefined) {
+            ids[detailKey] = value;
+        }
+    }
+
+    return ids;
+};
+
+/** How the audited operation ended: with the plane's result, or refused with an error code. */
+type AuditSettlement = { code: string | undefined; outcome: "failure" } | { outcome: "success"; result: unknown };
+
+/**
+ * The row an audited mutation records: who acted, from where, on which ids, through which route, and how it ended. A
+ * failure row keeps only the requested ids and the error code: the role and address it would carry are caller text that
+ * nothing applied, and the error message can carry backend internals.
+ */
 const buildAuditEntry = (
     path: string,
     audit: NonNullable<AuthRouteDescriptor["audit"]>,
     actor: string,
     origin: AuditOrigin,
     input: unknown,
-    result: unknown,
+    settlement: AuditSettlement,
 ): AuthAuditWrite => {
-    const detail: Record<string, unknown> = { path };
+    const detail: Record<string, unknown> = { path, ...requestedIds(input) };
+    const base = {
+        actorId: actor,
+        detail,
+        event: audit.event,
+        ts: Date.now(),
+        ...(origin.ip === undefined ? {} : { ip: origin.ip }),
+        ...(origin.userAgent === undefined ? {} : { userAgent: origin.userAgent.slice(0, MAX_USER_AGENT_LENGTH) }),
+    };
 
-    for (const [inputField, detailKey] of AUDIT_INPUT_IDS) {
-        const value = stringField(input, inputField);
-
-        if (value !== undefined) {
-            detail[detailKey] = value;
+    if (settlement.outcome === "failure") {
+        if (settlement.code !== undefined) {
+            detail["code"] = settlement.code;
         }
+
+        return { ...base, outcome: "failure" };
     }
+
+    const { result } = settlement;
 
     // A team, member or custom-role update names only its item; the row it returns carries the organization.
     const resultOrganizationId = audit.event.startsWith("org-") && detail["organizationId"] === undefined ? stringField(result, "organizationId") : undefined;
@@ -344,16 +376,7 @@ const buildAuditEntry = (
 
     const email = auditedTargetEmail(input, result);
 
-    return {
-        actorId: actor,
-        detail,
-        event: audit.event,
-        outcome: "success",
-        ts: Date.now(),
-        ...(origin.ip === undefined ? {} : { ip: origin.ip }),
-        ...(email === undefined ? {} : { targetEmail: email.slice(0, MAX_TARGET_EMAIL_LENGTH) }),
-        ...(origin.userAgent === undefined ? {} : { userAgent: origin.userAgent.slice(0, MAX_USER_AGENT_LENGTH) }),
-    };
+    return { ...base, outcome: "success", ...(email === undefined ? {} : { targetEmail: email.slice(0, MAX_TARGET_EMAIL_LENGTH) }) };
 };
 
 /**
@@ -969,8 +992,74 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
         // leaking no route topology.
         deps.assertAdmin(request);
 
+        const url = new URL(request.url);
+
+        // Only after assertAdmin: an unauthenticated caller must not be able to fill the trail. A refusal or a failed
+        // operation is recorded, then rethrown unchanged, so a probe for ids or a revoke that did not happen is visible.
+        const recordAudit = async (input: unknown, settlement: AuditSettlement): Promise<void> => {
+            const writer = deps.getAuditWriter();
+
+            if (descriptor.audit === undefined || writer === undefined) {
+                return;
+            }
+
+            try {
+                await writer.write(
+                    buildAuditEntry(
+                        url.pathname,
+                        descriptor.audit,
+                        deps.adminActor(request),
+                        { ip: deps.clientIp(request), userAgent: request.headers.get("user-agent") ?? undefined },
+                        input,
+                        settlement,
+                    ),
+                );
+            } catch (error) {
+                // A succeeded operation already happened, and failing the response would invite a retry that repeats
+                // it; a failed one answers with its own error. Same policy as the better-auth audit hook.
+                // eslint-disable-next-line no-console -- server-side diagnostic; no injected logger at this layer
+                console.error("[lunora] auth admin audit write failed:", error);
+            }
+        };
+        const recordFailure = (input: unknown, error: unknown): Promise<void> =>
+            recordAudit(input, { code: error instanceof LunoraError ? error.code : undefined, outcome: "failure" });
+
+        const readBody = async (): Promise<Record<string, unknown>> => (descriptor.http === "POST" ? deps.readJsonBody(request) : {});
+        const buildInput = (body: Record<string, unknown>): unknown =>
+            descriptor.build({ body, paging: deps.parsePaging(request), query: (name) => deps.queryParameter(url, name) });
+
+        // The input a refused call would have run with, else its raw body: a refusal often carries an incomplete body
+        // (a password set naming only its user), and every audited build copies the AUDIT_INPUT_IDS fields under their
+        // body names, so the raw body yields the same ids. An unreadable body yields none.
+        const refusedInput = async (): Promise<unknown> => {
+            let body: Record<string, unknown>;
+
+            try {
+                body = await readBody();
+            } catch {
+                return undefined;
+            }
+
+            try {
+                return buildInput(body);
+            } catch {
+                return body;
+            }
+        };
+
         if (!NAMED_TOKEN_AUTH_METHODS.has(descriptor.method)) {
-            deps.assertRootAdmin(request);
+            try {
+                deps.assertRootAdmin(request);
+            } catch (error) {
+                // Name the target of the refused call when the request makes that possible. The body is read only here,
+                // after the refusal, under the same size cap; a wrong method or an unreadable body records no ids, and
+                // nothing from this attempt may replace the refusal the caller gets.
+                const input = request.method === descriptor.http ? await refusedInput() : undefined;
+
+                await recordFailure(input, error);
+
+                throw error;
+            }
         }
 
         if (request.method !== descriptor.http) {
@@ -989,35 +1078,18 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
             throw new LunoraError(`auth admin does not support \`${descriptor.method}\``, { code: "AUTH_OP_NOT_SUPPORTED", status: 400 });
         }
 
-        const url = new URL(request.url);
-        const context: AuthRouteContext = {
-            body: descriptor.http === "POST" ? await deps.readJsonBody(request) : {},
-            paging: deps.parsePaging(request),
-            query: (name) => deps.queryParameter(url, name),
-        };
-        const input = descriptor.build(context);
-        const result = await runAuthOp(() => (method as (argument: unknown) => Promise<unknown>)(input));
-        const writer = deps.getAuditWriter();
+        const input = buildInput(await readBody());
+        let result: unknown;
 
-        if (descriptor.audit !== undefined && writer !== undefined) {
-            try {
-                await writer.write(
-                    buildAuditEntry(
-                        url.pathname,
-                        descriptor.audit,
-                        deps.adminActor(request),
-                        { ip: deps.clientIp(request), userAgent: request.headers.get("user-agent") ?? undefined },
-                        input,
-                        result,
-                    ),
-                );
-            } catch (error) {
-                // The operation already happened; failing the response would invite a retry that repeats it. Same
-                // policy as the better-auth audit hook.
-                // eslint-disable-next-line no-console -- server-side diagnostic; no injected logger at this layer
-                console.error("[lunora] auth admin audit write failed:", error);
-            }
+        try {
+            result = await runAuthOp(() => (method as (argument: unknown) => Promise<unknown>)(input));
+        } catch (error) {
+            await recordFailure(input, error);
+
+            throw error;
         }
+
+        await recordAudit(input, { outcome: "success", result });
 
         // `no-store`, not just `content-type`: `users/impersonate` answers with a live
         // session bearer token for an arbitrary user and `users` with PII. Under an

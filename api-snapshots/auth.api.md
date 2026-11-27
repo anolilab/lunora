@@ -1239,6 +1239,7 @@ const createAuthAuditWriter: (executor: SqlExecutor, auth?: {
         hooks?: {
             after?: unknown;
         };
+        secret?: string;
     };
 } | null) => AuthAuditWriter;
 ```

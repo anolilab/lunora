@@ -151,6 +151,42 @@ describe(createAuthAuditWriter, () => {
         warn.mockRestore();
     });
 
+    it("stores a failure row's ids as keyed digests under the auth instance's secret, and keeps a success row's ids", async () => {
+        expect.assertions(2);
+
+        const writer = createAuthAuditWriter(executor, { options: { secret: "x".repeat(32) } });
+
+        await writer.write({
+            actorId: "admin:root",
+            detail: { code: "API_KEY_NOT_FOUND", keyId: "k-pasted" },
+            event: "api-key-delete",
+            outcome: "failure",
+            ts: 1,
+        });
+        await writer.write({ actorId: "admin:root", detail: { keyId: "k1" }, event: "api-key-delete", outcome: "success", ts: 2 });
+
+        const [success, failure] = await createAuthAuditReader(executor).read({});
+
+        expect(failure?.detail).toStrictEqual({ code: "API_KEY_NOT_FOUND", keyId: expect.stringMatching(/^hmac-sha256:[\da-f]{64}$/u) });
+        expect(success?.detail).toStrictEqual({ keyId: "k1" });
+    });
+
+    it("drops a failure row's ids when there is no auth secret to digest them under", async () => {
+        expect.assertions(1);
+
+        await createAuthAuditWriter(executor).write({
+            actorId: "admin:root",
+            detail: { code: "API_KEY_NOT_FOUND", keyId: "k-pasted", path: "/_lunora/admin/auth/api-keys/delete" },
+            event: "api-key-delete",
+            outcome: "failure",
+            ts: 1,
+        });
+
+        await expect(createAuthAuditReader(executor).read({})).resolves.toStrictEqual([
+            expect.objectContaining({ detail: { code: "API_KEY_NOT_FOUND", path: "/_lunora/admin/auth/api-keys/delete" }, outcome: "failure" }),
+        ]);
+    });
+
     it("accepts the generated worker's absent auth instance (null) and records with no hook config", async () => {
         expect.assertions(1);
 

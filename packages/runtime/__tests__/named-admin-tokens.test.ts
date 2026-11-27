@@ -1,6 +1,10 @@
+import { DatabaseSync } from "node:sqlite";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ADMIN_SIGNAL_HEADER, verifyAdminSignal } from "../../../shared/admin-token";
+import { createAuthAuditReader, createAuthAuditWriter } from "../../auth/src/audit";
+import type { SqlExecutor } from "../../auth/src/sql-store";
 import type { AdminTokenLookup } from "../src/admin-token-verifier";
 import { ADMIN_TOKEN_CACHE_TTL_MS, ADMIN_TOKEN_REFUSAL_TTL_MS, ADMIN_TOKEN_UNKNOWN_NAME_BURST, createAdminTokenVerifier } from "../src/admin-token-verifier";
 import type { ExecutionContextLike, FunctionRegistryLike } from "../src/create-worker";
@@ -703,6 +707,154 @@ describe("named admin tokens", () => {
 
         expect(rows).toStrictEqual([expect.objectContaining({ actorId: "admin:token:oncall", event: "admin-user-ban" })]);
         expect(JSON.stringify(rows)).not.toContain(token);
+    });
+
+    it("records a named token's refusal on a root-only audited route as a failure row under its name", async () => {
+        expect.assertions(2);
+
+        const { namespace } = fakeShards();
+        const rows: unknown[] = [];
+        const worker = createBareWorker({
+            adminRevocations: fakeRevocations(),
+            adminToken: ROOT,
+            authAdmin: {
+                impersonateUser: async () => {
+                    return { expiresAt: 1, token: "tok_u1", user: { id: "u1" } };
+                },
+                listSessions: async () => {
+                    return { rows: [], total: 0 };
+                },
+                listUsers: async () => {
+                    return { rows: [], total: 0 };
+                },
+            },
+            authAuditWriter: {
+                write: async (entry) => {
+                    rows.push(entry);
+                },
+            },
+            functions: REGISTRY,
+            shardDO: namespace,
+        });
+        const created = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "oncall" }), method: "POST" });
+        const { token } = await created.json<{ token: string }>();
+
+        await expect(
+            errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/auth/users/impersonate`, token, { body: JSON.stringify({ userId: "u1" }), method: "POST" })),
+        ).resolves.toBe("ADMIN_ROOT_REQUIRED");
+
+        expect(rows).toStrictEqual([
+            {
+                actorId: "admin:token:oncall",
+                detail: { code: "ADMIN_ROOT_REQUIRED", path: "/_lunora/admin/auth/users/impersonate", targetUserId: "u1" },
+                event: "admin-impersonate-start",
+                outcome: "failure",
+                ts: expect.any(Number),
+            },
+        ]);
+    });
+
+    describe("a refused root-only call", () => {
+        /** A worker whose admin plane records through the real writer, keyed by an auth secret, into in-memory SQLite. */
+        const refusingWorker = async (): Promise<{ read: () => Promise<unknown[]>; token: string; worker: ReturnType<typeof createBareWorker> }> => {
+            const { namespace } = fakeShards();
+            const database = new DatabaseSync(":memory:");
+            const executor: SqlExecutor = {
+                all: (sql, parameters) => Promise.resolve(database.prepare(sql).all(...(parameters as never[])) as Record<string, unknown>[]),
+                run: (sql, parameters) => {
+                    database.prepare(sql).run(...(parameters as never[]));
+
+                    return Promise.resolve();
+                },
+            };
+            const worker = createBareWorker({
+                adminRevocations: fakeRevocations(),
+                adminToken: ROOT,
+                authAdmin: {
+                    listSessions: async () => {
+                        return { rows: [], total: 0 };
+                    },
+                    listUsers: async () => {
+                        return { rows: [], total: 0 };
+                    },
+                    removeUser: async () => undefined,
+                },
+                authAuditWriter: createAuthAuditWriter(executor, { options: { secret: "x".repeat(32) } }),
+                functions: REGISTRY,
+                shardDO: namespace,
+            });
+            const created = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "oncall" }), method: "POST" });
+            const { token } = await created.json<{ token: string }>();
+
+            return { read: () => createAuthAuditReader(executor).read({}), token, worker };
+        };
+
+        it("records the target it named as a digest, never as the plain id", async () => {
+            expect.assertions(3);
+
+            const { read, token, worker } = await refusingWorker();
+            const target = "user-target-7f3a";
+
+            await expect(
+                errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/auth/users/remove`, token, { body: JSON.stringify({ userId: target }), method: "POST" })),
+            ).resolves.toBe("ADMIN_ROOT_REQUIRED");
+
+            const rows = await read();
+
+            expect(rows).toStrictEqual([
+                expect.objectContaining({
+                    actorId: "admin:token:oncall",
+                    detail: {
+                        code: "ADMIN_ROOT_REQUIRED",
+                        path: "/_lunora/admin/auth/users/remove",
+                        targetUserId: expect.stringMatching(/^hmac-sha256:[\da-f]{64}$/u),
+                    },
+                    outcome: "failure",
+                }),
+            ]);
+            expect(JSON.stringify(rows)).not.toContain(target);
+        });
+
+        it("records the target of a refused call whose body is incomplete", async () => {
+            expect.assertions(3);
+
+            const { read, token, worker } = await refusingWorker();
+            const target = "user-target-9c21";
+
+            // users/password needs newPassword too; the refusal must still name the user it was aimed at.
+            await expect(
+                errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/auth/users/password`, token, { body: JSON.stringify({ userId: target }), method: "POST" })),
+            ).resolves.toBe("ADMIN_ROOT_REQUIRED");
+
+            const rows = await read();
+
+            expect(rows).toStrictEqual([
+                expect.objectContaining({
+                    actorId: "admin:token:oncall",
+                    detail: {
+                        code: "ADMIN_ROOT_REQUIRED",
+                        path: "/_lunora/admin/auth/users/password",
+                        targetUserId: expect.stringMatching(/^hmac-sha256:[\da-f]{64}$/u),
+                    },
+                    event: "admin-password-set",
+                    outcome: "failure",
+                }),
+            ]);
+            expect(JSON.stringify(rows)).not.toContain(target);
+        });
+
+        it("still answers the refusal and records a row without ids when the body is malformed", async () => {
+            expect.assertions(2);
+
+            const { read, token, worker } = await refusingWorker();
+
+            await expect(
+                errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/auth/users/remove`, token, { body: '{"userId": "u1"', method: "POST" })),
+            ).resolves.toBe("ADMIN_ROOT_REQUIRED");
+            await expect(read()).resolves.toStrictEqual([
+                expect.objectContaining({ detail: { code: "ADMIN_ROOT_REQUIRED", path: "/_lunora/admin/auth/users/remove" }, outcome: "failure" }),
+            ]);
+        });
     });
 
     it("never records a token named root as the root credential", async () => {
