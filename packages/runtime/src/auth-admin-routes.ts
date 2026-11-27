@@ -1024,11 +1024,23 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
         const recordFailure = (input: unknown, error: unknown): Promise<void> =>
             recordAudit(input, { code: error instanceof LunoraError ? error.code : undefined, outcome: "failure" });
 
+        const buildInput = async (): Promise<unknown> =>
+            descriptor.build({
+                body: descriptor.http === "POST" ? await deps.readJsonBody(request) : {},
+                paging: deps.parsePaging(request),
+                query: (name) => deps.queryParameter(url, name),
+            });
+
         if (!NAMED_TOKEN_AUTH_METHODS.has(descriptor.method)) {
             try {
                 deps.assertRootAdmin(request);
             } catch (error) {
-                await recordFailure(undefined, error);
+                // Name the target of the refused call when the request makes that possible. The body is read only here,
+                // after the refusal, under the same size cap; a wrong method or an unreadable body records no ids, and
+                // nothing from this attempt may replace the refusal the caller gets.
+                const input = request.method === descriptor.http ? await buildInput().catch(() => undefined) : undefined;
+
+                await recordFailure(input, error);
 
                 throw error;
             }
@@ -1050,12 +1062,7 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
             throw new LunoraError(`auth admin does not support \`${descriptor.method}\``, { code: "AUTH_OP_NOT_SUPPORTED", status: 400 });
         }
 
-        const context: AuthRouteContext = {
-            body: descriptor.http === "POST" ? await deps.readJsonBody(request) : {},
-            paging: deps.parsePaging(request),
-            query: (name) => deps.queryParameter(url, name),
-        };
-        const input = descriptor.build(context);
+        const input = await buildInput();
         let result: unknown;
 
         try {
