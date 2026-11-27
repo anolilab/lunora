@@ -34,18 +34,17 @@
 "permissions": {}
 
 "jobs":
-    # The label list in the event payload is what the label was when the event fired. A run
-    # can wait in the queue behind the destroy of a later `unlabeled` event and start after
-    # it, so the live list decides, or that run would deploy the preview back.
+    # Whether the pull request wants a preview right now: open, and carrying the label. The
+    # event payload only says what the pull request was when the event fired, and queued runs
+    # of one pull request do not start in event order. A deploy that starts after the destroy
+    # of a later `unlabeled` or `closed` event would bring the preview back, and a destroy
+    # that starts after the deploy of a later `labeled` event would remove a wanted one, so
+    # both jobs go by this answer.
     "label":
-        "name": "Check the label"
+        "name": "Check the pull request"
         "if": >-
             github.repository == 'anolilab/lunora'
             && github.event.pull_request.head.repo.full_name == github.repository
-            && github.event.action != 'closed'
-            && github.event.action != 'unlabeled'
-            && contains(github.event.pull_request.labels.*.name, 'preview-docs')
-            && (github.event.action != 'labeled' || github.event.label.name == 'preview-docs')
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
         "permissions":
@@ -53,7 +52,7 @@
         "outputs":
             "preview": "${{ steps.live.outputs.preview }}"
         "steps":
-            - "name": "Read the pull request's current labels"
+            - "name": "Read the pull request's current state and labels"
               "id": "live"
               "env":
                   "GH_TOKEN": "${{ github.token }}"
@@ -61,7 +60,8 @@
               "run": |
                   set -euo pipefail
 
-                  labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --paginate --jq '.[].name')"
+                  # Labels of an open pull request only: a closed one keeps its labels.
+                  labels="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq 'select(.state == "open") | .labels[].name')"
 
                   if grep -qx 'preview-docs' <<< "${labels}"; then
                       echo "preview=true" >> "$GITHUB_OUTPUT"
@@ -72,7 +72,11 @@
     "deploy":
         "name": "Deploy the preview"
         "needs": "label"
-        "if": "needs.label.outputs.preview == 'true'"
+        "if": >-
+            needs.label.outputs.preview == 'true'
+            && github.event.action != 'closed'
+            && github.event.action != 'unlabeled'
+            && (github.event.action != 'labeled' || github.event.label.name == 'preview-docs')
         "permissions":
             "contents": "read"
             "deployments": "write"
@@ -127,9 +131,9 @@
 
     "destroy":
         "name": "Destroy the preview"
+        "needs": "label"
         "if": >-
-            github.repository == 'anolilab/lunora'
-            && github.event.pull_request.head.repo.full_name == github.repository
+            needs.label.outputs.preview != 'true'
             && (github.event.action == 'closed'
             || (github.event.action == 'unlabeled' && github.event.label.name == 'preview-docs'))
         "runs-on": "ubuntu-latest"
