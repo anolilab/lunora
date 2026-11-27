@@ -758,6 +758,50 @@ describe("createPayment", () => {
         expect(stored?.refundedAmount.minorUnits).toBe(300n);
     });
 
+    it("keeps a lost dispute that commits between the refund's re-read of the row and its write", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_1"));
+
+        // The dispute webhook lands on the first session write the facade makes, which is the refund's own.
+        let dispute: (() => Promise<unknown>) | undefined = async () =>
+            applyWebhookAction(store, {
+                amount: money(200, "USD"),
+                eventId: "evt_dispute",
+                provider: "stripe",
+                refundId: "dp_1",
+                reversal: "dispute",
+                sessionId: "pi_1",
+                type: "payment.refunded",
+            });
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) => {
+                const land = dispute;
+
+                dispute = undefined;
+                await land?.();
+
+                return store.upsertPaymentSession(session, guard);
+            },
+        }) as PaymentStore;
+        const adapter = fakeAdapter({
+            refundPayment: async () => {
+                return { ...paymentSession("user_1"), refundedAmount: money(300, "USD"), refundId: "re_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await payment.refundPayment({ amount: money(300, "USD"), sessionId: "pi_1" });
+
+        const stored = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(stored?.refundedAmount.minorUnits).toBe(500n);
+        expect(stored?.disputedAmount?.minorUnits).toBe(200n);
+        expect(stored?.state).toBe("partially_refunded");
+    });
+
     it("records the refund it issued, so a second refund never reaches the provider", async () => {
         expect.assertions(4);
 

@@ -730,14 +730,21 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     // Merge an adapter result onto the stored row. An adapter returns a PROVIDER-shaped session (Polar
     // pins the amounts to the refund, Stripe blanks `referenceId`), so the stored row owns identity and
     // money and each operation patches only the fields it establishes. The patch applies to the row
-    // RE-READ after the provider call, so a webhook that landed meanwhile is not undone.
+    // RE-READ after the provider call, so a webhook that landed meanwhile is not undone, and written guarded on the
+    // revision of that read: a webhook landing between the read and the write makes the patch recompute on its row.
     const persistSession = async (existing: PaymentSession, patch: (fresh: PaymentSession) => Partial<PaymentSession>): Promise<PaymentSession> => {
-        const fresh = (await store.getPaymentSession(adapter.identifier, existing.id)) ?? existing;
-        const merged: PaymentSession = { ...fresh, ...patch(fresh), updatedAt: Date.now() };
+        for (let attempt = 0; attempt < SETTLE_WRITE_ATTEMPTS; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row the last one lost to
+            const fresh = (await store.getPaymentSession(adapter.identifier, existing.id)) ?? existing;
+            const merged: PaymentSession = { ...fresh, ...patch(fresh), updatedAt: Date.now() };
 
-        await store.upsertPaymentSession(merged);
+            // eslint-disable-next-line no-await-in-loop -- see the read above
+            if (await store.upsertPaymentSession(merged, { ifRevision: fresh.revision })) {
+                return merged;
+            }
+        }
 
-        return merged;
+        throw new LunoraPaymentError("INVALID_TRANSITION", `payment session "${existing.id}" kept changing while it was being written; retry`);
     };
 
     // Brings the ledger up to the provider's settled refund total. `unrecorded` means money the provider moved
