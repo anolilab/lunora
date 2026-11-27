@@ -23,7 +23,11 @@ import {
     pendingRefundHeldKey,
     pendingRefundKey,
     refundNeedsPendingGuard,
-    UNBOOKED_REFUND_CLAIM_TYPE,
+    UNBOOKED_REFUND_DONE_CLAIM_TYPE,
+    UNBOOKED_REFUND_LEASE_MS,
+    unbookedRefundClaim,
+    unbookedRefundClaimParts,
+    unbookedRefundDoneKey,
     unbookedRefundKey,
 } from "./idempotency";
 import { addMoney, compareMoney, disputedAmountOf, isZeroMoney, maxMoney, subtractMoney, zeroMoney } from "./money";
@@ -831,38 +835,56 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return !unrecorded;
     };
 
-    // Passes the session's unbooked-refund record to `claim`, then books an earlier holder's refund from the provider's
-    // list. Releasing the earlier claim is also what stops that holder's ledger write, should it still be running,
-    // so the list's absolute total and its delta never both land. False when the record cannot be taken or the
-    // refund cannot be booked yet; the record then stands, with `claim` if it was taken.
-    const takeUnbookedRefund = async (sessionId: string, claim: string, currency: string): Promise<boolean> => {
+    // Whether the call holding `claim` can no longer be writing its refund: it said so on its way out, or its lease ran out.
+    const unbookedHolderGone = async (sessionId: string, claim: string): Promise<boolean> => {
+        const { startedAt, token } = unbookedRefundClaimParts(claim);
+
+        return (
+            Date.now() - startedAt >= UNBOOKED_REFUND_LEASE_MS ||
+            (await store.getEventClaim(adapter.identifier, unbookedRefundDoneKey(sessionId, token))) !== undefined
+        );
+    };
+
+    // Books the refund of an earlier unbooked-refund record from the provider's list and lifts the record. True when no
+    // record is left; false while its holder may still be writing, or the refund cannot be booked yet. The record is
+    // taken over under a lease that has already run out, so if anything below fails, the next call takes it at once;
+    // two takeovers at the same time are harmless, as the list books an absolute total.
+    const takeUnbookedRefund = async (sessionId: string, token: string, currency: string): Promise<boolean> => {
         const key = unbookedRefundKey(sessionId);
         const earlier = await store.getEventClaim(adapter.identifier, key);
 
-        if (earlier !== undefined) {
-            await store.releaseEvent(adapter.identifier, key, earlier);
+        if (earlier === undefined) {
+            return true;
         }
 
-        if (!(await store.markEventProcessed(adapter.identifier, key, claim))) {
+        if (!(await unbookedHolderGone(sessionId, earlier))) {
             return false;
         }
 
-        return earlier === undefined || bookRefundList(sessionId, currency);
+        const takeover = unbookedRefundClaim(token, 0);
+
+        await store.releaseEvent(adapter.identifier, key, earlier);
+
+        if (!(await store.markEventProcessed(adapter.identifier, key, takeover)) || !(await bookRefundList(sessionId, currency))) {
+            return false;
+        }
+
+        await store.releaseEvent(adapter.identifier, key, takeover);
+
+        return true;
     };
 
-    // Books an unbooked-refund record's refund from the provider's list and lifts the record once that succeeds.
+    // Books an unbooked-refund record's refund from the provider's list once its holder has ended.
     const settleUnbookedRefund = async (existing: PaymentSession): Promise<PaymentSession> => {
-        const claim = `${UNBOOKED_REFUND_CLAIM_TYPE}:${crypto.randomUUID()}`;
-
-        if (
-            (await store.getEventClaim(adapter.identifier, unbookedRefundKey(existing.id))) !== undefined &&
-            (await takeUnbookedRefund(existing.id, claim, existing.refundedAmount.currency))
-        ) {
-            await store.releaseEvent(adapter.identifier, unbookedRefundKey(existing.id), claim);
-        }
+        await takeUnbookedRefund(existing.id, crypto.randomUUID(), existing.refundedAmount.currency);
 
         return (await store.getPaymentSession(adapter.identifier, existing.id)) ?? existing;
     };
+
+    // Clears an earlier unbooked refund and claims this call's record. False when either cannot be done yet.
+    const claimUnbookedRecord = async (sessionId: string, unbookedClaim: string, currency: string): Promise<boolean> =>
+        (await takeUnbookedRefund(sessionId, unbookedRefundClaimParts(unbookedClaim).token, currency)) &&
+        store.markEventProcessed(adapter.identifier, unbookedRefundKey(sessionId), unbookedClaim);
 
     // Claims refundPayment's pending-refund marker, or refuses while another call holds it, and returns the row as it
     // stands once claimed. The over-refund check read the row before the claim: a refund booked, and its marker released,
@@ -878,8 +900,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             throw new LunoraPaymentError("INVALID_TRANSITION", "a refund on this session is still pending; retry once it settles");
         }
 
-        // An earlier refund the provider may have issued and no ledger write took is booked first, or blocks this one.
-        if (unbookedClaim !== undefined && !(await takeUnbookedRefund(existing.id, unbookedClaim, existing.refundedAmount.currency))) {
+        // An earlier refund the provider may have issued and no ledger write took is booked first, or blocks this one. This
+        // call's own claim goes back on every way out, a throw included, or nothing would ever release it.
+        let clear: boolean;
+
+        try {
+            clear = unbookedClaim === undefined || (await claimUnbookedRecord(existing.id, unbookedClaim, existing.refundedAmount.currency));
+        } catch (error) {
+            await store.releaseEvent(adapter.identifier, pendingRefundKey(existing.id), pendingClaim);
+
+            throw error;
+        }
+
+        if (!clear) {
             await store.releaseEvent(adapter.identifier, pendingRefundKey(existing.id), pendingClaim);
 
             throw new LunoraPaymentError("INVALID_TRANSITION", "an earlier refund on this session is not on the ledger yet; retry once it settles");
@@ -947,6 +980,16 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     const releaseUnbookedRefund = async (sessionId: string, unbookedClaim: string | undefined): Promise<void> => {
         if (unbookedClaim !== undefined) {
             await store.releaseEvent(adapter.identifier, unbookedRefundKey(sessionId), unbookedClaim);
+        }
+    };
+
+    // Says a refund call that may have left its refund off the ledger has ended, so the next call need not wait out the
+    // lease. Best effort: should it fail, the lease frees the record, and the call's own error is the one its caller sees.
+    const markUnbookedRefundEnded = async (sessionId: string, unbookedClaim: string | undefined): Promise<void> => {
+        if (unbookedClaim !== undefined) {
+            const { token } = unbookedRefundClaimParts(unbookedClaim);
+
+            await store.markEventProcessed(adapter.identifier, unbookedRefundDoneKey(sessionId, token), UNBOOKED_REFUND_DONE_CLAIM_TYPE).catch(() => false);
         }
     };
 
@@ -1353,12 +1396,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // newer call re-claim it, and only the newer call may then release it.
             const pendingClaim = `${PENDING_REFUND_CLAIM_TYPE}:${crypto.randomUUID()}`;
             // Only a provider that can list its refunds can book one from that list later; see `unbookedRefundKey`.
-            const unbookedClaim = pendingGuarded && adapter.listRefunds !== undefined ? `${UNBOOKED_REFUND_CLAIM_TYPE}:${crypto.randomUUID()}` : undefined;
+            const unbookedClaim = pendingGuarded && adapter.listRefunds !== undefined ? unbookedRefundClaim(crypto.randomUUID(), Date.now()) : undefined;
             // A full refund is the remainder of the row as claimed: a refund booked since the first read shrinks it.
             const existing = pendingGuarded ? await claimPendingRefund(read, pendingClaim, input.amount, unbookedClaim) : read;
             const issued = remainderOf(existing);
-            // Set on every way out that leaves no refund of this call off the ledger; only those lift the record.
-            let leavesNothingUnbooked = false;
+            // Set while a refund of this call may be off the ledger: from the provider call until its answer is refused,
+            // pending, or booked. The record is lifted on every other way out.
+            let mayBeUnbooked = false;
 
             if (isZeroMoney(issued)) {
                 await store.releaseEvent(adapter.identifier, pendingMarker, pendingClaim);
@@ -1371,14 +1415,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // none is given. Omitted only when the remainder IS the captured total (full-only providers).
             const providerAmount = input.amount ?? (compareMoney(issued, existing.capturedAmount) === 0 ? undefined : issued);
 
-            // Keyed on the amount sent and the reason, so partial refunds don't collide. Two intentional
-            // same-amount refunds need distinct caller keys (see `LunoraPayment.refundPayment`).
-            const key = await outboundKey("refund_payment", [input.sessionId], input.idempotencyKey, () => [amountPart(providerAmount), input.reason ?? ""]);
-
             try {
+                // Keyed on the amount sent and the reason, so partial refunds don't collide. Two intentional
+                // same-amount refunds need distinct caller keys (see `LunoraPayment.refundPayment`).
+                const key = await outboundKey("refund_payment", [input.sessionId], input.idempotencyKey, () => [
+                    amountPart(providerAmount),
+                    input.reason ?? "",
+                ]);
+
+                mayBeUnbooked = true;
+
                 const issuedRefund = await adapter.refundPayment({ ...input, amount: providerAmount, idempotencyKey: key }).catch(async (error: unknown) => {
                     if (!pendingGuarded || refundDefinitelyRejected(error)) {
-                        leavesNothingUnbooked = true;
+                        mayBeUnbooked = false;
 
                         throw error;
                     }
@@ -1399,14 +1448,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 // nothing to undo). The pending marker stays until one of those two, or settlePendingRefund, settles it.
                 if (issuedRefund.pending) {
                     await holdPendingRefund(input.sessionId, pendingClaim, issuedRefund.refundId);
-                    leavesNothingUnbooked = true;
+                    mayBeUnbooked = false;
 
                     return existing;
                 }
 
                 const recorded = await bookIssuedRefund(input, existing, issued, issuedRefund, pendingClaim, unbookedClaim);
 
-                leavesNothingUnbooked = true;
+                mayBeUnbooked = false;
 
                 return recorded;
             } finally {
@@ -1419,9 +1468,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                     await store.releaseEvent(adapter.identifier, pendingMarker, pendingClaim);
                 }
 
-                if (leavesNothingUnbooked) {
-                    await releaseUnbookedRefund(input.sessionId, unbookedClaim);
-                }
+                await (mayBeUnbooked ? markUnbookedRefundEnded(input.sessionId, unbookedClaim) : releaseUnbookedRefund(input.sessionId, unbookedClaim));
             }
         },
 
