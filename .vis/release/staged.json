@@ -3,6 +3,38 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-27T15:06:22.562Z",
+      "key": "@lunora/runtime@1.0.0-alpha.305"
+    },
+    {
+      "at": "2026-11-27T15:06:22.562Z",
+      "key": "@lunora/client@1.0.0-alpha.306"
+    },
+    {
+      "at": "2026-11-27T15:06:22.562Z",
+      "key": "@lunora/scheduler@1.0.0-alpha.175"
+    },
+    {
+      "at": "2026-11-27T15:06:22.562Z",
+      "key": "@lunora/server@1.0.0-alpha.283"
+    },
+    {
+      "at": "2026-11-27T15:06:22.562Z",
+      "key": "@lunora/codegen@1.0.0-alpha.444"
+    },
+    {
+      "at": "2026-11-27T15:06:22.562Z",
+      "key": "@lunora/do@1.0.0-alpha.297"
+    },
+    {
+      "at": "2026-11-27T15:06:22.562Z",
+      "key": "@lunora/platform-node@1.0.0-alpha.226"
+    },
+    {
+      "at": "2026-11-27T15:06:22.562Z",
+      "key": "@lunora/testing@1.0.0-alpha.343"
+    },
+    {
       "at": "2026-11-27T14:09:31.305Z",
       "key": "@lunora/auth@1.0.0-alpha.281"
     },
@@ -369,40 +401,8 @@
     {
       "at": "2026-11-23T19:01:26.111Z",
       "key": "@lunora/cli@1.0.0-alpha.508"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/shard-engine@1.0.0-alpha.204"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/server@1.0.0-alpha.277"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/agent@1.0.0-alpha.286"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/angular@1.0.0-alpha.272"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/sql-store@1.0.0-alpha.243"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/d1@1.0.0-alpha.241"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/codegen@1.0.0-alpha.433"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/react@1.0.0-alpha.304"
     }
   ],
-  "updatedAt": "2026-11-27T14:09:31.306Z",
+  "updatedAt": "2026-11-27T15:06:22.563Z",
   "version": 1
 }
