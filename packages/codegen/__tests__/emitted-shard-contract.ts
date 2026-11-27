@@ -102,10 +102,11 @@ class EmittedShardContract extends ShardDO {
 
     /**
      * Mirrors the generated `buildCtx`'s scheduler wiring: the facade is handed
-     * `this.scheduleOutbox()`, which is `protected` for exactly this call.
+     * `this.scheduleOutbox()`, which is `protected` for exactly this call, and a
+     * getter for the caller's user id, which the generated body reads off `caller`.
      */
-    protected wrapScheduler(scheduler: SchedulerLike): SchedulerLike {
-        return withDeferredSchedules(scheduler, this.scheduleOutbox());
+    protected wrapScheduler(scheduler: SchedulerLike, userId: () => string | undefined): SchedulerLike {
+        return withDeferredSchedules(scheduler, this.scheduleOutbox(), userId);
     }
 
     /**

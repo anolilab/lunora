@@ -1,5 +1,6 @@
 import { DISPATCH_CLAIM_CEILING_MS, DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import { jsonResponse } from "../../../shared/json-response";
+import { DEDUP_SCOPE_GRAMMAR_MESSAGE, isDedupScope } from "../../../shared/scheduled-mutation-id";
 import { SCHEDULER_SIGNATURE_HEADER, SCHEDULER_TIMESTAMP_HEADER, signSchedulerDispatch } from "../../../shared/scheduler-dispatch";
 import resolveScheduleId from "./resolve-schedule-id";
 import type { CronRunInFlight, CronRunRecord, RetryPolicy, ScheduledJobState, ScheduledJobView, ScheduleRecord } from "./types";
@@ -329,6 +330,9 @@ interface ScheduleRequestBody {
     /** The receivers' replay-dedup key, when the caller fixed one (see `RunOptions.dedupKey`). */
     dedupKey?: string;
 
+    /** The scheduling user's dedup scope (see `ScheduleRecord.dedupScope`); absent for a job no user scheduled. */
+    dedupScope?: string;
+
     /**
      * The `ns:fn` path of the function to dispatch on fire. Absent when the job
      * targets a durable workflow/agent instead — see
@@ -624,6 +628,23 @@ class SchedulerDO {
         }
 
         return Object.keys(policy).length === 0 ? undefined : policy;
+    }
+
+    /** A request's dedup key and scope, or the 400 refusing one the receivers could not carry. */
+    private static dedupFields(body: ScheduleRequestBody): Response | { dedupKey: string | undefined; dedupScope: string | undefined } {
+        let dedupKey: string | undefined;
+
+        try {
+            dedupKey = assertDedupKey(body.dedupKey);
+        } catch (error) {
+            return SchedulerDO.error(400, "INVALID_INPUT", error instanceof Error ? error.message : "invalid `dedupKey`");
+        }
+
+        if (body.dedupScope !== undefined && !isDedupScope(body.dedupScope)) {
+            return SchedulerDO.error(400, "INVALID_INPUT", DEDUP_SCOPE_GRAMMAR_MESSAGE);
+        }
+
+        return { dedupKey, dedupScope: body.dedupScope };
     }
 
     /**
@@ -1073,6 +1094,9 @@ class SchedulerDO {
             // previous job's result. The key is fixed once per scheduling and carried through every
             // retry, so a re-fire of this record still collapses onto its first attempt.
             dedupKey: SchedulerDO.dedupKey(record),
+            // Scopes the shard mutation id the receiver derives to the user who scheduled the job;
+            // `undefined` (dropped by JSON.stringify) for a job no user scheduled.
+            dedupScope: record.dedupScope,
             functionPath: record.functionPath,
             id: record.id,
             // Echoed so the receiver can call back the SAME DO instance.
@@ -2199,12 +2223,10 @@ class SchedulerDO {
         const instanceName = optionalName(body.instanceName);
         const retry = SchedulerDO.normalizeRetry(body.retry);
 
-        let dedupKey: string | undefined;
+        const dedup = SchedulerDO.dedupFields(body);
 
-        try {
-            dedupKey = assertDedupKey(body.dedupKey);
-        } catch (error) {
-            return SchedulerDO.error(400, "INVALID_INPUT", error instanceof Error ? error.message : "invalid `dedupKey`");
+        if (dedup instanceof Response) {
+            return dedup;
         }
 
         const resolved = await this.resolveId(body.id);
@@ -2236,7 +2258,8 @@ class SchedulerDO {
             // Fixed here, once per scheduling, and carried by every retry; random rather than
             // derived from the clock, so a reused id never meets its previous job's key however
             // close together the two are scheduled, or whether this instance was recreated between.
-            dedupKey: dedupKey ?? `${id}-${crypto.randomUUID().replaceAll("-", "")}`,
+            dedupKey: dedup.dedupKey ?? `${id}-${crypto.randomUUID().replaceAll("-", "")}`,
+            ...(dedup.dedupScope === undefined ? {} : { dedupScope: dedup.dedupScope }),
             enqueuedAt: Date.now(),
             id,
             ...(functionPath === undefined ? {} : { functionPath }),

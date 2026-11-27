@@ -8,6 +8,13 @@ const TOKEN = "admin-token-for-tests";
 const SECRET = "scheduler-secret-for-tests";
 const NOW = 1_700_000_000_000;
 
+// SHA-256 vectors, computed outside the code under test (`shared/scheduled-mutation-id.ts`).
+const USER_1_SCOPE = "c6c289e49e9c05b2145860387b73bcb1";
+const JOB_1_MUTATION_ID = "4d377f7886b7213f2ded06a3aaf991a6ac49896e017ed55c126ea07ff5fe9221";
+const SYNC_MUTATION_ID = "b80091bfc07dfe767ed4bb13b1867abec8b48b3974cacd29773468eaab6b4ea3";
+const SYNC_USER_1_MUTATION_ID = "e026610c1c20b5a37102fc06f76d7251d7d48c3f16ef46c646a793116e4c4a25";
+const DELIVERY_1_MUTATION_ID = "0693d7dd81495de5ad93cfe3ea75c24ab9dc579f59892fce9abbf68e43aa2ca6";
+
 const build = (invoke = vi.fn<(call: NodeDispatchInvocation) => Promise<Response>>(async () => Response.json({ ok: true }))) => {
     return {
         invoke,
@@ -33,7 +40,9 @@ describe("createNodeDispatchRoute", () => {
 
         expect(response.status).toBe(200);
         expect(invoke).toHaveBeenCalledTimes(1);
-        expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ args: { n: 1 }, functionPath: "notes:add", id: "job-1", shardKey: "tenant-a" }));
+        expect(invoke).toHaveBeenCalledWith(
+            expect.objectContaining({ args: { n: 1 }, functionPath: "notes:add", id: JOB_1_MUTATION_ID, shardKey: "tenant-a" }),
+        );
     });
 
     it("carries the job's due time from the body through to the shard headers", async () => {
@@ -62,14 +71,16 @@ describe("createNodeDispatchRoute", () => {
         expect(request.headers.get("x-lunora-scheduled-for")).toBe("1700000000000");
     });
 
-    it("spends the scheduler's per-record dedupKey as the shard's mutation id, falling back to the id", async () => {
+    it("derives the shard's mutation id from the function, the scheduling user's scope and the dedupKey, falling back to the id", async () => {
         expect.assertions(2);
 
         const { invoke, route } = build();
         const keyed = JSON.stringify({ args: {}, dedupKey: "sync-user-1700000000000", functionPath: "notes:add", id: "sync-user" });
+        const scoped = JSON.stringify({ args: {}, dedupKey: "sync-user-1700000000000", dedupScope: USER_1_SCOPE, functionPath: "notes:add", id: "sync-user" });
         const bare = JSON.stringify({ args: {}, functionPath: "notes:add", id: "delivery-1" });
 
         await route(post(keyed, { authorization: `Bearer ${TOKEN}` }));
+        await route(post(scoped, { authorization: `Bearer ${TOKEN}` }));
         await route(post(bare, { authorization: `Bearer ${TOKEN}` }));
 
         const fetch = vi.fn<(request: Request) => Promise<Response>>(async () => Response.json({ result: null }));
@@ -84,10 +95,30 @@ describe("createNodeDispatchRoute", () => {
 
         await Promise.all(invoke.mock.calls.map(async ([call]) => shardInvoke(call)));
 
-        // A reused scheduler id's previous job left its dedup row under the bare id; the key is per scheduling.
-        // A sender without a key (a queue delivery) keeps its own id.
-        expect(fetch.mock.calls.map(([request]) => request.headers.get("x-lunora-mutation-id"))).toStrictEqual(["sync-user-1700000000000", "delivery-1"]);
-        expect(invoke).toHaveBeenCalledTimes(2);
+        // The same vectors the Workers route is held to in `@lunora/runtime`'s scheduled-workpool test.
+        // A sender without a key (a queue delivery) derives from its own id.
+        expect(fetch.mock.calls.map(([request]) => request.headers.get("x-lunora-mutation-id"))).toStrictEqual([
+            SYNC_MUTATION_ID,
+            SYNC_USER_1_MUTATION_ID,
+            DELIVERY_1_MUTATION_ID,
+        ]);
+        expect(invoke).toHaveBeenCalledTimes(3);
+    });
+
+    it("refuses a dedupScope the SchedulerDO would not have written with 400 INVALID_INPUT and never invokes", async () => {
+        expect.assertions(3);
+
+        const { invoke, route } = build();
+        const response = await route(
+            post(JSON.stringify({ args: {}, dedupKey: "k", dedupScope: "user-1", functionPath: "notes:add", id: "job-1" }), {
+                authorization: `Bearer ${TOKEN}`,
+            }),
+        );
+        const body = (await response.json()) as { error: { code: string } };
+
+        expect(response.status).toBe(400);
+        expect(body.error.code).toBe("INVALID_INPUT");
+        expect(invoke).not.toHaveBeenCalled();
     });
 
     it("refuses a dedupKey the SchedulerDO would not have written with 400 INVALID_INPUT and never invokes", async () => {

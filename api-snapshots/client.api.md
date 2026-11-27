@@ -1148,6 +1148,7 @@ interface ScheduleRecord {
     args: Record<string, unknown>;
     attempts?: number;
     dedupKey?: string;
+    dedupScope?: string;
     enqueuedAt: number;
     error?: string;
     firstDueAt?: number;

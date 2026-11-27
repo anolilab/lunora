@@ -92,7 +92,7 @@ describe("emitShard — transactional ctx.runMutation", () => {
 
 describe("emitShard — deferred scheduling", () => {
     it("installs the buffer on every dispatch that can host a mutation handler", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const emitted = shard();
 
@@ -109,7 +109,13 @@ describe("emitShard — deferred scheduling", () => {
         // outside the transaction, so without it a failure there leaves durable
         // writes, a durable replay-dedup row answering the client's retry with a
         // cached success, and a job that exists nowhere.
-        expect(emitted).toContain('const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase, this.scheduleOutbox());');
+        //
+        // The third is the scheduling user, read from the caller: the client scopes a fixed
+        // dedupKey to it, so two users' jobs under one key do not answer each other.
+        expect(emitted).toContain(
+            'const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase, this.scheduleOutbox(), () => caller.userId);',
+        );
+        expect(emitted).toContain("const mutationScheduler = withDeferredSchedules(schedulerBase, this.scheduleOutbox(), () => caller.userId);");
         expect(emitted).toContain("scheduler,");
     });
 

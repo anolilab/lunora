@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { encodeWire } from "@lunora/wire";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +10,15 @@ import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const ADMIN = "s3cret-admin";
+
+/** The shard mutation id a scheduled function dispatch should carry, computed independently of the helper the routes use. */
+const expectedMutationId = (functionPath: string, dedupScope: string | undefined, key: string): string =>
+    createHash("sha256")
+        .update(`${functionPath}\u0000${dedupScope ?? ""}\u0000${key}`)
+        .digest("hex");
+
+const USER_1_SCOPE = "c6c289e49e9c05b2145860387b73bcb1";
+const USER_2_SCOPE = "d92b69cfb82cecab45c753f56002b2c0";
 
 /** How often a running pooled job renews its slot: a third of the ceiling it lapses at. */
 const RENEW_MS = DISPATCH_CLAIM_CEILING_MS / 3;
@@ -574,11 +585,11 @@ describe("createWorker — scheduled dispatch idempotency key", () => {
 
         // This header IS what makes the scheduler's at-least-once contract
         // survivable: `@lunora/do` keys `__idempotency` on
-        // `(namespace, mutationId)`, so the record id reaching the shard
-        // verbatim is what makes a re-fired mutation exactly-once and what lets
-        // a settled action short-circuit instead of running again.
+        // `(namespace, mutationId)`, so an id derived from the record id alone (a
+        // body with no key) is what makes a re-fired mutation exactly-once and what
+        // lets a settled action short-circuit instead of running again.
         expect(seen).toHaveLength(1);
-        expect(seen[0]?.get("x-lunora-mutation-id")).toBe("job-dedupe");
+        expect(seen[0]?.get("x-lunora-mutation-id")).toBe(expectedMutationId("jobs:sweep", undefined, "job-dedupe"));
 
         // And the namespace those ids live in. A scheduler dispatch carries no
         // end-user identity, so `idempotencyNamespace()` answers `"system:"`
@@ -590,7 +601,7 @@ describe("createWorker — scheduled dispatch idempotency key", () => {
 });
 
 describe("createWorker — scheduled dispatch per-record dedup key", () => {
-    it("spends the scheduler's dedupKey as the shard mutation id and releases the slot it owns", async () => {
+    it("derives the shard mutation id from the function, the scope and the dedupKey, and releases the slot under the body's key", async () => {
         expect.assertions(2);
 
         const seen: Headers[] = [];
@@ -611,15 +622,109 @@ describe("createWorker — scheduled dispatch per-record dedup key", () => {
         const sched = schedulerSpy();
         const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO });
 
-        await dispatch(worker, { args: {}, dedupKey: "sync-user-1700000000000", functionPath: "jobs:sync", id: "sync-user", pool: "sync" });
+        await dispatch(worker, {
+            args: {},
+            dedupKey: "sync-user-1700000000000",
+            dedupScope: USER_1_SCOPE,
+            functionPath: "jobs:sync",
+            id: "sync-user",
+            pool: "sync",
+        });
 
-        // A reused id's previous job left its dedup row under the bare id; the key is per scheduling.
-        expect(seen[0]?.get("x-lunora-mutation-id")).toBe("sync-user-1700000000000");
+        expect(seen[0]?.get("x-lunora-mutation-id")).toBe(expectedMutationId("jobs:sync", USER_1_SCOPE, "sync-user-1700000000000"));
+        // The pool slot is owned by the key the scheduler wrote, not by the derived id.
         expect(sched.calls.find((call) => call.path === "/complete")?.body).toStrictEqual({
             dedupKey: "sync-user-1700000000000",
             id: "sync-user",
             pool: "sync",
         });
+    });
+
+    it("gives one fixed key a different shard mutation id per target function and per scheduling user, and the same id on a retry", async () => {
+        expect.assertions(4);
+
+        const seen: (string | null)[] = [];
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        seen.push(request.headers.get("x-lunora-mutation-id"));
+
+                        return Response.json({ result: null }, { status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: schedulerSpy().namespace, shardDO });
+        const job = { args: {}, dedupKey: "daily-digest", id: "job-1" };
+
+        await dispatch(worker, { ...job, dedupScope: USER_1_SCOPE, functionPath: "jobs:digest" });
+        await dispatch(worker, { ...job, dedupScope: USER_1_SCOPE, functionPath: "jobs:sweep" });
+        await dispatch(worker, { ...job, dedupScope: USER_2_SCOPE, functionPath: "jobs:digest" });
+        await dispatch(worker, { ...job, dedupScope: USER_1_SCOPE, functionPath: "jobs:digest" });
+
+        const [user1Digest, user1Sweep, user2Digest, retry] = seen;
+
+        expect(user1Sweep).not.toBe(user1Digest);
+        expect(user2Digest).not.toBe(user1Digest);
+        expect(retry).toBe(user1Digest);
+        expect(new Set(seen).size).toBe(3);
+    });
+
+    it("derives the id the Node dispatch route derives for the same body", async () => {
+        expect.assertions(1);
+
+        const seen: (string | null)[] = [];
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        seen.push(request.headers.get("x-lunora-mutation-id"));
+
+                        return Response.json({ result: null }, { status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: schedulerSpy().namespace, shardDO });
+
+        await dispatch(worker, { args: {}, dedupKey: "sync-user-1700000000000", dedupScope: USER_1_SCOPE, functionPath: "notes:add", id: "sync-user" });
+
+        // The vector `@lunora/platform-node`'s node-dispatch-route test holds its route to.
+        expect(seen).toStrictEqual(["e026610c1c20b5a37102fc06f76d7251d7d48c3f16ef46c646a793116e4c4a25"]);
+    });
+
+    it("refuses a dedupScope the SchedulerDO would not have written with 400 INVALID_INPUT, never reaching the shard", async () => {
+        expect.assertions(3);
+
+        let shardCalls = 0;
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        shardCalls += 1;
+
+                        return Response.json({ result: null }, { status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: schedulerSpy().namespace, shardDO });
+        const response = await dispatch(worker, { args: {}, dedupKey: "k", dedupScope: "user-1", functionPath: "jobs:sync", id: "sync-user" });
+        const body: { error: { code: string } } = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.error.code).toBe("INVALID_INPUT");
+        expect(shardCalls).toBe(0);
     });
 
     it("refuses a dedupKey the SchedulerDO would not have written with 400 INVALID_INPUT, never reaching the shard", async () => {

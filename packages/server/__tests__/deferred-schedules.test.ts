@@ -530,6 +530,104 @@ describe("withDeferredSchedules — replay dedup key", () => {
     });
 });
 
+describe("withDeferredSchedules — scheduling user", () => {
+    type FacadeRunAfter = (delayMs: number, target: string, args?: Record<string, unknown>, options?: Record<string, unknown>) => Promise<string>;
+
+    const build = (userId: () => string | undefined) => {
+        const liveOptions: Record<string, unknown>[] = [];
+        const record = async (_when: number, _target: unknown, _args: unknown, options?: Record<string, unknown>): Promise<string> => {
+            liveOptions.push(options ?? {});
+
+            return typeof options?.["id"] === "string" ? options["id"] : "immediate";
+        };
+        const outbox = budgetOutbox(10, 0);
+        const facade = withDeferredSchedules({ cancel: async () => undefined, runAfter: record, runAt: record } as never, outbox, userId) as unknown as {
+            runAfter: FacadeRunAfter;
+        };
+
+        return { facade, liveOptions, outbox };
+    };
+
+    it("fixes the user in the custody record and on the after-commit call, read when the call is made", async () => {
+        expect.assertions(2);
+
+        let current: string | undefined = "user-1";
+        const { facade, liveOptions, outbox } = build(() => current);
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "jobs:send", {}, { dedupKey: "daily" });
+        // The replay may run with no identity: what was recorded is what it sends.
+        current = undefined;
+        await settle(true);
+
+        const recorded = outbox.record.mock.calls[0]?.[1] as { options?: Record<string, unknown> } | undefined;
+
+        expect(recorded?.options?.["dedupUserId"]).toBe("user-1");
+        expect(liveOptions[0]?.["dedupUserId"]).toBe("user-1");
+    });
+
+    it("carries the user on the immediate call made outside a transaction", async () => {
+        expect.assertions(1);
+
+        const { facade, liveOptions } = build(() => "user-2");
+
+        await facade.runAfter(0, "jobs:send", {}, { dedupKey: "daily" });
+
+        expect(liveOptions[0]?.["dedupUserId"]).toBe("user-2");
+    });
+
+    it("drops a dedupUserId the caller passed when there is no user, so app code cannot pick its scope", async () => {
+        expect.assertions(3);
+
+        const { facade, liveOptions, outbox } = build(() => undefined);
+
+        await facade.runAfter(0, "jobs:send", {}, { dedupKey: "daily", dedupUserId: "someone-else" });
+
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "jobs:send", {}, { dedupKey: "daily", dedupUserId: "someone-else" });
+        await settle(true);
+
+        const recorded = outbox.record.mock.calls[0]?.[1] as { options?: Record<string, unknown> } | undefined;
+
+        expect(liveOptions[0]).not.toHaveProperty("dedupUserId");
+        expect(liveOptions[1]).not.toHaveProperty("dedupUserId");
+        expect(recorded?.options).not.toHaveProperty("dedupUserId");
+    });
+
+    it("passes no inherited dedupUserId on when there is no user, on the immediate and the deferred path", async () => {
+        expect.assertions(3);
+
+        const { facade, liveOptions, outbox } = build(() => undefined);
+        // An own copy would be dropped; one reached through the prototype must not get through either.
+        const inherited = (): Record<string, unknown> =>
+            Object.assign(Object.create({ dedupUserId: "someone-else" }) as Record<string, unknown>, { dedupKey: "daily" });
+
+        await facade.runAfter(0, "jobs:send", {}, inherited());
+
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "jobs:send", {}, inherited());
+        await settle(true);
+
+        const recorded = outbox.record.mock.calls[0]?.[1] as { options?: Record<string, unknown> } | undefined;
+
+        expect(liveOptions.map((options) => options["dedupUserId"])).toStrictEqual([undefined, undefined]);
+        expect(liveOptions[0]?.["dedupKey"]).toBe("daily");
+        expect(recorded?.options?.["dedupUserId"]).toBeUndefined();
+    });
+
+    it("replaces a dedupUserId the caller passed with the real user", async () => {
+        expect.assertions(1);
+
+        const { facade, liveOptions } = build(() => "user-1");
+
+        await facade.runAfter(0, "jobs:send", {}, { dedupKey: "daily", dedupUserId: "someone-else" });
+
+        expect(liveOptions[0]?.["dedupUserId"]).toBe("user-1");
+    });
+});
+
 describe("withDeferredSchedules — schedule-rate budget", () => {
     const NOW = 1_700_000_000_000;
     const WINDOW = 60_000;

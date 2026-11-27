@@ -89,6 +89,37 @@ describe("createScheduler", () => {
         });
     });
 
+    it("posts the deferral facade's dedupUserId as a 32-hex dedupScope, never as itself", async () => {
+        expect.assertions(4);
+
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace });
+        // The facade's internal option: not on the public `RunOptions`.
+        const scoped = (dedupUserId: string): never => ({ dedupKey: "daily", dedupUserId }) as never;
+
+        await scheduler.runAt(Date.now() + 1000, fnRef, {}, scoped("user-1"));
+        await scheduler.runAfter(1000, fnRef, {}, scoped("user-2"));
+        await scheduler.runAfter(1000, fnRef, {}, { dedupKey: "daily" });
+
+        // SHA-256("user-1") / SHA-256("user-2"), first 32 hex characters, computed with `node:crypto`.
+        expect(calls.map((call) => call.body["dedupScope"])).toStrictEqual(["c6c289e49e9c05b2145860387b73bcb1", "d92b69cfb82cecab45c753f56002b2c0", undefined]);
+        expect(calls[2]?.body).not.toHaveProperty("dedupScope");
+        expect(calls.some((call) => "dedupUserId" in call.body)).toBe(false);
+        expect(JSON.stringify(calls.map((call) => call.body))).not.toContain("user-1");
+    });
+
+    it("ignores a dedupUserId reached through the options' prototype", async () => {
+        expect.assertions(1);
+
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace });
+        const options = Object.assign(Object.create({ dedupUserId: "user-1" }), { dedupKey: "daily" });
+
+        await scheduler.runAfter(1000, fnRef, {}, options as never);
+
+        expect(calls[0]?.body).not.toHaveProperty("dedupScope");
+    });
+
     // Regression (contract drift): `runAfter`/`runAt` used to resolve the DO's
     // `{ id, scheduledFor }` record, while every gate that describes this object
     // — `SchedulerLike` (@lunora/shard-engine), `Scheduler` (@lunora/server),

@@ -2361,6 +2361,59 @@ describe("createWorker — HTTP actions", () => {
         expect(bodies[1]?.["dedupKey"]).toBe("order-7-invoice");
     });
 
+    it("posts the scheduling user's dedupScope, never the raw user id, and none for an anonymous caller", async () => {
+        expect.assertions(5);
+
+        const bodies: Record<string, unknown>[] = [];
+        const schedulerNamespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        const body: Record<string, unknown> = await request.json();
+
+                        bodies.push(body);
+
+                        return Response.json({ id: "job-1", scheduledFor: body["scheduledFor"] });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/jobs", async (c) => {
+                    await c.var.lunora.scheduler?.runAfter(0, { __lunoraRef: "jobs:run" }, {}, { dedupKey: "daily" });
+
+                    return Response.json(null);
+                }),
+            ),
+            resolveIdentity: (request) => {
+                const userId = request.headers.get("x-test-user");
+
+                return userId === null ? null : { userId };
+            },
+            schedulerDO: schedulerNamespace,
+            shardDO: shard.namespace,
+        });
+        const schedule = async (headers: Record<string, string>): Promise<void> => {
+            await worker.fetch(new Request("https://app.example/jobs", { headers, method: "POST" }), {}, fakeContext);
+        };
+
+        await schedule({ "x-test-user": "user-1" });
+        await schedule({ "x-test-user": "user-2" });
+        await schedule({});
+
+        // SHA-256("user-1") / SHA-256("user-2"), first 32 hex characters.
+        expect(bodies[0]?.["dedupScope"]).toBe("c6c289e49e9c05b2145860387b73bcb1");
+        expect(bodies[1]?.["dedupScope"]).toBe("d92b69cfb82cecab45c753f56002b2c0");
+        expect(bodies[2]).not.toHaveProperty("dedupScope");
+        expect(JSON.stringify(bodies)).not.toContain("user-1");
+        expect(bodies.map((body) => body["dedupKey"])).toStrictEqual(["daily", "daily", "daily"]);
+    });
+
     it("forwards a runAfter shardKey to the SchedulerDO's /schedule so the job runs on that shard", async () => {
         expect.assertions(2);
 

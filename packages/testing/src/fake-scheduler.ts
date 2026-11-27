@@ -174,9 +174,10 @@ const createFakeScheduler = (
     const recordedFailures: ScheduledJobFailure[] = [];
 
     /**
-     * When each caller-fixed dedup key last ran to completion. The receiver answers a later dispatch
-     * under the same key from its replay row instead of running the handler, and keeps that row for
-     * {@link DEDUP_RETENTION_MS}; this mirrors both.
+     * When each caller-fixed dedup key last ran to completion, per target function. The receiver
+     * answers a later dispatch of the same function under the same key from its replay row instead of
+     * running the handler, and keeps that row for {@link DEDUP_RETENTION_MS}; this mirrors both. The
+     * receiver also scopes the key by the scheduling user, which this fake cannot see.
      */
     const completedKeys = new Map<string, number>();
 
@@ -346,7 +347,8 @@ const createFakeScheduler = (
             );
         }
 
-        const ranAt = job.dedupKey === undefined ? undefined : completedKeys.get(job.dedupKey);
+        const completedKey = job.dedupKey === undefined ? undefined : `${job.functionPath ?? ""}\u0000${job.dedupKey}`;
+        const ranAt = completedKey === undefined ? undefined : completedKeys.get(completedKey);
 
         // Answered from the receiver's replay row: the handler does not run again.
         if (ranAt !== undefined && nowMs - ranAt < DEDUP_RETENTION_MS) {
@@ -362,8 +364,8 @@ const createFakeScheduler = (
         // `advance(3_600_000)` must see an hour of elapsed time rather than zero.
         await dispatch(entry.kind, entry, context, job.args, nowMs);
 
-        if (job.dedupKey !== undefined) {
-            completedKeys.set(job.dedupKey, nowMs);
+        if (completedKey !== undefined) {
+            completedKeys.set(completedKey, nowMs);
         }
     };
 

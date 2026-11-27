@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SchedulerDO, TERMINAL_RETENTION_MS } from "../src/scheduler-do";
-import type { ScheduledJobView } from "../src/types";
+import type { ScheduledJobView, ScheduleRecord } from "../src/types";
 import { BlockingScheduler, post, scheduleDue } from "./blocking-scheduler";
 import { createFakeState } from "./fake-state";
 
@@ -659,6 +659,72 @@ describe("schedulerDO dispatch dedup key", () => {
         // …while the reused id's new job must not be answered from the old job's result.
         expect(second?.dedupKey).toStrictEqual(expect.any(String));
         expect(second?.dedupKey).not.toBe(first?.dedupKey);
+    });
+
+    it("stores the scheduling user's dedupScope and sends it on every attempt", async () => {
+        expect.assertions(3);
+
+        const at = 1_700_000_000_000;
+        const setNow = pinClock(at);
+        const scopes: unknown[] = [];
+        const statuses = [500, 200];
+        const scope = "c6c289e49e9c05b2145860387b73bcb1";
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            scopes.push((JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { dedupScope?: unknown }).dedupScope);
+
+            return new Response(null, { status: statuses[scopes.length - 1] ?? 200 });
+        });
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, env);
+
+        await scheduler.fetch(
+            post("/schedule", {
+                args: {},
+                dedupKey: "daily",
+                dedupScope: scope,
+                functionPath: "jobs.first",
+                id: "scoped",
+                retry: { baseMs: 0 },
+                scheduledFor: at,
+            }),
+        );
+
+        expect((state.storageMap.get("id:scoped") as ScheduleRecord | undefined)?.dedupScope).toBe(scope);
+
+        // Fails, then its retry succeeds: both attempts carry the scope the record was written with.
+        await scheduler.alarm();
+        setNow(at + 1);
+        await scheduler.alarm();
+
+        expect(scopes).toStrictEqual([scope, scope]);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.first", id: "unscoped", scheduledFor: at + 1 }));
+        await scheduler.alarm();
+
+        // A job no user scheduled sends no scope at all.
+        expect(scopes[2]).toBeUndefined();
+    });
+
+    it.each([
+        ["a raw user id", "user-1"],
+        ["upper-case hex", "C6C289E49E9C05B2145860387B73BCB1"],
+        ["a full SHA-256", "b80091bfc07dfe767ed4bb13b1867abec8b48b3974cacd29773468eaab6b4ea3"],
+        ["a number", 7],
+    ])("refuses %s as a dedupScope with 400 INVALID_INPUT and stores nothing", async (_label, dedupScope) => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, env);
+        const response = await scheduler.fetch(
+            post("/schedule", { args: {}, dedupScope, functionPath: "jobs.first", id: "bad-scope", scheduledFor: Date.now() + 60_000 }),
+        );
+        const body: { error?: { code?: string } } = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.error?.code).toBe("INVALID_INPUT");
+        expect(state.storageMap.has("id:bad-scope")).toBe(false);
     });
 
     it("gives a reused id's new job its own key when it is scheduled in the same millisecond", async () => {
