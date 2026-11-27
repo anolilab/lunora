@@ -114,6 +114,13 @@ const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSe
 const REFUND_RANK: Partial<Record<PaymentState, number>> = { captured: 0, partially_refunded: 1, refunded: 2 };
 
 /**
+ * The money has already moved, so a refund total plus the stored disputes past the capture is
+ * recorded as the capture, as the facade's write paths do: above it, every remainder goes negative.
+ */
+const capAtCapture = (total: Money, snapshot: PaymentSession): Money =>
+    total.currency === snapshot.capturedAmount.currency && compareMoney(total, snapshot.capturedAmount) > 0 ? snapshot.capturedAmount : total;
+
+/**
  * `state`, raised to the refund rung `refundedAmount` implies when that total is larger than the
  * snapshot's own: `refunded` once it reaches the captured amount, `partially_refunded` below that.
  * A state off the ladder is left alone.
@@ -169,7 +176,8 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
     const sameRefundCurrency =
         existing.refundedAmount.currency === current.refundedAmount.currency &&
         (disputedAmount === undefined || disputedAmount.currency === current.refundedAmount.currency);
-    const reported = sameRefundCurrency && disputedAmount !== undefined ? addMoney(current.refundedAmount, disputedAmount) : current.refundedAmount;
+    const reported =
+        sameRefundCurrency && disputedAmount !== undefined ? capAtCapture(addMoney(current.refundedAmount, disputedAmount), current) : current.refundedAmount;
     const refundedAmount = sameRefundCurrency && compareMoney(existing.refundedAmount, reported) > 0 ? existing.refundedAmount : reported;
     const existingRank = REFUND_RANK[existing.state];
     const currentRank = REFUND_RANK[current.state];

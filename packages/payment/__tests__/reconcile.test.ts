@@ -1038,4 +1038,18 @@ describe("reconcile — a lost dispute beside refunds", () => {
         expect(merged?.refundedAmount.minorUnits).toBe(100n);
         expect(merged?.state).toBe("refunded");
     });
+
+    it("caps a refund total plus the dispute at the captured amount", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(disputed);
+        await reconcile({ adapter: snapshotAdapter(80, "partially_refunded"), paymentSessionIds: ["pay_1"], singleSubscriptionPerReference: false, store });
+
+        const merged = await store.getPaymentSession("dodopayments", "pay_1");
+
+        expect(merged?.refundedAmount.minorUnits).toBe(100n);
+        expect(merged?.state).toBe("refunded");
+    });
 });
