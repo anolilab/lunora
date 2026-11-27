@@ -2347,6 +2347,7 @@ const MESSAGE_IDS: readonly [
     "filter event, actor, target, IP",
     "Authentication and security events are recorded here.",
     "No security events.",
+    "hashed",
     "event",
     "actor",
     "ip / user agent",

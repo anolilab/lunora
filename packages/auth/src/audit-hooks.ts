@@ -993,8 +993,8 @@ const buildAuditEntry = (
  * endpoints — the net effect is a more truthful count, not a strictly larger or
  * smaller one. `sign-in-initiated` is a new event name (open `AuthAuditEvent`
  * union, so no wire/type break, but SIEM rules enumerating event names should
- * add it). A failed sign-in now also carries `targetEmail` (the attempted
- * address/username) when the request body supplied one — see
+ * add it). A failed sign-in now also carries `targetEmail` (a keyed digest of the
+ * attempted address/username) when the request body supplied one — see
  * {@link AppendAuthAuditEntry.targetEmail} — so credential-stuffing attempts can
  * be grouped by target even though they never produce an `actorEmail`.
  *

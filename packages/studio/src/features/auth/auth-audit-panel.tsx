@@ -51,6 +51,9 @@ const targetIdOf = (entry: AuthAuditEntry): string | undefined => {
     return undefined;
 };
 
+/** Prefix `@lunora/auth` gives a failed sign-in's keyed digest of the typed identifier, which no reader can reverse. */
+const HASHED_TARGET_PREFIX = "hmac-sha256:";
+
 /**
  * Security / audit — the authentication & security event trail (sign-in, sign-up,
  * password change, MFA toggle, token refresh, session revoke, account link/unlink),
@@ -157,7 +160,13 @@ const AuthAuditPanel = (): ReactElement => {
                                             {entry.actorEmail ?? entry.actorId ?? <span className="text-muted-foreground">—</span>}
                                         </TableCell>
                                         <TableCell className="max-w-[28ch] truncate font-mono text-xs" title={targetIdOf(entry)}>
-                                            {entry.targetEmail ?? targetIdOf(entry) ?? <span className="text-muted-foreground">—</span>}
+                                            {entry.targetEmail?.startsWith(HASHED_TARGET_PREFIX) === true ? (
+                                                <span className="text-muted-foreground" data-testid="aa-hashed-target" title={entry.targetEmail}>
+                                                    {entry.targetEmail.slice(HASHED_TARGET_PREFIX.length, HASHED_TARGET_PREFIX.length + 8)}… {t("hashed")}
+                                                </span>
+                                            ) : (
+                                                (entry.targetEmail ?? targetIdOf(entry) ?? <span className="text-muted-foreground">—</span>)
+                                            )}
                                             {entry.targetEmail !== undefined && targetIdOf(entry) !== undefined && (
                                                 <span className="ml-1 text-muted-foreground">· {targetIdOf(entry)}</span>
                                             )}

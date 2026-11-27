@@ -153,6 +153,29 @@ describe("authAuditPanel", () => {
         expect(target?.textContent).not.toContain("u9");
     });
 
+    it("shows a failed sign-in's hashed identifier as a short label, with the full digest in its title", async () => {
+        expect.assertions(5);
+
+        const digest = `hmac-sha256:${"ab12cd34".repeat(8)}`;
+        const failedSignIn: AuthAuditEntry = { event: "sign-in", outcome: "failure", seq: 7, targetEmail: digest, ts: 1_700_000_007_000 };
+
+        render(renderPanel(createClient([failedSignIn, ADMIN_ENTRY])));
+
+        await screen.findByTestId("aa-table");
+
+        const [hashedTarget, plainTarget] = bodyRows().map((row) => within(row).getAllByRole("cell")[3]);
+        const label = within(hashedTarget as HTMLElement).getByTestId("aa-hashed-target");
+
+        expect(hashedTarget?.textContent).not.toContain(digest);
+        expect(label.textContent).toBe("ab12cd34… hashed");
+        expect(label.getAttribute("title")).toBe(digest);
+        expect(plainTarget?.textContent).toContain("new@example.com");
+
+        fireEvent.change(screen.getByTestId("aa-search"), { target: { value: digest.slice(0, 20) } });
+
+        await expect(screen.findAllByTestId("aa-row")).resolves.toHaveLength(1);
+    });
+
     it("shows the empty state when there are no events", async () => {
         expect.assertions(1);
 
