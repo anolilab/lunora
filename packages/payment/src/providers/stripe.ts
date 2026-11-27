@@ -305,6 +305,7 @@ const disputeClosedAction = ({ base, currency, object }: StripeEvent): WebhookAc
         // Not a refund the facade issued, so the dispute id can never consume a local refund marker
         // and have its reversal silently dropped — see `sync.ts`.
         refundId: readString(object, "id"),
+        reversal: "dispute",
         // Payment rows are keyed on the PaymentIntent id. A dispute on a charge with no intent
         // (legacy Charges API) has nothing to reverse here and no-ops as `unhandled`.
         sessionId: readString(object, "payment_intent"),

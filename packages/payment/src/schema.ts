@@ -92,6 +92,12 @@ const sessions = defineTable({
     capturedMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
     createdAt: v.number(),
     currency: v.string(),
+
+    /**
+     * The part of `refundedMinor` that lost disputes reversed — see `PaymentSession.disputedAmount`.
+     * OPTIONAL, so adding it needs no backfill: a row written before it reads as no dispute.
+     */
+    disputedMinor: v.optional(v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER)),
     provider: v.string(),
     providerSessionId: v.string(),
     referenceId: v.string(),

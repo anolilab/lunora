@@ -18,13 +18,13 @@
  */
 import type { PaymentAdapter } from "./adapter";
 import { usageForwardIsIdempotent } from "./idempotency";
-import { compareMoney } from "./money";
+import { addMoney, compareMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
 import { storeSubscription } from "./subscription-policy";
-import type { Customer, PaymentSession, PaymentState, Subscription } from "./types";
+import type { Customer, Money, PaymentSession, PaymentState, Subscription } from "./types";
 
 interface ReconcileInput {
     readonly adapter: PaymentAdapter;
@@ -114,6 +114,29 @@ const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSe
 const REFUND_RANK: Partial<Record<PaymentState, number>> = { captured: 0, partially_refunded: 1, refunded: 2 };
 
 /**
+ * `state`, raised to the refund rung `refundedAmount` implies when that total is larger than the
+ * snapshot's own: `refunded` once it reaches the captured amount, `partially_refunded` below that.
+ * A state off the ladder is left alone.
+ */
+const refundStateAbove = (state: PaymentState, refundedAmount: Money, snapshot: PaymentSession): PaymentState => {
+    const rank = REFUND_RANK[state];
+    const { capturedAmount } = snapshot;
+
+    if (
+        rank === undefined ||
+        refundedAmount.currency !== snapshot.refundedAmount.currency ||
+        refundedAmount.currency !== capturedAmount.currency ||
+        compareMoney(refundedAmount, snapshot.refundedAmount) <= 0
+    ) {
+        return state;
+    }
+
+    const implied: PaymentState = compareMoney(refundedAmount, capturedAmount) >= 0 ? "refunded" : "partially_refunded";
+
+    return (REFUND_RANK[implied] ?? 0) > rank ? implied : state;
+};
+
+/**
  * Merge the provider's payment snapshot over the stored row without regressing owner attribution or a
  * refund the provider truth can't see. Reconcile trusts `getPaymentStatus` as authoritative, but some
  * providers surface neither refunds nor the reference on that call: a Stripe PaymentIntent stays
@@ -131,24 +154,33 @@ const REFUND_RANK: Partial<Record<PaymentState, number>> = { captured: 0, partia
  * the state slid back a rung, leaving a row whose refunded total equals its captured total under a
  * "partially refunded" label. `check` and every remainder calculation read that row, and
  * `partially_refunded` is not terminal where `refunded` is.
+ *
+ * A provider snapshot's refunded total counts refunds only, and no snapshot reports a lost dispute,
+ * so the stored dispute total is added to it before the comparison and carried onto the result.
+ * When that leaves the total above the snapshot's, the snapshot's state can sit a rung low on the
+ * ladder for the same reason, so the state is raised to what the total implies.
  */
 const mergePaymentTruth = (existing: PaymentSession | undefined, current: PaymentSession): PaymentSession => {
     if (!existing) {
         return current;
     }
 
-    const sameRefundCurrency = existing.refundedAmount.currency === current.refundedAmount.currency;
-    const refundedAmount =
-        sameRefundCurrency && compareMoney(existing.refundedAmount, current.refundedAmount) > 0 ? existing.refundedAmount : current.refundedAmount;
+    const { disputedAmount } = existing;
+    const sameRefundCurrency =
+        existing.refundedAmount.currency === current.refundedAmount.currency &&
+        (disputedAmount === undefined || disputedAmount.currency === current.refundedAmount.currency);
+    const reported = sameRefundCurrency && disputedAmount !== undefined ? addMoney(current.refundedAmount, disputedAmount) : current.refundedAmount;
+    const refundedAmount = sameRefundCurrency && compareMoney(existing.refundedAmount, reported) > 0 ? existing.refundedAmount : reported;
     const existingRank = REFUND_RANK[existing.state];
     const currentRank = REFUND_RANK[current.state];
-    const state = existingRank !== undefined && currentRank !== undefined && currentRank < existingRank ? existing.state : current.state;
+    const ladderState = existingRank !== undefined && currentRank !== undefined && currentRank < existingRank ? existing.state : current.state;
 
     return {
         ...current,
+        ...(disputedAmount === undefined ? {} : { disputedAmount }),
         referenceId: ownerOf(existing.referenceId, current.referenceId),
         refundedAmount,
-        state,
+        state: refundStateAbove(ladderState, refundedAmount, current),
         subscriptionId: current.subscriptionId ?? existing.subscriptionId,
     };
 };

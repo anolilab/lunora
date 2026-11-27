@@ -492,7 +492,8 @@ holds every integer up to 2^53 exactly (about 90 trillion dollars in cents), and
 the store refuses to write an amount outside that range rather than round it.
 Every row carries a `provider` discriminator so multiple providers can coexist during a
 migration. A **capture or refund is not its own table**: both fold into the
-payment's `payment_sessions` row as `capturedMinor` / `refundedMinor` plus a
+payment's `payment_sessions` row as `capturedMinor` / `refundedMinor` (the
+lost-dispute part of the refunded total also in `disputedMinor`) plus a
 state (`refunded` / `partially_refunded`). Products, prices, checkouts and
 invoices stay with the provider — the store does not mirror them.
 

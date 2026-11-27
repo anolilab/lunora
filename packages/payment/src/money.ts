@@ -11,7 +11,7 @@ import { toSnapshot } from "dinero.js";
 import { add, allocate, compare, dinero, subtract } from "dinero.js/bigint";
 
 import { LunoraPaymentError } from "./errors";
-import type { CurrencyCode, Money } from "./types";
+import type { CurrencyCode, Money, PaymentSession } from "./types";
 
 // ISO-4217 minor-unit exponents (digits after the decimal). Default 2; these are the exceptions.
 const ZERO_DECIMAL = new Set(["BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"]);
@@ -129,6 +129,9 @@ export const allocateMoney = (amount: Money, ratios: ReadonlyArray<bigint>): Mon
  * True when the amount is exactly zero minor units.
  */
 export const isZeroMoney = (a: Money): boolean => a.minorUnits === 0n;
+
+/** The lost-dispute part of a session's refunded total, zero when it has none. */
+export const disputedAmountOf = (session: PaymentSession): Money => session.disputedAmount ?? zeroMoney(session.refundedAmount.currency);
 
 /**
  * JSON-safe wire form of money (bigint encoded as a decimal string).
