@@ -3,6 +3,30 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-27T13:23:37.523Z",
+      "key": "@lunora/client@1.0.0-alpha.305"
+    },
+    {
+      "at": "2026-11-27T13:23:37.523Z",
+      "key": "@lunora/angular@1.0.0-alpha.274"
+    },
+    {
+      "at": "2026-11-27T13:23:37.523Z",
+      "key": "@lunora/react@1.0.0-alpha.307"
+    },
+    {
+      "at": "2026-11-27T13:23:37.523Z",
+      "key": "@lunora/solid@1.0.0-alpha.295"
+    },
+    {
+      "at": "2026-11-27T13:23:37.523Z",
+      "key": "@lunora/svelte@1.0.0-alpha.324"
+    },
+    {
+      "at": "2026-11-27T13:23:37.523Z",
+      "key": "@lunora/vue@1.0.0-alpha.325"
+    },
+    {
       "at": "2026-11-27T12:37:59.023Z",
       "key": "@lunora/payment@1.0.0-alpha.280"
     },
@@ -377,32 +401,8 @@
     {
       "at": "2026-11-23T17:19:42.442Z",
       "key": "@lunora/svelte@1.0.0-alpha.322"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/testing@1.0.0-alpha.340"
-    },
-    {
-      "at": "2026-11-23T17:19:42.442Z",
-      "key": "@lunora/vue@1.0.0-alpha.323"
-    },
-    {
-      "at": "2026-11-23T16:26:22.921Z",
-      "key": "@lunora/codegen@1.0.0-alpha.432"
-    },
-    {
-      "at": "2026-11-23T16:26:22.921Z",
-      "key": "@lunora/do@1.0.0-alpha.292"
-    },
-    {
-      "at": "2026-11-23T16:26:22.921Z",
-      "key": "@lunora/sql-store@1.0.0-alpha.242"
-    },
-    {
-      "at": "2026-11-23T14:42:23.575Z",
-      "key": "@lunora/jwt-auth@1.0.0-alpha.15"
     }
   ],
-  "updatedAt": "2026-11-27T12:37:59.023Z",
+  "updatedAt": "2026-11-27T13:23:37.524Z",
   "version": 1
 }
