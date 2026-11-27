@@ -1024,12 +1024,28 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
         const recordFailure = (input: unknown, error: unknown): Promise<void> =>
             recordAudit(input, { code: error instanceof LunoraError ? error.code : undefined, outcome: "failure" });
 
-        const buildInput = async (): Promise<unknown> =>
-            descriptor.build({
-                body: descriptor.http === "POST" ? await deps.readJsonBody(request) : {},
-                paging: deps.parsePaging(request),
-                query: (name) => deps.queryParameter(url, name),
-            });
+        const readBody = async (): Promise<Record<string, unknown>> => (descriptor.http === "POST" ? deps.readJsonBody(request) : {});
+        const buildInput = (body: Record<string, unknown>): unknown =>
+            descriptor.build({ body, paging: deps.parsePaging(request), query: (name) => deps.queryParameter(url, name) });
+
+        // The input a refused call would have run with, else its raw body: a refusal often carries an incomplete body
+        // (a password set naming only its user), and every audited build copies the AUDIT_INPUT_IDS fields under their
+        // body names, so the raw body yields the same ids. An unreadable body yields none.
+        const refusedInput = async (): Promise<unknown> => {
+            let body: Record<string, unknown>;
+
+            try {
+                body = await readBody();
+            } catch {
+                return undefined;
+            }
+
+            try {
+                return buildInput(body);
+            } catch {
+                return body;
+            }
+        };
 
         if (!NAMED_TOKEN_AUTH_METHODS.has(descriptor.method)) {
             try {
@@ -1038,7 +1054,7 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
                 // Name the target of the refused call when the request makes that possible. The body is read only here,
                 // after the refusal, under the same size cap; a wrong method or an unreadable body records no ids, and
                 // nothing from this attempt may replace the refusal the caller gets.
-                const input = request.method === descriptor.http ? await buildInput().catch(() => undefined) : undefined;
+                const input = request.method === descriptor.http ? await refusedInput() : undefined;
 
                 await recordFailure(input, error);
 
@@ -1062,7 +1078,7 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
             throw new LunoraError(`auth admin does not support \`${descriptor.method}\``, { code: "AUTH_OP_NOT_SUPPORTED", status: 400 });
         }
 
-        const input = await buildInput();
+        const input = buildInput(await readBody());
         let result: unknown;
 
         try {

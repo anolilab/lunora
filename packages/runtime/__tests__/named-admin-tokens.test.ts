@@ -815,6 +815,34 @@ describe("named admin tokens", () => {
             expect(JSON.stringify(rows)).not.toContain(target);
         });
 
+        it("records the target of a refused call whose body is incomplete", async () => {
+            expect.assertions(3);
+
+            const { read, token, worker } = await refusingWorker();
+            const target = "user-target-9c21";
+
+            // users/password needs newPassword too; the refusal must still name the user it was aimed at.
+            await expect(
+                errorCodeOf(call(worker, `${ORIGIN}/_lunora/admin/auth/users/password`, token, { body: JSON.stringify({ userId: target }), method: "POST" })),
+            ).resolves.toBe("ADMIN_ROOT_REQUIRED");
+
+            const rows = await read();
+
+            expect(rows).toStrictEqual([
+                expect.objectContaining({
+                    actorId: "admin:token:oncall",
+                    detail: {
+                        code: "ADMIN_ROOT_REQUIRED",
+                        path: "/_lunora/admin/auth/users/password",
+                        targetUserId: expect.stringMatching(/^hmac-sha256:[\da-f]{64}$/u),
+                    },
+                    event: "admin-password-set",
+                    outcome: "failure",
+                }),
+            ]);
+            expect(JSON.stringify(rows)).not.toContain(target);
+        });
+
         it("still answers the refusal and records a row without ids when the body is malformed", async () => {
             expect.assertions(2);
 
