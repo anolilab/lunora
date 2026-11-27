@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { decodeWire, encodeArgsOrThrow } from "@lunora/wire";
 
 import { collectPages } from "../../../shared/collect-pages";
+import { dedupScopeOf } from "../../../shared/scheduled-mutation-id";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, ScheduledJobView, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
@@ -20,6 +21,19 @@ const targetLabel = (target: CronTarget): string => {
 
     return (isWorkflowReference(target) ? target.className : target.__lunoraRef) ?? "<unknown>";
 };
+
+/**
+ * The scheduling user's id, set only by `@lunora/server`'s deferred-schedule facade, which reads it
+ * from the shard's caller. Kept off the public {@link RunOptions} so app code cannot choose the scope
+ * its key is deduped in. The raw id is never posted: it is hashed into `dedupScope` here.
+ */
+interface ScopedRunOptions extends RunOptions {
+    dedupUserId?: unknown;
+}
+
+/** The `dedupScope` a call is posted with, from the facade's `dedupUserId` when it set one. */
+const dedupScopeField = async (options: ScopedRunOptions): Promise<{ dedupScope?: string }> =>
+    typeof options.dedupUserId === "string" && options.dedupUserId.length > 0 ? { dedupScope: await dedupScopeOf(options.dedupUserId) } : {};
 
 /**
  * Undo `runAt`'s encode on a record read back out of the DO, so `list()` /
@@ -76,6 +90,7 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
             // workflow branch (before `create({ params })`) for a workflow one.
             args: encodeArgsOrThrow("ctx.scheduler.runAt", targetLabel(target), args),
             dedupKey: options_.dedupKey,
+            ...(await dedupScopeField(options_)),
             // Pre-minted id, when the caller decided it before the call could be
             // made (see `RunOptions.id`). Absent for an ordinary schedule, and the
             // DO mints one.

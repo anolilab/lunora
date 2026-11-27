@@ -216,6 +216,24 @@ describe("fake scheduler", () => {
         await expect(t.query(readLog, {})).resolves.toHaveLength(3);
     });
 
+    it("runs two functions scheduled under one fixed dedupKey, since the receiver scopes the key per function", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        await t.action(async (ctx) => {
+            await ctx.scheduler.runAfter(0, "log:appendLog", { message: "append" }, { dedupKey: "shared" });
+            await ctx.scheduler.runAfter(0, "log:appendOrThrow", { fail: false, message: "append-or-throw" }, { dedupKey: "shared" });
+        });
+        await t.scheduler.runPending();
+
+        const log = await t.query(readLog, {});
+
+        // Row order is not the scheduling order, so the two messages are matched as a set.
+        expect(log.map((entry) => entry.message)).toStrictEqual(expect.arrayContaining(["append", "append-or-throw"]));
+        expect(log).toHaveLength(2);
+    });
+
     it("queues a job via runAfter and does not execute it immediately", async () => {
         expect.assertions(2);
 

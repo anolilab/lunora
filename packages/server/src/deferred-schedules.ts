@@ -262,6 +262,23 @@ const handOffDeferred = async (outbox: ScheduleOutbox | undefined, { id, run, to
 };
 
 /**
+ * The caller's options with the scheduling user's id set as `dedupUserId`, which `@lunora/scheduler`'s
+ * client hashes into the key's dedup scope. A `dedupUserId` the caller passed itself is dropped when
+ * there is no user, so app code cannot choose the scope its key is deduped in.
+ */
+const withDedupUser = (options: Record<string, unknown> | undefined, userId: (() => string | undefined) | undefined): Record<string, unknown> | undefined => {
+    const user = userId?.();
+
+    if (user !== undefined && user.length > 0) {
+        return { ...options, dedupUserId: user };
+    }
+
+    return options === undefined || !Object.hasOwn(options, "dedupUserId")
+        ? options
+        : Object.fromEntries(Object.entries(options).filter(([key]) => key !== "dedupUserId"));
+};
+
+/**
  * Wrap a scheduler so `runAfter`/`runAt` can be held for a transaction.
  *
  * Call once per dispatch, OUTSIDE the read-stamping wrapper: the spread reads
@@ -272,8 +289,11 @@ const handOffDeferred = async (outbox: ScheduleOutbox | undefined, { id, run, to
  * that had to widen to `unknown` and cast back — the generated shard among them
  * — could not be type-checked against the contract this docblock describes.
  * @param scheduler the `ctx.scheduler` implementation to wrap
+ * @param outbox durable custody for buffered calls; absent on a harness with no store
+ * @param userId reads the user the call is scheduled for, at each call; the raw id is fixed in
+ * the custody record, so a replay with no identity still lands in the same dedup scope
  */
-export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, outbox?: ScheduleOutbox): S => {
+export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, outbox?: ScheduleOutbox, userId?: () => string | undefined): S => {
     const inner = scheduler as unknown as Record<string, unknown>;
     const queue: ScheduleQueue = { decisions: new Map(), innermost: undefined, outbox };
 
@@ -285,8 +305,9 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
         when: number,
         target: unknown,
         args: unknown,
-        options: Record<string, unknown> | undefined,
+        callerOptions: Record<string, unknown> | undefined,
     ): Promise<string> => {
+        const options = withDedupUser(callerOptions, userId);
         // The schedule-rate budget, decided once per target per dispatch. A fan-out of many
         // jobs to one target from one invocation is one decision, so it is never deferred
         // piecemeal. A deferral only moves the job later: a job already due after the

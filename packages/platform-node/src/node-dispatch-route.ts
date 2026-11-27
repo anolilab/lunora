@@ -30,6 +30,7 @@ import { resolveShard, toErrorResponse } from "@lunora/runtime";
 import { assertDedupKey } from "@lunora/scheduler";
 
 import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
+import { DEDUP_SCOPE_GRAMMAR_MESSAGE, isDedupScope, scheduledMutationId } from "../../../shared/scheduled-mutation-id";
 import {
     AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE,
     isAgentRunOffDefaultShard,
@@ -48,9 +49,11 @@ interface NodeDispatchInvocation {
     functionPath: string;
 
     /**
-     * The shard's idempotency key: the scheduler's per-record `dedupKey` when the body carries one,
-     * else the record or delivery id. A scheduler id is free again once its job settles, so the bare
-     * id would answer a reused id's new job from the previous job's dedup row.
+     * The shard's idempotency key, derived from the function path, the scheduling user's
+     * `dedupScope` and the scheduler's per-record `dedupKey` (else the record or delivery id). A
+     * scheduler id is free again once its job settles, so the bare id would answer a reused id's
+     * new job from the previous job's dedup row; and every dispatch shares the shard's `"system:"`
+     * namespace, so the bare key would let another user or function answer this one.
      */
     id: string | undefined;
     /** Identity the trusted caller forwarded, if any. */
@@ -149,10 +152,16 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
         throw new LunoraError("BAD_REQUEST", AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE);
     }
 
+    if (candidate["dedupScope"] !== undefined && !isDedupScope(candidate["dedupScope"])) {
+        throw new LunoraError("INVALID_INPUT", `Scheduler dispatch: ${DEDUP_SCOPE_GRAMMAR_MESSAGE}`);
+    }
+
+    const key = dedupKey(candidate);
+
     return options.invoke({
         args: (candidate["args"] ?? {}) as Record<string, unknown>,
         functionPath: candidate["functionPath"],
-        id: dedupKey(candidate),
+        id: key === undefined ? undefined : await scheduledMutationId(candidate["functionPath"], candidate["dedupScope"], key),
         identity: readForwardedDispatchIdentity(request),
         scheduledFor: typeof candidate["scheduledFor"] === "number" ? candidate["scheduledFor"] : undefined,
         shardKey,

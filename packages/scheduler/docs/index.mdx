@@ -250,11 +250,18 @@ ladder and the dead-letter park are built on, and it means a job can run more
 than once. There are two ways it happens, and they are not equally forgiving.
 
 **A retry after a failed attempt** is the ordinary one. The attempt is over
-before the next begins, so the record id — which rides to the shard as the
-replay-dedup key, and to Cloudflare Workflows as the instance id — finds the
-previous attempt's mark already in place. A `mutation` short-circuits to its
-cached result, a `workflow` re-attaches to the instance it already created, and
-an `action` short-circuits too.
+before the next begins, so the job's dedup key — fixed once per scheduling and
+carried by every retry — finds the previous attempt's mark already in place. A
+`mutation` short-circuits to its cached result, a `workflow` re-attaches to the
+instance it already created, and an `action` short-circuits too.
+
+The key is minted per scheduling unless the caller fixes one with
+`RunOptions.dedupKey`. For a function target the shard dedups on a mutation id
+derived from the target function, the user who scheduled the job and the key, so
+a fixed key is unique per scheduling user and target function on a shard, and is
+remembered for 24 hours. Jobs scheduled without a user (cron, server code) share
+one scope per function. A workflow target uses the bare key as its instance id,
+deduped for as long as the instance exists.
 
 **A re-delivery that overlaps a live attempt** is the hard one, and it comes
 from exactly one source: the Durable Object that owns the schedule being evicted
@@ -263,7 +270,7 @@ or crashing while a dispatch is open. **Every target kind now survives it.**
 | Target             | Overlapping re-delivery                                                          |
 | ------------------ | -------------------------------------------------------------------------------- |
 | `mutation`         | Runs once. The dedup read holds the shard's single-writer gate.                  |
-| `workflow` / agent | Runs once. The record id is the instance id; a second create is a no-op.         |
+| `workflow` / agent | Runs once. The dedup key is the instance id; a second create is a no-op.         |
 | `action`           | Runs once. The shard declines the second delivery while the first is in flight¹. |
 
 `action` used to be the exception. It is dispatched without the shard's

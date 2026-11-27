@@ -1108,7 +1108,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // it succeeded. The outbox takes custody of each buffered call inside the
             // transaction and releases it once the scheduler has the job; what
             // survives is retried by `pollScheduleOutbox` on the shared poll alarm.
-            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase, this.scheduleOutbox());
+            //
+            // `caller.userId` is read directly, not through `readUserId()`: that reader marks the path
+            // identity-reading to keep live queries apart, and this facade is never on a query ctx.
+            const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase, this.scheduleOutbox(), () => caller.userId);
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
@@ -1356,7 +1359,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     const mutationCtx: Record<string, unknown> = this.mutationContexts.has(target)
                         ? target
                         : (() => {
-                            const mutationScheduler = withDeferredSchedules(schedulerBase, this.scheduleOutbox());
+                            const mutationScheduler = withDeferredSchedules(schedulerBase, this.scheduleOutbox(), () => caller.userId);
                             const mutationDatabase = makeDatabaseContext(mutationScheduler);
                             // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
                             // fresh factory per call would repeat the same draws across sibling mutations.

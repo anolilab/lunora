@@ -40,6 +40,7 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import { withRunShard } from "../../../shared/run-shard";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
+import { DEDUP_SCOPE_GRAMMAR_MESSAGE, dedupScopeOf, isDedupScope, scheduledMutationId } from "../../../shared/scheduled-mutation-id";
 import {
     AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE,
     checkBearerToken,
@@ -2240,6 +2241,21 @@ const ADMIN_FUNCTION_PREFIX = "__lunora_admin__";
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH || pathname === ADVISOR_PROCEDURES_PATH;
 
 /**
+ * The `x-lunora-mutation-id` a scheduled function dispatch carries: derived from the function, the
+ * scheduling user's scope and the key, because every scheduled dispatch reaches the shard in the
+ * one `"system:"` idempotency namespace, where the bare key would let another user's job, or another
+ * function's, under the same fixed key be answered from this one's replay row. A scope the
+ * SchedulerDO would not have written is a forged or hand-built body, refused like a bad key.
+ */
+const scheduledDispatchMutationId = async (functionPath: string, dedupScope: unknown, dedupKey: string | undefined): Promise<string | undefined> => {
+    if (dedupScope !== undefined && !isDedupScope(dedupScope)) {
+        throw new LunoraError(`Scheduler dispatch: ${DEDUP_SCOPE_GRAMMAR_MESSAGE}`, { code: "INVALID_INPUT", status: 400 });
+    }
+
+    return dedupKey === undefined ? undefined : await scheduledMutationId(functionPath, dedupScope, dedupKey);
+};
+
+/**
  * Refuse a `__lunora_relation__:*` dispatch that is NOT a fan-out.
  *
  * SECURITY: the reserved relation reader answers with RAW, RLS-blind rows for
@@ -4329,6 +4345,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             args?: unknown;
             attempt?: unknown;
             dedupKey?: unknown;
+            dedupScope?: unknown;
             functionPath?: unknown;
             id?: unknown;
             instanceName?: unknown;
@@ -4361,8 +4378,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `params`) rather than dispatching a function to a shard — the
         // workflow/agent is reached off the Worker's `ctx.exports` (or `env`), not the DO.
         // The dedup key becomes the INSTANCE id, so a re-fire attaches to the
-        // running instance instead of starting a second one; the function path
-        // below spends the same key as the shard's replay-dedup `mutationId`.
+        // running instance instead of starting a second one. An instance id is
+        // already per workflow class, so the bare key is enough here; the function
+        // path below scopes it by function and scheduling user instead.
         //
         // It still releases its pool slot. `Scheduler.runAt` accepts a
         // `WorkflowReference` alongside `RunOptions.pool`, and `reservePoolSlot`
@@ -4409,12 +4427,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // The job's due time rides along so the shard can record how late it started;
         // a sender predating the field simply leaves the metric unrecorded.
         const scheduledFor = typeof candidate.scheduledFor === "number" ? candidate.scheduledFor : undefined;
+        // The pool slot keeps the body's own key; only the shard's replay id is scoped.
+        const mutationId = await scheduledDispatchMutationId(candidate.functionPath, candidate.dedupScope, dedupKey);
         const stopRenewing = keepPoolSlotAlive(candidate);
         const response = await dispatchToShard(
             candidate.functionPath,
             args,
             shardKey,
-            dedupKey,
+            mutationId,
             identity,
             request.headers.get("traceparent") ?? undefined,
             scheduledFor,
@@ -5030,6 +5050,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 args: encodeArgsOrThrow("ctx.scheduler", String(fields["functionPath"] ?? fields["workflow"]), args),
                 // Validated by the SchedulerDO, which refuses a key the receivers cannot carry (400).
                 dedupKey: runOptions?.dedupKey,
+                // The key is deduped per scheduling user; only the digest leaves this Worker.
+                ...(identity?.userId === undefined || identity.userId.length === 0 ? {} : { dedupScope: await dedupScopeOf(identity.userId) }),
                 // Whole milliseconds, rounded up: the SchedulerDO refuses a
                 // fractional instant (`runAfter(1500.5)`), as `@lunora/scheduler`'s
                 // `runAt` also rounds.

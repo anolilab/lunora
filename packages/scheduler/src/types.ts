@@ -122,10 +122,12 @@ export interface RunOptions {
      * facade passes its own, so a replay of a hand-off that did land is answered from the first
      * run. Must match `^[A-Za-z0-9_][A-Za-z0-9_-]{0,99}$` (`400 INVALID_INPUT` otherwise).
      *
-     * How long "once" lasts depends on the target: a function target is answered from the shard's
-     * replay row, which is kept for 24 hours, so the same key a day later runs again; a workflow
-     * target is deduped for as long as its instance exists. The key is shared by every job reaching
-     * the same shard, so scope a fixed key yourself (tenant, record id) when callers could collide.
+     * For a function target the shard dedups on an id derived from the target function, the user
+     * who scheduled the job and the key, so a key is unique per scheduling user and function on a
+     * shard; jobs scheduled without a user (cron, server code) share one scope per function. The
+     * shard keeps that replay row for 24 hours, so the same key a day later runs again. A workflow
+     * target uses the bare key as its instance id (already per workflow class), deduped for as long
+     * as the instance exists.
      */
     dedupKey?: string;
 
@@ -187,6 +189,13 @@ export interface ScheduleRecord {
 
     /** The key every dispatch of this record is deduped on at its receiver; see {@link RunOptions.dedupKey}. */
     dedupKey?: string;
+
+    /**
+     * The scheduling user's dedup scope: the first 32 hex characters of SHA-256 over their user id,
+     * so the raw id is never stored here. A function target's receiver folds it into the shard
+     * mutation id. Absent for a job no user scheduled (cron, server code).
+     */
+    dedupScope?: string;
     enqueuedAt: number;
     /** Why the job was dead-lettered. Set only on a parked (`/dead`) record. */
     error?: string;
