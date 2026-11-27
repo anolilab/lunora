@@ -1161,6 +1161,66 @@ describe("createPayment", () => {
             });
         });
 
+        it("keeps the record when the confirming webhook has claimed the refund but not yet written it", async () => {
+            expect.assertions(2);
+
+            const store = new MemoryPaymentStore();
+            const { facade, providerRefunds, refundPayment } = await issuingSetup(store);
+            const webhook = gatedStore(store, "first");
+            let webhookDone: Promise<unknown> = Promise.resolve();
+
+            // The provider settles the refund and its webhook claims it before the call's answer arrives; the
+            // webhook's row write is still to come.
+            refundPayment.mockImplementationOnce(async () => {
+                providerRefunds.push({ amount: money(600, "USD"), refundId: "ref_1", status: "succeeded" });
+                webhookDone = applyWebhookAction(webhook.gated, confirming("ref_1", 600));
+                await webhook.atWrite;
+
+                return { ...paymentSession("user_1"), id: "ord_1", provider: "polar", refundedAmount: money(600, "USD"), refundId: "ref_1" };
+            });
+
+            await facade(store).refundPayment({ amount: money(600, "USD"), sessionId: "ord_1" });
+
+            // The earlier refund is booked from the provider's list first, so this one is measured against it.
+            await expect(facade(store).refundPayment({ amount: money(600, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+            webhook.resume();
+            await webhookDone;
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(600, "USD") });
+        });
+
+        it.each(["settlePendingRefund", "refundPayment"] as const)(
+            "books a stopped call's settled refund through %s once its lease has run out, with no webhook",
+            async (entry) => {
+                expect.assertions(2);
+
+                vi.useFakeTimers({ toFake: ["Date"] });
+
+                try {
+                    const store = new MemoryPaymentStore();
+                    const { atWrite, gated } = gatedStore(store, "all");
+                    const { facade, refundPayment } = await issuingSetup(store, gated);
+
+                    // Never settles: the call is abandoned where its isolate stopped, its pending claim still standing.
+                    facade(gated)
+                        .refundPayment({ sessionId: "ord_1" })
+                        .catch(() => undefined);
+                    await atWrite;
+                    vi.setSystemTime(Date.now() + UNBOOKED_REFUND_LEASE_MS);
+
+                    await (entry === "settlePendingRefund"
+                        ? facade(store).settlePendingRefund({ sessionId: "ord_1" })
+                        : facade(store).refundPayment({ sessionId: "ord_1" }));
+
+                    await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(1000, "USD"), state: "refunded" });
+                    expect(refundPayment).toHaveBeenCalledTimes(1);
+                } finally {
+                    vi.useRealTimers();
+                }
+            },
+        );
+
         it("does not let settlePendingRefund take over a call that claimed the session just after settle read its marker", async () => {
             expect.assertions(1);
 
