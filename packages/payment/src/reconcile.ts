@@ -21,6 +21,7 @@ import { usageForwardIsIdempotent } from "./idempotency";
 import { addMoney, compareMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
+import { REFUND_RANK, refundRungKept } from "./state-machine";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
 import { storeSubscription } from "./subscription-policy";
@@ -106,14 +107,6 @@ const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSe
     !sameCurrencyAmount(existing.refundedAmount, current.refundedAmount);
 
 /**
- * How far a payment has progressed through being refunded. The refunded total only ever moves
- * forward on a merge, so the state that labels it must not move backward either — states outside
- * this ladder (`initiated`, `authorized`, `failed`, `canceled`) are not refund progress and are
- * left entirely to provider truth.
- */
-const REFUND_RANK: Partial<Record<PaymentState, number>> = { captured: 0, partially_refunded: 1, refunded: 2 };
-
-/**
  * The money has already moved, so a refund total plus the stored disputes past the capture is
  * recorded as the capture, as the facade's write paths do: above it, every remainder goes negative.
  */
@@ -179,9 +172,7 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
     const reported =
         sameRefundCurrency && disputedAmount !== undefined ? capAtCapture(addMoney(current.refundedAmount, disputedAmount), current) : current.refundedAmount;
     const refundedAmount = sameRefundCurrency && compareMoney(existing.refundedAmount, reported) > 0 ? existing.refundedAmount : reported;
-    const existingRank = REFUND_RANK[existing.state];
-    const currentRank = REFUND_RANK[current.state];
-    const ladderState = existingRank !== undefined && currentRank !== undefined && currentRank < existingRank ? existing.state : current.state;
+    const ladderState = refundRungKept(existing.state, current.state);
 
     return {
         ...current,

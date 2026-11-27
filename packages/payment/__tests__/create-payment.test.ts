@@ -4,7 +4,14 @@ import type { PaymentAdapter } from "../src/adapter";
 import type { CreatePaymentOptions, WebhookOutcome } from "../src/create-payment";
 import { createPayment, webhookResponse } from "../src/create-payment";
 import { LunoraPaymentError } from "../src/errors";
-import { derivedIdempotencyKey, heldClaimFor, PENDING_REFUND_CLAIM_TYPE, pendingRefundHeldKey, pendingRefundKey } from "../src/idempotency";
+import {
+    derivedIdempotencyKey,
+    heldClaimFor,
+    PENDING_REFUND_CLAIM_TYPE,
+    pendingRefundHeldKey,
+    pendingRefundKey,
+    UNBOOKED_REFUND_LEASE_MS,
+} from "../src/idempotency";
 import { money } from "../src/money";
 import type { PaymentEvent, PaymentObserver } from "../src/observability";
 import type { StripeClientLike } from "../src/providers/stripe";
@@ -12,7 +19,7 @@ import { createStripeAdapter } from "../src/providers/stripe";
 import type { PaymentStore, RevisionGuard } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
-import type { CheckoutRequest, PaymentSession, ProviderRefund, Subscription, WebhookAction } from "../src/types";
+import type { CheckoutRequest, PaymentSession, ProviderId, ProviderRefund, Subscription, WebhookAction } from "../src/types";
 import { MAX_WEBHOOK_BODY_BYTES } from "../src/webhook-body";
 
 const subscription = (referenceId: string, state: Subscription["state"]): Subscription => {
@@ -756,6 +763,495 @@ describe("createPayment", () => {
         // The refunded TOTAL is recorded from what this call issued, not left to the webhook: it is
         // what stops a retry from issuing the refund a second time.
         expect(stored?.refundedAmount.minorUnits).toBe(300n);
+    });
+
+    it("keeps a lost dispute that commits between the refund's re-read of the row and its write", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_1"));
+
+        // The dispute webhook lands on the first session write the facade makes, which is the refund's own.
+        let dispute: (() => Promise<unknown>) | undefined = async () =>
+            applyWebhookAction(store, {
+                amount: money(200, "USD"),
+                eventId: "evt_dispute",
+                provider: "stripe",
+                refundId: "dp_1",
+                reversal: "dispute",
+                sessionId: "pi_1",
+                type: "payment.refunded",
+            });
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) => {
+                const land = dispute;
+
+                dispute = undefined;
+                await land?.();
+
+                return store.upsertPaymentSession(session, guard);
+            },
+        }) as PaymentStore;
+        const adapter = fakeAdapter({
+            refundPayment: async () => {
+                return { ...paymentSession("user_1"), refundedAmount: money(300, "USD"), refundId: "re_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await payment.refundPayment({ amount: money(300, "USD"), sessionId: "pi_1" });
+
+        const stored = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(stored?.refundedAmount.minorUnits).toBe(500n);
+        expect(stored?.disputedAmount?.minorUnits).toBe(200n);
+        expect(stored?.state).toBe("partially_refunded");
+    });
+
+    it("keeps an unkeyed refund held when its ledger write loses every attempt, so a retry issues nothing", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        const losing = Object.assign(Object.create(store) as object, {
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) => (guard === undefined ? store.upsertPaymentSession(session) : false),
+        }) as PaymentStore;
+        const refundPayment = vi.fn<PaymentAdapter["refundPayment"]>(async () => {
+            return { ...polarSession, refundedAmount: money(300, "USD"), refundId: "ref_1" };
+        });
+        const payment = createPayment({
+            adapter: fakeAdapter({ identifier: "polar", refundPayment }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store: losing,
+        });
+
+        await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+        expect(refundPayment).toHaveBeenCalledTimes(1);
+
+        // The confirming webhook still books the money, since the refund's own marker was given back.
+        await applyWebhookAction(store, {
+            amount: money(300, "USD"),
+            eventId: "evt_ok",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "ord_1",
+            type: "payment.refunded",
+        });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
+    });
+
+    it("keeps the refund rung a webhook booked just before a guarded capture write", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession({ ...paymentSession("user_1"), capturedAmount: money(0, "USD"), state: "authorized" });
+
+        let land: (() => Promise<unknown>) | undefined = async () => {
+            await applyWebhookAction(store, {
+                amount: money(1000, "USD"),
+                eventId: "evt_capture",
+                provider: "stripe",
+                sessionId: "pi_1",
+                type: "payment.captured",
+            });
+            await applyWebhookAction(store, {
+                amount: money(300, "USD"),
+                eventId: "evt_refund",
+                provider: "stripe",
+                refundId: "re_1",
+                sessionId: "pi_1",
+                type: "payment.refunded",
+            });
+        };
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) => {
+                const hook = land;
+
+                land = undefined;
+                await hook?.();
+
+                return store.upsertPaymentSession(session, guard);
+            },
+        }) as PaymentStore;
+        const adapter = fakeAdapter({
+            capturePayment: async () => {
+                return { ...paymentSession("user_1"), state: "captured" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await payment.capturePayment({ sessionId: "pi_1" });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({
+            capturedAmount: money(1000, "USD"),
+            refundedAmount: money(300, "USD"),
+            state: "partially_refunded",
+        });
+    });
+
+    describe("a refund the provider issued that the ledger did not record", () => {
+        const confirming = (refundId: string, minorUnits: number): WebhookAction => {
+            return { amount: money(minorUnits, "USD"), eventId: `evt_${refundId}`, provider: "polar", refundId, sessionId: "ord_1", type: "payment.refunded" };
+        };
+
+        /** A Polar facade whose provider lists the refunds it issued; `refundId` names the one the next call gets. */
+        const issuingSetup = async (store: MemoryPaymentStore, facadeStore: PaymentStore = store) => {
+            const session = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+            await store.upsertPaymentSession(session);
+
+            const providerRefunds: ProviderRefund[] = [];
+            const next = { refundId: "ref_1" };
+            const refundPayment = vi.fn<PaymentAdapter["refundPayment"]>(async (input) => {
+                const amount = input.amount ?? session.capturedAmount;
+
+                if (!providerRefunds.some((refund) => refund.refundId === next.refundId)) {
+                    providerRefunds.push({ amount, refundId: next.refundId, status: "succeeded" });
+                }
+
+                return { ...session, refundedAmount: amount, refundId: next.refundId };
+            });
+            const adapter = fakeAdapter({ identifier: "polar", listRefunds: async () => [...providerRefunds], refundPayment });
+            const facade = (over: PaymentStore) => createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: over });
+
+            return { facade, next, payment: facade(facadeStore), providerRefunds, refundPayment };
+        };
+
+        it("keeps the session blocked when cleanup fails after a lost ledger write, so a retry issues nothing", async () => {
+            expect.assertions(3);
+
+            const store = new MemoryPaymentStore();
+            let failing = true;
+            const flaky = Object.assign(Object.create(store) as object, {
+                releaseEvent: async (provider: ProviderId, eventId: string, ifType?: string) => {
+                    if (failing && eventId.startsWith("local-refund:")) {
+                        throw new Error("release failed");
+                    }
+
+                    return store.releaseEvent(provider, eventId, ifType);
+                },
+                upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) =>
+                    failing && guard !== undefined ? false : store.upsertPaymentSession(session, guard),
+            }) as PaymentStore;
+            const { payment, refundPayment } = await issuingSetup(store, flaky);
+
+            await expect(payment.refundPayment({ sessionId: "ord_1" })).rejects.toBeInstanceOf(Error);
+
+            failing = false;
+
+            // The retry books the issued refund from the provider's list, leaving nothing to refund.
+            await expect(payment.refundPayment({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(1000, "USD"), state: "refunded" });
+            expect(refundPayment).toHaveBeenCalledTimes(1);
+        });
+
+        it("books the refund when its webhook and the redelivery were both acknowledged during a failed ledger write", async () => {
+            expect.assertions(3);
+
+            const store = new MemoryPaymentStore();
+            let losing = true;
+            const answers: unknown[] = [];
+            const racing = Object.assign(Object.create(store) as object, {
+                upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) => {
+                    if (!losing || guard === undefined) {
+                        return store.upsertPaymentSession(session, guard);
+                    }
+
+                    if (answers.length === 0) {
+                        answers.push(await applyWebhookAction(store, confirming("ref_1", 1000)), await applyWebhookAction(store, confirming("ref_1", 1000)));
+                    }
+
+                    return false;
+                },
+            }) as PaymentStore;
+            const { payment, refundPayment } = await issuingSetup(store, racing);
+
+            await expect(payment.refundPayment({ sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            losing = false;
+
+            await expect(payment.refundPayment({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(1000, "USD"), state: "refunded" });
+            expect(refundPayment).toHaveBeenCalledTimes(1);
+        });
+
+        const milestone = () => {
+            let settle: () => void = () => {};
+            const promise = new Promise<void>((resolve) => {
+                settle = resolve;
+            });
+
+            return { promise, resolve: settle };
+        };
+
+        /** A store whose first guarded session write signals `atWrite`, waits for `resume`, then `loses` or applies. */
+        const gatedStore = (store: MemoryPaymentStore, loses: "first" | "all") => {
+            const atWrite = milestone();
+            const resume = milestone();
+            let first = true;
+            const gated = Object.assign(Object.create(store) as object, {
+                upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard): Promise<boolean> => {
+                    if (guard === undefined) {
+                        return store.upsertPaymentSession(session);
+                    }
+
+                    if (first) {
+                        first = false;
+                        atWrite.resolve();
+                        await resume.promise;
+
+                        return false;
+                    }
+
+                    return loses === "all" ? false : store.upsertPaymentSession(session, guard);
+                },
+            }) as PaymentStore;
+
+            return { atWrite: atWrite.promise, gated, resume: resume.resolve };
+        };
+
+        it("books the refund of a call that stopped during its ledger write, once its lease has run out", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers({ toFake: ["Date"] });
+
+            try {
+                const store = new MemoryPaymentStore();
+                const { atWrite, gated } = gatedStore(store, "all");
+                const { facade, refundPayment } = await issuingSetup(store, gated);
+
+                // Never settles: the call is abandoned where its isolate stopped.
+                facade(gated)
+                    .refundPayment({ sessionId: "ord_1" })
+                    .catch(() => undefined);
+                await atWrite;
+                await applyWebhookAction(store, confirming("ref_1", 1000));
+
+                // Until the lease runs out, the stopped call cannot be told from one still writing.
+                await expect(facade(store).refundPayment({ sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+                vi.setSystemTime(Date.now() + UNBOOKED_REFUND_LEASE_MS);
+
+                await expect(facade(store).refundPayment({ sessionId: "ord_1" })).resolves.toMatchObject({
+                    refundedAmount: money(1000, "USD"),
+                    state: "refunded",
+                });
+                expect(refundPayment).toHaveBeenCalledTimes(1);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("books a failed call's refund at once from the provider's list, though its webhook was acknowledged", async () => {
+            expect.assertions(3);
+
+            const store = new MemoryPaymentStore();
+            const { atWrite, gated, resume } = gatedStore(store, "all");
+            const { facade, providerRefunds } = await issuingSetup(store, gated);
+            const first = facade(gated).refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            await atWrite;
+            // A refund made in the dashboard settles meanwhile, which also settles the first call's pending marker.
+            providerRefunds.push({ amount: money(100, "USD"), refundId: "ref_x", status: "succeeded" });
+            await applyWebhookAction(store, confirming("ref_x", 100));
+            await applyWebhookAction(store, confirming("ref_1", 300));
+            resume();
+
+            await expect(first).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            await facade(store).settlePendingRefund({ sessionId: "ord_1" });
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(400, "USD") });
+            await expect(applyWebhookAction(store, { ...confirming("ref_1", 300), eventId: "evt_ref_1_again" })).resolves.toMatchObject({
+                reason: "duplicate",
+            });
+        });
+
+        it("lets a call whose record was taken over past its lease stop writing, so its refund is not added twice", async () => {
+            expect.assertions(1);
+
+            vi.useFakeTimers({ toFake: ["Date"] });
+
+            try {
+                const store = new MemoryPaymentStore();
+                const { atWrite, gated, resume } = gatedStore(store, "first");
+                const { facade, next, providerRefunds } = await issuingSetup(store, gated);
+                const first = facade(gated).refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+                await atWrite;
+                providerRefunds.push({ amount: money(100, "USD"), refundId: "ref_x", status: "succeeded" });
+                await applyWebhookAction(store, confirming("ref_x", 100));
+                vi.setSystemTime(Date.now() + UNBOOKED_REFUND_LEASE_MS);
+                next.refundId = "ref_2";
+                // The second call books the first call's refund from the provider's list, then issues and books its own.
+                await facade(store).refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+                resume();
+                await first;
+
+                await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(600, "USD") });
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("releases the pending claim and keeps the earlier refund recorded when the provider's list fails during a takeover", async () => {
+            expect.assertions(4);
+
+            const store = new MemoryPaymentStore();
+            let losing = true;
+            const racing = Object.assign(Object.create(store) as object, {
+                upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) =>
+                    losing && guard !== undefined ? false : store.upsertPaymentSession(session, guard),
+            }) as PaymentStore;
+            const { facade, providerRefunds, refundPayment } = await issuingSetup(store, racing);
+
+            await expect(facade(racing).refundPayment({ sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            losing = false;
+
+            const listed = [...providerRefunds];
+            const failingList = createPayment({
+                adapter: fakeAdapter({
+                    identifier: "polar",
+                    listRefunds: async () => {
+                        throw new Error("polar unavailable");
+                    },
+                    refundPayment,
+                }),
+                authorize: () => true,
+                store,
+            });
+
+            await expect(failingList.refundPayment({ sessionId: "ord_1" })).rejects.toThrow("polar unavailable");
+
+            providerRefunds.splice(0, providerRefunds.length, ...listed);
+
+            await expect(facade(store).refundPayment({ sessionId: "ord_1" })).resolves.toMatchObject({ refundedAmount: money(1000, "USD"), state: "refunded" });
+            expect(refundPayment).toHaveBeenCalledTimes(1);
+        });
+
+        it("does not let a second call take over while the first call's refund is in flight after a webhook released its marker", async () => {
+            expect.assertions(3);
+
+            const store = new MemoryPaymentStore();
+            const { atWrite, gated, resume } = gatedStore(store, "first");
+            const { facade, next, providerRefunds } = await issuingSetup(store, gated);
+            const first = facade(gated).refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            await atWrite;
+            // The provider has not listed the first refund yet; a dashboard refund's webhook releases the first call's marker.
+            providerRefunds.splice(0, providerRefunds.length, { amount: money(100, "USD"), refundId: "ref_x", status: "succeeded" });
+            await applyWebhookAction(store, confirming("ref_x", 100));
+            next.refundId = "ref_2";
+
+            await expect(facade(store).refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+            resume();
+            await first;
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(400, "USD") });
+            await expect(facade(store).refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" })).resolves.toMatchObject({
+                refundedAmount: money(600, "USD"),
+            });
+        });
+
+        it("keeps the record when the confirming webhook has claimed the refund but not yet written it", async () => {
+            expect.assertions(2);
+
+            const store = new MemoryPaymentStore();
+            const { facade, providerRefunds, refundPayment } = await issuingSetup(store);
+            const webhook = gatedStore(store, "first");
+            let webhookDone: Promise<unknown> = Promise.resolve();
+
+            // The provider settles the refund and its webhook claims it before the call's answer arrives; the
+            // webhook's row write is still to come.
+            refundPayment.mockImplementationOnce(async () => {
+                providerRefunds.push({ amount: money(600, "USD"), refundId: "ref_1", status: "succeeded" });
+                webhookDone = applyWebhookAction(webhook.gated, confirming("ref_1", 600));
+                await webhook.atWrite;
+
+                return { ...paymentSession("user_1"), id: "ord_1", provider: "polar", refundedAmount: money(600, "USD"), refundId: "ref_1" };
+            });
+
+            await facade(store).refundPayment({ amount: money(600, "USD"), sessionId: "ord_1" });
+
+            // The earlier refund is booked from the provider's list first, so this one is measured against it.
+            await expect(facade(store).refundPayment({ amount: money(600, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+            webhook.resume();
+            await webhookDone;
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(600, "USD") });
+        });
+
+        it.each(["settlePendingRefund", "refundPayment"] as const)(
+            "books a stopped call's settled refund through %s once its lease has run out, with no webhook",
+            async (entry) => {
+                expect.assertions(2);
+
+                vi.useFakeTimers({ toFake: ["Date"] });
+
+                try {
+                    const store = new MemoryPaymentStore();
+                    const { atWrite, gated } = gatedStore(store, "all");
+                    const { facade, refundPayment } = await issuingSetup(store, gated);
+
+                    // Never settles: the call is abandoned where its isolate stopped, its pending claim still standing.
+                    facade(gated)
+                        .refundPayment({ sessionId: "ord_1" })
+                        .catch(() => undefined);
+                    await atWrite;
+                    vi.setSystemTime(Date.now() + UNBOOKED_REFUND_LEASE_MS);
+
+                    await (entry === "settlePendingRefund"
+                        ? facade(store).settlePendingRefund({ sessionId: "ord_1" })
+                        : facade(store).refundPayment({ sessionId: "ord_1" }));
+
+                    await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(1000, "USD"), state: "refunded" });
+                    expect(refundPayment).toHaveBeenCalledTimes(1);
+                } finally {
+                    vi.useRealTimers();
+                }
+            },
+        );
+
+        it("does not let settlePendingRefund take over a call that claimed the session just after settle read its marker", async () => {
+            expect.assertions(1);
+
+            const store = new MemoryPaymentStore();
+            const { atWrite, gated, resume } = gatedStore(store, "first");
+            const { facade, providerRefunds } = await issuingSetup(store, gated);
+            let first: Promise<PaymentSession> | undefined;
+            let readOnce = true;
+            // settle reads the pending marker as absent; the refund call then claims the session before settle goes on.
+            const settling = Object.assign(Object.create(store) as object, {
+                getEventClaim: async (provider: ProviderId, eventId: string) => {
+                    const claim = await store.getEventClaim(provider, eventId);
+
+                    if (readOnce && eventId === pendingRefundKey("ord_1")) {
+                        readOnce = false;
+                        first = facade(gated).refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+                        await atWrite;
+                        // The provider has not listed the refund yet.
+                        providerRefunds.length = 0;
+                    }
+
+                    return claim;
+                },
+            }) as PaymentStore;
+
+            await facade(settling).settlePendingRefund({ sessionId: "ord_1" });
+            resume();
+            await first;
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
+        });
     });
 
     it("records the refund it issued, so a second refund never reaches the provider", async () => {
@@ -1642,8 +2138,8 @@ describe("createPayment", () => {
             expect(listRefunds).not.toHaveBeenCalled();
         });
 
-        it("keeps a newer call's hold when an earlier call settles after a webhook released its own", async () => {
-            expect.assertions(1);
+        it("refuses a second call while an earlier call is in flight, though a webhook released the earlier call's hold", async () => {
+            expect.assertions(2);
 
             const { payment, refundPayment, store } = await settleSetup("polar");
             let answer: (() => void) | undefined;
@@ -1675,12 +2171,14 @@ describe("createPayment", () => {
                 sessionId: "ord_1",
                 type: "payment.refunded",
             });
-            await payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" });
+
+            // The first call may still book its refund, so a second one waits for it.
+            await expect(payment.refundPayment({ amount: money(200, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
 
             answer?.();
             await first;
 
-            await expect(payment.refundPayment({ amount: money(100, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
         });
 
         it("keeps the hold after a provider call that failed without an answer, until settlePendingRefund reads the outcome", async () => {

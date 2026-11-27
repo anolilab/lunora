@@ -13,7 +13,7 @@ import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentAction, SubscriptionAction } from "./state-machine";
 import { nextPaymentState, nextSubscriptionState } from "./state-machine";
-import type { PaymentStore } from "./store";
+import type { PaymentStore, RevisionGuard } from "./store";
 import { ownerOf } from "./store";
 import { ENTITLING_STATES, storeSubscription, swapPrimaryPrice } from "./subscription-policy";
 import type { ApplyResult, Money, PaymentSession, PaymentState, Subscription, SubscriptionState, WebhookAction, WebhookActionType } from "./types";
@@ -47,6 +47,9 @@ const SUBSCRIPTION_ACTION_BY_TYPE: Partial<Record<WebhookActionType, Subscriptio
     "subscription.past_due": "mark_past_due",
     "subscription.paused": "pause",
 };
+
+/** How often a payment event re-reads its row and recomputes after a concurrent write beat its guarded write. */
+const SESSION_WRITE_ATTEMPTS = 3;
 
 /**
  * States in which the money has not been captured yet. A refund that lands on one of them is
@@ -208,7 +211,10 @@ const refundedTotalFor = (base: PaymentSession, action: WebhookAction): Money | 
     const prospective = addMoney(base.refundedAmount, action.amount);
 
     if (compareMoney(prospective, base.capturedAmount) > 0) {
-        return undefined;
+        // A lost dispute has already taken the money back, so refusing it would acknowledge the webhook and
+        // record it nowhere; it is capped at the capture as the absolute branch caps the same sum. An ordinary
+        // refund past the capture is still refused, and so is a dispute that alone exceeds it.
+        return action.reversal === "dispute" && compareMoney(action.amount, base.capturedAmount) <= 0 ? base.capturedAmount : undefined;
     }
 
     return prospective;
@@ -262,52 +268,56 @@ const adoptOrphanSubscription = async (store: PaymentStore, action: WebhookActio
 
 /**
  * Fill what a stored session is missing — a blank owner, the subscription link — from any later
- * event, even one whose own transition is a no-op. Never moves an established owner.
+ * event, even one whose own transition is a no-op. Never moves an established owner. Answers the row
+ * as stored afterwards, or `undefined` when a concurrent write moved it since `existing` was read.
  */
 const adoptOrphanSession = async (
     store: PaymentStore,
     existing: PaymentSession | undefined,
     action: WebhookAction,
     now: number,
-): Promise<PaymentSession | undefined> => {
+): Promise<{ readonly session: PaymentSession | undefined } | undefined> => {
     if (!existing) {
-        return existing;
+        return { session: existing };
     }
 
     const referenceId = ownerOf(existing.referenceId, action.referenceId);
     const subscriptionId = existing.subscriptionId ?? action.subscriptionId;
 
     if (referenceId === existing.referenceId && subscriptionId === existing.subscriptionId) {
-        return existing;
+        return { session: existing };
     }
 
-    const adopted = { ...existing, referenceId, subscriptionId, updatedAt: now };
+    // Guarded like the event's own write: an unguarded snapshot would undo a write that landed since the read.
+    if (!(await store.upsertPaymentSession({ ...existing, referenceId, subscriptionId, updatedAt: now }, { ifRevision: existing.revision }))) {
+        return undefined;
+    }
 
-    await store.upsertPaymentSession(adopted);
-
-    return adopted;
+    // Re-read rather than predict the revision the store gave this write: the event's own write is guarded on it.
+    return { session: await store.getPaymentSession(action.provider, existing.id) };
 };
 
 /**
- * Write a payment session row. A failed write releases the refund claim first: the claim is taken
- * before the row, because a concurrent restatement of the same refund must not double-count while
- * this write is in flight. There is no transaction across the two, so a failed write would otherwise
- * leave the claim standing, and the provider's retry — which the caller's rethrow triggers — would
- * zero the amount and lose the refund entirely.
+ * Write a payment session row, guarded on the revision it was derived from. `undefined` means a
+ * concurrent write moved the row first: nothing was written, and the caller recomputes from a re-read.
  *
  * A value the store cannot hold (a money amount beyond 2^53 minor units) fails the same way on every
  * retry, so retrying only keeps the event undelivered. Nothing was written: that case answers
- * `unstorable`, so the provider stops and the observer records the reason. Any other failure rethrows.
+ * `unstorable` and gives the refund claim back, so the provider stops and the observer records the
+ * reason. Any other failure rethrows, and `applyPayment` gives the claim back.
  */
-const writeSession = async (store: PaymentStore, session: PaymentSession, refund: RefundFold | undefined): Promise<ApplyResult | undefined> => {
+const writeSession = async (
+    store: PaymentStore,
+    session: PaymentSession,
+    guard: RevisionGuard,
+    refund: RefundFold | undefined,
+): Promise<ApplyResult | undefined> => {
     try {
-        await store.upsertPaymentSession(session);
-
-        return undefined;
+        return (await store.upsertPaymentSession(session, guard)) ? { applied: true, reason: "ok" } : undefined;
     } catch (error) {
-        await refund?.release();
-
         if (error instanceof LunoraPaymentError && error.code === "VALIDATION_ERROR") {
+            await refund?.release();
+
             return { applied: false, reason: "unstorable" };
         }
 
@@ -315,45 +325,24 @@ const writeSession = async (store: PaymentStore, session: PaymentSession, refund
     }
 };
 
-const applyPayment = async (
+/**
+ * One pass of {@link applyPayment} over the row as read. `undefined` means a concurrent write beat this
+ * pass's guarded write, and the caller re-reads; every other path returns its result.
+ */
+const applyPaymentTo = async (
     store: PaymentStore,
-    action: WebhookAction,
+    action: WebhookAction & { readonly sessionId: string },
     paymentAction: PaymentAction,
-    observer: PaymentObserver | undefined,
-    singleSubscriptionPerReference: boolean,
-): Promise<ApplyResult> => {
-    if (!action.sessionId) {
-        return { applied: false, reason: "unhandled" };
-    }
-
-    // No amount means no way to book it: resolving one as a FULL refund flipped the row to
-    // `refunded` with nothing in `refundedAmount`, and the next `refundPayment` then issued the whole
-    // captured amount again. Acknowledged (200) rather than orphaned — a retry carries no amount either.
-    if (!action.amount && paymentAction === "refund") {
-        return { applied: false, reason: "invalid_refund_amount" };
-    }
-
-    let existing = await store.getPaymentSession(action.provider, action.sessionId);
-    const fromState: PaymentState = existing?.state ?? "initiated";
-    const now = Date.now();
-
-    // Before the FSM gate: ownership does not depend on whether this event's transition is legal.
-    existing = await adoptOrphanSession(store, existing, action, now);
-    const adopted = await adoptOrphanSubscription(store, action, now, singleSubscriptionPerReference);
-
-    if (!adopted) {
-        // The capture still books. Only the owner is not adopted, and the operator is told which subscription to cancel.
-        notifyObserver(observer, { provider: action.provider, subscriptionId: action.subscriptionId ?? "", type: "subscription.duplicate" });
-    }
-
-    const currency = action.amount?.currency ?? existing?.amount.currency ?? "USD";
-
-    const refund = paymentAction === "refund" ? await foldRefundOnce(store, action, existing) : undefined;
-
+    existing: PaymentSession | undefined,
+    refund: RefundFold | undefined,
+    now: number,
+): Promise<ApplyResult | undefined> => {
     if (refund?.booked) {
         return { applied: false, reason: "duplicate" };
     }
 
+    const fromState: PaymentState = existing?.state ?? "initiated";
+    const currency = action.amount?.currency ?? existing?.amount.currency ?? "USD";
     const resolvedAction = paymentAction === "refund" ? resolveRefundAction(existing, action) : paymentAction;
 
     const toState = nextPaymentState(fromState, resolvedAction);
@@ -403,17 +392,85 @@ const applyPayment = async (
 
     const disputed = disputedAfter(base, action, resolvedAction);
 
-    const unstorable = await writeSession(
+    // `existing?.revision` is `undefined` for a missing row and for one written before the counter
+    // existed; either guard still fails once another write lands, because every write bumps it.
+    return writeSession(
         store,
         { ...base, capturedAmount, ...disputed, referenceId: ownerOf(base.referenceId, action.referenceId), refundedAmount, state: toState, updatedAt: now },
+        { ifRevision: existing?.revision },
         refund,
     );
+};
 
-    if (unstorable) {
-        return unstorable;
+const applyPayment = async (
+    store: PaymentStore,
+    action: WebhookAction,
+    paymentAction: PaymentAction,
+    observer: PaymentObserver | undefined,
+    singleSubscriptionPerReference: boolean,
+): Promise<ApplyResult> => {
+    const { sessionId } = action;
+
+    if (!sessionId) {
+        return { applied: false, reason: "unhandled" };
     }
 
-    return { applied: true, reason: "ok" };
+    // No amount means no way to book it: resolving one as a FULL refund flipped the row to
+    // `refunded` with nothing in `refundedAmount`, and the next `refundPayment` then issued the whole
+    // captured amount again. Acknowledged (200) rather than orphaned — a retry carries no amount either.
+    if (!action.amount && paymentAction === "refund") {
+        return { applied: false, reason: "invalid_refund_amount" };
+    }
+
+    const now = Date.now();
+    const adopted = await adoptOrphanSubscription(store, action, now, singleSubscriptionPerReference);
+
+    if (!adopted) {
+        // The capture still books. Only the owner is not adopted, and the operator is told which subscription to cancel.
+        notifyObserver(observer, { provider: action.provider, subscriptionId: action.subscriptionId ?? "", type: "subscription.duplicate" });
+    }
+
+    // Taken once per event, not per pass: a pass that loses the row writes nothing, so the claim still
+    // stands for the money this event carries, and claiming again would find it taken and answer
+    // `duplicate`. A refund reaches a write only on an existing row, and rows are never removed, so a
+    // pass that folded with no row ends without retrying.
+    let refund: RefundFold | undefined;
+
+    // The refund claim is taken before the row, because a concurrent restatement of the same refund must
+    // not double-count while this event is in flight, and there is no transaction across the two. Any
+    // exit without a write gives it back, a throw from a later pass included: the throw releases the
+    // event claim too, and a redelivery that found this refund claimed would book nothing.
+    try {
+        for (let attempt = 0; attempt < SESSION_WRITE_ATTEMPTS; attempt += 1) {
+            // Before the FSM gate: ownership does not depend on whether this event's transition is legal.
+            // eslint-disable-next-line no-await-in-loop -- each pass re-reads the row the last one lost to
+            const adoption = await adoptOrphanSession(store, await store.getPaymentSession(action.provider, sessionId), action, now);
+
+            if (adoption === undefined) {
+                continue;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- once per event, see `refund` above
+            refund ??= paymentAction === "refund" ? await foldRefundOnce(store, action, adoption.session) : undefined;
+
+            // eslint-disable-next-line no-await-in-loop -- see the read above
+            const result = await applyPaymentTo(store, { ...action, sessionId }, paymentAction, adoption.session, refund, now);
+
+            if (result !== undefined) {
+                return result;
+            }
+        }
+
+        // Never written unguarded: that would undo whatever beat it. The provider redelivers instead.
+        throw new LunoraPaymentError(
+            "INVALID_TRANSITION",
+            `payment session "${sessionId}" kept changing while a webhook applied; the provider will redeliver it`,
+        );
+    } catch (error) {
+        await refund?.release();
+
+        throw error;
+    }
 };
 
 /**

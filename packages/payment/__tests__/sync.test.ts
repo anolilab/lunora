@@ -4,6 +4,7 @@ import { hasActivePrice } from "../src/entitlements";
 import { LunoraPaymentError } from "../src/errors";
 import { money } from "../src/money";
 import type { PaymentObserver } from "../src/observability";
+import type { PaymentStore, RevisionGuard } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
 import type { PaymentSession, ProviderId, WebhookAction } from "../src/types";
@@ -1550,6 +1551,37 @@ describe("applyWebhookAction — a lost dispute beside refunds", () => {
         expect(session?.state).toBe("refunded");
     });
 
+    it("books a lost dispute whose sum with the stored refunds passes the capture, capped at the capture", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, refundTotal("evt_refund", 80));
+
+        const result = await applyWebhookAction(store, disputeLost("evt_dispute"));
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(result).toStrictEqual({ applied: true, reason: "ok" });
+        expect(session?.refundedAmount.minorUnits).toBe(100n);
+        expect(session?.disputedAmount?.minorUnits).toBe(30n);
+        expect(session?.state).toBe("refunded");
+    });
+
+    it("still refuses an ordinary refund delta whose sum with the stored refunds passes the capture", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, refundTotal("evt_refund", 80));
+
+        const result = await applyWebhookAction(store, { ...disputeLost("evt_refund_delta"), refundId: "re_2", reversal: undefined });
+
+        expect(result.reason).toBe("invalid_refund_amount");
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(80n);
+    });
+
     it("still refuses a refund total that alone exceeds the capture", async () => {
         expect.assertions(2);
 
@@ -1563,5 +1595,195 @@ describe("applyWebhookAction — a lost dispute beside refunds", () => {
 
         expect(result.reason).toBe("invalid_refund_amount");
         expect(session?.refundedAmount.minorUnits).toBe(30n);
+    });
+});
+
+describe("applyWebhookAction — a payment event racing another write to its row", () => {
+    const capture: WebhookAction = {
+        amount: money(100, "USD"),
+        eventId: "evt_capture",
+        provider: "stripe",
+        referenceId: "user_1",
+        sessionId: "pi_1",
+        type: "payment.captured",
+    };
+
+    /** Lands `land` once, between the next payment event's read of its row and that event's write. */
+    const racing = (store: MemoryPaymentStore, land: () => Promise<unknown>): PaymentStore => {
+        let pending: (() => Promise<unknown>) | undefined = land;
+
+        return Object.assign(Object.create(store) as object, {
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard): Promise<boolean> => {
+                const hook = pending;
+
+                pending = undefined;
+                await hook?.();
+
+                return store.upsertPaymentSession(session, guard);
+            },
+        }) as PaymentStore;
+    };
+
+    it("keeps a lost dispute that commits while an absolute refund total is being written", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+
+        const dispute: WebhookAction = {
+            amount: money(30, "USD"),
+            eventId: "evt_dispute",
+            provider: "stripe",
+            refundId: "dp_1",
+            reversal: "dispute",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+        const refundTotal: WebhookAction = {
+            amount: money(20, "USD"),
+            amountKind: "absolute",
+            eventId: "evt_refund",
+            provider: "stripe",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+
+        await expect(
+            applyWebhookAction(
+                racing(store, async () => applyWebhookAction(store, dispute)),
+                refundTotal,
+            ),
+        ).resolves.toStrictEqual({
+            applied: true,
+            reason: "ok",
+        });
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.refundedAmount.minorUnits).toBe(50n);
+        expect(session?.disputedAmount?.minorUnits).toBe(30n);
+        expect(session?.state).toBe("partially_refunded");
+    });
+
+    it("stores both of two first events for a payment that has no row yet", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const authorized: WebhookAction = { ...capture, eventId: "evt_authorized", type: "payment.authorized" };
+        // The capture carries no owner; only the authorization that commits first does.
+        const ownerless: WebhookAction = { ...capture, referenceId: undefined };
+
+        await expect(
+            applyWebhookAction(
+                racing(store, async () => applyWebhookAction(store, authorized)),
+                ownerless,
+            ),
+        ).resolves.toStrictEqual({
+            applied: true,
+            reason: "ok",
+        });
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.state).toBe("captured");
+        expect(session?.referenceId).toBe("user_1");
+    });
+
+    it("keeps a refund that commits while a redelivered capture is being written", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...capture, eventId: "evt_authorized", type: "payment.authorized" });
+
+        // Stripe reports one capture as both `payment_intent.succeeded` and `charge.succeeded`.
+        const land = async (): Promise<void> => {
+            await applyWebhookAction(store, { ...capture, eventId: "evt_charge" });
+            await applyWebhookAction(store, {
+                amount: money(30, "USD"),
+                eventId: "evt_refund",
+                provider: "stripe",
+                refundId: "re_1",
+                sessionId: "pi_1",
+                type: "payment.refunded",
+            });
+        };
+
+        await expect(applyWebhookAction(racing(store, land), capture)).resolves.toStrictEqual({ applied: false, reason: "illegal_transition" });
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.capturedAmount.minorUnits).toBe(100n);
+        expect(session?.refundedAmount.minorUnits).toBe(30n);
+        expect(session?.state).toBe("partially_refunded");
+    });
+
+    it("throws when every guarded write loses, and releases the refund claim for the redelivery", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...capture, provider: "polar" });
+
+        const losing = Object.assign(Object.create(store) as object, {
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard): Promise<boolean> =>
+                guard === undefined ? store.upsertPaymentSession(session) : false,
+        }) as PaymentStore;
+        const refund: WebhookAction = {
+            amount: money(30, "USD"),
+            eventId: "evt_refund",
+            provider: "polar",
+            refundId: "re_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+
+        await expect(applyWebhookAction(losing, refund)).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+        // The event claim and the refund claim both came back, so the redelivery books the money.
+        await expect(applyWebhookAction(store, refund)).resolves.toStrictEqual({ applied: true, reason: "ok" });
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(30n);
+    });
+
+    it("releases the refund claim when a later pass throws after a lost guarded write", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...capture, provider: "polar" });
+
+        let conflicted = false;
+        const flaky = Object.assign(Object.create(store) as object, {
+            getPaymentSession: async (provider: ProviderId, id: string): Promise<PaymentSession | undefined> => {
+                if (conflicted) {
+                    throw new Error("store read failed");
+                }
+
+                return store.getPaymentSession(provider, id);
+            },
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard): Promise<boolean> => {
+                if (guard !== undefined) {
+                    conflicted = true;
+
+                    return false;
+                }
+
+                return store.upsertPaymentSession(session);
+            },
+        }) as PaymentStore;
+        const refund: WebhookAction = {
+            amount: money(30, "USD"),
+            eventId: "evt_refund",
+            provider: "polar",
+            refundId: "re_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+
+        await expect(applyWebhookAction(flaky, refund)).rejects.toThrow("store read failed");
+
+        await expect(applyWebhookAction(store, refund)).resolves.toStrictEqual({ applied: true, reason: "ok" });
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(30n);
     });
 });

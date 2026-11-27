@@ -122,6 +122,48 @@ export const localRefundKey = (sessionId: string, refundId: string | undefined, 
 export const LOCAL_REFUND_CLAIM_TYPE = "marker.local_refund";
 
 /**
+ * Marker for a refund on `sessionId` the provider may have issued and the ledger may not hold yet.
+ *
+ * Claimed by `refundPayment` before it calls a provider that can list its refunds, and lifted only once no
+ * refund of that call is left off the ledger: the provider refused it, answered `pending` (the pending hold
+ * carries it from there), or the row write took it. Every other way out — a failed ledger write, a lost
+ * answer, a stopped isolate — leaves it standing, so nothing has to succeed for the session to stay blocked.
+ * Once its holder has ended (see {@link unbookedRefundDoneKey}) or its lease has run out, the next `refundPayment` or
+ * `settlePendingRefund` takes it over and books the provider's settled refunds before any further refund is issued. A confirming webhook acknowledged as a duplicate meanwhile loses
+ * nothing: the provider's list is what books the money.
+ */
+export const unbookedRefundKey = (sessionId: string): string => `unbooked-refund:${sessionId}`;
+
+/** Claim `type` prefix for an {@link unbookedRefundKey} marker. */
+export const UNBOOKED_REFUND_CLAIM_TYPE = "marker.unbooked_refund";
+
+/**
+ * How long an {@link unbookedRefundKey} record protects the call that claimed it. Far longer than a refund call waits
+ * on its provider, so a holder this old has stopped; until then a later call cannot tell it from one still running,
+ * whose refund a takeover could book before the provider lists it.
+ */
+export const UNBOOKED_REFUND_LEASE_MS: number = 15 * 60_000;
+
+/** The claim for an {@link unbookedRefundKey} record: the holder's token and when its lease started. */
+export const unbookedRefundClaim = (token: string, startedAt: number): string => `${UNBOOKED_REFUND_CLAIM_TYPE}:${token}:${String(startedAt)}`;
+
+/** The token and lease start an {@link unbookedRefundClaim} carries. */
+export const unbookedRefundClaimParts = (claim: string): { startedAt: number; token: string } => {
+    const [token = "", startedAt = "0"] = claim.slice(UNBOOKED_REFUND_CLAIM_TYPE.length + 1).split(":");
+
+    return { startedAt: Number(startedAt), token };
+};
+
+/**
+ * Set by the holder of an {@link unbookedRefundKey} record that ends with a refund possibly left off the ledger, so the
+ * next call can take the record over without waiting out the lease.
+ */
+export const unbookedRefundDoneKey = (sessionId: string, token: string): string => `unbooked-refund-done:${sessionId}:${token}`;
+
+/** Claim `type` recorded for an {@link unbookedRefundDoneKey} marker. */
+export const UNBOOKED_REFUND_DONE_CLAIM_TYPE = "marker.unbooked_refund_done";
+
+/**
  * Whether re-forwarding a recorded usage event to `provider` is safe, i.e. whether the key travels.
  *
  * `reconcile`'s usage sweep exists to retry a forward that failed — but a row can be unreported
