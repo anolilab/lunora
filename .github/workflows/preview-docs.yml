@@ -23,10 +23,13 @@
 
 # One run per pull request. deploy-docs.yml serialises its own state under
 # `deploy-docs-pr-<number>`; this group must NOT be that one, or caller and callee wait
-# on each other forever.
+# on each other forever. `queue: max` keeps every waiting run: with the default only one
+# can wait, so a later event (another label, a push) would replace a pending destroy,
+# skip both jobs, and leave the preview deployed until the pull request closes.
 "concurrency":
     "group": "preview-docs-${{ github.event.pull_request.number }}"
     "cancel-in-progress": false
+    "queue": "max"
 
 "permissions": {}
 

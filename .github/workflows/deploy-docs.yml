@@ -43,6 +43,7 @@
             - "package.json"
             - "project.json"
             - "tsconfig.base.json"
+            - "vis.config.ts"
             - "pnpm-lock.yaml"
             - "pnpm-workspace.yaml"
     "workflow_dispatch": {}
