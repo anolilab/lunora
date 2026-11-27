@@ -163,6 +163,8 @@ export const billingTables = {
         capturedMinor: v.number(),
         createdAt: v.number(),
         currency: v.string(),
+        // The part of `refundedMinor` that lost disputes reversed; absent means none.
+        disputedMinor: v.optional(v.number()),
         provider: v.string(),
         providerSessionId: v.string(),
         referenceId: v.string(),

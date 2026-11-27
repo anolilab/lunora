@@ -855,6 +855,7 @@ export const payment_sessions = sqliteTable("payment_sessions", {
     capturedMinor: real("capturedMinor").notNull(),
     createdAt: real("createdAt").notNull(),
     currency: text("currency").notNull(),
+    disputedMinor: real("disputedMinor"),
     provider: text("provider").notNull(),
     providerSessionId: text("providerSessionId").notNull(),
     referenceId: text("referenceId").notNull(),
