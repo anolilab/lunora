@@ -142,7 +142,7 @@ export const UNBOOKED_REFUND_CLAIM_TYPE = "marker.unbooked_refund";
  * on its provider, so a holder this old has stopped; until then a later call cannot tell it from one still running,
  * whose refund a takeover could book before the provider lists it.
  */
-export const UNBOOKED_REFUND_LEASE_MS = 15 * 60_000;
+export const UNBOOKED_REFUND_LEASE_MS: number = 15 * 60_000;
 
 /** The claim for an {@link unbookedRefundKey} record: the holder's token and when its lease started. */
 export const unbookedRefundClaim = (token: string, startedAt: number): string => `${UNBOOKED_REFUND_CLAIM_TYPE}:${token}:${String(startedAt)}`;
