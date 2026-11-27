@@ -244,7 +244,7 @@ describe("auth audit trail", () => {
             await appendAuthAuditEntry(executor, {
                 detail: { email: "victim@example.com" },
                 event: "sign-in",
-                outcome: "failure",
+                outcome: "success",
                 targetEmail: "victim@example.com",
                 ts: 1,
             });
@@ -503,7 +503,7 @@ describe("auth audit trail", () => {
          * address is invisible in the trail — this is the finding the plan opened
          * with.
          */
-        it("a FAILED /sign-in/email still carries the attempted `targetEmail`", () => {
+        it("a FAILED /sign-in/email entry carries the attempted `targetEmail` to the append, which digests it", () => {
             expect.assertions(2);
 
             const entry = buildAuditEntry({

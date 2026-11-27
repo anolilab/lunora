@@ -935,3 +935,14 @@ out), so a token or password that leaks into one never reaches the durable
 table. The trail lives in the reserved
 `__lunora_auth_audit__` table (auto-hidden from the data browser); retention is
 configurable via `retention` and defaults to unbounded.
+
+A sign-in row also carries `targetEmail`, the identifier the request attempted. On a
+successful sign-in it is the plain address. On a **failed** one it is whatever was typed into
+the field, often a stranger's address and sometimes a password pasted into the wrong box, so
+it is stored as a keyed digest, `hmac-sha256:<hex>`, under a key derived from the auth
+secret. The identifier is trimmed and lower-cased first, so every failed attempt against one
+address shares one digest: a SIEM receiving rows through `onRecord` still sees the digest
+rather than the text, and can group a credential-stuffing sweep by it. If you write a failed
+row yourself with `appendAuthAuditEntry` and pass no `hashKey`, the identifier is dropped.
+Rows recorded before this change keep the plain text they were written with; purge them if
+that matters to you.

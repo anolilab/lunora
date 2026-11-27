@@ -29,7 +29,11 @@ interface AuthAuditEntry {
     outcome: AuthAuditOutcome;
     /** Monotonic per-database cursor — strictly increasing, never reused. */
     seq: number;
-    /** Address the event targeted, when it names its target by address (an invitation, a created user). */
+
+    /**
+     * Address the event targeted, when it names its target by address: plain for a success (a sign-in, an invitation, a created
+     * user), and a keyed digest, `hmac-sha256:<hex>`, for a failed sign-in, whose identifier is caller-typed text.
+     */
     targetEmail?: string;
     /** Wall-clock millis when the event was recorded. */
     ts: number;

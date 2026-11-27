@@ -157,10 +157,13 @@ interface AuthAuditEntry {
 
     /**
      * The identifier (email or username) a sign-in-family request ATTEMPTED,
-     * read from the request body. Present for both successful and failed
-     * attempts — unlike `actorEmail` (which requires an authenticated
-     * session), this is what lets a FAILED credential-stuffing attempt be
-     * grouped by target. Same redaction exemption as `actorEmail`: a
+     * read from the request body, or the address an admin-plane event acted on.
+     * Plain text for a success. For a FAILED attempt it is a keyed digest,
+     * `hmac-sha256:<hex>` of the trimmed, lower-cased identifier, because that
+     * text is whatever the caller typed (sometimes a pasted password); it is
+     * absent when the writer passed no `hashKey`. Unlike `actorEmail` (which
+     * requires an authenticated session), this is what lets a FAILED
+     * credential-stuffing attempt be grouped by target. Same redaction exemption as `actorEmail`: a
      * top-level column, not a `detail` key, because `AUDIT_REDACT_RULES`
      * scrubs email-shaped values inside `detail` regardless of key name —
      * putting it there would erase exactly this datum. Length-capped to 320
@@ -269,6 +272,20 @@ const IDENTIFIER_DIGEST_CONTEXT = "lunora/auth-audit/failed-identifier";
 const hexOf = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /**
+ * The key a failed attempt's identifiers are digested under, derived for this purpose only. The hash key is the auth
+ * secret, which also signs cookies and URLs, so a row holding its MAC of caller-chosen text would hand that caller a
+ * signature.
+ */
+const identifierDigestKey = async (hashKey: string): Promise<CryptoKey> => {
+    const rootKey = await importHmacKey(hashKey);
+
+    return importHmacKey(hexOf(await crypto.subtle.sign("HMAC", rootKey, new TextEncoder().encode(IDENTIFIER_DIGEST_CONTEXT))));
+};
+
+const digestIdentifier = async (key: CryptoKey, value: string): Promise<string> =>
+    HASHED_IDENTIFIER_PREFIX + hexOf(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value)));
+
+/**
  * Replace the identifier values of a failed attempt with a keyed digest. Without a key the detail is left as written: the
  * hook always supplies the auth secret, and a direct writer is trusted with what it passes. Successful rows keep their ids.
  */
@@ -277,21 +294,31 @@ const protectFailedIdentifiers = async (detail: Record<string, unknown>, hashKey
         return detail;
     }
 
-    // Digest under a key derived for this purpose only. The hash key is the auth secret, which also signs cookies and URLs, so
-    // a row holding its MAC of caller-chosen text would hand that caller a signature.
-    const rootKey = await importHmacKey(hashKey);
-    const key = await importHmacKey(hexOf(await crypto.subtle.sign("HMAC", rootKey, new TextEncoder().encode(IDENTIFIER_DIGEST_CONTEXT))));
+    const key = await identifierDigestKey(hashKey);
     const digests = await Promise.all(
         Object.entries(detail)
             .filter(([name, value]) => IDENTIFIER_DETAIL_KEYS.has(name) && typeof value === "string")
-            .map(async ([name, value]) => {
-                const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(String(value)));
-
-                return [name, HASHED_IDENTIFIER_PREFIX + hexOf(mac)] as const;
-            }),
+            .map(async ([name, value]) => [name, await digestIdentifier(key, String(value))] as const),
     );
 
     return { ...detail, ...Object.fromEntries(digests) };
+};
+
+/**
+ * A failed sign-in's `targetEmail` is whatever was typed into the identifier field, sometimes a pasted password, so it is
+ * stored as a keyed digest, normalised so repeated attempts against one address still group. Without a key it is dropped
+ * rather than stored as text. Successful rows keep the address.
+ */
+const protectFailedTargetEmail = async (entry: AppendAuthAuditEntry, hashKey: string | undefined): Promise<string | undefined> => {
+    if (entry.outcome !== "failure" || entry.targetEmail === undefined) {
+        return entry.targetEmail;
+    }
+
+    if (hashKey === undefined) {
+        return undefined;
+    }
+
+    return digestIdentifier(await identifierDigestKey(hashKey), entry.targetEmail.trim().toLowerCase());
 };
 
 /** Redact the free-form detail, leaving the allow-listed identifier keys as the hooks wrote them. */
@@ -419,6 +446,8 @@ const appendAuthAuditEntry = async (
         detail = options.redactDetail === false ? scoped : redactDetail(scoped);
     }
 
+    const targetEmail = await protectFailedTargetEmail(entry, options.hashKey);
+
     await executor.run(
         `INSERT INTO "${AUTH_AUDIT_TABLE}" (ts, event, outcome, actor_id, actor_email, target_email, ip, user_agent, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -427,7 +456,7 @@ const appendAuthAuditEntry = async (
             entry.outcome,
             entry.actorId ?? SQL_NULL,
             entry.actorEmail ?? SQL_NULL,
-            entry.targetEmail ?? SQL_NULL,
+            targetEmail ?? SQL_NULL,
             entry.ip ?? SQL_NULL,
             entry.userAgent ?? SQL_NULL,
             detail === undefined ? SQL_NULL : JSON.stringify(detail),
@@ -441,7 +470,7 @@ const appendAuthAuditEntry = async (
         await executor.run(`DELETE FROM "${AUTH_AUDIT_TABLE}" WHERE seq <= (SELECT MAX(seq) - ? FROM "${AUTH_AUDIT_TABLE}")`, [options.retention]);
     }
 
-    return { ...entry, detail };
+    return { ...entry, detail, targetEmail };
 };
 
 /**
