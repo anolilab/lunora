@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.303...@lunora/runtime@1.0.0-alpha.304) (2026-11-27)
+
+- security(runtime)!: audit failed admin auth operations (#1723)
+
 ## @lunora/runtime [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.302...@lunora/runtime@1.0.0-alpha.303) (2026-11-27)
 
 - security(auth)!: digest a failed sign-in's typed identifier (#1718)
