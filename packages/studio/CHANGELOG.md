@@ -1,3 +1,7 @@
+## @lunora/studio [1.0.0-alpha.392](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.391...@lunora/studio@1.0.0-alpha.392) (2026-11-27)
+
+- security(auth)!: digest a failed sign-in's typed identifier (#1718)
+
 ## @lunora/studio [1.0.0-alpha.391](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.390...@lunora/studio@1.0.0-alpha.391) (2026-11-23)
 
 - fix(auth): close leftover admin and audit review findings (#1678)

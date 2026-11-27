@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.302...@lunora/runtime@1.0.0-alpha.303) (2026-11-27)
+
+- security(auth)!: digest a failed sign-in's typed identifier (#1718)
+
 ## @lunora/runtime [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.301...@lunora/runtime@1.0.0-alpha.302) (2026-11-24)
 
 - fix(scheduler): stop a workpool exceeding its concurrency cap (#1655)

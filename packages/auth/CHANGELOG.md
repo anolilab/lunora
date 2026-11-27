@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.279...@lunora/auth@1.0.0-alpha.280) (2026-11-27)
+
+- security(auth)!: digest a failed sign-in's typed identifier (#1718)
+
 ## @lunora/auth [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.278...@lunora/auth@1.0.0-alpha.279) (2026-11-26)
 
 - feat(auth): report canonical-email duplicates by id and expose backfill status (#1716)
