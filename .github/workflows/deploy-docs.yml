@@ -39,6 +39,10 @@
             - "apps/docs/**"
             - "packages/**"
             - "shared/**"
+            # The root files the package build reads (`build:packages:prod` runs vis).
+            - "package.json"
+            - "project.json"
+            - "tsconfig.base.json"
             - "pnpm-lock.yaml"
             - "pnpm-workspace.yaml"
     "workflow_dispatch": {}
