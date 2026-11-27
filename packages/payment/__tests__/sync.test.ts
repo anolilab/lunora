@@ -1533,4 +1533,35 @@ describe("applyWebhookAction — a lost dispute beside refunds", () => {
         expect(session?.refundedAmount.minorUnits).toBe(20n);
         expect(session?.disputedAmount).toBeUndefined();
     });
+
+    it("books a refund total within the capture at the capture when the dispute pushes the sum past it", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, disputeLost("evt_dispute"));
+
+        const result = await applyWebhookAction(store, refundTotal("evt_refund", 80));
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(result.applied).toBe(true);
+        expect(session?.refundedAmount.minorUnits).toBe(100n);
+        expect(session?.state).toBe("refunded");
+    });
+
+    it("still refuses a refund total that alone exceeds the capture", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, capture);
+        await applyWebhookAction(store, disputeLost("evt_dispute"));
+
+        const result = await applyWebhookAction(store, refundTotal("evt_refund", 120));
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(result.reason).toBe("invalid_refund_amount");
+        expect(session?.refundedAmount.minorUnits).toBe(30n);
+    });
 });

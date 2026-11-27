@@ -7,7 +7,7 @@
  * directory this suite creates and removes.
  */
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,12 +26,23 @@ describe("sdk stamp", () => {
 
     /**
      * Makes `alias` a second name for `relativePath`. A case-insensitive filesystem already does that
-     * for a case-only difference, so the hard link is made only where the disk keeps the names apart.
+     * for a case-only difference, so the hard link is made only where the disk keeps the names apart;
+     * anything else already at `alias` makes `linkSync` throw.
      */
     const makeAlias = (relativePath: string, alias: string): void => {
-        if (!existsSync(join(outputDirectory, alias))) {
-            linkSync(join(outputDirectory, relativePath), join(outputDirectory, alias));
+        const target = join(outputDirectory, relativePath);
+        const second = join(outputDirectory, alias);
+
+        if (existsSync(second)) {
+            const targetStat = statSync(target);
+            const secondStat = statSync(second);
+
+            if (targetStat.ino === secondStat.ino && targetStat.dev === secondStat.dev) {
+                return;
+            }
         }
+
+        linkSync(target, second);
     };
 
     const writeRawStamp = (document: unknown): void => {

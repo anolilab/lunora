@@ -198,6 +198,20 @@ describe("a failed sign-in's typed identifier is a keyed digest, not the caller'
         expect(row?.targetEmail).toBe("ada@example.com");
     });
 
+    it("derives the digest key once for a failed sign-in carrying both a detail identifier and an address", async () => {
+        expect.assertions(1);
+
+        // Counted by `sign`, not `importKey`: the shared CryptoKey cache absorbs a second derivation's imports.
+        const sign = vi.spyOn(crypto.subtle, "sign");
+
+        await appendAuthAuditEntry(executor, { ...failedSignIn("victim@example.com"), detail: { clientId: PASTED } }, { hashKey: "auth-secret-one" });
+
+        // One derivation plus one digest each for the client id and the address.
+        expect(sign).toHaveBeenCalledTimes(3);
+
+        sign.mockRestore();
+    });
+
     it("stores no identifier for a failed sign-in when the writer passes no hash key", async () => {
         expect.assertions(2);
 

@@ -192,10 +192,20 @@ const refundedTotalFor = (base: PaymentSession, action: WebhookAction): Money | 
     // re-delivered or stale one adds nothing. It counts refunds only, though, while the stored total
     // also holds every lost dispute: the disputes are added back before the two are compared, or a
     // dispute of 30 then a refund total of 20 would resolve to 30 instead of 50.
-    const prospective =
-        action.amountKind === "absolute"
-            ? maxMoney(addMoney(action.amount, disputedAmountOf(base)), base.refundedAmount)
-            : addMoney(base.refundedAmount, action.amount);
+    if (action.amountKind === "absolute") {
+        if (compareMoney(action.amount, base.capturedAmount) > 0) {
+            return undefined;
+        }
+
+        // A provider total within the capture is booked even when the stored disputes push the sum past
+        // it, capped at the capture as `mergePaymentTruth` and `refundPayment` cap the same sum, rather
+        // than refused, which would acknowledge the webhook and lose the refund.
+        const total = maxMoney(addMoney(action.amount, disputedAmountOf(base)), base.refundedAmount);
+
+        return compareMoney(total, base.capturedAmount) > 0 ? base.capturedAmount : total;
+    }
+
+    const prospective = addMoney(base.refundedAmount, action.amount);
 
     if (compareMoney(prospective, base.capturedAmount) > 0) {
         return undefined;
