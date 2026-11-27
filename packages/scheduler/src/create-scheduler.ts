@@ -31,9 +31,16 @@ interface ScopedRunOptions extends RunOptions {
     dedupUserId?: unknown;
 }
 
-/** The `dedupScope` a call is posted with, from the facade's `dedupUserId` when it set one. */
-const dedupScopeField = async (options: ScopedRunOptions): Promise<{ dedupScope?: string }> =>
-    typeof options.dedupUserId === "string" && options.dedupUserId.length > 0 ? { dedupScope: await dedupScopeOf(options.dedupUserId) } : {};
+/**
+ * The `dedupScope` a call is posted with, from the facade's `dedupUserId` when it set one. Read as
+ * an own property only: the facade always sets its own, and one inherited from the caller's options
+ * object would let a caller choose another user's scope.
+ */
+const dedupScopeField = async (options: ScopedRunOptions): Promise<{ dedupScope?: string }> => {
+    const userId = Object.hasOwn(options, "dedupUserId") ? options.dedupUserId : undefined;
+
+    return typeof userId === "string" && userId.length > 0 ? { dedupScope: await dedupScopeOf(userId) } : {};
+};
 
 /**
  * Undo `runAt`'s encode on a record read back out of the DO, so `list()` /

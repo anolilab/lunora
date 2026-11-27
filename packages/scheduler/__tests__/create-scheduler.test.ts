@@ -108,6 +108,18 @@ describe("createScheduler", () => {
         expect(JSON.stringify(calls.map((call) => call.body))).not.toContain("user-1");
     });
 
+    it("ignores a dedupUserId reached through the options' prototype", async () => {
+        expect.assertions(1);
+
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace });
+        const options = Object.assign(Object.create({ dedupUserId: "user-1" }), { dedupKey: "daily" });
+
+        await scheduler.runAfter(1000, fnRef, {}, options as never);
+
+        expect(calls[0]?.body).not.toHaveProperty("dedupScope");
+    });
+
     // Regression (contract drift): `runAfter`/`runAt` used to resolve the DO's
     // `{ id, scheduledFor }` record, while every gate that describes this object
     // — `SchedulerLike` (@lunora/shard-engine), `Scheduler` (@lunora/server),

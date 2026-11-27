@@ -595,6 +595,28 @@ describe("withDeferredSchedules — scheduling user", () => {
         expect(recorded?.options).not.toHaveProperty("dedupUserId");
     });
 
+    it("passes no inherited dedupUserId on when there is no user, on the immediate and the deferred path", async () => {
+        expect.assertions(3);
+
+        const { facade, liveOptions, outbox } = build(() => undefined);
+        // An own copy would be dropped; one reached through the prototype must not get through either.
+        const inherited = (): Record<string, unknown> =>
+            Object.assign(Object.create({ dedupUserId: "someone-else" }) as Record<string, unknown>, { dedupKey: "daily" });
+
+        await facade.runAfter(0, "jobs:send", {}, inherited());
+
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        await facade.runAfter(0, "jobs:send", {}, inherited());
+        await settle(true);
+
+        const recorded = outbox.record.mock.calls[0]?.[1] as { options?: Record<string, unknown> } | undefined;
+
+        expect(liveOptions.map((options) => options["dedupUserId"])).toStrictEqual([undefined, undefined]);
+        expect(liveOptions[0]?.["dedupKey"]).toBe("daily");
+        expect(recorded?.options?.["dedupUserId"]).toBeUndefined();
+    });
+
     it("replaces a dedupUserId the caller passed with the real user", async () => {
         expect.assertions(1);
 

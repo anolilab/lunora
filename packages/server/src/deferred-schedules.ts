@@ -273,7 +273,8 @@ const withDedupUser = (options: Record<string, unknown> | undefined, userId: (()
         return { ...options, dedupUserId: user };
     }
 
-    return options === undefined || !Object.hasOwn(options, "dedupUserId")
+    // `in`, not an own-property check: one reached through the prototype would reach the client too.
+    return options === undefined || !("dedupUserId" in options)
         ? options
         : Object.fromEntries(Object.entries(options).filter(([key]) => key !== "dedupUserId"));
 };
