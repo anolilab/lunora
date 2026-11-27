@@ -298,15 +298,10 @@ const adoptOrphanSession = async (
  * Write a payment session row, guarded on the revision it was derived from. `undefined` means a
  * concurrent write moved the row first: nothing was written, and the caller recomputes from a re-read.
  *
- * A failed write releases the refund claim first: the claim is taken before the row, because a
- * concurrent restatement of the same refund must not double-count while this write is in flight.
- * There is no transaction across the two, so a failed write would otherwise leave the claim standing,
- * and the provider's retry — which the caller's rethrow triggers — would zero the amount and lose the
- * refund entirely.
- *
  * A value the store cannot hold (a money amount beyond 2^53 minor units) fails the same way on every
  * retry, so retrying only keeps the event undelivered. Nothing was written: that case answers
- * `unstorable`, so the provider stops and the observer records the reason. Any other failure rethrows.
+ * `unstorable` and gives the refund claim back, so the provider stops and the observer records the
+ * reason. Any other failure rethrows, and `applyPayment` gives the claim back.
  */
 const writeSession = async (
     store: PaymentStore,
@@ -317,9 +312,9 @@ const writeSession = async (
     try {
         return (await store.upsertPaymentSession(session, guard)) ? { applied: true, reason: "ok" } : undefined;
     } catch (error) {
-        await refund?.release();
-
         if (error instanceof LunoraPaymentError && error.code === "VALIDATION_ERROR") {
+            await refund?.release();
+
             return { applied: false, reason: "unstorable" };
         }
 
@@ -434,35 +429,45 @@ const applyPayment = async (
     // pass that folded with no row ends without retrying.
     let refund: RefundFold | undefined;
 
-    for (let attempt = 0; attempt < SESSION_WRITE_ATTEMPTS; attempt += 1) {
-        // Before the FSM gate: ownership does not depend on whether this event's transition is legal.
-        // eslint-disable-next-line no-await-in-loop -- each pass re-reads the row the last one lost to
-        const adoption = await adoptOrphanSession(store, await store.getPaymentSession(action.provider, sessionId), action, now);
+    // The refund claim is taken before the row, because a concurrent restatement of the same refund must
+    // not double-count while this event is in flight, and there is no transaction across the two. Any
+    // exit without a write gives it back, a throw from a later pass included: the throw releases the
+    // event claim too, and a redelivery that found this refund claimed would book nothing.
+    try {
+        for (let attempt = 0; attempt < SESSION_WRITE_ATTEMPTS; attempt += 1) {
+            // Before the FSM gate: ownership does not depend on whether this event's transition is legal.
+            // eslint-disable-next-line no-await-in-loop -- each pass re-reads the row the last one lost to
+            const adoption = await adoptOrphanSession(store, await store.getPaymentSession(action.provider, sessionId), action, now);
 
-        if (adoption === undefined) {
-            continue;
+            if (adoption === undefined) {
+                continue;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- once per event, see `refund` above
+            refund ??= paymentAction === "refund" ? await foldRefundOnce(store, action, adoption.session) : undefined;
+
+            if (refund?.booked) {
+                return { applied: false, reason: "duplicate" };
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- see the read above
+            const result = await applyPaymentTo(store, { ...action, sessionId }, paymentAction, adoption.session, refund, now);
+
+            if (result !== undefined) {
+                return result;
+            }
         }
 
-        // eslint-disable-next-line no-await-in-loop -- once per event, see `refund` above
-        refund ??= paymentAction === "refund" ? await foldRefundOnce(store, action, adoption.session) : undefined;
+        // Never written unguarded: that would undo whatever beat it. The provider redelivers instead.
+        throw new LunoraPaymentError(
+            "INVALID_TRANSITION",
+            `payment session "${sessionId}" kept changing while a webhook applied; the provider will redeliver it`,
+        );
+    } catch (error) {
+        await refund?.release();
 
-        if (refund?.booked) {
-            return { applied: false, reason: "duplicate" };
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- see the read above
-        const result = await applyPaymentTo(store, { ...action, sessionId }, paymentAction, adoption.session, refund, now);
-
-        if (result !== undefined) {
-            return result;
-        }
+        throw error;
     }
-
-    // Never written unguarded: that would undo whatever beat it. The throw releases the event claim, so
-    // the provider redelivers, and the refund claim goes with it so that redelivery can book the money.
-    await refund?.release();
-
-    throw new LunoraPaymentError("INVALID_TRANSITION", `payment session "${sessionId}" kept changing while a webhook applied; the provider will redeliver it`);
 };
 
 /**

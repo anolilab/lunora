@@ -64,6 +64,22 @@ const SUBSCRIPTION_TRANSITIONS: Record<SubscriptionState, Partial<Record<Subscri
     trialing: { activate: "active", cancel: "canceled", mark_past_due: "past_due", pause: "paused", renew: "active" },
 };
 
+/**
+ * How far a payment has progressed through being refunded. The refunded total only ever moves
+ * forward on a merge, so the state that labels it must not move backward either — states outside
+ * this ladder (`initiated`, `authorized`, `failed`, `canceled`) are not refund progress and are
+ * left entirely to provider truth.
+ */
+const REFUND_RANK: Partial<Record<PaymentState, number>> = { captured: 0, partially_refunded: 1, refunded: 2 };
+
+/** `reported`, unless both states are on the refund ladder and `stored` is further along it. */
+const refundRungKept = (stored: PaymentState, reported: PaymentState): PaymentState => {
+    const storedRank = REFUND_RANK[stored];
+    const reportedRank = REFUND_RANK[reported];
+
+    return storedRank !== undefined && reportedRank !== undefined && reportedRank < storedRank ? stored : reported;
+};
+
 const PAYMENT_TERMINAL_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["canceled", "refunded"]);
 
 const SUBSCRIPTION_TERMINAL_STATES: ReadonlySet<SubscriptionState> = new Set<SubscriptionState>(["canceled"]);
@@ -82,5 +98,14 @@ const nextSubscriptionState = (from: SubscriptionState, action: SubscriptionActi
 
 const canTransitionSubscription = (from: SubscriptionState, action: SubscriptionAction): boolean => nextSubscriptionState(from, action) !== undefined;
 
-export { canTransitionPayment, canTransitionSubscription, nextPaymentState, nextSubscriptionState, PAYMENT_TERMINAL_STATES, SUBSCRIPTION_TERMINAL_STATES };
+export {
+    canTransitionPayment,
+    canTransitionSubscription,
+    nextPaymentState,
+    nextSubscriptionState,
+    PAYMENT_TERMINAL_STATES,
+    REFUND_RANK,
+    refundRungKept,
+    SUBSCRIPTION_TERMINAL_STATES,
+};
 export type { PaymentAction, SubscriptionAction };

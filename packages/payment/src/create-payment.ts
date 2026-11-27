@@ -27,7 +27,7 @@ import {
 import { addMoney, compareMoney, disputedAmountOf, isZeroMoney, maxMoney, subtractMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
-import { SUBSCRIPTION_TERMINAL_STATES } from "./state-machine";
+import { refundRungKept, SUBSCRIPTION_TERMINAL_STATES } from "./state-machine";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
 import type { SubscriptionWrite } from "./subscription-policy";
@@ -853,6 +853,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         }
     };
 
+    // For a refund the provider issued but the ledger write did not record. The refund's marker is claimed before the row
+    // (the webhook may land mid-write) with no transaction across the two, so it is released and the webhook carries the
+    // money; a hard isolate kill between the writes still strands it until that webhook consumes it. An unkeyed provider
+    // would issue a retry again, so the session stays held as for a pending refund until its webhook or
+    // settlePendingRefund books it.
+    const leaveRefundToWebhook = async (sessionId: string, marker: string, pendingClaim: string, refundId: string | undefined): Promise<void> => {
+        await store.releaseEvent(adapter.identifier, marker);
+
+        if (refundNeedsPendingGuard(adapter.identifier)) {
+            await holdPendingRefund(sessionId, pendingClaim, refundId);
+        }
+    };
+
     // Copies, not the adapter's own objects: nothing reachable from `provider` can call an operation or change
     // what the facade reads from the adapter.
     const provider = Object.freeze({
@@ -876,9 +889,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             const key = await outboundKey("cancel_payment", [sessionId], cancelOptions?.idempotencyKey, () => []);
             const updated = await adapter.cancelPayment(sessionId, { ...cancelOptions, idempotencyKey: key });
 
-            // A cancel establishes the state and nothing else — the amounts on the row stand.
-            return persistSession(existing, () => {
-                return { state: updated.state };
+            // A cancel establishes the state and nothing else — the amounts on the row stand, and so does a
+            // refund rung a webhook booked since the call.
+            return persistSession(existing, (fresh) => {
+                return { state: refundRungKept(fresh.state, updated.state) };
             });
         },
 
@@ -940,8 +954,9 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             // The provider's captured total is authoritative here, and its own `payment.captured`
             // webhook later ASSIGNS the same value (never accumulates), so both paths agree.
-            return persistSession(existing, () => {
-                return { capturedAmount: updated.capturedAmount, state: updated.state };
+            // A refund booked since the call keeps its rung: the capture does not undo it.
+            return persistSession(existing, (fresh) => {
+                return { capturedAmount: updated.capturedAmount, state: refundRungKept(fresh.state, updated.state) };
             });
         },
 
@@ -1267,10 +1282,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                         return { refundedAmount: total, state: compareMoney(total, fresh.capturedAmount) < 0 ? "partially_refunded" : "refunded" };
                     });
                 } catch (error) {
-                    // The marker is claimed before the row (the webhook may land mid-write) with no transaction
-                    // across the two, so release it on failure and let the webhook carry the money. A hard
-                    // isolate kill between the writes still strands it until that webhook consumes it.
-                    await store.releaseEvent(adapter.identifier, marker);
+                    await leaveRefundToWebhook(input.sessionId, marker, pendingClaim, issuedRefund.refundId);
 
                     throw error;
                 }

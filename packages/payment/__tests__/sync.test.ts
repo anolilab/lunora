@@ -1714,4 +1714,45 @@ describe("applyWebhookAction — a payment event racing another write to its row
         await expect(applyWebhookAction(store, refund)).resolves.toStrictEqual({ applied: true, reason: "ok" });
         await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(30n);
     });
+
+    it("releases the refund claim when a later pass throws after a lost guarded write", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, { ...capture, provider: "polar" });
+
+        let conflicted = false;
+        const flaky = Object.assign(Object.create(store) as object, {
+            getPaymentSession: async (provider: ProviderId, id: string): Promise<PaymentSession | undefined> => {
+                if (conflicted) {
+                    throw new Error("store read failed");
+                }
+
+                return store.getPaymentSession(provider, id);
+            },
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard): Promise<boolean> => {
+                if (guard !== undefined) {
+                    conflicted = true;
+
+                    return false;
+                }
+
+                return store.upsertPaymentSession(session);
+            },
+        }) as PaymentStore;
+        const refund: WebhookAction = {
+            amount: money(30, "USD"),
+            eventId: "evt_refund",
+            provider: "polar",
+            refundId: "re_1",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        };
+
+        await expect(applyWebhookAction(flaky, refund)).rejects.toThrow("store read failed");
+
+        await expect(applyWebhookAction(store, refund)).resolves.toStrictEqual({ applied: true, reason: "ok" });
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(30n);
+    });
 });

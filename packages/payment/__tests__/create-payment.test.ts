@@ -802,6 +802,94 @@ describe("createPayment", () => {
         expect(stored?.state).toBe("partially_refunded");
     });
 
+    it("keeps an unkeyed refund held when its ledger write loses every attempt, so a retry issues nothing", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        const losing = Object.assign(Object.create(store) as object, {
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) => (guard === undefined ? store.upsertPaymentSession(session) : false),
+        }) as PaymentStore;
+        const refundPayment = vi.fn<PaymentAdapter["refundPayment"]>(async () => {
+            return { ...polarSession, refundedAmount: money(300, "USD"), refundId: "ref_1" };
+        });
+        const payment = createPayment({
+            adapter: fakeAdapter({ identifier: "polar", refundPayment }),
+            authorize: (referenceId) => referenceId === "user_1",
+            store: losing,
+        });
+
+        await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+        await expect(payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" })).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+
+        expect(refundPayment).toHaveBeenCalledTimes(1);
+
+        // The confirming webhook still books the money, since the refund's own marker was given back.
+        await applyWebhookAction(store, {
+            amount: money(300, "USD"),
+            eventId: "evt_ok",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "ord_1",
+            type: "payment.refunded",
+        });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD") });
+    });
+
+    it("keeps the refund rung a webhook booked just before a guarded capture write", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession({ ...paymentSession("user_1"), capturedAmount: money(0, "USD"), state: "authorized" });
+
+        let land: (() => Promise<unknown>) | undefined = async () => {
+            await applyWebhookAction(store, {
+                amount: money(1000, "USD"),
+                eventId: "evt_capture",
+                provider: "stripe",
+                sessionId: "pi_1",
+                type: "payment.captured",
+            });
+            await applyWebhookAction(store, {
+                amount: money(300, "USD"),
+                eventId: "evt_refund",
+                provider: "stripe",
+                refundId: "re_1",
+                sessionId: "pi_1",
+                type: "payment.refunded",
+            });
+        };
+        const racing = Object.assign(Object.create(store) as object, {
+            upsertPaymentSession: async (session: PaymentSession, guard?: RevisionGuard) => {
+                const hook = land;
+
+                land = undefined;
+                await hook?.();
+
+                return store.upsertPaymentSession(session, guard);
+            },
+        }) as PaymentStore;
+        const adapter = fakeAdapter({
+            capturePayment: async () => {
+                return { ...paymentSession("user_1"), state: "captured" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: racing });
+
+        await payment.capturePayment({ sessionId: "pi_1" });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({
+            capturedAmount: money(1000, "USD"),
+            refundedAmount: money(300, "USD"),
+            state: "partially_refunded",
+        });
+    });
+
     it("records the refund it issued, so a second refund never reaches the provider", async () => {
         expect.assertions(4);
 
