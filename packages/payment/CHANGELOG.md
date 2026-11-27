@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.279...@lunora/payment@1.0.0-alpha.280) (2026-11-27)
+
+- fix(payment): count a lost dispute and a refund on one payment (#1719)
+
 ## @lunora/payment [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.278...@lunora/payment@1.0.0-alpha.279) (2026-11-25)
 
 - feat(payment)!: add getSubscriptionStatus, a live provider read (#1706)
