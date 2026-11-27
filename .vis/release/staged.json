@@ -3,6 +3,18 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-27T11:57:28.208Z",
+      "key": "@lunora/auth@1.0.0-alpha.280"
+    },
+    {
+      "at": "2026-11-27T11:57:28.208Z",
+      "key": "@lunora/runtime@1.0.0-alpha.303"
+    },
+    {
+      "at": "2026-11-27T11:57:28.208Z",
+      "key": "@lunora/studio@1.0.0-alpha.392"
+    },
+    {
       "at": "2026-11-26T20:10:31.401Z",
       "key": "@lunora/auth@1.0.0-alpha.279"
     },
@@ -389,20 +401,8 @@
     {
       "at": "2026-11-23T14:18:33.061Z",
       "key": "@lunora/ratelimit@1.0.0-alpha.197"
-    },
-    {
-      "at": "2026-11-23T14:18:33.061Z",
-      "key": "@lunora/angular@1.0.0-alpha.271"
-    },
-    {
-      "at": "2026-11-23T14:18:33.061Z",
-      "key": "@lunora/mail@1.0.0-alpha.141"
-    },
-    {
-      "at": "2026-11-23T14:18:33.061Z",
-      "key": "@lunora/react@1.0.0-alpha.303"
     }
   ],
-  "updatedAt": "2026-11-26T20:10:31.402Z",
+  "updatedAt": "2026-11-27T11:57:28.208Z",
   "version": 1
 }
