@@ -266,6 +266,9 @@ export const authOptions = (env: AuthEnv): LunoraAuthOptions => {
             },
         },
         emailVerification: {
+            // Sign-up creates no session while `requireEmailVerification` is on, so
+            // following the link would otherwise leave the user signed out.
+            autoSignInAfterVerification: true,
             sendVerificationEmail: async ({ url, user }) => {
                 await sendAuthEmail(env, { subject: "Verify your email address", text: `Verify your email address:\n${url}`, to: user.email });
             },

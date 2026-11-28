@@ -11,6 +11,7 @@ reload.
 pnpm install
 cp .dev.vars.example .dev.vars   # then set BETTER_AUTH_SECRET: openssl rand -base64 32
 pnpm exec lunora add auth-ui     # the sign-in, sign-up and organization screens
+# replace src/routes/auth.$view.tsx with the snippet under "The auth screens" below
 pnpm run dev
 ```
 
@@ -54,8 +55,10 @@ function AuthPage() {
 }
 ```
 
-Sign up (in dev the verification link is printed to the terminal until you run
-`lunora add email`), create an organization, and open `/dashboard`.
+Sign up, then open the verification link: in dev it is in the Studio **Mail** tab
+(`/__lunora`), subject "Verify your email address", not in the terminal. Opening it
+verifies the address and signs you in. Create an organization and open `/dashboard`.
+Run `lunora add email` before deploying so real mail is delivered.
 
 ## A tenant is a shard
 
