@@ -1156,8 +1156,13 @@ const testNamespaceFor = (handler: ContainerTestHandler): ContainerNamespaceLike
 
 /**
  * Docker-free test double for `ctx.containers`: each export name maps to a
- * fetch handler that plays the container. Mirrors the real shape exactly, so
- * action handlers under test can't tell the difference.
+ * fetch handler that plays the container. Mirrors the real accessor shape
+ * (`get`, `any`, `pool`, `files`), so action handlers under test can't tell the
+ * difference, with one deliberate exception: retries are not simulated.
+ * `pool({ attempts })` always runs a single attempt (and `get`/`any` default to
+ * one), so a handler's own 5xx is returned as-is instead of being retried on
+ * another instance. Test retry behaviour against a real container or a
+ * hand-written double.
  *
  * ```ts
  * const containers = createContainerTestContext({
