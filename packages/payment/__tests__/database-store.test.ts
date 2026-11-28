@@ -9,6 +9,7 @@ import { createDatabasePaymentStore, PAYMENT_TABLES } from "../src/database-stor
 import { money } from "../src/money";
 import type { CreemClientLike } from "../src/providers/creem";
 import { createCreemAdapter } from "../src/providers/creem";
+import { MAX_BOOKED_REFUNDS } from "../src/refund-ledger";
 import paymentExtension from "../src/schema";
 import type { PaymentStore } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
@@ -1003,9 +1004,6 @@ describe("createDatabasePaymentStore", () => {
 
     it("round-trips a list of booked refunds at its cap", async () => {
         expect.assertions(2);
-
-        // The ledger keeps at most this many entries per row.
-        const MAX_BOOKED_REFUNDS = 1000;
 
         const store = createDatabasePaymentStore(makeValidatingDb());
         const bookedRefunds = Array.from({ length: MAX_BOOKED_REFUNDS }, (_, index) => {
