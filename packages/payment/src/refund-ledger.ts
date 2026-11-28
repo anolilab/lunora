@@ -133,5 +133,16 @@ const bookRefundTotal = (row: PaymentSession, input: RefundTotal): RefundTotalOu
     return { ...(added.length === 0 ? {} : { bookedRefunds: appendBooked(row.bookedRefunds, added) }), kind: "booked", refundedAmount };
 };
 
-export { bookRefundDelta, bookRefundTotal, isRefundBooked, MAX_BOOKED_REFUNDS };
+/** The row fields a `booked` outcome sets, to spread over the row it was computed from. */
+const bookedChanges = (
+    outcome: Extract<RefundDeltaOutcome | RefundTotalOutcome, { kind: "booked" }>,
+): Pick<PaymentSession, "bookedRefunds" | "disputedAmount" | "refundedAmount"> => {
+    return {
+        ...(outcome.bookedRefunds === undefined ? {} : { bookedRefunds: outcome.bookedRefunds }),
+        ...("disputedAmount" in outcome && outcome.disputedAmount !== undefined ? { disputedAmount: outcome.disputedAmount } : {}),
+        refundedAmount: outcome.refundedAmount,
+    };
+};
+
+export { bookedChanges, bookRefundDelta, bookRefundTotal, isRefundBooked, MAX_BOOKED_REFUNDS };
 export type { RefundDelta, RefundDeltaOutcome, RefundTotal, RefundTotalOutcome };

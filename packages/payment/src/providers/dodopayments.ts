@@ -483,7 +483,10 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             // says so explicitly, so the facade does not have to infer it from the SESSION's state —
             // it holds its ledger back until `refund.succeeded` lands, because `refund.failed` reverses
             // no money and would leave an optimistic write over-stating the row for good.
-            const settled = readString(refund, "status") === "succeeded";
+            const refundId = readString(refund, "refund_id") ?? "";
+            // A settled refund is booked by its id; one whose id could not be read is held as pending, so its
+            // webhook (which carries the id) or `settlePendingRefund` books it, as `listRefunds` treats it.
+            const settled = readString(refund, "status") === "succeeded" && refundId !== "";
             const state: PaymentState = settled ? "refunded" : "captured";
 
             return {
@@ -496,7 +499,7 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
                 referenceId: "",
                 refundedAmount,
                 // The same id Dodo's confirming `refund.succeeded` carries.
-                refundId: readString(refund, "refund_id"),
+                refundId,
                 state,
                 updatedAt: Date.now(),
             };

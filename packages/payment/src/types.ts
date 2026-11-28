@@ -415,12 +415,12 @@ export interface RefundResult extends PaymentSession {
     readonly refundedTotal?: Money;
 
     /**
-     * The provider's id for THIS refund — Stripe and Polar `Refund.id`, Dodo `refund_id`. It is the
-     * identity the facade keys its local refund marker on, so two in-flight refunds of the same
-     * amount on one session stay distinct. `undefined` only where a provider reports no id, which
-     * falls the marker back to the (colliding) amount.
+     * The provider's id for THIS refund — Stripe and Polar `Refund.id`, Dodo `refund_id`, the same id its refund
+     * webhook carries. The facade names the refund on the row by it (`PaymentSession.bookedRefunds`), so the
+     * confirming webhook adds nothing and two refunds of the same amount stay distinct. A settled refund always has
+     * one; an adapter that could not read it reports the refund `pending` instead.
      */
-    readonly refundId?: string;
+    readonly refundId: string;
 }
 
 export interface CancelSubscriptionOptions {
@@ -519,10 +519,10 @@ export interface WebhookAction {
     readonly referenceId?: string;
 
     /**
-     * Provider id of the refund this event reports (`payment.refunded`, `payment.refund_failed`).
-     * Carries the per-refund identity the sync layer matches against the marker `refundPayment`
-     * left behind, so a second facade refund of the same amount is not mistaken for the first one's
-     * confirmation.
+     * Provider id of the refund this event reports (`payment.refunded`, `payment.refund_failed`), or the dispute id
+     * for a lost dispute. A `"delta"` refund is counted once by it against `PaymentSession.bookedRefunds`, so a
+     * restatement or the confirming webhook of a facade refund adds nothing; a delta without one is refused as
+     * `invalid_refund_amount`. An `"absolute"` total needs none.
      */
     readonly refundId?: string;
 
