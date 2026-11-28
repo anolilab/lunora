@@ -55,8 +55,10 @@ function AuthPage() {
 }
 ```
 
-Sign up, then open the verification link: in dev it is in the Studio **Mail** tab
-(`/__lunora`), subject "Verify your email address", not in the terminal. Opening it
+Sign up, then open the verification link (subject "Verify your email address"). Until
+mail is set up (`MAIL_FROM` unset), `lunora dev` prints it in the dev server output as
+`[auth] email → …`. Once `lunora add email` has set `MAIL_FROM`, dev sends are captured
+in the Studio **Mail** tab (`/__lunora`) instead of being delivered. Opening it
 verifies the address and signs you in. Create an organization and open `/dashboard`.
 Run `lunora add email` before deploying so real mail is delivered.
 
