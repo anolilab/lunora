@@ -157,6 +157,30 @@ describe("database payment store on workerd", () => {
         });
     });
 
+    it("round-trips a session's booked refunds, and keeps them through a write that omits the list", async () => {
+        expect.assertions(3);
+
+        await withStore(async (store) => {
+            const bookedRefunds = [
+                { amount: money(300n, "EUR"), id: "re_1" },
+                { amount: money(200n, "EUR"), id: "dp_1" },
+            ];
+            const refunded = session({ capturedAmount: money(1000n, "EUR"), refundedAmount: money(500n, "EUR"), state: "partially_refunded" });
+
+            await store.upsertPaymentSession(session());
+
+            await expect(store.getPaymentSession("stripe", "cs_1").then((row) => row?.bookedRefunds)).resolves.toBeUndefined();
+
+            await store.upsertPaymentSession({ ...refunded, bookedRefunds });
+
+            await expect(store.getPaymentSession("stripe", "cs_1").then((row) => row?.bookedRefunds)).resolves.toStrictEqual(bookedRefunds);
+
+            await store.upsertPaymentSession({ ...refunded, updatedAt: 2 });
+
+            await expect(store.getPaymentSession("stripe", "cs_1").then((row) => row?.bookedRefunds)).resolves.toStrictEqual(bookedRefunds);
+        });
+    });
+
     it("finds a subscription's payment session by subscription id, only one that names an owner", async () => {
         expect.assertions(3);
 

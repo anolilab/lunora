@@ -11,7 +11,7 @@ import { LunoraPaymentError } from "./errors";
 import { isZeroMoney, money } from "./money";
 import type { PaymentStore, RevisionGuard } from "./store";
 import { foldUsage } from "./store";
-import type { Customer, Money, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
+import type { BookedRefund, Customer, Money, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
 import { usageFirstDueAt } from "./usage-due";
 
 /**
@@ -144,6 +144,33 @@ const readOptionalMoney = (row: PaymentRow, key: string, currency: string): Mone
     row[key] === undefined || row[key] === null ? undefined : money(readMinorUnits(row, key), currency);
 
 /**
+ * The `bookedRefunds` column; absent reads as `undefined`. A malformed entry is refused like a malformed money column:
+ * skipping it would forget that a refund was counted, and its next report would be counted again.
+ */
+const readBookedRefunds = (row: PaymentRow, currency: string): BookedRefund[] | undefined => {
+    const value = row["bookedRefunds"];
+
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+
+    if (!Array.isArray(value)) {
+        throw new LunoraPaymentError("VALIDATION_ERROR", "payment store: `bookedRefunds` is not a list");
+    }
+
+    return value.map((entry: unknown) => {
+        const record = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+        const { id } = record;
+
+        if (typeof id !== "string") {
+            throw new LunoraPaymentError("VALIDATION_ERROR", "payment store: a `bookedRefunds` entry has no id");
+        }
+
+        return { amount: money(readMinorUnits(record as PaymentRow, "minor"), currency), id };
+    });
+};
+
+/**
  * Domain minor units → the `v.number()` money column. A double is exact only up to 2^53, so an
  * amount outside the safe-integer range is refused rather than written rounded.
  */
@@ -195,6 +222,15 @@ const sessionToRow = (session: PaymentSession): Record<string, unknown> => {
         capturedMinor: toMinorUnitsColumn(session.capturedAmount.minorUnits, "capturedMinor"),
         createdAt: session.createdAt,
         currency: session.amount.currency,
+        // Omitted when empty, like every optional column: a patch then leaves a stored list as it is, so a write that
+        // never read the list cannot clear it.
+        ...(session.bookedRefunds === undefined || session.bookedRefunds.length === 0
+            ? {}
+            : {
+                  bookedRefunds: session.bookedRefunds.map((refund) => {
+                      return { id: refund.id, minor: toMinorUnitsColumn(refund.amount.minorUnits, "bookedRefunds") };
+                  }),
+              }),
         ...(session.disputedAmount === undefined || isZeroMoney(session.disputedAmount)
             ? {}
             : { disputedMinor: toMinorUnitsColumn(session.disputedAmount.minorUnits, "disputedMinor") }),
@@ -213,6 +249,7 @@ const rowToSession = (row: PaymentRow): PaymentSession => {
 
     return {
         amount: money(readMinorUnits(row, "amountMinor"), currency),
+        bookedRefunds: readBookedRefunds(row, currency),
         capturedAmount: money(readMinorUnits(row, "capturedMinor"), currency),
         createdAt: readNumber(row, "createdAt"),
         disputedAmount: readOptionalMoney(row, "disputedMinor", currency),

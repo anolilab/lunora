@@ -65,8 +65,23 @@ export interface Customer {
     readonly referenceId: string;
 }
 
+/** One refund counted in {@link PaymentSession.refundedAmount}, by the provider's id for it. */
+export interface BookedRefund {
+    readonly amount: Money;
+    /** The provider's refund id, or the dispute id for a lost dispute (the two never collide). */
+    readonly id: string;
+}
+
 export interface PaymentSession {
     readonly amount: Money;
+
+    /**
+     * The refunds counted in {@link PaymentSession.refundedAmount}, oldest first; absent means none recorded. A refund
+     * whose id is listed is never counted again, so a redelivered or restated refund event adds nothing. The list need
+     * not sum to the total: rows written before it existed, and provider totals that name no refund, are in the total
+     * and not here.
+     */
+    readonly bookedRefunds?: ReadonlyArray<BookedRefund>;
     readonly capturedAmount: Money;
     readonly createdAt: number;
 

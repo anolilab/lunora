@@ -56,6 +56,7 @@ export interface Doc_payment_sessions {
     createdAt: number;
     currency: string;
     disputedMinor?: number;
+    bookedRefunds?: Array<{ id: string; minor: number }>;
     provider: string;
     providerSessionId: string;
     referenceId: string;
@@ -213,6 +214,7 @@ export interface Insert_payment_sessions {
     createdAt: number;
     currency: string;
     disputedMinor?: number;
+    bookedRefunds?: Array<{ id: string; minor: number }>;
     provider: string;
     providerSessionId: string;
     referenceId: string;

@@ -965,6 +965,84 @@ describe("createDatabasePaymentStore", () => {
         expect(written?.disputedAmount?.minorUnits).toBe(300n);
     });
 
+    it("round-trips the booked refunds through a column the schema accepts, and reads a row without it as none", async () => {
+        expect.assertions(4);
+
+        const db = makeValidatingDb();
+        const store = createDatabasePaymentStore(db);
+
+        await store.upsertPaymentSession(session);
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ bookedRefunds: undefined });
+
+        const bookedRefunds = [
+            { amount: money(300, "USD"), id: "re_1" },
+            { amount: money(200, "USD"), id: "dp_1" },
+        ];
+
+        await store.upsertPaymentSession({ ...session, bookedRefunds, refundedAmount: money(500, "USD"), state: "partially_refunded" });
+
+        const { rows } = await db.findMany("payment_sessions", {});
+
+        expect(rows.map((row) => row["bookedRefunds"])).toStrictEqual([
+            [
+                { id: "re_1", minor: 300 },
+                { id: "dp_1", minor: 200 },
+            ],
+        ]);
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.bookedRefunds)).resolves.toStrictEqual(bookedRefunds);
+
+        // A write built without the list (one that never read it) leaves the stored list standing.
+        await store.upsertPaymentSession({ ...session, refundedAmount: money(500, "USD"), state: "partially_refunded" });
+
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.bookedRefunds?.map((refund) => refund.id))).resolves.toStrictEqual([
+            "re_1",
+            "dp_1",
+        ]);
+    });
+
+    it("round-trips a list of booked refunds at its cap", async () => {
+        expect.assertions(2);
+
+        // The ledger keeps at most this many entries per row.
+        const MAX_BOOKED_REFUNDS = 1000;
+
+        const store = createDatabasePaymentStore(makeValidatingDb());
+        const bookedRefunds = Array.from({ length: MAX_BOOKED_REFUNDS }, (_, index) => {
+            return { amount: money(1, "USD"), id: `re_${String(index)}` };
+        });
+
+        await store.upsertPaymentSession({ ...session, bookedRefunds });
+
+        const stored = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(stored?.bookedRefunds).toHaveLength(MAX_BOOKED_REFUNDS);
+        expect(stored?.bookedRefunds?.at(-1)).toStrictEqual({ amount: money(1n, "USD"), id: `re_${String(MAX_BOOKED_REFUNDS - 1)}` });
+    });
+
+    it("refuses a stored booked refund without an id, rather than forgetting it was counted", async () => {
+        expect.assertions(1);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        await db.insert("payment_sessions", {
+            amountMinor: 1000,
+            bookedRefunds: [{ minor: 300 }],
+            capturedMinor: 1000,
+            createdAt: 1,
+            currency: "USD",
+            provider: "stripe",
+            providerSessionId: "pi_1",
+            referenceId: "user_1",
+            refundedMinor: 300,
+            state: "partially_refunded",
+            updatedAt: 1,
+        });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toThrow(/bookedRefunds/u);
+    });
+
     it("stores the largest safe amount exactly and refuses one that would round", async () => {
         expect.assertions(4);
 
