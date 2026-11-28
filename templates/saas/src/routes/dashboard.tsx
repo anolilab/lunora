@@ -1,10 +1,12 @@
 import { useMutation, usePresence, useQuery } from "@lunora/react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
 import type { Id } from "../../lunora/_generated/dataModel";
 import { ActivityFeed, OverviewStats, PresenceBar, ProjectsCard } from "../../lunora/saas-ui/react";
+
+import { authClient } from "../auth-client";
 
 import "../../lunora/saas-ui/styles.css";
 
@@ -14,6 +16,59 @@ export const Route = createFileRoute("/dashboard")({
 
 /** Roles the server lets create and archive projects (`WRITER_ROLES` in `lunora/saas/index.ts`). */
 const WRITER_ROLES = new Set(["admin", "owner"]);
+
+/**
+ * Actor id → display name for the activity feed. Activity rows carry only the
+ * user id, and members live in better-auth's tables, so the names come from the
+ * organization's member list; a user who is not in it (removed, or the list has
+ * not loaded) reads as "Someone" rather than as a raw id.
+ *
+ * The list is fetched only for actor ids no earlier fetch covered, so a member who
+ * just joined is named on their first activity while known actors cost nothing. A
+ * failed fetch covers nothing and is tried again when the feed next changes.
+ * The lookup is kept with the organization it was fetched for: after a switch,
+ * the previous organization's names never apply.
+ */
+const useMemberNames = (organizationId: string, actorIds: ReadonlyArray<string> | undefined): ((actorId: string) => string) => {
+    const [lookup, setLookup] = useState<{ asked: ReadonlySet<string>; names: ReadonlyMap<string, string>; organizationId: string } | undefined>(undefined);
+    const current = lookup?.organizationId === organizationId ? lookup : undefined;
+    const unasked = [...new Set(actorIds)]
+        .filter((id) => !current?.asked.has(id))
+        .sort()
+        .join(",");
+    // Part of the effect's key so a fetch that failed (left ids unasked) is retried on the next
+    // feed change; once every id is asked, `unasked` is empty and a feed change costs nothing.
+    const feed = actorIds?.join(",");
+
+    useEffect(() => {
+        if (unasked === "") {
+            return undefined;
+        }
+
+        let cancelled = false;
+
+        void authClient.organization
+            .getFullOrganization({ query: { organizationId } })
+            .then(({ data }) => {
+                if (!cancelled && data) {
+                    setLookup((previous) => ({
+                        asked: new Set([...(previous?.organizationId === organizationId ? previous.asked : []), ...unasked.split(",")]),
+                        names: new Map(data.members.map((member) => [member.userId, member.user.name || member.user.email])),
+                        organizationId,
+                    }));
+                }
+            })
+            // A failed lookup leaves the ids unasked, so the next feed change retries it; the feed
+            // meanwhile shows "Someone", which is what this catch keeps from becoming an error.
+            .catch(() => undefined);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [organizationId, unasked, feed]);
+
+    return (actorId) => current?.names.get(actorId) ?? "Someone";
+};
 
 /**
  * Who the caller is and which organisation they are in — read on the root
@@ -82,6 +137,10 @@ interface OrganizationDashboardProps {
 function OrganizationDashboard({ name, organizationId, orgRole, userId }: OrganizationDashboardProps) {
     const shard = { shardKey: organizationId };
     const payload = useQuery(api.saas.overview, {}, shard);
+    const resolveActor = useMemberNames(
+        organizationId,
+        payload?.activity.map((entry) => entry.actorId),
+    );
 
     /*
      * Who else has this page open. `usePresence` heartbeats on an interval and
@@ -137,7 +196,7 @@ function OrganizationDashboard({ name, organizationId, orgRole, userId }: Organi
                 onCreate={create}
                 rows={payload?.projects}
             />
-            <ActivityFeed now={now} rows={payload?.activity} timeZone={timeZone} />
+            <ActivityFeed now={now} resolveActor={resolveActor} rows={payload?.activity} timeZone={timeZone} />
         </main>
     );
 }

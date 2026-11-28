@@ -6,6 +6,7 @@ import type { ShardNamespaceLike } from "lunorash/runtime";
 import ssr from "@tanstack/react-start/server-entry";
 
 import { authOptions, getAuth } from "./auth/index.js";
+import { authorizeShard, resolveIdentity } from "./authorize-shard.js";
 import { defineApp } from "./_generated/app.js";
 import http from "./http.js";
 import { entitlementsFromPlans, PLANS } from "./plans.js";
@@ -70,65 +71,6 @@ const paymentAdapter = (env: Env): PaymentAdapter => {
     });
 
     return stripeAdapter;
-};
-
-/**
- * The resolved identity: the claims `lunora/identity.ts` declares, plus the
- * undeclared ones the runtime, `saas.me` and `presence` read (`name`, `expiresAtMs`, `orgId`).
- */
-const resolveIdentity = async (env: Env, request: Request): Promise<{ [claim: string]: unknown; userId: string } | null> => {
-    const auth = getAuth(env);
-    const session = await auth.api.getSession({ headers: request.headers });
-
-    if (!session?.user.id) {
-        return null;
-    }
-
-    /*
-     * `organization()` and `admin()` add `activeOrganizationId` and `role` at
-     * runtime, but `createAuth` is declared to return the erased `LunoraAuth`,
-     * so better-auth's plugin inference never reaches a consumer. Reading them
-     * through one narrow shape at this single boundary is the containment: the
-     * claims are validated against `lunora/identity.ts` immediately afterwards,
-     * and a claim set that does not match is rejected with a 401.
-     */
-    const { activeOrganizationId } = session.session as { activeOrganizationId?: string | null };
-    const { role } = session.user as { role?: string | null };
-
-    /*
-     * The caller's role in the organisation is NOT on the session — it lives on
-     * better-auth's `member` row. The same lookup is the membership check: a
-     * session can still name an organisation its user has been removed from,
-     * and that must not become a tenant claim (it is what `authorizeShard`
-     * admits the caller to).
-     */
-    const member = activeOrganizationId
-        ? await (
-              await auth.$context
-          ).adapter.findOne<{ role: string }>({
-              model: "member",
-              where: [
-                  { field: "organizationId", value: activeOrganizationId },
-                  { field: "userId", value: session.user.id },
-              ],
-          })
-        : null;
-    const { expiresAt } = session.session;
-
-    return {
-        activeOrganizationId: member ? activeOrganizationId : undefined,
-        appRole: role ?? undefined,
-        email: session.user.email || undefined,
-        // The socket credential expiry: without it a signed-out user keeps an
-        // already-open WebSocket streaming their tenant's rows.
-        ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
-        name: session.user.name || undefined,
-        // The same membership-checked tenant under the claim name `lunora/presence`
-        // scopes its rooms by; without it every organisation shares one room.
-        orgId: member ? activeOrganizationId : undefined,
-        orgRole: member?.role,
-        userId: session.user.id,
-    };
 };
 
 /*
@@ -215,15 +157,9 @@ const app = defineApp<Env>()
          * served from D1 — a different path entirely. Add `authorizeFanOut` if
          * you introduce one, and think hard about who may trigger it.
          */
-        authorizeShard: ({ identity, shardKey }) => {
-            if (!identity?.userId) {
-                return false;
-            }
+        authorizeShard,
 
-            return shardKey === "__root__" || identity.activeOrganizationId === shardKey;
-        },
-
-        resolveIdentity: async (request: Request) => resolveIdentity(env, request),
+        resolveIdentity: async (request: Request) => resolveIdentity(getAuth(env), request),
     }))
     // `wrangler.jsonc` points `main` HERE rather than at `virtual:lunora/worker`:
     // the composed virtual entry never imports this file, so the tenancy gate
