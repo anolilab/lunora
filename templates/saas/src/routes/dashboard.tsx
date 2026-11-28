@@ -47,15 +47,20 @@ const useMemberNames = (organizationId: string, actorIds: ReadonlyArray<string> 
 
         let cancelled = false;
 
-        void authClient.organization.getFullOrganization({ query: { organizationId } }).then(({ data }) => {
-            if (!cancelled && data) {
-                setLookup((previous) => ({
-                    asked: new Set([...(previous?.organizationId === organizationId ? previous.asked : []), ...unasked.split(",")]),
-                    names: new Map(data.members.map((member) => [member.userId, member.user.name || member.user.email])),
-                    organizationId,
-                }));
-            }
-        });
+        void authClient.organization
+            .getFullOrganization({ query: { organizationId } })
+            .then(({ data }) => {
+                if (!cancelled && data) {
+                    setLookup((previous) => ({
+                        asked: new Set([...(previous?.organizationId === organizationId ? previous.asked : []), ...unasked.split(",")]),
+                        names: new Map(data.members.map((member) => [member.userId, member.user.name || member.user.email])),
+                        organizationId,
+                    }));
+                }
+            })
+            // A failed lookup leaves the ids unasked, so the next feed change retries it; the feed
+            // meanwhile shows "Someone", which is what this catch keeps from becoming an error.
+            .catch(() => undefined);
 
         return () => {
             cancelled = true;
