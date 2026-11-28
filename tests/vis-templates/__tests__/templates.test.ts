@@ -189,6 +189,16 @@ const REQUIRED_ADAPTER: Record<string, string | null> = {
     "vinext-pages": "@lunora/react",
 };
 
+/**
+ * Templates that must list `@lunora/client` themselves. `lunorash` floats on
+ * `@lunora/client` (`^…`) while `@lunora/react` needs a newer one; `lunora init`
+ * stamps only the deps a template lists, so without a direct entry a fresh
+ * install resolves two client versions and the browser client lacks methods the
+ * React provider calls (`e.onShardConnectionStatus is not a function`). A direct
+ * pin makes the package manager reuse that one version for the floating range.
+ */
+const PINS_CLIENT = new Set(["saas"]);
+
 /** Source files a template ships, minus generated output and installed deps. */
 const SOURCE_EXTENSIONS = new Set([".astro", ".svelte", ".ts", ".tsx", ".vue"]);
 const SKIPPED_DIRECTORIES = new Set(["_generated", ".next", ".nuxt", ".output", ".svelte-kit", "dist", "node_modules"]);
@@ -288,6 +298,14 @@ describe("templates/* package.json validation", () => {
             if (adapter !== null) {
                 expect(Object.keys(deps)).toContain(adapter);
             }
+        });
+
+        test("lists @lunora/client directly when it must resolve a single client version", () => {
+            if (!PINS_CLIENT.has(templateName)) {
+                return;
+            }
+
+            expect(Object.keys(deps), `${templateName} must list @lunora/client so lunorash and @lunora/react share one version`).toContain("@lunora/client");
         });
 
         /**

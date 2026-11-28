@@ -16,6 +16,7 @@
     },
     "dependencies": {
         "@lunora/auth": "^0.0.0",
+        "@lunora/client": "^0.0.0",
         "@lunora/d1": "^0.0.0",
         "@lunora/errors": "^0.0.0",
         "@lunora/mail": "^0.0.0",
