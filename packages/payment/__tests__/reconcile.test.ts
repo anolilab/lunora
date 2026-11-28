@@ -1349,6 +1349,32 @@ describe("reconcile — a refund total beside the refund webhooks that make it u
         await expect(store.getPaymentSession("dodopayments", "pay_1").then((written) => written?.refundedAmount.minorUnits)).resolves.toBe(30n);
     });
 
+    it("books a refund against the capture the snapshot reports when the row was last written before the capture", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+        const authorized: PaymentSession = { ...stored, amount: money(100, "USD"), capturedAmount: money(0, "USD"), state: "authorized" };
+        const adapter = {
+            getPaymentStatus: async () => {
+                return { ...authorized, capturedAmount: money(100, "USD"), referenceId: "", refundedAmount: money(30, "USD"), state: "partially_refunded" };
+            },
+            identifier: "polar",
+            listRefunds: async (): Promise<ProviderRefund[]> => [{ amount: money(30, "USD"), refundId: "ref_1", status: "succeeded" }],
+        } as unknown as PaymentAdapter;
+
+        await store.upsertPaymentSession(authorized);
+        await reconcile({ adapter, observability: observer, paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({
+            bookedRefunds: [{ amount: money(30, "USD"), id: "ref_1" }],
+            capturedAmount: money(100, "USD"),
+            refundedAmount: money(30, "USD"),
+            state: "partially_refunded",
+        });
+        expect(observer).not.toHaveBeenCalledWith(expect.objectContaining({ type: "reconcile.error" }));
+    });
+
     it("leaves a row's booked refunds in place when it repairs the row", async () => {
         expect.assertions(2);
 

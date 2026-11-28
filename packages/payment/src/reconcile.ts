@@ -257,7 +257,10 @@ const withListedRefunds = (
     // The list is read after the snapshot, so a refund that settled in between is listed but not in the snapshot's total:
     // naming it without its money would make its own webhook a duplicate, and the refund would be counted nowhere.
     const total = snapshot.refundedAmount.currency === currency ? maxMoney(snapshot.refundedAmount, listed) : listed;
-    const outcome = accounted ? bookRefundTotal(stored, { refunds: succeeded, total }) : undefined;
+    // The stored row is the baseline (refunded total, disputes, named ids), but the capture is the snapshot's: a row last
+    // written before its capture holds none, and every refund would be refused as past it.
+    const baseline = merged.capturedAmount.currency === currency ? { ...stored, capturedAmount: merged.capturedAmount } : stored;
+    const outcome = accounted ? bookRefundTotal(baseline, { refunds: succeeded, total }) : undefined;
 
     if (outcome?.kind === "unchanged") {
         return { row: merged };
