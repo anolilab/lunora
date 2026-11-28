@@ -1691,6 +1691,7 @@ describe("lunora dev", () => {
             const result = await runDevCommand({
                 cwd: workdir,
                 logger,
+                probeReady: async () => true,
                 startWorker: () => {
                     spawned = true;
 

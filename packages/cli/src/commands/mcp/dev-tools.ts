@@ -14,7 +14,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { DEV_STATE_DIR, readLiveDevServerState } from "@lunora/config";
+import { DEV_STATE_DIR, devServerPhase, isDevServerReady, readLiveDevServerState } from "@lunora/config";
 import type { McpTool, ToolResult } from "@lunora/mcp";
 
 import isInsideDirectory from "../../util/path-containment";
@@ -92,7 +92,7 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
         definition: {
             annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false, readOnlyHint: true, title: "Check the local dev server" },
             description:
-                "Report whether a `lunora dev` server is running for this project, and its URL, studio URL, mode and uptime. Call this first when a query or mutation tool fails to connect.",
+                "Report whether a `lunora dev` server is running for this project, whether it answers yet (`phase`: launching, starting or ready), and its URL, studio URL and mode. Call this first when a query or mutation tool fails to connect.",
             inputSchema: { properties: {}, type: "object" },
             name: "lunora_dev_status",
         },
@@ -108,7 +108,9 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
                 background: state.background === true,
                 logFile: containedLogFile(projectRoot, state.logFile),
                 mode: state.mode,
+                phase: devServerPhase(state),
                 pid: state.pid,
+                ready: isDevServerReady(state),
                 running: true,
                 startedAt: state.startedAt,
                 studioUrl: state.studioUrl,

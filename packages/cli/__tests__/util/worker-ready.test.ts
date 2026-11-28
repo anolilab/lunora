@@ -123,28 +123,73 @@ describe("markWorkerReadyWhenServing", () => {
         }
     });
 
-    it("gives up on its own deadline and says why", async () => {
-        expect.assertions(3);
+    it("warns at its deadline and keeps probing until the server answers", async () => {
+        expect.assertions(4);
 
-        // A server that never binds must not leave the probe running for the life
-        // of the dev session, and the give-up has to be visible — this is the
-        // path that reports "your supervisor will wait forever".
+        // A session with several services can boot slower than the ready
+        // timeout. Stopping there left a server that answered later reported as
+        // "starting" for good, so the timeout only decides when to warn.
         const workdir = projectWithStartedServer();
         const { logger, warns } = silentLogger();
+        let attempts = 0;
+
+        vi.useFakeTimers({ toFake: ["Date"] });
 
         try {
             const recorded = await markWorkerReadyWhenServing({
                 cwd: workdir,
                 logger,
                 origin: "http://localhost:8787",
-                probe: async () => false,
-                readyTimeoutMs: 1,
+                pollIntervalMs: 1,
+                probe: async () => {
+                    attempts += 1;
+                    // Each attempt moves the clock past the deadline; nothing waits on it.
+                    vi.advanceTimersByTime(20);
+
+                    return attempts === 4;
+                },
+                readyTimeoutMs: 5,
                 signal: new AbortController().signal,
             });
 
+            expect(recorded).toBe(true);
+            expect(readDevServerState(workdir)?.readyAt).toBeDefined();
+            expect(warns).toHaveLength(1);
+            expect(warns[0]).toContain("still waiting");
+        } finally {
+            vi.useRealTimers();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("stops probing when the session shuts down", async () => {
+        expect.assertions(2);
+
+        const workdir = projectWithStartedServer();
+        const { logger } = silentLogger();
+        const controller = new AbortController();
+        let attempts = 0;
+
+        try {
+            const recorded = await markWorkerReadyWhenServing({
+                cwd: workdir,
+                logger,
+                origin: "http://localhost:8787",
+                pollIntervalMs: 1,
+                probe: async () => {
+                    attempts += 1;
+
+                    if (attempts === 3) {
+                        controller.abort();
+                    }
+
+                    return false;
+                },
+                signal: controller.signal,
+            });
+
             expect(recorded).toBe(false);
-            expect(readDevServerState(workdir)?.readyAt).toBeUndefined();
-            expect(warns.join(" ")).toContain("LUNORA_DEV_READY_TIMEOUT_MS");
+            expect(attempts).toBe(3);
         } finally {
             rmSync(workdir, { force: true, recursive: true });
         }
@@ -211,39 +256,6 @@ describe("markWorkerReadyWhenServing", () => {
             expect(recorded).toBe(false);
             expect(readDevServerState(workdir)?.readyAt).toBeUndefined();
         } finally {
-            rmSync(workdir, { force: true, recursive: true });
-        }
-    });
-
-    it("ignores a probe that answers true only AFTER the deadline", async () => {
-        expect.assertions(2);
-
-        // Same shape against the timeout: having told the caller it gave up, it
-        // must not then stamp readiness a moment later.
-        const workdir = projectWithStartedServer();
-        const { logger } = silentLogger();
-
-        vi.useFakeTimers({ toFake: ["Date"] });
-
-        try {
-            const recorded = await markWorkerReadyWhenServing({
-                cwd: workdir,
-                logger,
-                origin: "http://localhost:8787",
-                probe: async () => {
-                    // The answer arrives after the deadline: the clock moves, nothing waits.
-                    vi.advanceTimersByTime(20);
-
-                    return true;
-                },
-                readyTimeoutMs: 5,
-                signal: new AbortController().signal,
-            });
-
-            expect(recorded).toBe(false);
-            expect(readDevServerState(workdir)?.readyAt).toBeUndefined();
-        } finally {
-            vi.useRealTimers();
             rmSync(workdir, { force: true, recursive: true });
         }
     });

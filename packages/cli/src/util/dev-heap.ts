@@ -27,11 +27,9 @@ interface HeapMemory {
 }
 
 const measureMemory = (): HeapMemory => {
-    // Looked up, not called directly: the engines range still includes Node releases
-    // where the method is experimental. It returns 0 (or, on some releases, a huge
-    // sentinel) when no cgroup limit applies, which the `min` with total memory absorbs.
-    const constrainedMemory = Reflect.get(process, "constrainedMemory") as (() => number) | undefined;
-    const constrained = typeof constrainedMemory === "function" ? constrainedMemory.call(process) : 0;
+    // 0 (or, on some releases, a huge sentinel) when no cgroup limit applies, which the `min` with total memory absorbs.
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- present (experimental) on every supported Node; only its stability label differs
+    const constrained = process.constrainedMemory();
 
     return {
         availableBytes: Math.min(constrained > 0 ? constrained : Number.POSITIVE_INFINITY, totalmem()),

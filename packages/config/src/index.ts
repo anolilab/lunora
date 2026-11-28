@@ -61,7 +61,7 @@ export type { DevEnvCheck, DevEnvCheckOptions, EnvKeyFailure } from "./dev-env-c
 export { checkDevEnv, describeDevEnvCheck, ENV_FILENAME } from "./dev-env-check";
 export type { DevProcess, DevProcessOptions, DevProcessSpawner } from "./dev-process";
 export { acceptsConnection, startDevProcess } from "./dev-process";
-export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
+export type { ClaimDevServerStateResult, DevServerMode, DevServerPhase, DevServerState } from "./dev-server-state";
 export {
     claimDevServerState,
     clearDevServerState,
@@ -72,6 +72,7 @@ export {
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,
     DEV_STATE_FILE,
+    devServerPhase,
     isDevServerReady,
     isProcessAlive,
     isRecordedProcessCurrent,

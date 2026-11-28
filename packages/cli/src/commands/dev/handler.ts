@@ -1,5 +1,5 @@
 import { runCodegen } from "@lunora/codegen";
-import type { ContainerLogStreamHandle, DiscoveryCache } from "@lunora/config";
+import type { ContainerLogStreamHandle, DevServerState, DiscoveryCache } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
     checkDevEnv,
@@ -52,11 +52,11 @@ import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
 import {
+    answerExistingServer,
     codegenRequested,
     detectDevFlavor,
     printCloudflareCliConfigWarning,
     readLiveReportingExited,
-    reportExistingServer,
     runLifecycleSubcommand,
     startBackground,
 } from "./lifecycle";
@@ -309,7 +309,7 @@ const afterWorkerSpawn = (
  * parent claimed before spawning it. Returns the live incumbent on a lost
  * claim.
  */
-const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url: string } | undefined => {
+const claimStartRecord = (plan: DevCommandPlan, cwd: string): DevServerState | undefined => {
     const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
     const claim = claimDevServerState(
         cwd,
@@ -727,9 +727,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         const existing = readLiveDevServerState(cwd);
 
         if (existing !== undefined && existing.pid !== process.pid && existing.pid !== handoffPid) {
-            reportExistingServer(logger, existing);
-
-            return { code: 0, plan };
+            return { code: await answerExistingServer(logger, existing, options.probeReady), plan };
         }
 
         // Atomically claim the record before ANY sibling starts (see
@@ -737,9 +735,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         const incumbent = claimStartRecord(plan, cwd);
 
         if (incumbent !== undefined) {
-            reportExistingServer(logger, incumbent);
-
-            return { code: 0, plan };
+            return { code: await answerExistingServer(logger, incumbent, options.probeReady), plan };
         }
 
         if (plan.flavor === "vite" || plan.flavor === "framework-worker") {
@@ -1021,9 +1017,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         const existing = readLiveReportingExited(cwd, logger);
 
         if (existing !== undefined) {
-            reportExistingServer(logger, existing);
-
-            return { code: 0 };
+            return { code: await answerExistingServer(logger, existing) };
         }
 
         // The daemon prints the tunnel's own warning into its log file, which

@@ -216,6 +216,26 @@ describe("lunora dev lifecycle", () => {
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
+        it("names a launcher's placeholder record as launching", () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, {
+                background: true,
+                mode: "cli",
+                pid: process.pid,
+                provisional: true,
+                startedAt: new Date().toISOString(),
+                url: "http://localhost:8787",
+            });
+
+            const { lines, logger } = recordingLogger();
+
+            runDevStatus({ cwd: workdir, json: false, logger });
+
+            expect(lines.some((line) => line.message.includes("launching"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("is the launcher"))).toBe(true);
+        });
+
         it("reports URL, pid, uptime, and background for a live record", () => {
             expect.assertions(3);
 
@@ -604,6 +624,7 @@ describe("lunora dev lifecycle", () => {
                 jsonLogs: false,
                 logger,
                 options: {} as DevOptions,
+                probe: async () => true,
                 remote: false,
                 run: () => {
                     spawned = true;
@@ -617,6 +638,75 @@ describe("lunora dev lifecycle", () => {
             expect(lines.some((line) => line.message.includes("already running"))).toBe(true);
             // The incumbent's record is untouched.
             expect(readDevServerState(workdir)?.pid).toBe(process.ppid);
+        });
+
+        it("does not call a live incumbent that never answers 'already running'", async () => {
+            expect.assertions(3);
+
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:8788" });
+
+            let spawned = false;
+            const { lines, logger } = recordingLogger();
+
+            const result = await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger,
+                options: {} as DevOptions,
+                probe: async () => false,
+                remote: false,
+                run: () => {
+                    spawned = true;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
+            expect(spawned).toBe(false);
+            expect(lines.some((line) => line.message.includes("has not answered there yet"))).toBe(true);
+        });
+
+        it("reports a launcher's provisional record as a start in progress, whatever answers on its guessed URL", async () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: process.ppid, provisional: true, url: "http://localhost:8787" });
+
+            const { lines, logger } = recordingLogger();
+
+            const result = await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger,
+                options: {} as DevOptions,
+                probe: async () => true,
+                remote: false,
+                run: () => Promise.resolve({ code: 0 }),
+            });
+
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
+            expect(lines.some((line) => line.message.includes("start is in progress"))).toBe(true);
+        });
+
+        it("marks its own claim as provisional until the server records itself", async () => {
+            expect.assertions(1);
+
+            let provisional: boolean | undefined;
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run: () => {
+                    provisional = readDevServerState(workdir)?.provisional;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            expect(provisional).toBe(true);
         });
     });
 

@@ -78,6 +78,16 @@ interface DevServerState {
     pid: number;
 
     /**
+     * `true` while the record is the background launcher's placeholder: `pid` is
+     * the launcher (or, after the launcher stopped waiting, the detached child it
+     * spawned) and `url` is the origin it guessed before anything listened. The
+     * server replaces the whole record with its own pid and resolved URL once it
+     * starts, which drops this flag. A provisional record never means a server
+     * is serving.
+     */
+    provisional?: boolean;
+
+    /**
      * ISO-8601 stamp marking when the server at {@link DevServerState.url} was
      * first observed accepting requests — absent until then.
      *
@@ -249,6 +259,7 @@ const readDevServerState = (projectRoot: string): DevServerState | undefined => 
         logFile: stringField(parsed, "logFile"),
         mode: parsed["mode"] === "vite" ? "vite" : "cli",
         pid: parsed["pid"],
+        provisional: parsed["provisional"] === true ? true : undefined,
         readyAt: stringField(parsed, "readyAt"),
         startedAt: stringField(parsed, "startedAt"),
         studioUrl: stringField(parsed, "studioUrl"),
@@ -312,6 +323,22 @@ const updateDevServerState = (projectRoot: string, patch: Partial<DevServerState
  * output, and any future reader cannot each invent their own answer.
  */
 const isDevServerReady = (state: Pick<DevServerState, "readyAt"> | undefined): boolean => state?.readyAt !== undefined;
+
+/** Where a recorded dev server is in its start, as {@link devServerPhase} names it. */
+type DevServerPhase = "launching" | "ready" | "starting";
+
+/**
+ * `launching` while the record is still the background launcher's placeholder
+ * (its pid and URL change once the server starts), `starting` once the server
+ * recorded itself but has not answered, `ready` once it has.
+ */
+const devServerPhase = (state: Pick<DevServerState, "provisional" | "readyAt">): DevServerPhase => {
+    if (state.provisional === true) {
+        return "launching";
+    }
+
+    return isDevServerReady(state) ? "ready" : "starting";
+};
 
 /**
  * Remove `.lunora/dev.json`. Idempotent and never throws. When `expectedPid`
@@ -437,7 +464,7 @@ const claimDevServerState = (projectRoot: string, state: DevServerState, options
     return { ok: writeDevServerState(projectRoot, state) !== undefined };
 };
 
-export type { ClaimDevServerStateResult, DevServerMode, DevServerState };
+export type { ClaimDevServerStateResult, DevServerMode, DevServerPhase, DevServerState };
 export {
     claimDevServerState,
     clearDevServerState,
@@ -448,6 +475,7 @@ export {
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,
     DEV_STATE_FILE,
+    devServerPhase,
     isDevServerReady,
     isProcessAlive,
     isRecordedProcessCurrent,

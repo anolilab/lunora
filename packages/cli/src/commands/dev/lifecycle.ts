@@ -27,6 +27,7 @@ import {
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
+    devServerPhase,
     isCodegenDisabled,
     isDevServerReady,
     isRecordedProcessCurrent,
@@ -300,9 +301,6 @@ const readLiveOrExited = (cwd: string): { exited?: ExitedServer; live?: DevServe
 /** Matches V8's fatal out-of-memory line. */
 const HEAP_EXHAUSTED = /JavaScript heap out of memory|Ineffective mark-compacts near heap limit/u;
 
-/** The flag the heap hint names; `<MiB>` is a placeholder for the user to fill in. */
-const HEAP_HINT_FLAG = ["--max-old-space-size", "<MiB>"].join("=");
-
 /** Tell the user a recorded background server is gone, with the end of its log. */
 const reportExitedServer = (logger: Logger, exited: ExitedServer): void => {
     logger.warn(
@@ -314,7 +312,8 @@ const reportExitedServer = (logger: Logger, exited: ExitedServer): void => {
     }
 
     if (exited.logTail.some((line) => HEAP_EXHAUSTED.test(line))) {
-        logger.warn(`  It ran out of V8 heap. Raise the limit with NODE_OPTIONS=${HEAP_HINT_FLAG} and start it again.`);
+        // eslint-disable-next-line no-secrets/no-secrets -- a flag name with a placeholder, not a credential
+        logger.warn("  It ran out of V8 heap. Raise the limit with NODE_OPTIONS=--max-old-space-size=<MiB> and start it again.");
     }
 };
 
@@ -354,10 +353,35 @@ const printCloudflareCliConfigWarning = (logger: Logger, cwd: string): void => {
     });
 };
 
-/** Report an already-running dev server + the lifecycle hints (the idempotent-start path). */
-const reportExistingServer = (logger: Logger, existing: { pid: number; url: string }): void => {
-    logger.warn(`Dev server already running at ${existing.url} (pid ${String(existing.pid)})`);
-    printLifecycleHints(logger);
+/**
+ * Answer a start that found another dev server's live record, and return its exit code.
+ *
+ * "Already running" (exit 0, the idempotent start) needs more than a live pid: the
+ * record must be the server's own and its origin must answer. A launcher's
+ * provisional record names a guessed URL, so an answer there could come from
+ * anything and never counts. Every other case exits {@link EXIT_CODE.UNAVAILABLE}
+ * with what the record shows, because a supervisor that read exit 0 as "serving"
+ * went on to talk to a port nothing was listening on.
+ */
+const answerExistingServer = async (logger: Logger, existing: DevServerState, probe: ReadinessProbe = defaultProbe): Promise<number> => {
+    if (existing.provisional !== true && (await probe(existing.url))) {
+        logger.warn(`Dev server already running at ${existing.url} (pid ${String(existing.pid)})`);
+        printLifecycleHints(logger);
+
+        return 0;
+    }
+
+    if (existing.provisional === true) {
+        logger.warn(`Another dev server start is in progress (pid ${String(existing.pid)}); its server has not recorded itself yet.`);
+    } else if (existing.readyAt === undefined) {
+        logger.warn(`A dev server is recorded at ${existing.url} (pid ${String(existing.pid)}) but has not answered there yet: still starting, or stuck.`);
+    } else {
+        logger.warn(`A dev server is recorded at ${existing.url} (pid ${String(existing.pid)}) and answered at ${existing.readyAt}, but does not answer now.`);
+    }
+
+    logger.info("  `lunora dev status` and `lunora dev logs` show what it is doing; `lunora dev stop` stops it so a new start can run.");
+
+    return EXIT_CODE.UNAVAILABLE;
 };
 
 /** Print the ready banner both humans and agents read after a background start. */
@@ -613,6 +637,8 @@ const startBackground = async (context: {
     jsonLogs: boolean;
     logger: Logger;
     options: DevOptions;
+    /** Injection seam for tests — defaults to the real HTTP readiness probe. */
+    probe?: ReadinessProbe;
     remote: boolean;
     /** Injection seam for tests — defaults to the real {@link runDevBackground}. */
     run?: (options: BackgroundCommandOptions) => Promise<{ code: number }>;
@@ -637,16 +663,13 @@ const startBackground = async (context: {
         background: true,
         mode: "cli",
         pid: process.pid,
+        provisional: true,
         startedAt: new Date().toISOString(),
         url,
     });
 
     if (!claim.ok) {
-        if (claim.existing !== undefined) {
-            reportExistingServer(logger, claim.existing);
-        }
-
-        return { code: 0 };
+        return { code: claim.existing === undefined ? 0 : await answerExistingServer(logger, claim.existing, context.probe) };
     }
 
     const handoff = { [DEV_HANDOFF_ENV]: String(process.pid) };
@@ -918,6 +941,7 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
             background: state.background === true,
             logFile: state.logFile,
             mode: state.mode,
+            phase: devServerPhase(state),
             pid: state.pid,
             // `running` is "a process exists"; `ready` is "it answered". A
             // supervisor composing Lunora with other workers wants the second —
@@ -942,10 +966,16 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
         // Distinguishes "the process is up" from "the worker answers" — the
         // record exists from the moment the server starts, so without this the
         // status line reads identically either side of the port opening.
-        isDevServerReady(state) ? "ready" : "starting",
+        devServerPhase(state),
     ];
 
     logger.success(`Dev server running at ${state.url} (${details.join(", ")})`);
+
+    if (state.provisional === true) {
+        logger.info(`  pid ${String(state.pid)} is the launcher; the server replaces this record with its own pid and URL once it starts.`);
+    } else if (!isDevServerReady(state)) {
+        logger.info("  Not answering yet; `lunora dev logs` shows what it is doing.");
+    }
 
     if (state.studioUrl !== undefined) {
         logger.info(`  Studio: ${state.studioUrl}`);
@@ -1031,11 +1061,11 @@ const runLifecycleSubcommand = (parameters: {
 
 export type { DevFlavor };
 export {
+    answerExistingServer,
     codegenRequested,
     detectDevFlavor,
     printCloudflareCliConfigWarning,
     readLiveReportingExited,
-    reportExistingServer,
     runDevBackground,
     runDevLogs,
     runDevStatus,
