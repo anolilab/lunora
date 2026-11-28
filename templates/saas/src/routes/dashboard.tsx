@@ -22,25 +22,29 @@ const WRITER_ROLES = new Set(["admin", "owner"]);
  * user id, and members live in better-auth's tables, so the names come from the
  * organization's member list; a user who is not in it (removed, or the list has
  * not loaded) reads as "Someone" rather than as a raw id.
+ *
+ * The list is fetched again whenever the feed changes, so a member who just joined
+ * is named on their first activity. The names are kept with the organization they
+ * were fetched for: after a switch, the previous organization's names never apply.
  */
-const useMemberNames = (organizationId: string): ((actorId: string) => string) => {
-    const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
+const useMemberNames = (organizationId: string, feed: unknown): ((actorId: string) => string) => {
+    const [lookup, setLookup] = useState<{ names: ReadonlyMap<string, string>; organizationId: string } | undefined>(undefined);
 
     useEffect(() => {
         let cancelled = false;
 
         void authClient.organization.getFullOrganization({ query: { organizationId } }).then(({ data }) => {
             if (!cancelled && data) {
-                setNames(new Map(data.members.map((member) => [member.userId, member.user.name || member.user.email])));
+                setLookup({ names: new Map(data.members.map((member) => [member.userId, member.user.name || member.user.email])), organizationId });
             }
         });
 
         return () => {
             cancelled = true;
         };
-    }, [organizationId]);
+    }, [organizationId, feed]);
 
-    return (actorId) => names.get(actorId) ?? "Someone";
+    return (actorId) => (lookup?.organizationId === organizationId ? lookup.names.get(actorId) : undefined) ?? "Someone";
 };
 
 /**
@@ -110,7 +114,7 @@ interface OrganizationDashboardProps {
 function OrganizationDashboard({ name, organizationId, orgRole, userId }: OrganizationDashboardProps) {
     const shard = { shardKey: organizationId };
     const payload = useQuery(api.saas.overview, {}, shard);
-    const resolveActor = useMemberNames(organizationId);
+    const resolveActor = useMemberNames(organizationId, payload?.activity);
 
     /*
      * Who else has this page open. `usePresence` heartbeats on an interval and
