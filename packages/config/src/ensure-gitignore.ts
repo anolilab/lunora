@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Split a `.gitignore` on either line ending, so a CRLF file's patterns still match. */
@@ -13,6 +13,10 @@ const GITIGNORE_LINE = /\r?\n/u;
  * it sits below every pattern that would otherwise catch its file. An appended
  * pattern lands BELOW whatever the file already had, so when anything is
  * appended every negation in `patterns` is re-stated after the additions.
+ *
+ * The lines are appended, never written over the file: an edit landing between
+ * this read and the write survives. Two such calls racing can append the block
+ * twice, which git reads the same as once.
  * @param directory The directory whose `.gitignore` is ensured; the patterns are relative to it.
  * @param patterns The `.gitignore` lines the directory must carry.
  * @returns The patterns appended, empty when the file already covered them all.
@@ -42,7 +46,7 @@ const ensureGitignoreEntries = (directory: string, patterns: ReadonlyArray<strin
         : missing;
     const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
 
-    writeFileSync(gitignorePath, `${existing}${prefix}\n# Lunora — local secrets and dev state, never commit\n${additions.join("\n")}\n`, "utf8");
+    appendFileSync(gitignorePath, `${prefix}\n# Lunora — local secrets and dev state, never commit\n${additions.join("\n")}\n`, "utf8");
 
     return missing;
 };
