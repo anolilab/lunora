@@ -70,6 +70,13 @@ type DevServerMode = "cli" | "vite";
 interface DevServerState {
     /** Whether the server was detached into the background (`lunora dev --background`). */
     background?: boolean;
+
+    /**
+     * PID of the background launcher that wrote a provisional record. It stays when
+     * the launcher re-points `pid` at its child, so only that launcher's handoff
+     * (see {@link DEV_HANDOFF_ENV}) replaces the record, never another launch's child.
+     */
+    launcherPid?: number;
     /** Absolute path of the log file capturing the server's output, when captured. */
     logFile?: string;
     /** `"cli"` for the `lunora dev` wrangler orchestration, `"vite"` for a Vite dev server. */
@@ -256,6 +263,7 @@ const readDevServerState = (projectRoot: string): DevServerState | undefined => 
 
     return {
         background: parsed["background"] === true,
+        launcherPid: typeof parsed["launcherPid"] === "number" ? parsed["launcherPid"] : undefined,
         logFile: stringField(parsed, "logFile"),
         mode: parsed["mode"] === "vite" ? "vite" : "cli",
         pid: parsed["pid"],
@@ -403,9 +411,9 @@ interface ClaimDevServerStateResult {
  *
  * `supersedePid` names ONE live record this claim may replace instead of
  * losing to: the provisional record a parent CLI wrote before spawning this
- * server (handed down via {@link DEV_HANDOFF_ENV}). A record marked
- * `provisional` is replaced too, whichever pid it carries. Any other live
- * record still wins.
+ * server (handed down via {@link DEV_HANDOFF_ENV}). A provisional record whose
+ * `launcherPid` is that parent is replaced too, whichever pid it carries now.
+ * Any other live record still wins.
  */
 
 /**
@@ -422,11 +430,11 @@ const resolveClaimConflict = (projectRoot: string, state: DevServerState, supers
         return undefined;
     }
 
-    // A provisional record counts as the handed-down one whatever its pid: when the
+    // The handed-down placeholder is matched by its launcher, not its pid: when the
     // launcher stops waiting it re-points the placeholder at the child it spawned,
     // which for a Vite project is the package-manager wrapper, not the server that
     // claims here. Losing that race left the placeholder in place for good.
-    if (supersedePid !== undefined && (existing.pid === supersedePid || existing.provisional === true)) {
+    if (supersedePid !== undefined && (existing.pid === supersedePid || (existing.provisional === true && existing.launcherPid === supersedePid))) {
         return { ok: writeDevServerState(projectRoot, state) !== undefined };
     }
 

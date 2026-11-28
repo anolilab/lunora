@@ -215,6 +215,33 @@ describe("writeDevConfig and git", () => {
         expect(readFileSync(join(root, "shared-ignore"), "utf8")).toBe("node_modules\n");
     });
 
+    it("ignores a service copy in a nested repository through that repository's own .gitignore", () => {
+        expect.assertions(1);
+
+        git("init", "-q");
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+        spawnSync("git", ["init", "-q"], { cwd: join(root, "services", "parser"), stdio: "ignore" });
+
+        const written = writeDevConfig(join(root, "services", "parser"), "service", "{}", root);
+
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+        expect(spawnSync("git", ["check-ignore", "-q", written.configPath], { cwd: join(root, "services", "parser") }).status).toBe(0);
+    });
+
+    it("checks every copy, not just the first in a folder", () => {
+        expect.assertions(1);
+
+        git("init", "-q");
+        // Covers the app's own copy only, so the service copy written next to it still needs a line.
+        writeFileSync(join(root, ".git", "info", "exclude"), ".wrangler.lunora-dev.*\n", "utf8");
+
+        writeDevConfig(root, "dev", "{}", root);
+
+        const service = writeDevConfig(root, "service", "{}", root);
+
+        expect(isIgnored(service.configPath)).toBe(true);
+    });
+
     it("writes no .gitignore outside a repository", () => {
         expect.assertions(1);
 

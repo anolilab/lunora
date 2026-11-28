@@ -509,6 +509,7 @@ const startBackground = async (context: {
 
     const claim = claimDevServerState(cwd, {
         background: true,
+        launcherPid: process.pid,
         mode: "cli",
         pid: process.pid,
         provisional: true,

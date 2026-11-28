@@ -566,6 +566,7 @@ type DevServerPhase = "launching" | "ready" | "starting";
 ```ts
 interface DevServerState {
     background?: boolean;
+    launcherPid?: number;
     logFile?: string;
     mode: DevServerMode;
     pid: number;

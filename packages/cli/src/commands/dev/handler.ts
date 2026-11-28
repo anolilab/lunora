@@ -1006,7 +1006,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
               });
 
     if (!isDaemon && (options.background === true || agent !== undefined)) {
-        // Idempotent start: a live server means success, not a conflict.
+        // A live record is answered, not overwritten: exit 0 when its server answers, 8 otherwise.
         const existing = readLiveReportingExited(cwd, logger);
 
         if (existing !== undefined) {

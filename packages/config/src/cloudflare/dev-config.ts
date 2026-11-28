@@ -114,8 +114,10 @@ const createCleanup = (path: string): (() => void) => {
     };
 };
 
-/** Folders whose ignore check already ran in this process. */
-const ignoreChecked = new Set<string>();
+/** `git check-ignore` for one path: 0 ignored, 1 not ignored, 128 (or `null`) outside a repository or without git. */
+const checkIgnoreStatus = (path: string): number | null =>
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell
+    spawnSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: dirname(path), stdio: "ignore", timeout: 5000 }).status;
 
 /**
  * Make git ignore a temp config before it exists. A service folder is often a
@@ -126,35 +128,26 @@ const ignoreChecked = new Set<string>();
  * excludes file or `.git/info/exclude` already covering the path must not make
  * this append a line to a tracked file. The line goes into the project's
  * `.gitignore` when the folder is inside the project (the pattern has no slash,
- * so it reaches subfolders), else into the folder's own. Outside a repository
- * (`check-ignore` exits 128) or without git, nothing is written.
+ * so it reaches subfolders). Git is asked again after each write, and the folder's
+ * own `.gitignore` takes the line when the project's cannot cover it: the folder is
+ * outside the project, is a nested repository, or a lower `.gitignore` negates the
+ * pattern. Outside a repository or without git, nothing is written.
  */
 const ensureDevConfigIgnored = (configPath: string, projectRoot: string): void => {
     const directory = dirname(configPath);
-
-    // A session rewrites its configs (each `generation`); git's answer for a folder does not change within it.
-    if (ignoreChecked.has(directory)) {
-        return;
-    }
-
-    ignoreChecked.add(directory);
+    const targets = directory !== projectRoot && isWithinDirectory(directory, projectRoot) ? [projectRoot, directory] : [directory];
 
     try {
-        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell
-        const { status } = spawnSync("git", ["check-ignore", "-q", "--no-index", configPath], { cwd: directory, stdio: "ignore", timeout: 5000 });
+        for (const target of targets) {
+            if (checkIgnoreStatus(configPath) !== 1) {
+                return;
+            }
 
-        if (status !== 1) {
-            return;
+            // Git does not read a `.gitignore` that is a symlink, so a line written through one ignores nothing.
+            if (lstatSync(join(target, ".gitignore"), { throwIfNoEntry: false })?.isSymbolicLink() !== true) {
+                ensureGitignoreEntries(target, [DEV_CONFIG_IGNORE]);
+            }
         }
-
-        const target = directory === projectRoot || isWithinDirectory(directory, projectRoot) ? projectRoot : directory;
-
-        // Git does not read a `.gitignore` that is a symlink, so a line written through one ignores nothing.
-        if (lstatSync(join(target, ".gitignore"), { throwIfNoEntry: false })?.isSymbolicLink() === true) {
-            return;
-        }
-
-        ensureGitignoreEntries(target, [DEV_CONFIG_IGNORE]);
     } catch {
         // An unignored temp file is noise in `git status`, never a reason to fail dev startup.
     }

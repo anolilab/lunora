@@ -1,4 +1,6 @@
 /** What a start, `status` and the MCP status tool make of the `.lunora/dev.json` record another dev server left. */
+import { setTimeout as sleep } from "node:timers/promises";
+
 import type { DevServerState } from "@lunora/config";
 import { clearDevServerState, devServerPhase, isRecordedProcessCurrent, readDevServerState } from "@lunora/config";
 
@@ -84,14 +86,24 @@ const printLifecycleHints = (logger: Logger): void => {
 };
 
 /**
- * Probe attempts for a server that has answered before. One attempt is bounded by
- * the probe's own timeout, and a serving worker can miss one while it rebuilds, so
- * a single miss must not turn an idempotent start into a failure.
+ * Probe attempts for a server that has answered before, and the pause between
+ * them. A serving worker can miss one while it rebuilds, and a reload closes its
+ * port for a moment, so the attempts span about a second rather than the few
+ * milliseconds three refused connections take.
  */
 const SERVING_PROBE_ATTEMPTS = 3;
+const SERVING_PROBE_GAP_MS = 500;
 
-const answersWithin = async (probe: ReadinessProbe, url: string, attempts: number): Promise<boolean> => {
+/** Waits between probe attempts; injectable so tests do not sleep. */
+type Pause = (ms: number) => Promise<unknown>;
+
+const answersWithin = async (probe: ReadinessProbe, url: string, attempts: number, pause: Pause): Promise<boolean> => {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
+        if (attempt > 0) {
+            // eslint-disable-next-line no-await-in-loop -- the gap between attempts is the point
+            await pause(SERVING_PROBE_GAP_MS);
+        }
+
         // eslint-disable-next-line no-await-in-loop -- attempts are sequential by design: each one waits for the previous to miss
         if (await probe(url)) {
             return true;
@@ -111,13 +123,13 @@ const answersWithin = async (probe: ReadinessProbe, url: string, attempts: numbe
  * with what the record shows, because a supervisor that read exit 0 as "serving"
  * went on to talk to a port nothing was listening on.
  */
-const answerExistingServer = async (logger: Logger, existing: DevServerState, probe: ReadinessProbe = defaultProbe): Promise<number> => {
+const answerExistingServer = async (logger: Logger, existing: DevServerState, probe: ReadinessProbe = defaultProbe, pause: Pause = sleep): Promise<number> => {
     const phase = devServerPhase(existing);
     const at = `${existing.url} (pid ${String(existing.pid)})`;
 
     if (phase === "launching") {
         logger.warn(`Another dev server start is in progress (pid ${String(existing.pid)}); its server has not recorded itself yet.`);
-    } else if (await answersWithin(probe, existing.url, phase === "ready" ? SERVING_PROBE_ATTEMPTS : 1)) {
+    } else if (await answersWithin(probe, existing.url, phase === "ready" ? SERVING_PROBE_ATTEMPTS : 1, pause)) {
         logger.warn(`Dev server already running at ${at}`);
         printLifecycleHints(logger);
 

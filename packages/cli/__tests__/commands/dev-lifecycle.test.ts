@@ -6,6 +6,7 @@ import { claimDevServerState, clearDevServerState, DEV_LOG_FILE, readDevServerSt
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { answerExistingServer } from "../../src/commands/dev/existing-server";
 import type { DevOptions } from "../../src/commands/dev/index";
 import { runDevBackground, runDevLogs, runDevStatus, runDevStop, startBackground } from "../../src/commands/dev/lifecycle";
 import { devHeapNodeOptions } from "../../src/util/dev-heap";
@@ -712,6 +713,27 @@ describe("lunora dev lifecycle", () => {
             expect(attempts).toBe(2);
         });
 
+        it("pauses between probe attempts, so a reload's closed port does not use them all up", async () => {
+            expect.assertions(2);
+
+            const events: string[] = [];
+            const code = await answerExistingServer(
+                recordingLogger().logger,
+                { mode: "cli", pid: process.ppid, readyAt: new Date().toISOString(), url: "http://localhost:8787" },
+                async () => {
+                    events.push("probe");
+
+                    return events.length > 1;
+                },
+                async (ms) => {
+                    events.push(`pause ${String(ms)}`);
+                },
+            );
+
+            expect(code).toBe(0);
+            expect(events).toStrictEqual(["probe", "pause 500", "probe"]);
+        });
+
         it("reports a launcher's provisional record as a start in progress, whatever answers on its guessed URL", async () => {
             expect.assertions(2);
 
@@ -745,7 +767,9 @@ describe("lunora dev lifecycle", () => {
                 options: {} as DevOptions,
                 remote: false,
                 run: () => {
-                    provisional = readDevServerState(workdir)?.provisional;
+                    const record = readDevServerState(workdir);
+
+                    provisional = record?.provisional === true && record.launcherPid === process.pid;
 
                     return Promise.resolve({ code: 0 });
                 },
