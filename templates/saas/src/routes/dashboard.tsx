@@ -1,10 +1,12 @@
 import { useMutation, usePresence, useQuery } from "@lunora/react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
 import type { Id } from "../../lunora/_generated/dataModel";
 import { ActivityFeed, OverviewStats, PresenceBar, ProjectsCard } from "../../lunora/saas-ui/react";
+
+import { authClient } from "../auth-client";
 
 import "../../lunora/saas-ui/styles.css";
 
@@ -14,6 +16,32 @@ export const Route = createFileRoute("/dashboard")({
 
 /** Roles the server lets create and archive projects (`WRITER_ROLES` in `lunora/saas/index.ts`). */
 const WRITER_ROLES = new Set(["admin", "owner"]);
+
+/**
+ * Actor id → display name for the activity feed. Activity rows carry only the
+ * user id, and members live in better-auth's tables, so the names come from the
+ * organization's member list; a user who is not in it (removed, or the list has
+ * not loaded) reads as "Someone" rather than as a raw id.
+ */
+const useMemberNames = (organizationId: string): ((actorId: string) => string) => {
+    const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
+
+    useEffect(() => {
+        let cancelled = false;
+
+        void authClient.organization.getFullOrganization({ query: { organizationId } }).then(({ data }) => {
+            if (!cancelled && data) {
+                setNames(new Map(data.members.map((member) => [member.userId, member.user.name || member.user.email])));
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [organizationId]);
+
+    return (actorId) => names.get(actorId) ?? "Someone";
+};
 
 /**
  * Who the caller is and which organisation they are in — read on the root
@@ -82,6 +110,7 @@ interface OrganizationDashboardProps {
 function OrganizationDashboard({ name, organizationId, orgRole, userId }: OrganizationDashboardProps) {
     const shard = { shardKey: organizationId };
     const payload = useQuery(api.saas.overview, {}, shard);
+    const resolveActor = useMemberNames(organizationId);
 
     /*
      * Who else has this page open. `usePresence` heartbeats on an interval and
@@ -137,7 +166,7 @@ function OrganizationDashboard({ name, organizationId, orgRole, userId }: Organi
                 onCreate={create}
                 rows={payload?.projects}
             />
-            <ActivityFeed now={now} rows={payload?.activity} timeZone={timeZone} />
+            <ActivityFeed now={now} resolveActor={resolveActor} rows={payload?.activity} timeZone={timeZone} />
         </main>
     );
 }
