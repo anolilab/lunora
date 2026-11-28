@@ -166,7 +166,11 @@ const readBookedRefunds = (row: PaymentRow, currency: string): BookedRefund[] | 
             throw new LunoraPaymentError("VALIDATION_ERROR", "payment store: a `bookedRefunds` entry has no id");
         }
 
-        return { amount: money(readMinorUnits(record as PaymentRow, "minor"), currency), id };
+        return {
+            amount: money(readMinorUnits(record as PaymentRow, "minor"), currency),
+            id,
+            ...(record["dispute"] === true ? { reversal: "dispute" as const } : {}),
+        };
     });
 };
 
@@ -236,7 +240,11 @@ const sessionToRow = (session: PaymentSession): Record<string, unknown> => {
                           );
                       }
 
-                      return { id: refund.id, minor: toMinorUnitsColumn(refund.amount.minorUnits, "bookedRefunds") };
+                      return {
+                          ...(refund.reversal === "dispute" ? { dispute: true } : {}),
+                          id: refund.id,
+                          minor: toMinorUnitsColumn(refund.amount.minorUnits, "bookedRefunds"),
+                      };
                   }),
               }),
         ...(session.disputedAmount === undefined || isZeroMoney(session.disputedAmount)

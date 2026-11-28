@@ -104,7 +104,16 @@ const sessions = defineTable({
      * the same guarded write as the total, which is what makes a refund count once. OPTIONAL, so adding it needs no
      * backfill: a row written before it reads as no refund recorded.
      */
-    bookedRefunds: v.optional(v.array(v.object({ id: v.string(), minor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER) }))),
+    bookedRefunds: v.optional(
+        v.array(
+            v.object({
+                // Set on a lost dispute's entry, absent on a refund's — see `BookedRefund.reversal`.
+                dispute: v.optional(v.boolean()),
+                id: v.string(),
+                minor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+            }),
+        ),
+    ),
     provider: v.string(),
     providerSessionId: v.string(),
     referenceId: v.string(),

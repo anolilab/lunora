@@ -44,7 +44,7 @@ export const payment_sessions = sqliteTable("payment_sessions", {
     createdAt: real("createdAt").notNull(),
     currency: text("currency").notNull(),
     disputedMinor: real("disputedMinor"),
-    bookedRefunds: text("bookedRefunds", { mode: "json" }).$type<Array<{ id: string; minor: number }>>(),
+    bookedRefunds: text("bookedRefunds", { mode: "json" }).$type<Array<{ dispute?: boolean; id: string; minor: number }>>(),
     provider: text("provider").notNull(),
     providerSessionId: text("providerSessionId").notNull(),
     referenceId: text("referenceId").notNull(),

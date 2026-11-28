@@ -977,7 +977,7 @@ describe("createDatabasePaymentStore", () => {
 
         const bookedRefunds = [
             { amount: money(300, "USD"), id: "re_1" },
-            { amount: money(200, "USD"), id: "dp_1" },
+            { amount: money(200, "USD"), id: "dp_1", reversal: "dispute" as const },
         ];
 
         await store.upsertPaymentSession({ ...session, bookedRefunds, refundedAmount: money(500, "USD"), state: "partially_refunded" });
@@ -987,7 +987,7 @@ describe("createDatabasePaymentStore", () => {
         expect(rows.map((row) => row["bookedRefunds"])).toStrictEqual([
             [
                 { id: "re_1", minor: 300 },
-                { id: "dp_1", minor: 200 },
+                { dispute: true, id: "dp_1", minor: 200 },
             ],
         ]);
         await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.bookedRefunds)).resolves.toStrictEqual(bookedRefunds);

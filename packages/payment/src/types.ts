@@ -70,6 +70,8 @@ export interface BookedRefund {
     readonly amount: Money;
     /** The provider's refund id, or the dispute id for a lost dispute (the two never collide). */
     readonly id: string;
+    /** A lost dispute: its amount is part of {@link PaymentSession.disputedAmount}, not a refund a provider total counts. */
+    readonly reversal?: "dispute";
 }
 
 export interface PaymentSession {

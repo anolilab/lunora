@@ -95,7 +95,7 @@ const bookRefundDelta = (row: PaymentSession, delta: RefundDelta): RefundDeltaOu
     }
 
     return {
-        bookedRefunds: appendBooked(row.bookedRefunds, [{ amount, id: delta.id }]),
+        bookedRefunds: appendBooked(row.bookedRefunds, [{ amount, id: delta.id, ...(delta.reversal === "dispute" ? { reversal: "dispute" as const } : {}) }]),
         // The dispute total is a part of the refunded total, so a capped dispute is capped there too.
         ...(delta.reversal === "dispute" ? { disputedAmount: minMoney(addMoney(disputedOf(row), amount), refundedAmount) } : {}),
         kind: "booked",

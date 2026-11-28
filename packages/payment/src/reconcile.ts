@@ -216,8 +216,9 @@ const holdsUnnamedRefunds = (merged: PaymentSession): boolean => {
 
     let named = zeroMoney(currency);
 
+    // A lost dispute's entry is in `disputedAmount`, which the total below already leaves out.
     for (const refund of merged.bookedRefunds ?? []) {
-        if (refund.amount.currency === currency) {
+        if (refund.reversal !== "dispute" && refund.amount.currency === currency) {
             named = addMoney(named, refund.amount);
         }
     }

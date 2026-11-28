@@ -161,7 +161,7 @@ export const billingTables = {
         // these columns are read with.
         amountMinor: v.number(),
         // The refunds counted in `refundedMinor`, by provider refund id; absent means none recorded.
-        bookedRefunds: v.optional(v.array(v.object({ id: v.string(), minor: v.number() }))),
+        bookedRefunds: v.optional(v.array(v.object({ dispute: v.optional(v.boolean()), id: v.string(), minor: v.number() }))),
         capturedMinor: v.number(),
         createdAt: v.number(),
         currency: v.string(),

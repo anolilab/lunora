@@ -57,6 +57,7 @@ type AuthorizeReference = (referenceId: string) => boolean | Promise<boolean>;
 interface BookedRefund {
     readonly amount: Money;
     readonly id: string;
+    readonly reversal?: "dispute";
 }
 ```
 

@@ -755,7 +755,7 @@ export interface Doc_payment_sessions {
     _id: Id<"payment_sessions">;
     _creationTime: number;
     amountMinor: number;
-    bookedRefunds?: Array<{ id: string; minor: number }>;
+    bookedRefunds?: Array<{ dispute?: boolean; id: string; minor: number }>;
     capturedMinor: number;
     createdAt: number;
     currency: string;
@@ -1841,7 +1841,7 @@ export interface Insert_payment_sessions {
     _id?: Id<"payment_sessions">;
     _creationTime?: number;
     amountMinor: number;
-    bookedRefunds?: Array<{ id: string; minor: number }>;
+    bookedRefunds?: Array<{ dispute?: boolean; id: string; minor: number }>;
     capturedMinor: number;
     createdAt: number;
     currency: string;

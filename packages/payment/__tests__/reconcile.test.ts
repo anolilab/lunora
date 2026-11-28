@@ -1301,6 +1301,54 @@ describe("reconcile — a refund total beside the refund webhooks that make it u
         await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
     });
 
+    it("reads the refund list of a row whose only named entry is a lost dispute, so the refund beside it is counted once", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const row: PaymentSession = {
+            ...stored,
+            amount: money(100, "USD"),
+            bookedRefunds: [{ amount: money(20, "USD"), id: "dp_1", reversal: "dispute" }],
+            capturedAmount: money(100, "USD"),
+            disputedAmount: money(20, "USD"),
+            id: "pay_1",
+            provider: "dodopayments",
+            refundedAmount: money(20, "USD"),
+            state: "partially_refunded",
+        };
+        const listRefunds = vi.fn<() => Promise<ProviderRefund[]>>(async () => [{ amount: money(10, "USD"), refundId: "re_1", status: "succeeded" }]);
+        const adapter = {
+            getPaymentStatus: async () => {
+                return { ...row, bookedRefunds: undefined, disputedAmount: undefined, referenceId: "", refundedAmount: money(10, "USD") };
+            },
+            identifier: "dodopayments",
+            listRefunds,
+        } as unknown as PaymentAdapter;
+
+        await store.upsertPaymentSession(row);
+        await reconcile({ adapter, paymentSessionIds: ["pay_1"], singleSubscriptionPerReference: false, store });
+
+        expect(listRefunds).toHaveBeenCalledTimes(1);
+        await expect(store.getPaymentSession("dodopayments", "pay_1")).resolves.toMatchObject({
+            bookedRefunds: [
+                { amount: money(20, "USD"), id: "dp_1", reversal: "dispute" },
+                { amount: money(10, "USD"), id: "re_1" },
+            ],
+            refundedAmount: money(30, "USD"),
+        });
+        await expect(
+            applyWebhookAction(store, {
+                amount: money(10, "USD"),
+                eventId: "evt_re_1",
+                provider: "dodopayments",
+                refundId: "re_1",
+                sessionId: "pay_1",
+                type: "payment.refunded",
+            }),
+        ).resolves.toStrictEqual({ applied: false, reason: "duplicate" });
+        await expect(store.getPaymentSession("dodopayments", "pay_1").then((written) => written?.refundedAmount.minorUnits)).resolves.toBe(30n);
+    });
+
     it("leaves a row's booked refunds in place when it repairs the row", async () => {
         expect.assertions(2);
 

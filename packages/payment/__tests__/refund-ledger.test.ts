@@ -83,6 +83,14 @@ describe("bookRefundDelta — disputes and blank ids", () => {
         });
     });
 
+    it("marks the entry of a lost dispute as one", () => {
+        expect.assertions(1);
+
+        expect(bookRefundDelta(row(), { amount: money(100, "USD"), id: "dp_1", reversal: "dispute" })).toMatchObject({
+            bookedRefunds: [{ amount: money(100, "USD"), id: "dp_1", reversal: "dispute" }],
+        });
+    });
+
     it.each(["", "   "])("refuses a refund whose id is blank (%j)", (id) => {
         expect.assertions(1);
 
