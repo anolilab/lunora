@@ -21,7 +21,7 @@ import {
 const fileWrites: { flag: string | undefined; path: string }[] = [];
 
 /** When set, the next write lands half its content and then fails, as an interrupted process would leave it. */
-let tearNextWrite = false;
+let tearNextWrite: true | undefined;
 
 vi.mock(import("node:fs"), async (importOriginal) => {
     const actual = await importOriginal();
@@ -33,8 +33,8 @@ vi.mock(import("node:fs"), async (importOriginal) => {
 
             fileWrites.push({ flag: typeof options === "object" && options !== null ? options.flag?.toString() : undefined, path: String(arguments_[0]) });
 
-            if (tearNextWrite) {
-                tearNextWrite = false;
+            if (tearNextWrite === true) {
+                tearNextWrite = undefined;
                 actual.writeFileSync(arguments_[0], typeof arguments_[1] === "string" ? arguments_[1].slice(0, 10) : "");
 
                 throw new Error("EIO: write interrupted");
