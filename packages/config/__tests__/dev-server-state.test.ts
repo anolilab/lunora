@@ -214,4 +214,22 @@ describe("dev-server-state", () => {
         expect(stranger.ok).toBe(false);
         expect(readDevServerState(workdir)?.url).toBe("http://localhost:5173");
     });
+
+    it("claimDevServerState supersedes a launcher placeholder re-pointed at another pid", () => {
+        expect.assertions(4);
+
+        // After the ready wait times out, the launcher re-points its placeholder at the
+        // child it spawned, which is not the process that claims later.
+        writeDevServerState(workdir, { background: true, mode: "cli", pid: process.pid, provisional: true, url: "http://localhost:5173" });
+
+        const unhanded = claimDevServerState(workdir, { mode: "vite", pid: 99_999, url: "http://localhost:5199" });
+
+        expect(unhanded.ok).toBe(false);
+
+        const handed = claimDevServerState(workdir, { mode: "vite", pid: 99_999, url: "http://localhost:5199" }, { supersedePid: 12_345 });
+
+        expect(handed.ok).toBe(true);
+        expect(readDevServerState(workdir)?.url).toBe("http://localhost:5199");
+        expect(readDevServerState(workdir)?.provisional).toBeUndefined();
+    });
 });

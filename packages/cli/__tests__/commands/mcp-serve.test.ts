@@ -531,6 +531,19 @@ describe("dev tools", () => {
         expect(parsed.hint).toContain("lunora dev");
     });
 
+    it("names a background server that died instead of clearing its record silently", async () => {
+        expect.assertions(3);
+
+        // pid 2147483646 is above the platform's pid ceiling, so it can't be running.
+        recordDevServer({ background: true, pid: 2_147_483_646 });
+
+        const parsed = JSON.parse(textOf(await toolNamed("lunora_dev_status").handle({}))) as { exited?: { pid: number }; hint: string; running: boolean };
+
+        expect(parsed.running).toBe(false);
+        expect(parsed.exited?.pid).toBe(2_147_483_646);
+        expect(parsed.hint).toContain("lunora dev logs");
+    });
+
     it("reports the running server's url, studio url and mode", async () => {
         expect.assertions(3);
 

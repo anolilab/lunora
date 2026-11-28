@@ -403,8 +403,9 @@ interface ClaimDevServerStateResult {
  *
  * `supersedePid` names ONE live record this claim may replace instead of
  * losing to: the provisional record a parent CLI wrote before spawning this
- * server (handed down via {@link DEV_HANDOFF_ENV}). Any other live record
- * still wins.
+ * server (handed down via {@link DEV_HANDOFF_ENV}). A record marked
+ * `provisional` is replaced too, whichever pid it carries. Any other live
+ * record still wins.
  */
 
 /**
@@ -421,7 +422,11 @@ const resolveClaimConflict = (projectRoot: string, state: DevServerState, supers
         return undefined;
     }
 
-    if (supersedePid !== undefined && existing.pid === supersedePid) {
+    // A provisional record counts as the handed-down one whatever its pid: when the
+    // launcher stops waiting it re-points the placeholder at the child it spawned,
+    // which for a Vite project is the package-manager wrapper, not the server that
+    // claims here. Losing that race left the placeholder in place for good.
+    if (supersedePid !== undefined && (existing.pid === supersedePid || existing.provisional === true)) {
         return { ok: writeDevServerState(projectRoot, state) !== undefined };
     }
 

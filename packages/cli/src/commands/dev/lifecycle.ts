@@ -354,6 +354,24 @@ const printCloudflareCliConfigWarning = (logger: Logger, cwd: string): void => {
 };
 
 /**
+ * Probe attempts for a server that has answered before. One attempt is bounded by
+ * the probe's own timeout, and a serving worker can miss one while it rebuilds, so
+ * a single miss must not turn an idempotent start into a failure.
+ */
+const SERVING_PROBE_ATTEMPTS = 3;
+
+const answersWithin = async (probe: ReadinessProbe, url: string, attempts: number): Promise<boolean> => {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop -- attempts are sequential by design: each one waits for the previous to miss
+        if (await probe(url)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
  * Answer a start that found another dev server's live record, and return its exit code.
  *
  * "Already running" (exit 0, the idempotent start) needs more than a live pid: the
@@ -364,7 +382,7 @@ const printCloudflareCliConfigWarning = (logger: Logger, cwd: string): void => {
  * went on to talk to a port nothing was listening on.
  */
 const answerExistingServer = async (logger: Logger, existing: DevServerState, probe: ReadinessProbe = defaultProbe): Promise<number> => {
-    if (existing.provisional !== true && (await probe(existing.url))) {
+    if (existing.provisional !== true && (await answersWithin(probe, existing.url, existing.readyAt === undefined ? 1 : SERVING_PROBE_ATTEMPTS))) {
         logger.warn(`Dev server already running at ${existing.url} (pid ${String(existing.pid)})`);
         printLifecycleHints(logger);
 
@@ -972,7 +990,7 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
     logger.success(`Dev server running at ${state.url} (${details.join(", ")})`);
 
     if (state.provisional === true) {
-        logger.info(`  pid ${String(state.pid)} is the launcher; the server replaces this record with its own pid and URL once it starts.`);
+        logger.info("  This is the background launcher's placeholder; the server replaces it with its own pid and URL once it starts.");
     } else if (!isDevServerReady(state)) {
         logger.info("  Not answering yet; `lunora dev logs` shows what it is doing.");
     }
@@ -1065,6 +1083,7 @@ export {
     codegenRequested,
     detectDevFlavor,
     printCloudflareCliConfigWarning,
+    readLiveOrExited,
     readLiveReportingExited,
     runDevBackground,
     runDevLogs,

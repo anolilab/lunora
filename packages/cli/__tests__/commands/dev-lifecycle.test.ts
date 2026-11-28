@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevOptions } from "../../src/commands/dev/index";
 import { runDevBackground, runDevLogs, runDevStatus, runDevStop, startBackground } from "../../src/commands/dev/lifecycle";
+import { devHeapNodeOptions } from "../../src/util/dev-heap";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
@@ -233,7 +234,7 @@ describe("lunora dev lifecycle", () => {
             runDevStatus({ cwd: workdir, json: false, logger });
 
             expect(lines.some((line) => line.message.includes("launching"))).toBe(true);
-            expect(lines.some((line) => line.message.includes("is the launcher"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("launcher's placeholder"))).toBe(true);
         });
 
         it("reports URL, pid, uptime, and background for a live record", () => {
@@ -667,6 +668,31 @@ describe("lunora dev lifecycle", () => {
             expect(lines.some((line) => line.message.includes("has not answered there yet"))).toBe(true);
         });
 
+        it("retries a server that has answered before, so one missed probe is not a failed start", async () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, readyAt: new Date().toISOString(), url: "http://localhost:8787" });
+
+            let attempts = 0;
+
+            const result = await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                probe: async () => {
+                    attempts += 1;
+
+                    return attempts === 2;
+                },
+                remote: false,
+                run: () => Promise.resolve({ code: 0 }),
+            });
+
+            expect(result.code).toBe(0);
+            expect(attempts).toBe(2);
+        });
+
         it("reports a launcher's provisional record as a start in progress, whatever answers on its guessed URL", async () => {
             expect.assertions(2);
 
@@ -826,7 +852,8 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(nodeOptions).toMatch(/^--enable-source-maps --max-old-space-size=\d+$/u);
+            // What the helper decides depends on this machine's memory and heap; the wiring is what is under test.
+            expect(nodeOptions).toBe(devHeapNodeOptions("--enable-source-maps") ?? "--enable-source-maps");
         });
 
         it("surfaces the log tail and fails when the daemon dies before readiness", async () => {

@@ -18,6 +18,7 @@ import { DEV_STATE_DIR, devServerPhase, isDevServerReady, readLiveDevServerState
 import type { McpTool, ToolResult } from "@lunora/mcp";
 
 import isInsideDirectory from "../../util/path-containment";
+import { readLiveOrExited } from "../dev/lifecycle";
 
 /** Log lines returned when the caller doesn't ask for a specific number. */
 const DEFAULT_LOG_LINES = 100;
@@ -98,10 +99,18 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
         },
         // eslint-disable-next-line @typescript-eslint/require-await -- the McpTool contract is Promise-returning; this surface happens to be synchronous, and dropping `async` would only move the wrapping to the return sites.
         handle: async (): Promise<ToolResult> => {
-            const state = readLiveDevServerState(projectRoot);
+            const { exited, live: state } = readLiveOrExited(projectRoot);
 
             if (state === undefined) {
-                return ok({ hint: "Start it with `lunora dev` in the project directory.", running: false });
+                // The log tail stays out: this tool only reads log files inside the project (see `containedLogFile`).
+                return ok({
+                    ...(exited === undefined ? {} : { exited: { pid: exited.pid, url: exited.url } }),
+                    hint:
+                        exited === undefined
+                            ? "Start it with `lunora dev` in the project directory."
+                            : "The background dev server exited; `lunora dev logs` shows how it ended. Start it again with `lunora dev`.",
+                    running: false,
+                });
             }
 
             return ok({
