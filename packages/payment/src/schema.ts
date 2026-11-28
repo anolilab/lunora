@@ -17,8 +17,8 @@
  * number column, unlike a `v.bigint()` one, is also accepted on a `.global()` table and compares
  * numerically there. Every row carries a
  * `provider` discriminator so multiple providers can coexist during a migration. A refund is folded
- * into its `sessions` row (`refundedMinor` + a `refunded`/`partially_refunded` state), not a separate
- * ledger table.
+ * into its `sessions` row (`refundedMinor` + a `refunded`/`partially_refunded` state, and the refund's id in
+ * `bookedRefunds`), not a separate ledger table.
  */
 import type { SchemaExtension, TableDefinition } from "@lunora/server";
 import { defineSchemaExtension, defineTable } from "@lunora/server";
@@ -98,6 +98,22 @@ const sessions = defineTable({
      * OPTIONAL, so adding it needs no backfill: a row written before it reads as no dispute.
      */
     disputedMinor: v.optional(v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER)),
+
+    /**
+     * The refunds counted in `refundedMinor`, by provider refund id — see `PaymentSession.bookedRefunds`. Written in
+     * the same guarded write as the total, which is what makes a refund count once. OPTIONAL, so adding it needs no
+     * backfill: a row written before it reads as no refund recorded.
+     */
+    bookedRefunds: v.optional(
+        v.array(
+            v.object({
+                // Set on a lost dispute's entry, absent on a refund's — see `BookedRefund.reversal`.
+                dispute: v.optional(v.boolean()),
+                id: v.string(),
+                minor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+            }),
+        ),
+    ),
     provider: v.string(),
     providerSessionId: v.string(),
     referenceId: v.string(),

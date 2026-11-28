@@ -260,7 +260,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 amount: money((readNumber(object, "amount") ?? 0) + (readNumber(object, "tax_amount") ?? 0), currency),
                 referenceId: referenceFromMetadata(object),
                 // The event object IS the refund, so its `id` is this refund's id — the identity the
-                // sync layer matches against the marker `refundPayment` left for its own refund.
+                // sync layer counts it once by, whether `refundPayment` or an earlier event booked it.
                 refundId: readString(object, "id"),
                 sessionId: readString(object, "order_id") ?? readString(object, "id"),
                 type: "payment.refunded",

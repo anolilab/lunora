@@ -691,6 +691,7 @@ describe("applyWebhookAction", () => {
             amount: money(400, "USD"),
             eventId: "evt_2",
             provider: "stripe",
+            refundId: "re_1",
             sessionId: "pi_1",
             type: "payment.refunded",
         };
@@ -723,6 +724,7 @@ describe("applyWebhookAction", () => {
             amount: money(400, "USD"),
             eventId: "evt_2",
             provider: "stripe",
+            refundId: "re_1",
             sessionId: "pi_1",
             type: "payment.refunded",
         });
@@ -738,6 +740,7 @@ describe("applyWebhookAction", () => {
             amount: money(600, "USD"),
             eventId: "evt_3",
             provider: "stripe",
+            refundId: "re_2",
             sessionId: "pi_1",
             type: "payment.refunded",
         });
@@ -751,7 +754,7 @@ describe("applyWebhookAction", () => {
     });
 
     it("books a delta provider's refund once when two events restate the same refund id", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const store = new MemoryPaymentStore();
 
@@ -774,7 +777,7 @@ describe("applyWebhookAction", () => {
 
         await expect(applyWebhookAction(store, refunded("evt_2"))).resolves.toEqual({ applied: true, reason: "ok" });
 
-        await applyWebhookAction(store, refunded("evt_3"));
+        await expect(applyWebhookAction(store, refunded("evt_3"))).resolves.toEqual({ applied: false, reason: "duplicate" });
 
         const session = await store.getPaymentSession("polar", "pi_1");
 
@@ -787,7 +790,7 @@ describe("applyWebhookAction", () => {
         await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(8000n);
     });
 
-    it("releases the kept refund claim when the amount is rejected, so a corrected restatement books", async () => {
+    it("books nothing for a rejected amount, so a corrected restatement of the same refund books", async () => {
         expect.assertions(3);
 
         const store = new MemoryPaymentStore();
@@ -795,9 +798,9 @@ describe("applyWebhookAction", () => {
         await applyWebhookAction(store, { amount: money(1000, "EUR"), eventId: "evt_1", provider: "polar", sessionId: "pi_1", type: "payment.captured" });
 
         // A refund event whose currency disagrees with the row is rejected without writing anything
-        // (a payload that omitted `currency` falls back to "usd" in the adapter). The refund id is
-        // real, so the claim was taken — and it has to come back, or the provider's corrected
-        // restatement of the SAME refund is zeroed and the money never reaches the ledger.
+        // (a payload that omitted `currency` falls back to "usd" in the adapter). Its id must not be
+        // recorded anywhere, or the provider's corrected restatement of the SAME refund is a duplicate
+        // and the money never reaches the ledger.
         const rejected = await applyWebhookAction(store, {
             amount: money(400, "USD"),
             eventId: "evt_2",
@@ -823,30 +826,35 @@ describe("applyWebhookAction", () => {
         await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(400n);
     });
 
-    it("still accumulates two same-amount refunds from a provider that reports no refund id", async () => {
-        expect.assertions(1);
+    it("refuses a refund delta that names no refund, leaving the row unchanged", async () => {
+        expect.assertions(2);
 
         const store = new MemoryPaymentStore();
 
         await applyWebhookAction(store, { ...captureEvent("evt_1"), provider: "polar" });
 
-        const refund = (eventId: string): WebhookAction => {
-            return { amount: money(400, "USD"), eventId, provider: "polar", sessionId: "pi_1", type: "payment.refunded" };
-        };
+        const before = await store.getPaymentSession("polar", "pi_1");
 
-        // With no refund id the marker key is only `(session, amount)`, which two genuinely distinct
-        // same-amount refunds SHARE. Keeping that claim the way a per-refund-id one is kept would
-        // silently swallow the second refund, so this case stays test-and-release.
-        await applyWebhookAction(store, refund("evt_2"));
-        await applyWebhookAction(store, refund("evt_3"));
-
-        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(800n);
+        // A delta is counted once by its refund id; one without an id (a malformed payload) could be counted
+        // again by every restatement, so it is acknowledged and booked nowhere.
+        await expect(
+            applyWebhookAction(store, { amount: money(400, "USD"), eventId: "evt_2", provider: "polar", sessionId: "pi_1", type: "payment.refunded" }),
+        ).resolves.toEqual({ applied: false, reason: "invalid_refund_amount" });
+        await expect(store.getPaymentSession("polar", "pi_1")).resolves.toStrictEqual(before);
     });
 
-    it("releases the kept refund claim when the row write fails, so the retry still books it", async () => {
-        expect.assertions(3);
+    it("claims nothing for a refund whose row write fails, so the retry still books it", async () => {
+        expect.assertions(4);
 
         const store = new MemoryPaymentStore();
+        const claimed: string[] = [];
+        const markEventProcessed = store.markEventProcessed.bind(store);
+
+        store.markEventProcessed = async (provider, eventId, type) => {
+            claimed.push(eventId);
+
+            return markEventProcessed(provider, eventId, type);
+        };
 
         await applyWebhookAction(store, { ...captureEvent("evt_1"), provider: "polar" });
 
@@ -872,16 +880,16 @@ describe("applyWebhookAction", () => {
             type: "payment.refunded",
         };
 
-        // The claim that makes a refund book once is taken BEFORE the row is written. A failed write
-        // must give it back, or the provider's retry sees this refund as already booked, zeroes the
-        // amount, and the money never reaches the ledger at all.
+        // What makes a refund book once is its id on the row, written by the same write as its money. A
+        // failed write therefore records nothing, and the provider's retry books the refund.
         await expect(applyWebhookAction(store, refund)).rejects.toThrow("store write failed");
         await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: true, reason: "ok" });
 
         await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(400n);
+        expect(claimed.filter((eventId) => eventId.startsWith("local-refund:"))).toStrictEqual([]);
     });
 
-    it("releases the kept refund claim on an out-of-order refund, so the redelivery books it", async () => {
+    it("records nothing for an out-of-order refund, so the redelivery books it", async () => {
         expect.assertions(3);
 
         const store = new MemoryPaymentStore();
@@ -898,7 +906,7 @@ describe("applyWebhookAction", () => {
         };
 
         // The refund lands on a row that exists but has not captured yet, so nothing is written and
-        // the event is released for ONE redelivery. The refund claim has to come back with it.
+        // the event is released for ONE redelivery, which books it.
         await expect(applyWebhookAction(store, refund)).resolves.toEqual({ applied: false, reason: "orphaned" });
 
         await applyWebhookAction(store, { ...captureEvent("evt_3"), provider: "polar" });
@@ -918,6 +926,7 @@ describe("applyWebhookAction", () => {
             amount: money(1500, "USD"),
             eventId: "evt_2",
             provider: "stripe",
+            refundId: "re_1",
             sessionId: "pi_1",
             type: "payment.refunded",
         });
@@ -933,6 +942,7 @@ describe("applyWebhookAction", () => {
             amount: money(400, "USD"),
             eventId: "evt_3",
             provider: "stripe",
+            refundId: "re_2",
             sessionId: "pi_1",
             type: "payment.refunded",
         });
@@ -1214,6 +1224,7 @@ describe("applyWebhookAction", () => {
             eventId: "evt_refund",
             provider: "stripe",
             referenceId: "user_1",
+            refundId: "re_1",
             sessionId: "pi_1",
             type: "payment.refunded",
         };
@@ -1243,6 +1254,7 @@ describe("applyWebhookAction", () => {
             amount: money(400, "USD"),
             eventId: "evt_refund",
             provider: "stripe",
+            refundId: "re_1",
             sessionId: "pi_1",
             type: "payment.refunded",
         };
@@ -1315,14 +1327,14 @@ describe("applyWebhookAction — bug-hunt regressions", () => {
         return { amount: money(30, "USD"), eventId, provider: "polar", refundId: "re_1", sessionId: "ord_1", type: "payment.refunded", ...extra };
     };
 
-    it("never writes back a pre-claim row when a restatement of the same refund loses the claim", async () => {
+    it("never writes back a stale row when a restatement of the same refund read it before the refund was booked", async () => {
         expect.assertions(2);
 
         const store = new MemoryPaymentStore();
 
         await store.upsertPaymentSession(captured("user_1"));
 
-        // Two deliveries of one refund read the row together; the first books it before the second claims.
+        // Two deliveries of one refund read the row together; the first books it before the second writes.
         const getPaymentSession = vi.spyOn(store, "getPaymentSession");
 
         getPaymentSession.mockResolvedValueOnce(captured("user_1"));
@@ -1719,7 +1731,7 @@ describe("applyWebhookAction — a payment event racing another write to its row
         expect(session?.state).toBe("partially_refunded");
     });
 
-    it("throws when every guarded write loses, and releases the refund claim for the redelivery", async () => {
+    it("throws when every guarded write loses, and the redelivery books the refund", async () => {
         expect.assertions(3);
 
         const store = new MemoryPaymentStore();
@@ -1741,12 +1753,12 @@ describe("applyWebhookAction — a payment event racing another write to its row
 
         await expect(applyWebhookAction(losing, refund)).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
 
-        // The event claim and the refund claim both came back, so the redelivery books the money.
+        // The event claim came back and nothing else was recorded, so the redelivery books the money.
         await expect(applyWebhookAction(store, refund)).resolves.toStrictEqual({ applied: true, reason: "ok" });
         await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(30n);
     });
 
-    it("releases the refund claim when a later pass throws after a lost guarded write", async () => {
+    it("books the refund on redelivery when a later pass throws after a lost guarded write", async () => {
         expect.assertions(3);
 
         const store = new MemoryPaymentStore();
@@ -1784,6 +1796,140 @@ describe("applyWebhookAction — a payment event racing another write to its row
         await expect(applyWebhookAction(flaky, refund)).rejects.toThrow("store read failed");
 
         await expect(applyWebhookAction(store, refund)).resolves.toStrictEqual({ applied: true, reason: "ok" });
+        await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(30n);
+    });
+});
+
+describe("applyWebhookAction — the refund ledger on the row", () => {
+    const capture: WebhookAction = {
+        amount: money(100, "USD"),
+        eventId: "evt_capture",
+        provider: "polar",
+        referenceId: "user_1",
+        sessionId: "pi_1",
+        type: "payment.captured",
+    };
+
+    const refundEvent = (eventId: string): WebhookAction => {
+        return { amount: money(30, "USD"), eventId, provider: "polar", refundId: "re_1", sessionId: "pi_1", type: "payment.refunded" };
+    };
+
+    class Stopped extends Error {}
+
+    /**
+     * `store`, as seen by an isolate that stops before its `stopAt`-th store call (1-based): that call and every later
+     * one throw, a rollback included, so nothing after the stop reaches the store. `calls()` counts the calls made.
+     */
+    const stoppingAt = (store: MemoryPaymentStore, stopAt: number): { calls: () => number; store: PaymentStore } => {
+        let made = 0;
+        const proxy = new Proxy(store, {
+            get: (target, property, receiver) => {
+                const value: unknown = Reflect.get(target, property, receiver);
+
+                if (typeof value !== "function") {
+                    return value;
+                }
+
+                return async (...args: unknown[]): Promise<unknown> => {
+                    made += 1;
+
+                    if (made >= stopAt) {
+                        throw new Stopped("isolate stopped");
+                    }
+
+                    return (value as (...parameters: unknown[]) => Promise<unknown>).apply(target, args);
+                };
+            },
+        });
+
+        return { calls: () => made, store: proxy };
+    };
+
+    it("books a refund once whatever store call a stopped isolate never made", async () => {
+        expect.hasAssertions();
+
+        const probe = new MemoryPaymentStore();
+
+        await applyWebhookAction(probe, capture);
+
+        const counting = stoppingAt(probe, Number.POSITIVE_INFINITY);
+
+        await applyWebhookAction(counting.store, refundEvent("evt_refund"));
+
+        const calls = counting.calls();
+
+        // The claim, the row read, the pre-change marker read, the row write, then the pending-refund reads.
+        expect(calls).toBeGreaterThanOrEqual(4);
+
+        for (let stopAt = 1; stopAt <= calls; stopAt += 1) {
+            const store = new MemoryPaymentStore();
+
+            // eslint-disable-next-line no-await-in-loop -- one isolate per stop point, each on its own store
+            await applyWebhookAction(store, capture);
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await expect(applyWebhookAction(stoppingAt(store, stopAt).store, refundEvent("evt_refund"))).rejects.toBeInstanceOf(Stopped);
+
+            // The provider redelivers, and Polar restates the refund under `refund.updated`. A stop before the row write
+            // leaves the event id claimed, so the redelivery of that id is dropped; the restatement then books the refund.
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await applyWebhookAction(store, refundEvent("evt_refund"));
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await applyWebhookAction(store, refundEvent("evt_refund_updated"));
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            const session = await store.getPaymentSession("polar", "pi_1");
+
+            expect(session?.refundedAmount.minorUnits).toBe(30n);
+            expect(session?.bookedRefunds?.map((refund) => refund.id)).toStrictEqual(["re_1"]);
+        }
+    });
+
+    it.each(["", "  "])("refuses a refund delta whose id is blank (%j), and still books an absolute total without one", async (refundId) => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const getEventClaim = vi.spyOn(store, "getEventClaim");
+
+        await applyWebhookAction(store, capture);
+
+        await expect(applyWebhookAction(store, { ...refundEvent("evt_blank"), refundId })).resolves.toStrictEqual({
+            applied: false,
+            reason: "invalid_refund_amount",
+        });
+        expect(getEventClaim).not.toHaveBeenCalledWith("polar", expect.stringMatching(/^local-refund:/u));
+        await expect(
+            applyWebhookAction(store, {
+                amount: money(30, "USD"),
+                amountKind: "absolute",
+                eventId: "evt_total",
+                provider: "polar",
+                sessionId: "pi_1",
+                type: "payment.refunded",
+            }),
+        ).resolves.toStrictEqual({ applied: true, reason: "ok" });
+    });
+
+    it("answers duplicate for a refund booked before rows named their refunds", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        // A row as written before `bookedRefunds` existed, with the marker its booking left in the events table.
+        await store.upsertPaymentSession({
+            amount: money(100, "USD"),
+            capturedAmount: money(100, "USD"),
+            createdAt: 0,
+            id: "pi_1",
+            provider: "polar",
+            referenceId: "user_1",
+            refundedAmount: money(30, "USD"),
+            state: "partially_refunded",
+            updatedAt: 0,
+        });
+        await store.markEventProcessed("polar", "local-refund:pi_1:id:re_1", "marker.local_refund");
+
+        await expect(applyWebhookAction(store, refundEvent("evt_refund_updated"))).resolves.toStrictEqual({ applied: false, reason: "duplicate" });
         await expect(store.getPaymentSession("polar", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(30n);
     });
 });

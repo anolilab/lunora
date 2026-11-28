@@ -224,9 +224,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 ...base,
                 amount: amount === undefined ? undefined : moneyFromMinor(amount, refundCurrency),
                 referenceId: referenceFromMetadata(object),
-                // The event object IS the refund, so its `id` is this refund's id. Creem issues refunds
-                // only from the dashboard (`refundPayment` throws), so no marker can ever match it —
-                // carrying it still keeps a same-amount dashboard refund from consuming one.
+                // The event object IS the refund, so its `id` is this refund's id: the sync layer counts
+                // the refund once by it, and refuses a delta without one.
                 refundId: readString(object, "id"),
                 // Key on the CHECKOUT id: `checkout.completed` writes the row under
                 // `CheckoutEntity.id` (see `checkoutToSession`) and `getPaymentStatus` retrieves the

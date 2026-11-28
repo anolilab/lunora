@@ -168,6 +168,23 @@ describe("dodopayments adapter", () => {
         expect(result.state).toBe("captured");
     });
 
+    it("holds a settled refund whose id Dodo left out as pending, since only its id lets the ledger count it once", async () => {
+        expect.assertions(1);
+
+        const client = {
+            ...makeClient(),
+            refunds: {
+                create: async () => {
+                    return { amount: 2500, currency: "USD", payment_id: "pay_1", status: "succeeded" };
+                },
+            },
+        };
+
+        const adapter = createDodoPaymentsAdapter({ client: () => client, webhookSecret: SECRET });
+
+        await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ pending: true, refundId: "", state: "captured" });
+    });
+
     it("sums the payment's succeeded refunds instead of reporting zero refunded (regression)", async () => {
         expect.assertions(4);
 

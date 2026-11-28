@@ -51,6 +51,16 @@ type AuthorizeContextReference = (referenceId: string, caller: {
 type AuthorizeReference = (referenceId: string) => boolean | Promise<boolean>;
 ```
 
+### `BookedRefund` (interface)
+
+```ts
+interface BookedRefund {
+    readonly amount: Money;
+    readonly id: string;
+    readonly reversal?: "dispute";
+}
+```
+
 ### `CancelSubscriptionOptions` (interface)
 
 ```ts
@@ -483,6 +493,7 @@ interface PaymentRow extends Record<string, unknown> {
 ```ts
 interface PaymentSession {
     readonly amount: Money;
+    readonly bookedRefunds?: ReadonlyArray<BookedRefund>;
     readonly capturedAmount: Money;
     readonly createdAt: number;
     readonly disputedAmount?: Money;
@@ -642,7 +653,7 @@ interface RefundResult extends PaymentSession {
     readonly pending?: boolean;
     readonly refundedAmount: Money;
     readonly refundedTotal?: Money;
-    readonly refundId?: string;
+    readonly refundId: string;
 }
 ```
 

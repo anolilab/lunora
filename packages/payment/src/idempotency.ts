@@ -54,7 +54,7 @@
  * not reliable for proration. Every key the facade forwards is hashed and namespaced to the object it acts on, a
  * caller-supplied one included, so one tenant's key never claims another's.
  */
-import type { Money, ProviderId } from "./types";
+import type { ProviderId } from "./types";
 
 const encoder = new TextEncoder();
 
@@ -99,27 +99,11 @@ export const derivedIdempotencyKey = async (operation: string, provider: string,
 };
 
 /**
- * Marker recording that the facade already folded ONE specific refund into `sessionId`'s row.
- *
- * Claimed (in the same store as inbound event ids) by `refundPayment` and consumed by the provider's
- * confirming `payment.refunded` webhook, so a DELTA provider's event — Polar, Creem, Dodo, which
- * report one refund each rather than a running total — does not add the same money a second time.
- * Absolute providers (Stripe) are idempotent without it, and an unconsumed marker is inert.
- *
- * The key is the provider's own `refundId` whenever there is one, because that is the only per-refund
- * identity: two in-flight refunds of the same amount on one session are two distinct refunds, and
- * keying on the amount would give them one shared marker, so one confirming event would be counted
- * twice. `amount` is the fallback for a provider that reports no refund id, and carries that
- * collision.
+ * The events-table key that recorded a booked refund before the payment row named its refunds (`bookedRefunds`). Nothing
+ * writes it any more; it is read only to recognise a refund booked back then, so its redelivery adds nothing. Delete it
+ * with its two readers once no such refund can be redelivered.
  */
-export const localRefundKey = (sessionId: string, refundId: string | undefined, amount: Money): string =>
-    refundId === undefined ? `local-refund:${sessionId}:${amount.currency}:${String(amount.minorUnits)}` : `local-refund:${sessionId}:id:${refundId}`;
-
-/**
- * Claim `type` recorded for a {@link localRefundKey} marker. Internal bookkeeping, not a provider
- * delivery — the `marker.` prefix is what separates the two in the `events` audit log.
- */
-export const LOCAL_REFUND_CLAIM_TYPE = "marker.local_refund";
+export const localRefundKey = (sessionId: string, refundId: string): string => `local-refund:${sessionId}:id:${refundId}`;
 
 /**
  * Marker for a refund on `sessionId` the provider may have issued and the ledger may not hold yet.
@@ -129,8 +113,8 @@ export const LOCAL_REFUND_CLAIM_TYPE = "marker.local_refund";
  * carries it from there), or the row write took it. Every other way out — a failed ledger write, a lost
  * answer, a stopped isolate — leaves it standing, so nothing has to succeed for the session to stay blocked.
  * Once its holder has ended (see {@link unbookedRefundDoneKey}) or its lease has run out, the next `refundPayment` or
- * `settlePendingRefund` takes it over and books the provider's settled refunds before any further refund is issued. A confirming webhook acknowledged as a duplicate meanwhile loses
- * nothing: the provider's list is what books the money.
+ * `settlePendingRefund` takes it over and books the provider's settled refunds before any further refund is issued. A
+ * refund its confirming webhook booked meanwhile is named on the row, so the list adds nothing for it.
  */
 export const unbookedRefundKey = (sessionId: string): string => `unbooked-refund:${sessionId}`;
 

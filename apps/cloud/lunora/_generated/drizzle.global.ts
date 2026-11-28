@@ -852,6 +852,7 @@ export const payment_sessions = sqliteTable("payment_sessions", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     amountMinor: real("amountMinor").notNull(),
+    bookedRefunds: text("bookedRefunds", { mode: "json" }).$type<Array<{ dispute?: boolean; id: string; minor: number }>>(),
     capturedMinor: real("capturedMinor").notNull(),
     createdAt: real("createdAt").notNull(),
     currency: text("currency").notNull(),

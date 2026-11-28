@@ -965,6 +965,96 @@ describe("createDatabasePaymentStore", () => {
         expect(written?.disputedAmount?.minorUnits).toBe(300n);
     });
 
+    it("round-trips the booked refunds through a column the schema accepts, and reads a row without it as none", async () => {
+        expect.assertions(4);
+
+        const db = makeValidatingDb();
+        const store = createDatabasePaymentStore(db);
+
+        await store.upsertPaymentSession(session);
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ bookedRefunds: undefined });
+
+        const bookedRefunds = [
+            { amount: money(300, "USD"), id: "re_1" },
+            { amount: money(200, "USD"), id: "dp_1", reversal: "dispute" as const },
+        ];
+
+        await store.upsertPaymentSession({ ...session, bookedRefunds, refundedAmount: money(500, "USD"), state: "partially_refunded" });
+
+        const { rows } = await db.findMany("payment_sessions", {});
+
+        expect(rows.map((row) => row["bookedRefunds"])).toStrictEqual([
+            [
+                { id: "re_1", minor: 300 },
+                { dispute: true, id: "dp_1", minor: 200 },
+            ],
+        ]);
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.bookedRefunds)).resolves.toStrictEqual(bookedRefunds);
+
+        // A write built without the list (one that never read it) leaves the stored list standing.
+        await store.upsertPaymentSession({ ...session, refundedAmount: money(500, "USD"), state: "partially_refunded" });
+
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.bookedRefunds?.map((refund) => refund.id))).resolves.toStrictEqual([
+            "re_1",
+            "dp_1",
+        ]);
+    });
+
+    it("refuses to write a booked refund in a currency other than the session's", async () => {
+        expect.assertions(2);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        await expect(
+            store.upsertPaymentSession({ ...session, bookedRefunds: [{ amount: money(300, "EUR"), id: "re_1" }], refundedAmount: money(300, "USD") }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(db.findMany("payment_sessions", {}).then((page) => page.rows)).resolves.toStrictEqual([]);
+    });
+
+    it.each([
+        ["the memory store", (): PaymentStore => new MemoryPaymentStore()],
+        ["the database store", (): PaymentStore => createDatabasePaymentStore(makeDb())],
+    ])("keeps a session's booked refunds in %s when a write omits them or carries an empty list", async (_name, makeStore) => {
+        expect.assertions(2);
+
+        const store = makeStore();
+        const bookedRefunds = [{ amount: money(300, "USD"), id: "re_1" }];
+
+        await store.upsertPaymentSession({ ...session, bookedRefunds, refundedAmount: money(300, "USD"), state: "partially_refunded" });
+        await store.upsertPaymentSession({ ...session, refundedAmount: money(300, "USD"), state: "partially_refunded", updatedAt: 2 });
+
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.bookedRefunds)).resolves.toStrictEqual(bookedRefunds);
+
+        await store.upsertPaymentSession({ ...session, bookedRefunds: [], refundedAmount: money(300, "USD"), state: "partially_refunded", updatedAt: 3 });
+
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.bookedRefunds)).resolves.toStrictEqual(bookedRefunds);
+    });
+
+    it("refuses a stored booked refund without an id, rather than forgetting it was counted", async () => {
+        expect.assertions(1);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        await db.insert("payment_sessions", {
+            amountMinor: 1000,
+            bookedRefunds: [{ minor: 300 }],
+            capturedMinor: 1000,
+            createdAt: 1,
+            currency: "USD",
+            provider: "stripe",
+            providerSessionId: "pi_1",
+            referenceId: "user_1",
+            refundedMinor: 300,
+            state: "partially_refunded",
+            updatedAt: 1,
+        });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).rejects.toThrow(/bookedRefunds/u);
+    });
+
     it("stores the largest safe amount exactly and refuses one that would round", async () => {
         expect.assertions(4);
 

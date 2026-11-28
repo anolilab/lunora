@@ -6,7 +6,7 @@ import type { PaymentObserver } from "../src/observability";
 import { reconcile } from "../src/reconcile";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
-import type { Subscription } from "../src/types";
+import type { PaymentSession, ProviderRefund, Subscription, WebhookAction } from "../src/types";
 
 const subscription = (state: Subscription["state"]): Subscription => {
     return {
@@ -1051,5 +1051,348 @@ describe("reconcile — a lost dispute beside refunds", () => {
 
         expect(merged?.refundedAmount.minorUnits).toBe(100n);
         expect(merged?.state).toBe("refunded");
+    });
+});
+
+describe("reconcile — a refund total beside the refund webhooks that make it up (Polar)", () => {
+    const stored: PaymentSession = {
+        amount: money(1000, "USD"),
+        capturedAmount: money(1000, "USD"),
+        createdAt: 1,
+        id: "ord_1",
+        provider: "polar",
+        referenceId: "user_1",
+        refundedAmount: money(0, "USD"),
+        state: "captured",
+        updatedAt: 1,
+    };
+
+    /** A Polar adapter whose order snapshot reports `refunded` and whose refund list is `listRefunds`. */
+    const polarAdapter = (refunded: number, listRefunds: () => Promise<ProviderRefund[]>): PaymentAdapter =>
+        ({
+            getPaymentStatus: async () => {
+                return { ...stored, referenceId: "", refundedAmount: money(refunded, "USD"), state: refunded > 0 ? "partially_refunded" : "captured" };
+            },
+            identifier: "polar",
+            listRefunds,
+        }) as unknown as PaymentAdapter;
+
+    const refundCreated = (eventId: string): WebhookAction => {
+        return { amount: money(300, "USD"), eventId, provider: "polar", refundId: "ref_1", sessionId: "ord_1", type: "payment.refunded" };
+    };
+
+    const settled = async (): Promise<ProviderRefund[]> => [{ amount: money(300, "USD"), refundId: "ref_1", status: "succeeded" }];
+
+    it("counts a refund once when its delta webhook follows a reconcile that wrote its total", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(stored);
+        await reconcile({ adapter: polarAdapter(300, settled), paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.bookedRefunds?.map((refund) => refund.id))).resolves.toStrictEqual(["ref_1"]);
+        await expect(applyWebhookAction(store, refundCreated("evt_created"))).resolves.toStrictEqual({ applied: false, reason: "duplicate" });
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD"), state: "partially_refunded" });
+    });
+
+    it("counts a refund once when a reconcile of its total follows its delta webhook", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(stored);
+        await applyWebhookAction(store, refundCreated("evt_created"));
+
+        await expect(
+            reconcile({ adapter: polarAdapter(300, settled), paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store }),
+        ).resolves.toMatchObject({ updatedPayments: 0 });
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD"), state: "partially_refunded" });
+    });
+
+    it.each([
+        [
+            "the refund list cannot be read",
+            async (): Promise<ProviderRefund[]> => {
+                throw new Error("polar unavailable");
+            },
+        ],
+        [
+            "the refund list holds less than the total",
+            async (): Promise<ProviderRefund[]> => [{ amount: money(300, "USD"), refundId: "ref_1", status: "pending" }],
+        ],
+    ])("keeps the stored refunded total when %s, so the following delta webhook books the refund once", async (_case, listRefunds) => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(stored);
+        await reconcile({ adapter: polarAdapter(300, listRefunds), paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
+
+        await applyWebhookAction(store, refundCreated("evt_created"));
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD"), state: "partially_refunded" });
+    });
+
+    it("books a refund that settled between the snapshot and the list with its money, not only its id", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const capturedAt100 = { ...stored, amount: money(100, "USD"), capturedAmount: money(100, "USD") };
+        const listed = async (): Promise<ProviderRefund[]> => [
+            { amount: money(30, "USD"), refundId: "ref_1", status: "succeeded" },
+            { amount: money(20, "USD"), refundId: "ref_2", status: "succeeded" },
+        ];
+        const adapter = {
+            getPaymentStatus: async () => {
+                return { ...capturedAt100, referenceId: "", refundedAmount: money(30, "USD"), state: "partially_refunded" };
+            },
+            identifier: "polar",
+            listRefunds: listed,
+        } as unknown as PaymentAdapter;
+
+        await store.upsertPaymentSession(capturedAt100);
+        await reconcile({ adapter, paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({
+            bookedRefunds: [
+                { amount: money(30, "USD"), id: "ref_1" },
+                { amount: money(20, "USD"), id: "ref_2" },
+            ],
+            refundedAmount: money(50, "USD"),
+        });
+        await expect(
+            applyWebhookAction(store, {
+                amount: money(20, "USD"),
+                eventId: "evt_ref_2",
+                provider: "polar",
+                refundId: "ref_2",
+                sessionId: "ord_1",
+                type: "payment.refunded",
+            }),
+        ).resolves.toStrictEqual({ applied: false, reason: "duplicate" });
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(50n);
+    });
+
+    it("names the refunds of a payment it writes for the first time, so the delta webhook that follows is a duplicate", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        await reconcile({ adapter: polarAdapter(300, settled), paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.bookedRefunds?.map((refund) => refund.id))).resolves.toStrictEqual(["ref_1"]);
+        await expect(applyWebhookAction(store, refundCreated("evt_created"))).resolves.toStrictEqual({ applied: false, reason: "duplicate" });
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(300n);
+    });
+
+    it("writes a first-seen payment with nothing refunded when its refund list does not account for the total", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await reconcile({ adapter: polarAdapter(300, async () => []), paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
+    });
+
+    it("names the refunds of a total an earlier reconcile wrote without them, leaving the total as it is", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        // A row as a reconcile wrote it before rows named their refunds: the total, no list, no marker.
+        await store.upsertPaymentSession({ ...stored, refundedAmount: money(300, "USD"), state: "partially_refunded" });
+        await reconcile({ adapter: polarAdapter(300, settled), paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({
+            bookedRefunds: [{ amount: money(300, "USD"), id: "ref_1" }],
+            refundedAmount: money(300, "USD"),
+        });
+        await expect(applyWebhookAction(store, refundCreated("evt_created"))).resolves.toStrictEqual({ applied: false, reason: "duplicate" });
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(300n);
+    });
+
+    it("does not read the refund list of a row that already names every refund in its total", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const listRefunds = vi.fn<() => Promise<ProviderRefund[]>>(settled);
+
+        await store.upsertPaymentSession({
+            ...stored,
+            bookedRefunds: [{ amount: money(300, "USD"), id: "ref_1" }],
+            refundedAmount: money(300, "USD"),
+            state: "partially_refunded",
+        });
+        await reconcile({ adapter: polarAdapter(300, listRefunds), paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        expect(listRefunds).not.toHaveBeenCalled();
+    });
+
+    it("labels a total the listed refunds bring to the capture refunded", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const capturedAt100 = { ...stored, amount: money(100, "USD"), capturedAmount: money(100, "USD") };
+        const adapter = {
+            getPaymentStatus: async () => {
+                return { ...capturedAt100, referenceId: "", refundedAmount: money(30, "USD"), state: "partially_refunded" };
+            },
+            identifier: "polar",
+            listRefunds: async (): Promise<ProviderRefund[]> => [
+                { amount: money(30, "USD"), refundId: "ref_1", status: "succeeded" },
+                { amount: money(70, "USD"), refundId: "ref_2", status: "succeeded" },
+            ],
+        } as unknown as PaymentAdapter;
+
+        await store.upsertPaymentSession(capturedAt100);
+        await reconcile({ adapter, paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(100, "USD"), state: "refunded" });
+    });
+
+    it("reports a refund list that cannot be read, and still writes the fallback row", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+        const failure = new Error("polar unavailable");
+
+        const result = await reconcile({
+            adapter: polarAdapter(300, async () => {
+                throw failure;
+            }),
+            observability: observer,
+            paymentSessionIds: ["ord_1"],
+            singleSubscriptionPerReference: false,
+            store,
+        });
+
+        expect(observer).toHaveBeenCalledWith({ error: failure, id: "ord_1", kind: "payment", provider: "polar", type: "reconcile.error" });
+        expect(result).toMatchObject({ failedPayments: 0, updatedPayments: 1 });
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
+    });
+
+    it("reports a refund list that does not account for the provider's refund total", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+
+        await store.upsertPaymentSession(stored);
+        await reconcile({
+            adapter: polarAdapter(300, async () => []),
+            observability: observer,
+            paymentSessionIds: ["ord_1"],
+            singleSubscriptionPerReference: false,
+            store,
+        });
+
+        expect(observer).toHaveBeenCalledWith({
+            error: expect.objectContaining({ code: "PROVIDER_ERROR" }),
+            id: "ord_1",
+            kind: "payment",
+            provider: "polar",
+            type: "reconcile.error",
+        });
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
+    });
+
+    it("reads the refund list of a row whose only named entry is a lost dispute, so the refund beside it is counted once", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const row: PaymentSession = {
+            ...stored,
+            amount: money(100, "USD"),
+            bookedRefunds: [{ amount: money(20, "USD"), id: "dp_1", reversal: "dispute" }],
+            capturedAmount: money(100, "USD"),
+            disputedAmount: money(20, "USD"),
+            id: "pay_1",
+            provider: "dodopayments",
+            refundedAmount: money(20, "USD"),
+            state: "partially_refunded",
+        };
+        const listRefunds = vi.fn<() => Promise<ProviderRefund[]>>(async () => [{ amount: money(10, "USD"), refundId: "re_1", status: "succeeded" }]);
+        const adapter = {
+            getPaymentStatus: async () => {
+                return { ...row, bookedRefunds: undefined, disputedAmount: undefined, referenceId: "", refundedAmount: money(10, "USD") };
+            },
+            identifier: "dodopayments",
+            listRefunds,
+        } as unknown as PaymentAdapter;
+
+        await store.upsertPaymentSession(row);
+        await reconcile({ adapter, paymentSessionIds: ["pay_1"], singleSubscriptionPerReference: false, store });
+
+        expect(listRefunds).toHaveBeenCalledTimes(1);
+        await expect(store.getPaymentSession("dodopayments", "pay_1")).resolves.toMatchObject({
+            bookedRefunds: [
+                { amount: money(20, "USD"), id: "dp_1", reversal: "dispute" },
+                { amount: money(10, "USD"), id: "re_1" },
+            ],
+            refundedAmount: money(30, "USD"),
+        });
+        await expect(
+            applyWebhookAction(store, {
+                amount: money(10, "USD"),
+                eventId: "evt_re_1",
+                provider: "dodopayments",
+                refundId: "re_1",
+                sessionId: "pay_1",
+                type: "payment.refunded",
+            }),
+        ).resolves.toStrictEqual({ applied: false, reason: "duplicate" });
+        await expect(store.getPaymentSession("dodopayments", "pay_1").then((written) => written?.refundedAmount.minorUnits)).resolves.toBe(30n);
+    });
+
+    it("books a refund against the capture the snapshot reports when the row was last written before the capture", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const observer = vi.fn<PaymentObserver>();
+        const authorized: PaymentSession = { ...stored, amount: money(100, "USD"), capturedAmount: money(0, "USD"), state: "authorized" };
+        const adapter = {
+            getPaymentStatus: async () => {
+                return { ...authorized, capturedAmount: money(100, "USD"), referenceId: "", refundedAmount: money(30, "USD"), state: "partially_refunded" };
+            },
+            identifier: "polar",
+            listRefunds: async (): Promise<ProviderRefund[]> => [{ amount: money(30, "USD"), refundId: "ref_1", status: "succeeded" }],
+        } as unknown as PaymentAdapter;
+
+        await store.upsertPaymentSession(authorized);
+        await reconcile({ adapter, observability: observer, paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({
+            bookedRefunds: [{ amount: money(30, "USD"), id: "ref_1" }],
+            capturedAmount: money(100, "USD"),
+            refundedAmount: money(30, "USD"),
+            state: "partially_refunded",
+        });
+        expect(observer).not.toHaveBeenCalledWith(expect.objectContaining({ type: "reconcile.error" }));
+    });
+
+    it("leaves a row's booked refunds in place when it repairs the row", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const bookedRefunds = [{ amount: money(300, "USD"), id: "ref_1" }];
+
+        // The captured amount drifted, so the row is written; the snapshot names no refund.
+        await store.upsertPaymentSession({
+            ...stored,
+            bookedRefunds,
+            capturedAmount: money(900, "USD"),
+            refundedAmount: money(300, "USD"),
+            state: "partially_refunded",
+        });
+
+        await expect(
+            reconcile({ adapter: polarAdapter(300, settled), paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store }),
+        ).resolves.toMatchObject({ updatedPayments: 1 });
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.bookedRefunds)).resolves.toStrictEqual(bookedRefunds);
     });
 });

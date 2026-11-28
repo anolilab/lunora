@@ -83,7 +83,7 @@ export interface PaymentStore {
      *
      * `type` is recorded on the claim row so the `events` table is a readable audit log rather than
      * bare ids and timestamps: a real delivery passes its `WebhookActionType`, and the
-     * internal claim markers (`sync.ts`'s orphan-retry bound, the local-refund ledger) pass a
+     * internal claim markers (`sync.ts`'s orphan-retry bound, the refund holds) pass a
      * `marker.*` label so they are distinguishable from provider traffic in the studio.
      */
     markEventProcessed: (provider: ProviderId, eventId: string, type: string) => Promise<boolean>;
@@ -345,7 +345,12 @@ export class MemoryPaymentStore implements PaymentStore {
     }
 
     public upsertPaymentSession(session: PaymentSession, guard?: RevisionGuard): Promise<boolean> {
-        return Promise.resolve(applyRevisioned(this.sessions, recordKey(session.provider, session.id), session, guard));
+        const key = recordKey(session.provider, session.id);
+        // As the database store patches (it omits an empty list): a write that omits the list, or carries an empty one,
+        // keeps the stored one, so it cannot clear it.
+        const bookedRefunds = session.bookedRefunds?.length ? session.bookedRefunds : this.sessions.get(key)?.bookedRefunds;
+
+        return Promise.resolve(applyRevisioned(this.sessions, key, bookedRefunds === undefined ? session : { ...session, bookedRefunds }, guard));
     }
 
     public upsertSubscription(subscription: Subscription, guard?: RevisionGuard): Promise<boolean> {

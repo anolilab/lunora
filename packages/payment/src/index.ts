@@ -48,6 +48,7 @@ export { default as applyWebhookAction } from "./sync";
 export type {
     ApplyResult,
     AttachInput,
+    BookedRefund,
     CancelSubscriptionOptions,
     CaptureInput,
     CheckInput,
