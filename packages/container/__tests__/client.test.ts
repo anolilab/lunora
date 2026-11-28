@@ -725,6 +725,22 @@ describe(createContainerTestContext, () => {
         await expect(pooled.text()).resolves.toBe("worker-0:/probe");
     });
 
+    it(".pool({ attempts }) runs a single attempt: retries are not simulated", async () => {
+        expect.assertions(2);
+
+        // The real pool re-picks an instance and retries a 5xx up to `attempts`
+        // times. The double pins `attempts: 1` so a handler's own 5xx can't
+        // loop; this documents that deliberate gap so nobody tests retry
+        // behaviour against the double and passes for the wrong reason.
+        const handler = vi.fn<() => Response>(() => new Response("busy", { status: 503 }));
+        const containers = createContainerTestContext({ engine: handler });
+
+        const response = await containers.engine!.pool({ attempts: 2 }).fetch("/scan", { body: "{}", method: "POST" });
+
+        expect(response.status).toBe(503);
+        expect(handler).toHaveBeenCalledTimes(1);
+    });
+
     it(".any() spreads across the pool exactly as the real accessor does", async () => {
         expect.assertions(1);
 
