@@ -29,15 +29,10 @@ const LATE_POLL_FACTOR = 8;
  * `clearDevServerState(cwd, expectedPid)`), and a late stamp is exactly the case
  * that needs it: this process's server can answer after a newer one has claimed
  * the record, and an unguarded patch would mark that newer server ready on our
- * behalf. `lateOrigin` is set when the timeout warning already went out, so the
- * log also says the wait ended.
+ * behalf.
  */
-const stampReady = (cwd: string, logger: Logger, lateOrigin: string | undefined): boolean => {
+const stampReady = (cwd: string): boolean => {
     updateDevServerState(cwd, { readyAt: new Date().toISOString() }, { expectedPid: process.pid });
-
-    if (lateOrigin !== undefined) {
-        logger.info(`server answered on ${lateOrigin}; .lunora/dev.json now has readyAt.`);
-    }
 
     return readDevServerState(cwd)?.readyAt !== undefined;
 };
@@ -116,7 +111,14 @@ const markWorkerReadyWhenServing = async (options: {
         }
 
         if (answered) {
-            return stampReady(cwd, logger, late ? origin : undefined);
+            const stamped = stampReady(cwd);
+
+            if (late) {
+                // The timeout warning already went out; say the wait ended.
+                logger.info(`server answered on ${origin}; .lunora/dev.json now has readyAt.`);
+            }
+
+            return stamped;
         }
 
         if (!late && Date.now() >= deadline) {

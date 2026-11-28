@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -201,6 +201,18 @@ describe("writeDevConfig and git", () => {
 
         expect(readFileSync(join(root, "services", "parser", ".gitignore"), "utf8")).toContain(DEV_CONFIG_IGNORE);
         expect(existsSync(join(app, ".gitignore"))).toBe(false);
+    });
+
+    it("writes nothing through a .gitignore that is a symlink, which git does not read", () => {
+        expect.assertions(1);
+
+        git("init", "-q");
+        writeFileSync(join(root, "shared-ignore"), "node_modules\n", "utf8");
+        symlinkSync(join(root, "shared-ignore"), join(root, ".gitignore"));
+
+        writeDevConfig(join(root, "services", "parser"), "service", "{}", root);
+
+        expect(readFileSync(join(root, "shared-ignore"), "utf8")).toBe("node_modules\n");
     });
 
     it("writes no .gitignore outside a repository", () => {

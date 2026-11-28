@@ -15,7 +15,7 @@
  * config's own directory. The Vite path edits the config in memory instead.
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import ensureGitignoreEntries from "../ensure-gitignore";
@@ -114,6 +114,9 @@ const createCleanup = (path: string): (() => void) => {
     };
 };
 
+/** Folders whose ignore check already ran in this process. */
+const ignoreChecked = new Set<string>();
+
 /**
  * Make git ignore a temp config before it exists. A service folder is often a
  * subdirectory the project's `.gitignore` was never written for, and a file there
@@ -129,6 +132,13 @@ const createCleanup = (path: string): (() => void) => {
 const ensureDevConfigIgnored = (configPath: string, projectRoot: string): void => {
     const directory = dirname(configPath);
 
+    // A session rewrites its configs (each `generation`); git's answer for a folder does not change within it.
+    if (ignoreChecked.has(directory)) {
+        return;
+    }
+
+    ignoreChecked.add(directory);
+
     try {
         // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell
         const { status } = spawnSync("git", ["check-ignore", "-q", "--no-index", configPath], { cwd: directory, stdio: "ignore", timeout: 5000 });
@@ -137,7 +147,14 @@ const ensureDevConfigIgnored = (configPath: string, projectRoot: string): void =
             return;
         }
 
-        ensureGitignoreEntries(directory === projectRoot || isWithinDirectory(directory, projectRoot) ? projectRoot : directory, [DEV_CONFIG_IGNORE]);
+        const target = directory === projectRoot || isWithinDirectory(directory, projectRoot) ? projectRoot : directory;
+
+        // Git does not read a `.gitignore` that is a symlink, so a line written through one ignores nothing.
+        if (lstatSync(join(target, ".gitignore"), { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+            return;
+        }
+
+        ensureGitignoreEntries(target, [DEV_CONFIG_IGNORE]);
     } catch {
         // An unignored temp file is noise in `git status`, never a reason to fail dev startup.
     }

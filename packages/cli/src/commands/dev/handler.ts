@@ -50,16 +50,9 @@ import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
 import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
+import { answerExistingServer, readLiveReportingExited } from "./existing-server";
 import type { DevOptions } from "./index";
-import {
-    answerExistingServer,
-    codegenRequested,
-    detectDevFlavor,
-    printCloudflareCliConfigWarning,
-    readLiveReportingExited,
-    runLifecycleSubcommand,
-    startBackground,
-} from "./lifecycle";
+import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, runLifecycleSubcommand, startBackground } from "./lifecycle";
 import { startNodeDevWorker } from "./node-dev-server";
 import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";

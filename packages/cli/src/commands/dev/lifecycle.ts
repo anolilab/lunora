@@ -13,8 +13,8 @@
  */
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { DevServerState } from "@lunora/config";
@@ -25,7 +25,6 @@ import {
     detectFramework,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
-    DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
     devServerPhase,
     isCodegenDisabled,
@@ -45,7 +44,7 @@ import { warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
 import { servesDevInProcess } from "../../util/deploy-target-resolve";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
-import { devHeapEnvironment } from "../../util/dev-heap";
+import { withDevHeap } from "../../util/dev-heap";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
 import { EXIT_CODE } from "../../util/exit-code";
@@ -54,7 +53,9 @@ import { printJson } from "../../util/output-format";
 import { spawnShellCompat } from "../../util/spawn";
 import daemonArguments from "./daemon-arguments";
 import pollDevServerState from "./dev-state-poll";
+import { answerExistingServer, exitedLogTail, printLifecycleHints, readLiveOrExited, reportExitedServer } from "./existing-server";
 import type { DevOptions } from "./index";
+import { LOG_TAIL_MAX_BYTES, readLogTail, resolveLogPath } from "./log-file";
 
 /** Grace period `dev stop` allows for a clean SIGTERM shutdown before SIGKILL. */
 const STOP_GRACE_MS = 10_000;
@@ -62,8 +63,6 @@ const STOP_GRACE_MS = 10_000;
 const DEFAULT_LOG_LINES = 100;
 /** Log lines surfaced when a background start fails before becoming ready. */
 const FAILURE_LOG_TAIL_LINES = 40;
-/** Upper bound on how much of the capture log is read back — a long-lived run's log can grow unbounded. */
-const LOG_TAIL_MAX_BYTES = 256 * 1024;
 
 /**
  * How the dev child runs. `wrangler` is the classic `lunora dev` stack (wrangler
@@ -217,125 +216,6 @@ const defaultDetachedSpawner: DetachedSpawner = (descriptor) => {
 };
 
 /**
- * Read the trailing window of a log file as text, capped at
- * {@link LOG_TAIL_MAX_BYTES} so a giant long-running capture log is never
- * slurped whole; `undefined` when unreadable. When capped, the first
- * (likely partial) line of the window is dropped.
- */
-const readLogWindow = (path: string): string | undefined => {
-    try {
-        const { size } = statSync(path);
-
-        if (size <= LOG_TAIL_MAX_BYTES) {
-            return readFileSync(path, "utf8");
-        }
-
-        const fd = openSync(path, "r");
-
-        try {
-            const buffer = Buffer.alloc(LOG_TAIL_MAX_BYTES);
-            const read = readSync(fd, buffer, 0, LOG_TAIL_MAX_BYTES, size - LOG_TAIL_MAX_BYTES);
-            const text = buffer.toString("utf8", 0, read);
-
-            return text.slice(text.indexOf("\n") + 1);
-        } finally {
-            closeSync(fd);
-        }
-    } catch {
-        return undefined;
-    }
-};
-
-/** Read the last `count` lines of a log file (all lines when `count` <= 0, bounded by {@link LOG_TAIL_MAX_BYTES}); `[]` when unreadable. */
-const readLogTail = (path: string, count: number): string[] => {
-    const text = readLogWindow(path);
-
-    if (text === undefined) {
-        return [];
-    }
-
-    const lines = text.split("\n");
-
-    // A trailing newline yields one empty final element — not a real line.
-    if (lines.at(-1) === "") {
-        lines.pop();
-    }
-
-    return count > 0 ? lines.slice(-count) : lines;
-};
-
-/** The absolute capture-log path for a project, honouring the state record when present. */
-const resolveLogPath = (cwd: string, state: DevServerState | undefined): string => state?.logFile ?? join(cwd, DEV_LOG_FILE);
-
-/** Log lines shown for a background server found dead by the next `status` or start. */
-const EXITED_LOG_TAIL_LINES = 15;
-
-/** What a background dev server left behind when it died without clearing its record. */
-interface ExitedServer {
-    logTail: string[];
-    pid: number;
-    url: string;
-}
-
-/**
- * Read the live record, and report one whose background server has died.
- *
- * A background server can die after the launcher stopped waiting for it, as one
- * that runs out of V8 heap a few seconds past the ready timeout does. Nobody sees
- * that crash: the launcher has exited and the output went to the log. The next
- * `status` or start is the first command that notices, so it returns what the log
- * ended with instead of silently clearing the record. A foreground server's record
- * has no log to show; it is cleared as before.
- */
-const readLiveOrExited = (cwd: string): { exited?: ExitedServer; live?: DevServerState } => {
-    const recorded = readDevServerState(cwd);
-    const live = readLiveDevServerState(cwd);
-
-    if (live !== undefined || recorded?.background !== true) {
-        return { live };
-    }
-
-    return { exited: { logTail: readLogTail(resolveLogPath(cwd, recorded), EXITED_LOG_TAIL_LINES), pid: recorded.pid, url: recorded.url } };
-};
-
-/** Matches V8's fatal out-of-memory line. */
-const HEAP_EXHAUSTED = /JavaScript heap out of memory|Ineffective mark-compacts near heap limit/u;
-
-/** Tell the user a recorded background server is gone, with the end of its log. */
-const reportExitedServer = (logger: Logger, exited: ExitedServer): void => {
-    logger.warn(
-        `The background dev server recorded at ${exited.url} (pid ${String(exited.pid)}) is no longer running; its record was cleared. Its log ended with:`,
-    );
-
-    for (const line of exited.logTail) {
-        logger.warn(`  ${line}`);
-    }
-
-    if (exited.logTail.some((line) => HEAP_EXHAUSTED.test(line))) {
-        // eslint-disable-next-line no-secrets/no-secrets -- a flag name with a placeholder, not a credential
-        logger.warn("  It ran out of V8 heap. Raise the limit with NODE_OPTIONS=--max-old-space-size=<MiB> and start it again.");
-    }
-};
-
-/** Read the live record for a start, reporting a dead background server first (see {@link readLiveOrExited}). */
-const readLiveReportingExited = (cwd: string, logger: Logger): DevServerState | undefined => {
-    const { exited, live } = readLiveOrExited(cwd);
-
-    if (exited !== undefined) {
-        reportExitedServer(logger, exited);
-    }
-
-    return live;
-};
-
-/** Print the `stop` / `status` / `logs` hint triple shown after every start-adjacent report. */
-const printLifecycleHints = (logger: Logger): void => {
-    logger.info("  Stop:   lunora dev stop");
-    logger.info("  Status: lunora dev status");
-    logger.info("  Logs:   lunora dev logs");
-};
-
-/**
  * Warn, once per process tree, when the project also has a Cloudflare CLI config
  * that Lunora never updates (#964). Call it BEFORE spawning any child: the claim
  * is an env var, so the Vite / wrangler / daemon children inherit it and the
@@ -351,55 +231,6 @@ const printCloudflareCliConfigWarning = (logger: Logger, cwd: string): void => {
     warnCloudflareCliConfigOnce(cwd, (message) => {
         logger.warn(message);
     });
-};
-
-/**
- * Probe attempts for a server that has answered before. One attempt is bounded by
- * the probe's own timeout, and a serving worker can miss one while it rebuilds, so
- * a single miss must not turn an idempotent start into a failure.
- */
-const SERVING_PROBE_ATTEMPTS = 3;
-
-const answersWithin = async (probe: ReadinessProbe, url: string, attempts: number): Promise<boolean> => {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-        // eslint-disable-next-line no-await-in-loop -- attempts are sequential by design: each one waits for the previous to miss
-        if (await probe(url)) {
-            return true;
-        }
-    }
-
-    return false;
-};
-
-/**
- * Answer a start that found another dev server's live record, and return its exit code.
- *
- * "Already running" (exit 0, the idempotent start) needs more than a live pid: the
- * record must be the server's own and its origin must answer. A launcher's
- * provisional record names a guessed URL, so an answer there could come from
- * anything and never counts. Every other case exits {@link EXIT_CODE.UNAVAILABLE}
- * with what the record shows, because a supervisor that read exit 0 as "serving"
- * went on to talk to a port nothing was listening on.
- */
-const answerExistingServer = async (logger: Logger, existing: DevServerState, probe: ReadinessProbe = defaultProbe): Promise<number> => {
-    if (existing.provisional !== true && (await answersWithin(probe, existing.url, existing.readyAt === undefined ? 1 : SERVING_PROBE_ATTEMPTS))) {
-        logger.warn(`Dev server already running at ${existing.url} (pid ${String(existing.pid)})`);
-        printLifecycleHints(logger);
-
-        return 0;
-    }
-
-    if (existing.provisional === true) {
-        logger.warn(`Another dev server start is in progress (pid ${String(existing.pid)}); its server has not recorded itself yet.`);
-    } else if (existing.readyAt === undefined) {
-        logger.warn(`A dev server is recorded at ${existing.url} (pid ${String(existing.pid)}) but has not answered there yet: still starting, or stuck.`);
-    } else {
-        logger.warn(`A dev server is recorded at ${existing.url} (pid ${String(existing.pid)}) and answered at ${existing.readyAt}, but does not answer now.`);
-    }
-
-    logger.info("  `lunora dev status` and `lunora dev logs` show what it is doing; `lunora dev stop` stops it so a new start can run.");
-
-    return EXIT_CODE.UNAVAILABLE;
 };
 
 /** Print the ready banner both humans and agents read after a background start. */
@@ -531,7 +362,7 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
         args: options.command.args,
         command: options.command.command,
         cwd,
-        env: {
+        env: withDevHeap({
             ...process.env,
             ...options.env,
             [DEV_DAEMON_ENV]: "1",
@@ -540,8 +371,7 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
             // agent) — ANSI colour codes would only garble it.
             ...(process.env.FORCE_COLOR === undefined ? { NO_COLOR: "1" } : {}),
             ...(options.json ? { LUNORA_LOG_JSON: "1" } : {}),
-            ...devHeapEnvironment(options.env?.["NODE_OPTIONS"] ?? process.env["NODE_OPTIONS"]),
-        },
+        }),
         logPath,
     });
 
@@ -921,15 +751,19 @@ interface StatusCommandOptions {
 }
 
 /** The `status` output when nothing is running, naming a background server that died since the last look. */
-const reportNotRunning = (options: StatusCommandOptions, exited: ExitedServer | undefined): void => {
+const reportNotRunning = (options: StatusCommandOptions, exited: DevServerState | undefined): void => {
     if (options.json) {
-        printJson(exited === undefined ? { running: false } : { exited, running: false });
+        printJson(
+            exited === undefined
+                ? { running: false }
+                : { exited: { logTail: exitedLogTail(options.cwd, exited), pid: exited.pid, url: exited.url }, running: false },
+        );
 
         return;
     }
 
     if (exited !== undefined) {
-        reportExitedServer(options.logger, exited);
+        reportExitedServer(options.logger, options.cwd, exited);
     }
 
     options.logger.info("No dev server running.");
@@ -1079,12 +913,9 @@ const runLifecycleSubcommand = (parameters: {
 
 export type { DevFlavor };
 export {
-    answerExistingServer,
     codegenRequested,
     detectDevFlavor,
     printCloudflareCliConfigWarning,
-    readLiveOrExited,
-    readLiveReportingExited,
     runDevBackground,
     runDevLogs,
     runDevStatus,

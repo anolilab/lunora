@@ -18,7 +18,7 @@ import { DEV_STATE_DIR, devServerPhase, isDevServerReady, readLiveDevServerState
 import type { McpTool, ToolResult } from "@lunora/mcp";
 
 import isInsideDirectory from "../../util/path-containment";
-import { readLiveOrExited } from "../dev/lifecycle";
+import { readLiveOrExited } from "../dev/existing-server";
 
 /** Log lines returned when the caller doesn't ask for a specific number. */
 const DEFAULT_LOG_LINES = 100;

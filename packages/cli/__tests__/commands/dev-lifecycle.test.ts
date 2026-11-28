@@ -217,6 +217,23 @@ describe("lunora dev lifecycle", () => {
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
+        it("does not report an interrupted launcher's placeholder as an exited server", () => {
+            expect.assertions(3);
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, DEV_LOG_FILE), "compiling services\n", "utf8");
+            // The launcher's pid is dead; its detached server may still be compiling and has not claimed the record yet.
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, provisional: true, url: "http://localhost:8788" });
+
+            const { lines, logger } = recordingLogger();
+
+            runDevStatus({ cwd: workdir, json: false, logger });
+
+            expect(lines.some((line) => line.message.includes("no longer running"))).toBe(false);
+            expect(lines.some((line) => line.message.includes("No dev server running"))).toBe(true);
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
         it("names a launcher's placeholder record as launching", () => {
             expect.assertions(2);
 

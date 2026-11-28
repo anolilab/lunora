@@ -62,11 +62,21 @@ const devHeapNodeOptions = (existing: string | undefined, memory: HeapMemory = m
     return existing === undefined || existing.trim() === "" ? flag : `${existing} ${flag}`;
 };
 
-/** The env patch to spread into a spawn's environment, from {@link devHeapNodeOptions}; empty when nothing changes. */
-const devHeapEnvironment = (existing: string | undefined): Record<string, string> => {
-    const nodeOptions = devHeapNodeOptions(existing);
+/** Matches V8's fatal out-of-memory line. */
+const HEAP_EXHAUSTED = /JavaScript heap out of memory|Ineffective mark-compacts near heap limit/u;
 
-    return nodeOptions === undefined ? {} : { NODE_OPTIONS: nodeOptions };
+// eslint-disable-next-line no-secrets/no-secrets -- a flag name with a placeholder, not a credential
+const HEAP_ADVICE = "It ran out of V8 heap. Raise the limit with NODE_OPTIONS=--max-old-space-size=<MiB> and start it again.";
+
+/** How to raise the limit, when a dead server's log shows V8 ran out of heap. */
+const heapExhaustedAdvice = (logTail: ReadonlyArray<string>): string | undefined =>
+    logTail.some((line) => HEAP_EXHAUSTED.test(line)) ? HEAP_ADVICE : undefined;
+
+/** `environment` with the heap flag from {@link devHeapNodeOptions} added to its `NODE_OPTIONS`. */
+const withDevHeap = (environment: Record<string, string | undefined>): Record<string, string | undefined> => {
+    const nodeOptions = devHeapNodeOptions(environment["NODE_OPTIONS"]);
+
+    return nodeOptions === undefined ? environment : { ...environment, NODE_OPTIONS: nodeOptions };
 };
 
-export { DEV_HEAP_TARGET_MB, devHeapEnvironment, devHeapNodeOptions };
+export { DEV_HEAP_TARGET_MB, devHeapNodeOptions, heapExhaustedAdvice, withDevHeap };
