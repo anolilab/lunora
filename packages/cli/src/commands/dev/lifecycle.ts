@@ -127,6 +127,14 @@ const detectDevFlavor = (cwd: string): DevFlavor => {
 };
 
 /**
+ * Whether the server a start spawns writes its own record over the launcher's: the
+ * `lunora dev` daemon does, and so does `@lunora/vite`'s dev-state plugin. An
+ * Rsbuild project shares the `vite` flavor but its plugin writes no record, so a
+ * placeholder there would read `launching` for the life of the server.
+ */
+const serverReplacesRecord = (flavor: DevFlavor, cwd: string): boolean => flavor === "wrangler" || readProjectDependencyNames(cwd).has("@lunora/vite");
+
+/**
  * The dev-server exec for the vite flavor — shared by the foreground plan and
  * the background detach so the two spawn sites can't drift. The project's own
  * `dev` script is the source of truth: for a meta-framework the dev server is
@@ -509,10 +517,9 @@ const startBackground = async (context: {
 
     const claim = claimDevServerState(cwd, {
         background: true,
-        launcherPid: process.pid,
         mode: "cli",
         pid: process.pid,
-        provisional: true,
+        ...(serverReplacesRecord(flavor, cwd) ? { launcherPid: process.pid, provisional: true } : {}),
         startedAt: new Date().toISOString(),
         url,
     });
@@ -922,6 +929,7 @@ export {
     runDevStatus,
     runDevStop,
     runLifecycleSubcommand,
+    serverReplacesRecord,
     startBackground,
     viteDevCommand,
     withViteChildEnv,

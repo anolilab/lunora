@@ -34,6 +34,20 @@ describe(devHeapNodeOptions, () => {
         );
     });
 
+    it("reads a launcher heap size given as a separate argument", () => {
+        expect.assertions(1);
+
+        expect(devHeapNodeOptions(undefined, memory(62, 2), ["--max-old-space-size", "2048"])).toBe("--max-old-space-size=2048");
+    });
+
+    it("does not take a heap flag inside another argument's value", () => {
+        expect.assertions(1);
+
+        expect(devHeapNodeOptions(undefined, memory(62), ["--require=./plugin--max-old-space-size=2048.js"])).toBe(
+            `--max-old-space-size=${String(DEV_HEAP_TARGET_MB)}`,
+        );
+    });
+
     it("caps the heap at three quarters of the available memory", () => {
         expect.assertions(1);
 

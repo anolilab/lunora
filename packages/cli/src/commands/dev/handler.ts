@@ -51,7 +51,7 @@ import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
 import { answerExistingServer, readLiveReportingExited } from "./existing-server";
 import type { DevOptions } from "./index";
-import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, runLifecycleSubcommand, startBackground } from "./lifecycle";
+import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, runLifecycleSubcommand, serverReplacesRecord, startBackground } from "./lifecycle";
 import { startNodeDevWorker } from "./node-dev-server";
 import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
@@ -306,7 +306,7 @@ const claimStartRecord = (plan: DevCommandPlan, cwd: string): DevServerState | u
     // Under a framework's Vite server `workerOrigin` is a guess made before anything
     // listens, so the record is a placeholder until the dev-state plugin replaces it:
     // an answer at the guessed URL could come from anything.
-    const placeholder = plan.flavor === "vite" || plan.flavor === "framework-worker";
+    const placeholder = plan.flavor !== "wrangler" && serverReplacesRecord(plan.flavor, cwd);
     const claim = claimDevServerState(
         cwd,
         {

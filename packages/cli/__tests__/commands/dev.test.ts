@@ -1675,6 +1675,26 @@ describe("lunora dev", () => {
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
+        it("writes no placeholder in front of an Rsbuild dev server, whose plugin never replaces the record", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/rspack": "workspace:*" }, name: "app" }), "utf8");
+
+            let provisional: boolean | undefined;
+
+            await runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                startWorker: () => {
+                    provisional = readDevServerState(workdir)?.provisional;
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(provisional).toBeUndefined();
+        });
+
         it("reports an already-running dev server instead of double-starting (lockfile)", async () => {
             expect.assertions(3);
 

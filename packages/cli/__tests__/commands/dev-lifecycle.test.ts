@@ -777,6 +777,29 @@ describe("lunora dev lifecycle", () => {
 
             expect(provisional).toBe(true);
         });
+
+        it("writes no placeholder for an Rsbuild project, whose plugin never replaces the record", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/rspack": "workspace:*" }, name: "app" }), "utf8");
+
+            let provisional: boolean | undefined;
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run: () => {
+                    provisional = readDevServerState(workdir)?.provisional;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            expect(provisional).toBeUndefined();
+        });
     });
 
     describe("runDevBackground", () => {

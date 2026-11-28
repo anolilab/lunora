@@ -20,6 +20,24 @@ const MIB = 1024 * 1024;
 /** Matches either spelling V8 accepts, so a limit the user chose is never overridden. */
 const HEAP_FLAG = /--max[-_]old[-_]space[-_]size/u;
 
+/** A whole exec argument naming the heap size, in either the `=` form or the bare form followed by its value. */
+const EXEC_HEAP_FLAG = /^--max[-_]old[-_]space[-_]size(?:=(\d+))?$/u;
+const DIGITS = /^\d+$/u;
+
+/** The heap flag from the launcher's exec arguments, as a `NODE_OPTIONS` entry; `undefined` when none is set. */
+const launcherHeapFlag = (execArgv: ReadonlyArray<string>): string | undefined => {
+    for (const [index, argument] of execArgv.entries()) {
+        const match = EXEC_HEAP_FLAG.exec(argument);
+        const size = match?.[1] ?? (match === null ? undefined : execArgv[index + 1]);
+
+        if (size !== undefined && DIGITS.test(size)) {
+            return `--max-old-space-size=${size}`;
+        }
+    }
+
+    return undefined;
+};
+
 /** How much memory this process may use and the heap limit V8 runs with, in bytes. */
 interface HeapMemory {
     availableBytes: number;
@@ -58,7 +76,7 @@ const devHeapNodeOptions = (
     // A size given on the launcher's own command line (`node --max-old-space-size=…`)
     // is the user's choice too, but the child is a fresh command that does not get
     // the launcher's exec arguments, so it is carried over through `NODE_OPTIONS`.
-    const launcherFlag = execArgv.find((argument) => HEAP_FLAG.test(argument) && argument.includes("="));
+    const launcherFlag = launcherHeapFlag(execArgv);
 
     if (launcherFlag !== undefined) {
         return existing === undefined || existing.trim() === "" ? launcherFlag : `${existing} ${launcherFlag}`;
