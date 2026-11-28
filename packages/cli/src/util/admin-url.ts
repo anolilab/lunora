@@ -23,8 +23,8 @@ const WRANGLER_DEV_URL = "http://localhost:8787";
  * one that makes a second `lunora dev` idempotent), so read it instead of
  * guessing — a live record beats a hardcoded port every time.
  *
- * The record is only consulted when it is LIVE: `readLiveDevServerState` drops
- * it when the recorded pid is gone. That check is liveness-only on macOS —
+ * The record is only consulted when it is LIVE: `readLiveDevServerState` ignores
+ * it once the recorded pid is gone. That check is liveness-only on macOS —
  * only Linux additionally compares the process start time — so a recycled pid
  * can still make a dead record look current there. Local-only, and the worst
  * case is a confusing connection error rather than a leaked secret, since the

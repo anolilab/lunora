@@ -36,6 +36,7 @@ describe("dev-server-state", () => {
 
         const path = writeDevServerState(workdir, {
             background: true,
+            exitedAt: "2026-01-01T00:00:05.000Z",
             launcherPid: 1234,
             logFile: join(workdir, "dev.log"),
             mode: "cli",
@@ -51,6 +52,7 @@ describe("dev-server-state", () => {
         expect(path).toBe(join(workdir, DEV_STATE_FILE));
         expect(readDevServerState(workdir)).toStrictEqual({
             background: true,
+            exitedAt: "2026-01-01T00:00:05.000Z",
             launcherPid: 1234,
             logFile: join(workdir, "dev.log"),
             mode: "cli",
@@ -149,6 +151,42 @@ describe("dev-server-state", () => {
         expect(readLiveDevServerState(workdir)).toBeUndefined();
         // The stale record was removed on the spot.
         expect(readDevServerState(workdir)).toBeUndefined();
+    });
+
+    it("readLiveDevServerState keeps a dead background record for the next status, stamped as exited", () => {
+        expect.assertions(4);
+
+        writeDevServerState(workdir, { background: true, mode: "cli", pid: DEAD_PID, url: "http://localhost:8787" });
+
+        expect(readLiveDevServerState(workdir)).toBeUndefined();
+
+        const exitedAt = readDevServerState(workdir)?.exitedAt;
+
+        expect(exitedAt).toBeDefined();
+        expect(readLiveDevServerState(workdir)).toBeUndefined();
+        // A second read keeps the first stamp rather than rewriting it.
+        expect(readDevServerState(workdir)?.exitedAt).toBe(exitedAt);
+    });
+
+    it("never reads a record stamped as exited as live, even when its pid is alive again", () => {
+        expect.assertions(3);
+
+        const recycled = { background: true, exitedAt: new Date().toISOString(), mode: "cli" as const, pid: process.pid, url: "http://localhost:8787" };
+
+        writeDevServerState(workdir, recycled);
+
+        expect(isRecordedProcessCurrent(recycled)).toBe(false);
+        expect(readLiveDevServerState(workdir)).toBeUndefined();
+        expect(readDevServerState(workdir)?.exitedAt).toBe(recycled.exitedAt);
+    });
+
+    it("claimDevServerState replaces a record kept for a dead background server", () => {
+        expect.assertions(2);
+
+        writeDevServerState(workdir, { background: true, exitedAt: new Date().toISOString(), mode: "cli", pid: process.ppid, url: "http://localhost:8787" });
+
+        expect(claimDevServerState(workdir, { mode: "vite", pid: process.pid, url: "http://localhost:5173" })).toStrictEqual({ ok: true });
+        expect(readDevServerState(workdir)).toMatchObject({ exitedAt: undefined, pid: process.pid });
     });
 
     it("treats a recycled PID as stale (record predates the process's start)", () => {
