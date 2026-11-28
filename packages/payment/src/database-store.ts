@@ -228,6 +228,14 @@ const sessionToRow = (session: PaymentSession): Record<string, unknown> => {
             ? {}
             : {
                   bookedRefunds: session.bookedRefunds.map((refund) => {
+                      // The column holds bare minor units read back in the row's currency, so another currency would be misread.
+                      if (refund.amount.currency !== session.amount.currency) {
+                          throw new LunoraPaymentError(
+                              "VALIDATION_ERROR",
+                              `payment store: booked refund "${refund.id}" is in ${refund.amount.currency}, not the session's ${session.amount.currency}`,
+                          );
+                      }
+
                       return { id: refund.id, minor: toMinorUnitsColumn(refund.amount.minorUnits, "bookedRefunds") };
                   }),
               }),

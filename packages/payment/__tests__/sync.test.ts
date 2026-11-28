@@ -1885,6 +1885,31 @@ describe("applyWebhookAction — the refund ledger on the row", () => {
         }
     });
 
+    it.each(["", "  "])("refuses a refund delta whose id is blank (%j), and still books an absolute total without one", async (refundId) => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const getEventClaim = vi.spyOn(store, "getEventClaim");
+
+        await applyWebhookAction(store, capture);
+
+        await expect(applyWebhookAction(store, { ...refundEvent("evt_blank"), refundId })).resolves.toStrictEqual({
+            applied: false,
+            reason: "invalid_refund_amount",
+        });
+        expect(getEventClaim).not.toHaveBeenCalledWith("polar", expect.stringMatching(/^local-refund:/u));
+        await expect(
+            applyWebhookAction(store, {
+                amount: money(30, "USD"),
+                amountKind: "absolute",
+                eventId: "evt_total",
+                provider: "polar",
+                sessionId: "pi_1",
+                type: "payment.refunded",
+            }),
+        ).resolves.toStrictEqual({ applied: true, reason: "ok" });
+    });
+
     it("answers duplicate for a refund booked before rows named their refunds", async () => {
         expect.assertions(2);
 

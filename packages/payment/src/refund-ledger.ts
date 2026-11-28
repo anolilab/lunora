@@ -52,6 +52,11 @@ const sameCurrency = (row: PaymentSession, amount: Money): boolean =>
     row.capturedAmount.currency === amount.currency &&
     (row.disputedAmount === undefined || row.disputedAmount.currency === amount.currency);
 
+// A blank id never names a refund: every later blank id would be a duplicate of it.
+const isBlankId = (id: string): boolean => id.trim() === "";
+
+const minMoney = (a: Money, b: Money): Money => (compareMoney(a, b) < 0 ? a : b);
+
 const disputedOf = (row: PaymentSession): Money => row.disputedAmount ?? zeroMoney(row.refundedAmount.currency);
 
 const isRefundBooked = (row: Pick<PaymentSession, "bookedRefunds">, id: string): boolean => row.bookedRefunds?.some((refund) => refund.id === id) ?? false;
@@ -63,6 +68,10 @@ const isRefundBooked = (row: Pick<PaymentSession, "bookedRefunds">, id: string):
  * {@link RefundDelta.capAtCapture}.
  */
 const bookRefundDelta = (row: PaymentSession, delta: RefundDelta): RefundDeltaOutcome => {
+    if (isBlankId(delta.id)) {
+        return REFUSED;
+    }
+
     if (isRefundBooked(row, delta.id)) {
         return DUPLICATE;
     }
@@ -87,7 +96,8 @@ const bookRefundDelta = (row: PaymentSession, delta: RefundDelta): RefundDeltaOu
 
     return {
         bookedRefunds: appendBooked(row.bookedRefunds, [{ amount, id: delta.id }]),
-        ...(delta.reversal === "dispute" ? { disputedAmount: addMoney(disputedOf(row), amount) } : {}),
+        // The dispute total is a part of the refunded total, so a capped dispute is capped there too.
+        ...(delta.reversal === "dispute" ? { disputedAmount: minMoney(addMoney(disputedOf(row), amount), refundedAmount) } : {}),
         kind: "booked",
         refundedAmount,
     };
@@ -112,7 +122,7 @@ const bookRefundTotal = (row: PaymentSession, input: RefundTotal): RefundTotalOu
     const added: BookedRefund[] = [];
 
     for (const refund of input.refunds ?? []) {
-        if (!isRefundBooked(row, refund.refundId) && !added.some((entry) => entry.id === refund.refundId)) {
+        if (!isBlankId(refund.refundId) && !isRefundBooked(row, refund.refundId) && !added.some((entry) => entry.id === refund.refundId)) {
             added.push({ amount: refund.amount, id: refund.refundId });
         }
     }

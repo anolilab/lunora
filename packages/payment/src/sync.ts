@@ -227,11 +227,11 @@ const unlistedRefundId = (existing: PaymentSession | undefined, action: WebhookA
 /**
  * A refund the ledger cannot book. No amount means no way to book it: resolving one as a FULL refund flipped the row to
  * `refunded` with nothing in `refundedAmount`, and the next `refundPayment` then issued the whole captured amount again.
- * And a delta is counted once by its refund id, so one without an id (only a malformed payload: every adapter sets one)
- * could be counted by every restatement.
+ * And a delta is counted once by its refund id, so one without an id, or with a blank one (only a malformed payload:
+ * every adapter sets one), could be counted by every restatement.
  */
 const unbookableRefund = (action: WebhookAction, paymentAction: PaymentAction): boolean =>
-    paymentAction === "refund" && (!action.amount || (isRefundDelta(action, paymentAction) && action.refundId === undefined));
+    paymentAction === "refund" && (!action.amount || (isRefundDelta(action, paymentAction) && (action.refundId ?? "").trim() === ""));
 
 /** The row fields a refund's ledger outcome sets, or the answer when it books nothing. */
 const refundChanges = (ledger: RefundDeltaOutcome | RefundTotalOutcome | undefined): ApplyResult | Partial<PaymentSession> => {

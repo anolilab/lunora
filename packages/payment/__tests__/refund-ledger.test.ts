@@ -70,6 +70,42 @@ describe("bookRefundDelta", () => {
     });
 });
 
+describe("bookRefundDelta — disputes and blank ids", () => {
+    it("caps the dispute total of a capped lost dispute at the refunded total", () => {
+        expect.assertions(1);
+
+        const disputed = row({ capturedAmount: money(2, "USD"), disputedAmount: money(1, "USD"), refundedAmount: money(1, "USD") });
+
+        expect(bookRefundDelta(disputed, { amount: money(2, "USD"), id: "dp_2", reversal: "dispute" })).toMatchObject({
+            disputedAmount: money(2, "USD"),
+            kind: "booked",
+            refundedAmount: money(2, "USD"),
+        });
+    });
+
+    it.each(["", "   "])("refuses a refund whose id is blank (%j)", (id) => {
+        expect.assertions(1);
+
+        expect(bookRefundDelta(row(), { amount: money(100, "USD"), id })).toStrictEqual({ kind: "refused" });
+    });
+});
+
+describe("bookRefundTotal — blank ids", () => {
+    it("books the total but names no refund whose id is blank", () => {
+        expect.assertions(1);
+
+        expect(
+            bookRefundTotal(row(), {
+                refunds: [
+                    { amount: money(100, "USD"), refundId: " " },
+                    { amount: money(50, "USD"), refundId: "re_1" },
+                ],
+                total: money(150, "USD"),
+            }),
+        ).toStrictEqual({ bookedRefunds: [{ amount: money(50, "USD"), id: "re_1" }], kind: "booked", refundedAmount: money(150, "USD") });
+    });
+});
+
 describe("bookRefundTotal", () => {
     it("raises the row to the provider total plus its disputes, never lowers it", () => {
         expect.assertions(2);

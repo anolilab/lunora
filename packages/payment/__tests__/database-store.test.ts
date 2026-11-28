@@ -1001,6 +1001,33 @@ describe("createDatabasePaymentStore", () => {
         ]);
     });
 
+    it("refuses to write a booked refund in a currency other than the session's", async () => {
+        expect.assertions(2);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        await expect(
+            store.upsertPaymentSession({ ...session, bookedRefunds: [{ amount: money(300, "EUR"), id: "re_1" }], refundedAmount: money(300, "USD") }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(db.findMany("payment_sessions", {}).then((page) => page.rows)).resolves.toStrictEqual([]);
+    });
+
+    it.each([
+        ["the memory store", (): PaymentStore => new MemoryPaymentStore()],
+        ["the database store", (): PaymentStore => createDatabasePaymentStore(makeDb())],
+    ])("keeps a session's booked refunds in %s when a write omits them", async (_name, makeStore) => {
+        expect.assertions(1);
+
+        const store = makeStore();
+        const bookedRefunds = [{ amount: money(300, "USD"), id: "re_1" }];
+
+        await store.upsertPaymentSession({ ...session, bookedRefunds, refundedAmount: money(300, "USD"), state: "partially_refunded" });
+        await store.upsertPaymentSession({ ...session, refundedAmount: money(300, "USD"), state: "partially_refunded", updatedAt: 2 });
+
+        await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.bookedRefunds)).resolves.toStrictEqual(bookedRefunds);
+    });
+
     it("refuses a stored booked refund without an id, rather than forgetting it was counted", async () => {
         expect.assertions(1);
 
