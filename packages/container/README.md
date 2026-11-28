@@ -220,7 +220,7 @@ Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization
 
 ### Entry points
 
-- `@lunora/container` — Node-safe: `defineContainer`, naming/normalization helpers, `createContainerContext`, and the Docker-free `createContainerTestContext` test double (it does not simulate `pool({ attempts })` retries: every call is a single attempt).
+- `@lunora/container` — Node-safe: `defineContainer`, naming/normalization helpers, `createContainerContext`, and the Docker-free `createContainerTestContext` test double (it does not simulate retries: `.pool()` always makes one attempt, and `.get()` / `.any()` default to one unless you pass `attempts`).
 - `@lunora/container/do` — workerd-only: the `LunoraContainer` base class the generated DO classes extend (pulls in `@cloudflare/containers`).
 - `@lunora/container/bridge` — runtime-agnostic: `createContainerBridge` for calling Lunora functions from inside a container.
 

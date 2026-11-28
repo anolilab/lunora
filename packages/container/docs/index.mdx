@@ -638,22 +638,27 @@ block those ranges yourself. What is established:
   `localhost`. Host names are not resolved, so a name that points at a private
   address still passes; to cover that, resolve the name yourself (for example with
   DNS over HTTPS) and check the answer. That check and the later connection are two
-  separate lookups, so it narrows the gap without closing it. For a hard
-  guarantee, allow only the exact hosts you trust with `enableInternet: false`.
+  separate lookups, so it narrows the gap without closing it. The tightest setup
+  is `enableInternet: false` with an allow-list of exact hosts; that still trusts
+  those hosts' DNS, since nothing checks the address they resolve to.
 
 ```ts
 import { LunoraContainer } from "@lunora/container/do";
 
 const PRIVATE_V4 = /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/;
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
-const PRIVATE_V6 = /^(f[cd]|fe80:|::ffff:)/;
+const PRIVATE_V6 = /^(f[cd]|fe[89ab]|::ffff:)/;
 
 const isPrivateTarget = (hostname: string): boolean => {
-    const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    // Unbracket IPv6 and drop trailing dots: `127.0.0.1.` and `localhost.` name the same targets.
+    const host = hostname
+        .replace(/^\[|\]$/g, "")
+        .replace(/\.+$/, "")
+        .toLowerCase();
 
     if (host.includes(":")) {
-        // IPv6: loopback, unique local (fc00::/7), link-local and IPv4-mapped.
-        return host === "::1" || PRIVATE_V6.test(host);
+        // IPv6: unspecified, loopback, unique local (fc00::/7), link-local (fe80::/10) and IPv4-mapped.
+        return host === "::" || host === "::1" || PRIVATE_V6.test(host);
     }
 
     return host === "localhost" || host.endsWith(".localhost") || (IPV4.test(host) && PRIVATE_V4.test(host));
@@ -665,7 +670,9 @@ export class Fetcher extends LunoraContainer {
             return new Response("Private address refused", { status: 403 });
         }
 
-        return fetch(request);
+        // `manual` hands a redirect back to the container instead of following it here, so the
+        // next hop is a new outbound request that passes through this check again.
+        return fetch(request, { redirect: "manual" });
     };
 }
 ```
