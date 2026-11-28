@@ -61,7 +61,9 @@ mail is set up (`MAIL_FROM` unset), `lunora dev` prints it in the dev server out
 in the Studio **Mail** tab (`/__lunora`) instead of being delivered. Opening it
 verifies the address and signs you in. Create an organization and open `/dashboard`.
 Before deploying, set `MAIL_FROM` for the deployment too (`lunora add email` writes it
-only to `.dev.vars`), along with a provider: the `SEND_EMAIL` binding or `RESEND_API_KEY`.
+only to `.dev.vars`), along with a provider: the `SEND_EMAIL` binding `lunora add email`
+creates, or `RESEND_API_KEY`. The binding wins whenever it exists, so for Resend remove it
+from `wrangler.jsonc`.
 Without `MAIL_FROM` a deployed sign-up cannot send its verification mail.
 
 ## A tenant is a shard
