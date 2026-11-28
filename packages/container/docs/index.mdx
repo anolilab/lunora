@@ -606,6 +606,75 @@ container's outbound calls), `@lunora/container/do` re-exports Cloudflare's
 custom outbound-handler types (`OutboundHandler`, `OutboundHandlers`,
 `outboundParams`); wire them onto a hand-authored `LunoraContainer` subclass.
 
+### Private and internal addresses
+
+Lunora does not block private, loopback or link-local addresses (10.0.0.0/8,
+172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.0.0/16, IPv6 equivalents),
+and neither the code underneath nor Cloudflare's Containers documentation
+promises that the platform does. If a container fetches user-supplied URLs,
+block those ranges yourself. What is established:
+
+- **The lists match host names, not addresses.** `allowedHosts` and
+  `deniedHosts` are glob-matched against the host name in the outbound request's
+  URL (trailing dots stripped); no address range is resolved or compared
+  (`ContainerProxy.fetch` in `@cloudflare/containers`). A deny entry like
+  `*.internal.example` cannot cover an arbitrary host name that resolves to a
+  private address, and an IP literal is only matched by a pattern that happens to
+  match its text.
+- **The URL is container-controlled.** Cloudflare documents that the request URL
+  comes from the `Host` header, which code in the container controls, and that
+  HTTPS intercepts match the TLS server name.
+- **No connect-time check is documented.** Neither source says whether the
+  address a name resolves to is checked when the connection is made, so do not
+  rely on protection against DNS rebinding (a name that resolves to a public
+  address when you check it and a private one when the request connects).
+- **Default and allow-list setups are the same here.** With
+  `enableInternet: true`, or with `enableInternet: false` plus an allow-list, a
+  request whose host passes the lists is forwarded with a plain `fetch`; nothing
+  in that path filters the destination address.
+- **An outbound handler can refuse a target, but only by host name.** It receives
+  the outbound `Request` and nothing else about the destination; it does not see a
+  resolved address. The handler below refuses IP literals in private ranges and
+  `localhost`. Host names are not resolved, so a name that points at a private
+  address still passes; to cover that, resolve the name yourself (for example with
+  DNS over HTTPS) and check the answer. That check and the later connection are two
+  separate lookups, so it narrows the gap without closing it. For a hard
+  guarantee, allow only the exact hosts you trust with `enableInternet: false`.
+
+```ts
+import { LunoraContainer } from "@lunora/container/do";
+
+const PRIVATE_V4 = /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/;
+
+const isPrivateTarget = (hostname: string): boolean => {
+    const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+
+    return (
+        host === "localhost" ||
+        host.endsWith(".localhost") ||
+        PRIVATE_V4.test(host) ||
+        host === "::1" ||
+        host.startsWith("fc") || // fc00::/7 (also matches host names starting "fc"; refusing them is acceptable)
+        host.startsWith("fd") ||
+        host.startsWith("fe80:") ||
+        host.startsWith("::ffff:") // IPv4-mapped IPv6
+    );
+};
+
+export class Fetcher extends LunoraContainer {
+    static outbound = (request: Request): Promise<Response> | Response => {
+        if (isPrivateTarget(new URL(request.url).hostname)) {
+            return new Response("Private address refused", { status: 403 });
+        }
+
+        return fetch(request);
+    };
+}
+```
+
+A catch-all `outbound` handler sits behind `deniedHosts` and `allowedHosts`, and
+(like the lists) it needs `interceptHttps: true` to see TLS traffic.
+
 ## Readiness gating
 
 The platform health check waits for an **open port** (`defaultPort`) and, if
@@ -1093,6 +1162,13 @@ per instance with Linux-shaped errors (`ENOENT`, `EEXIST`, `ENOTEMPTY`), so a
 handler that writes and reads container files can be tested without Docker.
 `spawn`, `backup`, `restore`, `deleteBackup`, `mount`, `inspectMount` and `unmount` reject with
 `NOT_IMPLEMENTED`: there is no process or bucket behind the double, so stub those handle methods in the test.
+
+The double does not simulate retries. `pool({ attempts })` always runs a single
+attempt, so a handler that returns a 5xx (or throws) is reported as-is instead of
+being retried on another instance, and `get` / `any` default to one attempt too.
+A test that expects `pool({ attempts: 2 })` to recover from a failing instance
+will not see a retry here; test retry behaviour against a real container or a
+hand-written double.
 
 Run the real container behind `lunora dev` for integration tests; keep those in
 a Docker-enabled CI job, separate from the default unit-test matrix.
