@@ -18,7 +18,7 @@
  */
 import type { PaymentAdapter } from "./adapter";
 import { usageForwardIsIdempotent } from "./idempotency";
-import { addMoney, compareMoney, disputedAmountOf, zeroMoney } from "./money";
+import { addMoney, compareMoney, disputedAmountOf, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import { bookedChanges, bookRefundTotal, isRefundBooked } from "./refund-ledger";
@@ -229,7 +229,10 @@ const withListedRefunds = (
     }
 
     const accounted = refunds !== undefined && compareMoney(capAtCapture(addMoney(listed, disputedAmountOf(stored)), merged), merged.refundedAmount) >= 0;
-    const outcome = accounted ? bookRefundTotal(stored, { refunds: succeeded, total: snapshot.refundedAmount }) : undefined;
+    // The list is read after the snapshot, so a refund that settled in between is listed but not in the snapshot's total:
+    // naming it without its money would make its own webhook a duplicate, and the refund would be counted nowhere.
+    const total = snapshot.refundedAmount.currency === currency ? maxMoney(snapshot.refundedAmount, listed) : listed;
+    const outcome = accounted ? bookRefundTotal(stored, { refunds: succeeded, total }) : undefined;
 
     if (outcome?.kind === "booked") {
         return { ...merged, ...bookedChanges(outcome) };

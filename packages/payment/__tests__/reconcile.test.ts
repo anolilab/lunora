@@ -1136,6 +1136,46 @@ describe("reconcile — a refund total beside the refund webhooks that make it u
         await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(300, "USD"), state: "partially_refunded" });
     });
 
+    it("books a refund that settled between the snapshot and the list with its money, not only its id", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const capturedAt100 = { ...stored, amount: money(100, "USD"), capturedAmount: money(100, "USD") };
+        const listed = async (): Promise<ProviderRefund[]> => [
+            { amount: money(30, "USD"), refundId: "ref_1", status: "succeeded" },
+            { amount: money(20, "USD"), refundId: "ref_2", status: "succeeded" },
+        ];
+        const adapter = {
+            getPaymentStatus: async () => {
+                return { ...capturedAt100, referenceId: "", refundedAmount: money(30, "USD"), state: "partially_refunded" };
+            },
+            identifier: "polar",
+            listRefunds: listed,
+        } as unknown as PaymentAdapter;
+
+        await store.upsertPaymentSession(capturedAt100);
+        await reconcile({ adapter, paymentSessionIds: ["ord_1"], singleSubscriptionPerReference: false, store });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({
+            bookedRefunds: [
+                { amount: money(30, "USD"), id: "ref_1" },
+                { amount: money(20, "USD"), id: "ref_2" },
+            ],
+            refundedAmount: money(50, "USD"),
+        });
+        await expect(
+            applyWebhookAction(store, {
+                amount: money(20, "USD"),
+                eventId: "evt_ref_2",
+                provider: "polar",
+                refundId: "ref_2",
+                sessionId: "ord_1",
+                type: "payment.refunded",
+            }),
+        ).resolves.toStrictEqual({ applied: false, reason: "duplicate" });
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(50n);
+    });
+
     it("leaves a row's booked refunds in place when it repairs the row", async () => {
         expect.assertions(2);
 
