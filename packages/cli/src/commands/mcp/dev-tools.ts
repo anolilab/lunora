@@ -11,7 +11,7 @@
  * the server up, on which port, and what did it print when the last mutation
  * threw.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { DEV_STATE_DIR, devServerPhase, isDevServerReady, readLiveDevServerState } from "@lunora/config";
@@ -63,9 +63,22 @@ const containedLogFile = (projectRoot: string, logFile: string | undefined): str
         return undefined;
     }
 
-    const stateDirectory = resolve(projectRoot, DEV_STATE_DIR);
+    const candidate = resolve(projectRoot, logFile);
 
-    return isInsideDirectory(stateDirectory, resolve(projectRoot, logFile)) ? resolve(projectRoot, logFile) : undefined;
+    if (!isInsideDirectory(resolve(projectRoot, DEV_STATE_DIR), candidate)) {
+        return undefined;
+    }
+
+    // The path text is not enough: a log that is a symlink, or a `.lunora/` that is one,
+    // reaches outside the project, and the readers follow links. Compare where they lead.
+    try {
+        const stateDirectory = realpathSync(resolve(projectRoot, DEV_STATE_DIR));
+        const real = realpathSync(candidate);
+
+        return isInsideDirectory(realpathSync(projectRoot), stateDirectory) && isInsideDirectory(stateDirectory, real) ? real : undefined;
+    } catch {
+        return undefined;
+    }
 };
 
 /** The last `count` lines of `path`. */
@@ -104,8 +117,8 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
             if (state === undefined) {
                 // The record is cleared by this read, so `lunora_dev_logs` cannot find the log afterwards: the tail
                 // comes back here, from a log inside the project only (see `containedLogFile`).
-                const logTail =
-                    exited === undefined || containedLogFile(projectRoot, exited.logFile) === undefined ? undefined : exitedLogTail(projectRoot, exited);
+                const logFile = containedLogFile(projectRoot, exited?.logFile);
+                const logTail = exited === undefined || logFile === undefined ? undefined : exitedLogTail(projectRoot, { ...exited, logFile });
 
                 return ok({
                     ...(exited === undefined ? {} : { exited: { logTail, pid: exited.pid, url: exited.url } }),

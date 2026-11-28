@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -537,6 +537,22 @@ describe("dev tools", () => {
         recordDevServer({ background: true, logFile: "/etc/hostname", pid: 2_147_483_646 });
 
         const parsed = JSON.parse(textOf(await toolNamed("lunora_dev_status").handle({}))) as { exited?: { logTail?: string[] } };
+
+        expect(parsed.exited?.logTail).toBeUndefined();
+    });
+
+    it("keeps a dead server's log out when the recorded log is a symlink leading outside the project", async () => {
+        expect.assertions(1);
+
+        const outside = mkdtempSync(join(tmpdir(), "lunora-outside-"));
+
+        writeFileSync(join(outside, "secret"), "TOKEN=abc\n", "utf8");
+        recordDevServer({ background: true, logFile: join(workdir, ".lunora", "dev.log"), pid: 2_147_483_646 });
+        symlinkSync(join(outside, "secret"), join(workdir, ".lunora", "dev.log"));
+
+        const parsed = JSON.parse(textOf(await toolNamed("lunora_dev_status").handle({}))) as { exited?: { logTail?: string[] } };
+
+        rmSync(outside, { force: true, recursive: true });
 
         expect(parsed.exited?.logTail).toBeUndefined();
     });
