@@ -531,16 +531,33 @@ describe("dev tools", () => {
         expect(parsed.hint).toContain("lunora dev");
     });
 
+    it("keeps a dead server's log out when it lies outside the project", async () => {
+        expect.assertions(1);
+
+        recordDevServer({ background: true, logFile: "/etc/hostname", pid: 2_147_483_646 });
+
+        const parsed = JSON.parse(textOf(await toolNamed("lunora_dev_status").handle({}))) as { exited?: { logTail?: string[] } };
+
+        expect(parsed.exited?.logTail).toBeUndefined();
+    });
+
     it("names a background server that died instead of clearing its record silently", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         // pid 2147483646 is above the platform's pid ceiling, so it can't be running.
-        recordDevServer({ background: true, pid: 2_147_483_646 });
+        recordDevServer({ background: true, logFile: join(workdir, ".lunora", "dev.log"), pid: 2_147_483_646 });
+        writeFileSync(join(workdir, ".lunora", "dev.log"), "FATAL ERROR: JavaScript heap out of memory\n", "utf8");
 
-        const parsed = JSON.parse(textOf(await toolNamed("lunora_dev_status").handle({}))) as { exited?: { pid: number }; hint: string; running: boolean };
+        const parsed = JSON.parse(textOf(await toolNamed("lunora_dev_status").handle({}))) as {
+            exited?: { logTail?: string[]; pid: number };
+            hint: string;
+            running: boolean;
+        };
 
         expect(parsed.running).toBe(false);
         expect(parsed.exited?.pid).toBe(2_147_483_646);
+        // The read cleared the record, so this is the caller's only way to the log.
+        expect(parsed.exited?.logTail).toStrictEqual(["FATAL ERROR: JavaScript heap out of memory"]);
         expect(parsed.hint).toContain("lunora dev logs");
     });
 

@@ -18,7 +18,7 @@ import { DEV_STATE_DIR, devServerPhase, isDevServerReady, readLiveDevServerState
 import type { McpTool, ToolResult } from "@lunora/mcp";
 
 import isInsideDirectory from "../../util/path-containment";
-import { readLiveOrExited } from "../dev/existing-server";
+import { exitedLogTail, readLiveOrExited } from "../dev/existing-server";
 
 /** Log lines returned when the caller doesn't ask for a specific number. */
 const DEFAULT_LOG_LINES = 100;
@@ -102,9 +102,13 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
             const { exited, live: state } = readLiveOrExited(projectRoot);
 
             if (state === undefined) {
-                // The log tail stays out: this tool only reads log files inside the project (see `containedLogFile`).
+                // The record is cleared by this read, so `lunora_dev_logs` cannot find the log afterwards: the tail
+                // comes back here, from a log inside the project only (see `containedLogFile`).
+                const logTail =
+                    exited === undefined || containedLogFile(projectRoot, exited.logFile) === undefined ? undefined : exitedLogTail(projectRoot, exited);
+
                 return ok({
-                    ...(exited === undefined ? {} : { exited: { pid: exited.pid, url: exited.url } }),
+                    ...(exited === undefined ? {} : { exited: { logTail, pid: exited.pid, url: exited.url } }),
                     hint:
                         exited === undefined
                             ? "Start it with `lunora dev` in the project directory."
