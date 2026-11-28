@@ -14,8 +14,12 @@
  * its config from disk and resolves relative `main`/`assets` paths against the
  * config's own directory. The Vite path edits the config in memory instead.
  */
-import { readdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { lstatSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
+import ensureGitignoreEntries from "../ensure-gitignore";
+import isWithinDirectory from "../is-within-directory";
 import join from "../path";
 
 /** Which kind of temp config a file is, in its name. */
@@ -23,9 +27,13 @@ type DevConfigKind = "dev" | "service";
 
 /**
  * Matches the names {@link devConfigBasename} produces. The sweep uses it to find
- * files a dead session left behind, and `.gitignore` covers the same pattern.
+ * files a dead session left behind; {@link DEV_CONFIG_IGNORE} is the same set as a
+ * `.gitignore` line.
  */
 const STALE_DEV_CONFIG: RegExp = /^\.wrangler\.lunora-(?:dev|service)\.(\d+)\.\d+\.jsonc$/;
+
+/** The `.gitignore` line covering every temp config. No slash, so it matches at any depth below the file. */
+const DEV_CONFIG_IGNORE = ".wrangler.lunora-*.jsonc";
 
 let generation = 0;
 
@@ -106,14 +114,60 @@ const createCleanup = (path: string): (() => void) => {
     };
 };
 
+/** `git check-ignore` for one path: 0 ignored, 1 not ignored, 128 (or `null`) outside a repository or without git. */
+const checkIgnoreStatus = (path: string): number | null =>
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell
+    spawnSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: dirname(path), stdio: "ignore", timeout: 5000 }).status;
+
+/**
+ * Make git ignore a temp config before it exists. A service folder is often a
+ * subdirectory the project's `.gitignore` was never written for, and a file there
+ * shows up as an untracked change for the whole session.
+ *
+ * Git answers, not a text match on one `.gitignore`: a parent's pattern, a global
+ * excludes file or `.git/info/exclude` already covering the path must not make
+ * this append a line to a tracked file. The line goes into the project's
+ * `.gitignore` when the folder is inside the project (the pattern has no slash,
+ * so it reaches subfolders). Git is asked again after each write, and the folder's
+ * own `.gitignore` takes the line when the project's cannot cover it: the folder is
+ * outside the project, is a nested repository, or a lower `.gitignore` negates the
+ * pattern. Outside a repository or without git, nothing is written.
+ */
+const ensureDevConfigIgnored = (configPath: string, projectRoot: string): void => {
+    const directory = dirname(configPath);
+    const targets = directory !== projectRoot && isWithinDirectory(directory, projectRoot) ? [projectRoot, directory] : [directory];
+
+    try {
+        for (const target of targets) {
+            if (checkIgnoreStatus(configPath) !== 1) {
+                return;
+            }
+
+            // Git does not read a `.gitignore` that is a symlink, so a line written through one ignores nothing.
+            if (lstatSync(join(target, ".gitignore"), { throwIfNoEntry: false })?.isSymbolicLink() !== true) {
+                ensureGitignoreEntries(target, [DEV_CONFIG_IGNORE]);
+            }
+        }
+    } catch {
+        // An unignored temp file is noise in `git status`, never a reason to fail dev startup.
+    }
+};
+
 /**
  * Write a temp config into `directory` and return where it is and how to remove it.
- * The directory is swept of dead sessions' files first.
+ * The directory is swept of dead sessions' files first, and git is made to ignore
+ * the file (see {@link ensureDevConfigIgnored}).
+ * @param directory Where the copy goes; wrangler resolves its relative paths against it.
+ * @param kind Which temp config this is, in its name.
+ * @param contents The config text.
+ * @param projectRoot The app's folder, whose `.gitignore` takes the ignore line when `directory` is inside it.
  */
-const writeDevConfig = (directory: string, kind: DevConfigKind, contents: string): { cleanup: () => void; configPath: string } => {
+const writeDevConfig = (directory: string, kind: DevConfigKind, contents: string, projectRoot: string): { cleanup: () => void; configPath: string } => {
     sweepStaleDevConfigs(directory);
 
     const configPath = join(directory, devConfigBasename(kind));
+
+    ensureDevConfigIgnored(configPath, projectRoot);
 
     writeFileSync(configPath, contents, "utf8");
 
@@ -170,4 +224,14 @@ const describeWithheld = ({ binding, kind }: WithheldBinding): string =>
           "`ctx.artifacts` will throw. Run `wrangler login` or set CLOUDFLARE_API_TOKEN to turn it on.";
 
 export type { DevConfigKind, WithheldBinding };
-export { createCleanup, describeWithheld, devConfigBasename, noopCleanup, STALE_DEV_CONFIG, sweepStaleDevConfigs, withheldBindings, writeDevConfig };
+export {
+    createCleanup,
+    describeWithheld,
+    DEV_CONFIG_IGNORE,
+    devConfigBasename,
+    noopCleanup,
+    STALE_DEV_CONFIG,
+    sweepStaleDevConfigs,
+    withheldBindings,
+    writeDevConfig,
+};

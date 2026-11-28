@@ -155,8 +155,11 @@ done
 pnpm run test:integration
 ```
 
-`lunora dev status` shows the same thing for a human, as `ready` or `starting`
-in its detail line. It works under `--no-worker` too: this process still owns the
+`lunora dev status` shows the same thing for a human, as `launching` (a
+launcher's placeholder record, written by a background start or by `lunora dev`
+in front of a framework's Vite server, whose pid and URL change once the server
+starts), `starting` or `ready` in its detail line; `--json` carries it as
+`phase`. It works under `--no-worker` too: this process still owns the
 record, so it reports on the worker your runner started.
 
 `readyAt` is a claim about the record's own `url` and nothing else. On the Vite
@@ -165,12 +168,14 @@ flavors `@lunora/vite` writes the record once Vite has resolved that URL, so
 `wrangler dev` sidecar that owns `ShardDO` runs on its own port, which this
 record does not advertise and `readyAt` says nothing about.
 
-Raise `LUNORA_DEV_READY_TIMEOUT_MS` if a cold build is slower than the default
-two minutes; it moves the background wait and this stamp together.
+`LUNORA_DEV_READY_TIMEOUT_MS` (default two minutes) sets how long the background
+start waits and when the stamp warns that the worker has not answered. The stamp
+keeps probing after that, more slowly, so a slow cold build still gets
+`readyAt` once it answers.
 
 <Callout type="warn">
-    A missing `readyAt` means *not ready yet*, never *never*. A worker that takes longer than the probe waits keeps running with the field absent, so poll for
-    it with your own timeout rather than treating one absent read as failure.
+    A missing `readyAt` means *not ready yet*, never *never*. A worker that is slow to boot keeps running with the field absent until it answers, so poll for it
+    with your own timeout rather than treating one absent read as failure.
 </Callout>
 
 <Callout type="info">

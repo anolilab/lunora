@@ -55,6 +55,31 @@ const resolveReadyTimeoutMs = (explicit?: number): number => {
 };
 
 /**
+ * Certificate checks that fail after a TLS handshake started: a server is
+ * listening and speaking TLS, the machine just does not trust its certificate.
+ * A Vite dev server on `server.https` with a self-signed or mkcert certificate
+ * (one whose CA Node does not read) fails exactly so, and is up.
+ */
+const UNTRUSTED_CERTIFICATE_CODES = new Set([
+    "CERT_HAS_EXPIRED",
+    "CERT_NOT_YET_VALID",
+    "CERT_UNTRUSTED",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_GET_ISSUER_CERT",
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+
+const isUntrustedCertificate = (error: unknown): boolean => {
+    const cause: unknown = error instanceof Error ? error.cause : undefined;
+    const code: unknown = typeof cause === "object" && cause !== null && "code" in cause ? cause.code : undefined;
+
+    return typeof code === "string" && UNTRUSTED_CERTIFICATE_CODES.has(code);
+};
+
+/**
  * True when a dev server answers at `origin` — ANY response counts, including a
  * 404: the question is whether something is listening and speaking HTTP, not
  * whether the app routes that path. Only a refused or failed connection is "not
@@ -71,6 +96,9 @@ const resolveReadyTimeoutMs = (explicit?: number): number => {
  * `redirect: "manual"` for the same reason: a `/` that 302s to a marketing page
  * or an OAuth provider would make the dev machine call that host on every start.
  * A liveness check must not follow anyone anywhere.
+ *
+ * An untrusted certificate counts as an answer (see
+ * {@link UNTRUSTED_CERTIFICATE_CODES}); the request fails before it is sent.
  */
 const defaultProbe = async (origin: string, signal?: AbortSignal): Promise<boolean> => {
     try {
@@ -89,8 +117,8 @@ const defaultProbe = async (origin: string, signal?: AbortSignal): Promise<boole
         await response.body?.cancel();
 
         return true;
-    } catch {
-        return false;
+    } catch (error) {
+        return isUntrustedCertificate(error);
     }
 };
 

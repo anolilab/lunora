@@ -6,8 +6,10 @@ import { claimDevServerState, clearDevServerState, DEV_LOG_FILE, readDevServerSt
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { answerExistingServer } from "../../src/commands/dev/existing-server";
 import type { DevOptions } from "../../src/commands/dev/index";
 import { runDevBackground, runDevLogs, runDevStatus, runDevStop, startBackground } from "../../src/commands/dev/lifecycle";
+import { devHeapNodeOptions } from "../../src/util/dev-heap";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
@@ -192,6 +194,67 @@ describe("lunora dev lifecycle", () => {
 
             expect(result.code).toBe(0);
             expect(lines.some((line) => line.message.includes("No dev server running"))).toBe(true);
+        });
+
+        it("reports a dead background server with the end of its log, then clears the record", () => {
+            expect.assertions(4);
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, DEV_LOG_FILE),
+                "starting wrangler dev + studio\nFATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory\n",
+                "utf8",
+            );
+            // pid 2147483646 is above the platform's pid ceiling, so it can't be running.
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, url: "http://localhost:8788" });
+
+            const { lines, logger } = recordingLogger();
+
+            runDevStatus({ cwd: workdir, json: false, logger });
+
+            expect(lines.some((line) => line.level === "warn" && line.message.includes("(pid 2147483646) is no longer running"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("FATAL ERROR: Ineffective mark-compacts"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("NODE_OPTIONS=--max-old-space-size"))).toBe(true);
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
+        it("reports a dead placeholder as a start that ended, with the end of its log", () => {
+            expect.assertions(4);
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, DEV_LOG_FILE), "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n", "utf8");
+            // The shape the ready timeout leaves: the placeholder re-pointed at a detached child that died
+            // before its server recorded itself.
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, provisional: true, url: "http://localhost:8788" });
+
+            const { lines, logger } = recordingLogger();
+
+            runDevStatus({ cwd: workdir, json: false, logger });
+
+            expect(lines.some((line) => line.level === "warn" && line.message.includes("(pid 2147483646) ended before its server recorded itself"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("is no longer running"))).toBe(false);
+            expect(lines.some((line) => line.message.includes("NODE_OPTIONS=--max-old-space-size"))).toBe(true);
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
+        it("names a launcher's placeholder record as launching", () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, {
+                background: true,
+                mode: "cli",
+                pid: process.pid,
+                provisional: true,
+                startedAt: new Date().toISOString(),
+                url: "http://localhost:8787",
+            });
+
+            const { lines, logger } = recordingLogger();
+
+            runDevStatus({ cwd: workdir, json: false, logger });
+
+            expect(lines.some((line) => line.message.includes("launching"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("launcher's placeholder"))).toBe(true);
         });
 
         it("reports URL, pid, uptime, and background for a live record", () => {
@@ -582,6 +645,7 @@ describe("lunora dev lifecycle", () => {
                 jsonLogs: false,
                 logger,
                 options: {} as DevOptions,
+                probe: async () => true,
                 remote: false,
                 run: () => {
                     spawned = true;
@@ -595,6 +659,146 @@ describe("lunora dev lifecycle", () => {
             expect(lines.some((line) => line.message.includes("already running"))).toBe(true);
             // The incumbent's record is untouched.
             expect(readDevServerState(workdir)?.pid).toBe(process.ppid);
+        });
+
+        it("does not call a live incumbent that never answers 'already running'", async () => {
+            expect.assertions(3);
+
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:8788" });
+
+            let spawned = false;
+            const { lines, logger } = recordingLogger();
+
+            const result = await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger,
+                options: {} as DevOptions,
+                probe: async () => false,
+                remote: false,
+                run: () => {
+                    spawned = true;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
+            expect(spawned).toBe(false);
+            expect(lines.some((line) => line.message.includes("has not answered there yet"))).toBe(true);
+        });
+
+        it("retries a server that has answered before, so one missed probe is not a failed start", async () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, readyAt: new Date().toISOString(), url: "http://localhost:8787" });
+
+            let attempts = 0;
+
+            const result = await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                probe: async () => {
+                    attempts += 1;
+
+                    return attempts === 2;
+                },
+                remote: false,
+                run: () => Promise.resolve({ code: 0 }),
+            });
+
+            expect(result.code).toBe(0);
+            expect(attempts).toBe(2);
+        });
+
+        it("pauses between probe attempts, so a reload's closed port does not use them all up", async () => {
+            expect.assertions(2);
+
+            const events: string[] = [];
+            const code = await answerExistingServer(
+                recordingLogger().logger,
+                { mode: "cli", pid: process.ppid, readyAt: new Date().toISOString(), url: "http://localhost:8787" },
+                async () => {
+                    events.push("probe");
+
+                    return events.length > 1;
+                },
+                async (ms) => {
+                    events.push(`pause ${String(ms)}`);
+                },
+            );
+
+            expect(code).toBe(0);
+            expect(events).toStrictEqual(["probe", "pause 500", "probe"]);
+        });
+
+        it("reports a launcher's provisional record as a start in progress, whatever answers on its guessed URL", async () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: process.ppid, provisional: true, url: "http://localhost:8787" });
+
+            const { lines, logger } = recordingLogger();
+
+            const result = await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger,
+                options: {} as DevOptions,
+                probe: async () => true,
+                remote: false,
+                run: () => Promise.resolve({ code: 0 }),
+            });
+
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
+            expect(lines.some((line) => line.message.includes("start is in progress"))).toBe(true);
+        });
+
+        it("marks its own claim as provisional until the server records itself", async () => {
+            expect.assertions(1);
+
+            let provisional: boolean | undefined;
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run: () => {
+                    const record = readDevServerState(workdir);
+
+                    provisional = record?.provisional === true && record.launcherPid === process.pid;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            expect(provisional).toBe(true);
+        });
+
+        it("writes no placeholder for an Rsbuild project, whose plugin never replaces the record", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/rspack": "workspace:*" }, name: "app" }), "utf8");
+
+            let provisional: boolean | undefined;
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run: () => {
+                    provisional = readDevServerState(workdir)?.provisional;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            expect(provisional).toBeUndefined();
         });
     });
 
@@ -689,6 +893,33 @@ describe("lunora dev lifecycle", () => {
             expect(banner?.message).toContain(`pid ${String(process.ppid)}`);
             expect(lines.some((line) => line.message.includes("lunora dev stop"))).toBe(true);
             expect(lines.some((line) => line.message.includes("lunora dev logs"))).toBe(true);
+        });
+
+        it("gives the detached server a raised heap limit through NODE_OPTIONS", async () => {
+            expect.assertions(1);
+
+            vi.stubEnv("NODE_OPTIONS", "--enable-source-maps");
+
+            let nodeOptions: string | undefined;
+            const { logger } = recordingLogger();
+
+            await runDevBackground({
+                command: { args: ["dev"], command: "lunora" },
+                cwd: workdir,
+                json: false,
+                logger,
+                pollIntervalMs: 1,
+                probe: async () => false,
+                readyTimeoutMs: 2000,
+                spawnDetached: ({ env }) => {
+                    nodeOptions = env["NODE_OPTIONS"];
+
+                    return { exited: Promise.resolve(1), pid: 999_999 };
+                },
+            });
+
+            // What the helper decides depends on this machine's memory and heap; the wiring is what is under test.
+            expect(nodeOptions).toBe(devHeapNodeOptions("--enable-source-maps") ?? "--enable-source-maps");
         });
 
         it("surfaces the log tail and fails when the daemon dies before readiness", async () => {

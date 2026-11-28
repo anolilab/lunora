@@ -101,6 +101,15 @@ Services run only in dev sessions: `vite build` does not build them, since
 flavor gets them too: reconcile writes the bindings into `wrangler.dev.jsonc`,
 and the `wrangler dev` sidecar runs each service beside the app.
 
+When a service's config needs a change for the dev session (a relative
+`build.cwd`, or a remote-only binding left out without a Cloudflare login),
+`lunora dev` runs a copy named `.wrangler.lunora-service.<pid>.<n>.jsonc` in the
+service's folder, so its relative paths still resolve. The copy is removed when
+the session stops, and the next session removes one a crashed session left. If
+git does not already ignore the file, `lunora dev` adds
+`.wrangler.lunora-*.jsonc` to the project's `.gitignore`, or to the service
+folder's own when the folder is outside the project.
+
 A service in the dev session has no HTTP port of its own: only the app does. Its
 bindings are part of the session too, so one that has no local mode (`ai`)
 makes `wrangler dev` open a remote proxy session, which needs Cloudflare

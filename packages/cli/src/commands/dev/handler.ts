@@ -1,5 +1,5 @@
 import { runCodegen } from "@lunora/codegen";
-import type { ContainerLogStreamHandle, DiscoveryCache } from "@lunora/config";
+import type { ContainerLogStreamHandle, DevServerState, DiscoveryCache } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
     checkDevEnv,
@@ -24,7 +24,6 @@ import {
     formatDevBannerRow,
     inferLunoraBindings,
     isInteractive,
-    readLiveDevServerState,
     readProjectRemotePreference,
     resolveLazyFunctions,
     resolveSchemaDirectory,
@@ -50,8 +49,9 @@ import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
 import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
+import { answerExistingServer, readLiveReportingExited } from "./existing-server";
 import type { DevOptions } from "./index";
-import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
+import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, runLifecycleSubcommand, serverReplacesRecord, startBackground } from "./lifecycle";
 import { startNodeDevWorker } from "./node-dev-server";
 import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
@@ -301,8 +301,12 @@ const afterWorkerSpawn = (
  * parent claimed before spawning it. Returns the live incumbent on a lost
  * claim.
  */
-const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url: string } | undefined => {
+const claimStartRecord = (plan: DevCommandPlan, cwd: string): DevServerState | undefined => {
     const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
+    // Under a framework's Vite server `workerOrigin` is a guess made before anything
+    // listens, so the record is a placeholder until the dev-state plugin replaces it:
+    // an answer at the guessed URL could come from anything.
+    const placeholder = plan.flavor !== "wrangler" && serverReplacesRecord(plan.flavor, cwd);
     const claim = claimDevServerState(
         cwd,
         {
@@ -310,6 +314,7 @@ const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url
             logFile: process.env[DEV_LOG_FILE_ENV],
             mode: "cli",
             pid: process.pid,
+            ...(placeholder ? { launcherPid: process.pid, provisional: true } : {}),
             startedAt: new Date().toISOString(),
             url: plan.workerOrigin,
         },
@@ -716,12 +721,10 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // fail to launch). A genuine other server has a PID that is neither ours
         // nor the handoff parent's, so it still short-circuits correctly.
         const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
-        const existing = readLiveDevServerState(cwd);
+        const existing = readLiveReportingExited(cwd, logger);
 
         if (existing !== undefined && existing.pid !== process.pid && existing.pid !== handoffPid) {
-            reportExistingServer(logger, existing);
-
-            return { code: 0, plan };
+            return { code: await answerExistingServer(logger, existing, options.probeReady), plan };
         }
 
         // Atomically claim the record before ANY sibling starts (see
@@ -729,9 +732,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         const incumbent = claimStartRecord(plan, cwd);
 
         if (incumbent !== undefined) {
-            reportExistingServer(logger, incumbent);
-
-            return { code: 0, plan };
+            return { code: await answerExistingServer(logger, incumbent, options.probeReady), plan };
         }
 
         if (plan.flavor === "vite" || plan.flavor === "framework-worker") {
@@ -1009,13 +1010,11 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
               });
 
     if (!isDaemon && (options.background === true || agent !== undefined)) {
-        // Idempotent start: a live server means success, not a conflict.
-        const existing = readLiveDevServerState(cwd);
+        // A live record is answered, not overwritten: exit 0 when its server answers, 8 otherwise.
+        const existing = readLiveReportingExited(cwd, logger);
 
         if (existing !== undefined) {
-            reportExistingServer(logger, existing);
-
-            return { code: 0 };
+            return { code: await answerExistingServer(logger, existing) };
         }
 
         // The daemon prints the tunnel's own warning into its log file, which

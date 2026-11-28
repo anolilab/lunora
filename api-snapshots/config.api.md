@@ -555,14 +555,22 @@ interface DevSecretsFillPlan {
 type DevServerMode = "cli" | "vite";
 ```
 
+### `DevServerPhase` (type)
+
+```ts
+type DevServerPhase = "launching" | "ready" | "starting";
+```
+
 ### `DevServerState` (interface)
 
 ```ts
 interface DevServerState {
     background?: boolean;
+    launcherPid?: number;
     logFile?: string;
     mode: DevServerMode;
     pid: number;
+    provisional?: boolean;
     readyAt?: string;
     startedAt?: string;
     studioUrl?: string;
@@ -1540,6 +1548,12 @@ const detectLintTools: (projectRoot: string) => LintTool[];
 
 ```ts
 const detectPackageManager: (startDirectory: string) => PackageManager;
+```
+
+### `devServerPhase` (const)
+
+```ts
+const devServerPhase: (state: Pick<DevServerState, "provisional" | "readyAt">) => DevServerPhase;
 ```
 
 ### `devTriggerHints` (const)

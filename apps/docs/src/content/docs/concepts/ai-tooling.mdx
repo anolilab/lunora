@@ -64,14 +64,31 @@ or `=1` to force it on.
 The background server is managed rather than fire-and-forget. A state record at
 `.lunora/dev.json` acts as a lockfile, so starting twice reports the running
 instance instead of spawning a conflict, and every subcommand is idempotent
-(stopping when nothing runs succeeds silently):
+(stopping when nothing runs succeeds silently). A second start exits 0 with
+"already running" only when the recorded server answers on its URL; a recorded
+server that is still starting, or alive but not answering, makes it exit 8
+with what the record shows.
+
+Until the detached server starts, the record is the launcher's placeholder:
+`lunora dev status` calls it `launching`, and the server then replaces it with
+its own pid and resolved URL. A supervisor should watch the pid in the record
+once the phase leaves `launching`, not the pid it spawned. The phase goes
+`launching`, `starting`, `ready` (`phase` and `ready` in `status --json`); a
+server slower than the ready timeout still turns `ready` once it answers.
 
 ```bash
 lunora dev --background   # detach; blocks until ready, prints URL + PID
-lunora dev status         # URL, PID, uptime (--json for machine-readable)
+lunora dev status         # URL, PID, uptime, phase (--json for machine-readable)
 lunora dev logs           # captured output (--lines n, 0 = all)
 lunora dev stop           # SIGTERM, then SIGKILL after 10s
 ```
+
+The detached server gets a V8 heap limit of up to 8 GiB (`--max-old-space-size`
+in its `NODE_OPTIONS`, capped at three quarters of the machine's memory), since a
+session with several services can outgrow Node's default while it starts. A
+heap size already in `NODE_OPTIONS` is kept. If the server dies after the
+start stopped waiting for it, the next `lunora dev status` or start says so and
+prints the end of its log.
 
 Agents can also poll `GET /_lunora/status` on the running worker, a public,
 secret-free health probe answering `{"ok":true}`.

@@ -11,13 +11,14 @@
  * the server up, on which port, and what did it print when the last mutation
  * threw.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { DEV_STATE_DIR, readLiveDevServerState } from "@lunora/config";
+import { DEV_STATE_DIR, devServerPhase, isDevServerReady, readLiveDevServerState } from "@lunora/config";
 import type { McpTool, ToolResult } from "@lunora/mcp";
 
 import isInsideDirectory from "../../util/path-containment";
+import { exitedLogTail, readLiveOrExited } from "../dev/existing-server";
 
 /** Log lines returned when the caller doesn't ask for a specific number. */
 const DEFAULT_LOG_LINES = 100;
@@ -62,9 +63,22 @@ const containedLogFile = (projectRoot: string, logFile: string | undefined): str
         return undefined;
     }
 
-    const stateDirectory = resolve(projectRoot, DEV_STATE_DIR);
+    const candidate = resolve(projectRoot, logFile);
 
-    return isInsideDirectory(stateDirectory, resolve(projectRoot, logFile)) ? resolve(projectRoot, logFile) : undefined;
+    if (!isInsideDirectory(resolve(projectRoot, DEV_STATE_DIR), candidate)) {
+        return undefined;
+    }
+
+    // The path text is not enough: a log that is a symlink, or a `.lunora/` that is one,
+    // reaches outside the project, and the readers follow links. Compare where they lead.
+    try {
+        const stateDirectory = realpathSync(resolve(projectRoot, DEV_STATE_DIR));
+        const real = realpathSync(candidate);
+
+        return isInsideDirectory(realpathSync(projectRoot), stateDirectory) && isInsideDirectory(stateDirectory, real) ? real : undefined;
+    } catch {
+        return undefined;
+    }
 };
 
 /** The last `count` lines of `path`. */
@@ -92,23 +106,37 @@ const devTools = (projectRoot: string): ReadonlyArray<McpTool> => [
         definition: {
             annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false, readOnlyHint: true, title: "Check the local dev server" },
             description:
-                "Report whether a `lunora dev` server is running for this project, and its URL, studio URL, mode and uptime. Call this first when a query or mutation tool fails to connect.",
+                "Report whether a `lunora dev` server is running for this project, whether it answers yet (`phase`: launching, starting or ready), and its URL, studio URL and mode. Call this first when a query or mutation tool fails to connect.",
             inputSchema: { properties: {}, type: "object" },
             name: "lunora_dev_status",
         },
         // eslint-disable-next-line @typescript-eslint/require-await -- the McpTool contract is Promise-returning; this surface happens to be synchronous, and dropping `async` would only move the wrapping to the return sites.
         handle: async (): Promise<ToolResult> => {
-            const state = readLiveDevServerState(projectRoot);
+            const { exited, live: state } = readLiveOrExited(projectRoot);
 
             if (state === undefined) {
-                return ok({ hint: "Start it with `lunora dev` in the project directory.", running: false });
+                // The record is cleared by this read, so `lunora_dev_logs` cannot find the log afterwards: the tail
+                // comes back here, from a log inside the project only (see `containedLogFile`).
+                const logFile = containedLogFile(projectRoot, exited?.logFile);
+                const logTail = exited === undefined || logFile === undefined ? undefined : exitedLogTail(projectRoot, { ...exited, logFile });
+
+                return ok({
+                    ...(exited === undefined ? {} : { exited: { logTail, pid: exited.pid, url: exited.url } }),
+                    hint:
+                        exited === undefined
+                            ? "Start it with `lunora dev` in the project directory."
+                            : "The background dev server exited; `lunora dev logs` shows how it ended. Start it again with `lunora dev`.",
+                    running: false,
+                });
             }
 
             return ok({
                 background: state.background === true,
                 logFile: containedLogFile(projectRoot, state.logFile),
                 mode: state.mode,
+                phase: devServerPhase(state),
                 pid: state.pid,
+                ready: isDevServerReady(state),
                 running: true,
                 startedAt: state.startedAt,
                 studioUrl: state.studioUrl,

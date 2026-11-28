@@ -70,12 +70,29 @@ type DevServerMode = "cli" | "vite";
 interface DevServerState {
     /** Whether the server was detached into the background (`lunora dev --background`). */
     background?: boolean;
+
+    /**
+     * PID of the background launcher that wrote a provisional record. It stays when
+     * the launcher re-points `pid` at its child, so only that launcher's handoff
+     * (see {@link DEV_HANDOFF_ENV}) replaces the record, never another launch's child.
+     */
+    launcherPid?: number;
     /** Absolute path of the log file capturing the server's output, when captured. */
     logFile?: string;
     /** `"cli"` for the `lunora dev` wrangler orchestration, `"vite"` for a Vite dev server. */
     mode: DevServerMode;
     /** PID of the process to signal for shutdown (the orchestrating CLI or the Vite process). */
     pid: number;
+
+    /**
+     * `true` while the record is the background launcher's placeholder: `pid` is
+     * the launcher (or, after the launcher stopped waiting, the detached child it
+     * spawned) and `url` is the origin it guessed before anything listened. The
+     * server replaces the whole record with its own pid and resolved URL once it
+     * starts, which drops this flag. A provisional record never means a server
+     * is serving.
+     */
+    provisional?: boolean;
 
     /**
      * ISO-8601 stamp marking when the server at {@link DevServerState.url} was
@@ -246,9 +263,11 @@ const readDevServerState = (projectRoot: string): DevServerState | undefined => 
 
     return {
         background: parsed["background"] === true,
+        launcherPid: typeof parsed["launcherPid"] === "number" ? parsed["launcherPid"] : undefined,
         logFile: stringField(parsed, "logFile"),
         mode: parsed["mode"] === "vite" ? "vite" : "cli",
         pid: parsed["pid"],
+        provisional: parsed["provisional"] === true ? true : undefined,
         readyAt: stringField(parsed, "readyAt"),
         startedAt: stringField(parsed, "startedAt"),
         studioUrl: stringField(parsed, "studioUrl"),
@@ -313,6 +332,22 @@ const updateDevServerState = (projectRoot: string, patch: Partial<DevServerState
  */
 const isDevServerReady = (state: Pick<DevServerState, "readyAt"> | undefined): boolean => state?.readyAt !== undefined;
 
+/** Where a recorded dev server is in its start, as {@link devServerPhase} names it. */
+type DevServerPhase = "launching" | "ready" | "starting";
+
+/**
+ * `launching` while the record is still the background launcher's placeholder
+ * (its pid and URL change once the server starts), `starting` once the server
+ * recorded itself but has not answered, `ready` once it has.
+ */
+const devServerPhase = (state: Pick<DevServerState, "provisional" | "readyAt">): DevServerPhase => {
+    if (state.provisional === true) {
+        return "launching";
+    }
+
+    return isDevServerReady(state) ? "ready" : "starting";
+};
+
 /**
  * Remove `.lunora/dev.json`. Idempotent and never throws. When `expectedPid`
  * is given, the file is only removed while it still records that PID — so a
@@ -376,8 +411,9 @@ interface ClaimDevServerStateResult {
  *
  * `supersedePid` names ONE live record this claim may replace instead of
  * losing to: the provisional record a parent CLI wrote before spawning this
- * server (handed down via {@link DEV_HANDOFF_ENV}). Any other live record
- * still wins.
+ * server (handed down via {@link DEV_HANDOFF_ENV}). A provisional record whose
+ * `launcherPid` is that parent is replaced too, whichever pid it carries now.
+ * Any other live record still wins.
  */
 
 /**
@@ -394,7 +430,11 @@ const resolveClaimConflict = (projectRoot: string, state: DevServerState, supers
         return undefined;
     }
 
-    if (supersedePid !== undefined && existing.pid === supersedePid) {
+    // The handed-down placeholder is matched by its launcher, not its pid: when the
+    // launcher stops waiting it re-points the placeholder at the child it spawned,
+    // which for a Vite project is the package-manager wrapper, not the server that
+    // claims here. Losing that race left the placeholder in place for good.
+    if (supersedePid !== undefined && (existing.pid === supersedePid || (existing.provisional === true && existing.launcherPid === supersedePid))) {
         return { ok: writeDevServerState(projectRoot, state) !== undefined };
     }
 
@@ -437,7 +477,7 @@ const claimDevServerState = (projectRoot: string, state: DevServerState, options
     return { ok: writeDevServerState(projectRoot, state) !== undefined };
 };
 
-export type { ClaimDevServerStateResult, DevServerMode, DevServerState };
+export type { ClaimDevServerStateResult, DevServerMode, DevServerPhase, DevServerState };
 export {
     claimDevServerState,
     clearDevServerState,
@@ -448,6 +488,7 @@ export {
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,
     DEV_STATE_FILE,
+    devServerPhase,
     isDevServerReady,
     isProcessAlive,
     isRecordedProcessCurrent,

@@ -13,8 +13,8 @@
  */
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { DevServerState } from "@lunora/config";
@@ -25,8 +25,8 @@ import {
     detectFramework,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
-    DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
+    devServerPhase,
     isCodegenDisabled,
     isDevServerReady,
     isRecordedProcessCurrent,
@@ -44,6 +44,7 @@ import { warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
 import { servesDevInProcess } from "../../util/deploy-target-resolve";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { withDevHeap } from "../../util/dev-heap";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
 import { EXIT_CODE } from "../../util/exit-code";
@@ -52,7 +53,9 @@ import { printJson } from "../../util/output-format";
 import { spawnShellCompat } from "../../util/spawn";
 import daemonArguments from "./daemon-arguments";
 import pollDevServerState from "./dev-state-poll";
+import { answerExistingServer, exitedLogTail, printLifecycleHints, readLiveOrExited, reportExitedServer } from "./existing-server";
 import type { DevOptions } from "./index";
+import { LOG_TAIL_MAX_BYTES, readLogTail, resolveLogPath } from "./log-file";
 
 /** Grace period `dev stop` allows for a clean SIGTERM shutdown before SIGKILL. */
 const STOP_GRACE_MS = 10_000;
@@ -60,8 +63,6 @@ const STOP_GRACE_MS = 10_000;
 const DEFAULT_LOG_LINES = 100;
 /** Log lines surfaced when a background start fails before becoming ready. */
 const FAILURE_LOG_TAIL_LINES = 40;
-/** Upper bound on how much of the capture log is read back — a long-lived run's log can grow unbounded. */
-const LOG_TAIL_MAX_BYTES = 256 * 1024;
 
 /**
  * How the dev child runs. `wrangler` is the classic `lunora dev` stack (wrangler
@@ -124,6 +125,14 @@ const detectDevFlavor = (cwd: string): DevFlavor => {
 
     return WORKER_RUNNING_PLUGINS.some((name) => dependencies.has(name)) ? "vite" : "wrangler";
 };
+
+/**
+ * Whether the server a start spawns writes its own record over the launcher's: the
+ * `lunora dev` daemon does, and so does `@lunora/vite`'s dev-state plugin. An
+ * Rsbuild project shares the `vite` flavor but its plugin writes no record, so a
+ * placeholder there would read `launching` for the life of the server.
+ */
+const serverReplacesRecord = (flavor: DevFlavor, cwd: string): boolean => flavor === "wrangler" || readProjectDependencyNames(cwd).has("@lunora/vite");
 
 /**
  * The dev-server exec for the vite flavor — shared by the foreground plan and
@@ -215,64 +224,6 @@ const defaultDetachedSpawner: DetachedSpawner = (descriptor) => {
 };
 
 /**
- * Read the trailing window of a log file as text, capped at
- * {@link LOG_TAIL_MAX_BYTES} so a giant long-running capture log is never
- * slurped whole; `undefined` when unreadable. When capped, the first
- * (likely partial) line of the window is dropped.
- */
-const readLogWindow = (path: string): string | undefined => {
-    try {
-        const { size } = statSync(path);
-
-        if (size <= LOG_TAIL_MAX_BYTES) {
-            return readFileSync(path, "utf8");
-        }
-
-        const fd = openSync(path, "r");
-
-        try {
-            const buffer = Buffer.alloc(LOG_TAIL_MAX_BYTES);
-            const read = readSync(fd, buffer, 0, LOG_TAIL_MAX_BYTES, size - LOG_TAIL_MAX_BYTES);
-            const text = buffer.toString("utf8", 0, read);
-
-            return text.slice(text.indexOf("\n") + 1);
-        } finally {
-            closeSync(fd);
-        }
-    } catch {
-        return undefined;
-    }
-};
-
-/** Read the last `count` lines of a log file (all lines when `count` <= 0, bounded by {@link LOG_TAIL_MAX_BYTES}); `[]` when unreadable. */
-const readLogTail = (path: string, count: number): string[] => {
-    const text = readLogWindow(path);
-
-    if (text === undefined) {
-        return [];
-    }
-
-    const lines = text.split("\n");
-
-    // A trailing newline yields one empty final element — not a real line.
-    if (lines.at(-1) === "") {
-        lines.pop();
-    }
-
-    return count > 0 ? lines.slice(-count) : lines;
-};
-
-/** The absolute capture-log path for a project, honouring the state record when present. */
-const resolveLogPath = (cwd: string, state: DevServerState | undefined): string => state?.logFile ?? join(cwd, DEV_LOG_FILE);
-
-/** Print the `stop` / `status` / `logs` hint triple shown after every start-adjacent report. */
-const printLifecycleHints = (logger: Logger): void => {
-    logger.info("  Stop:   lunora dev stop");
-    logger.info("  Status: lunora dev status");
-    logger.info("  Logs:   lunora dev logs");
-};
-
-/**
  * Warn, once per process tree, when the project also has a Cloudflare CLI config
  * that Lunora never updates (#964). Call it BEFORE spawning any child: the claim
  * is an env var, so the Vite / wrangler / daemon children inherit it and the
@@ -288,12 +239,6 @@ const printCloudflareCliConfigWarning = (logger: Logger, cwd: string): void => {
     warnCloudflareCliConfigOnce(cwd, (message) => {
         logger.warn(message);
     });
-};
-
-/** Report an already-running dev server + the lifecycle hints (the idempotent-start path). */
-const reportExistingServer = (logger: Logger, existing: { pid: number; url: string }): void => {
-    logger.warn(`Dev server already running at ${existing.url} (pid ${String(existing.pid)})`);
-    printLifecycleHints(logger);
 };
 
 /** Print the ready banner both humans and agents read after a background start. */
@@ -425,7 +370,7 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
         args: options.command.args,
         command: options.command.command,
         cwd,
-        env: {
+        env: withDevHeap({
             ...process.env,
             ...options.env,
             [DEV_DAEMON_ENV]: "1",
@@ -434,7 +379,7 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
             // agent) — ANSI colour codes would only garble it.
             ...(process.env.FORCE_COLOR === undefined ? { NO_COLOR: "1" } : {}),
             ...(options.json ? { LUNORA_LOG_JSON: "1" } : {}),
-        },
+        }),
         logPath,
     });
 
@@ -548,6 +493,8 @@ const startBackground = async (context: {
     jsonLogs: boolean;
     logger: Logger;
     options: DevOptions;
+    /** Injection seam for tests — defaults to the real HTTP readiness probe. */
+    probe?: ReadinessProbe;
     remote: boolean;
     /** Injection seam for tests — defaults to the real {@link runDevBackground}. */
     run?: (options: BackgroundCommandOptions) => Promise<{ code: number }>;
@@ -572,16 +519,13 @@ const startBackground = async (context: {
         background: true,
         mode: "cli",
         pid: process.pid,
+        ...(serverReplacesRecord(flavor, cwd) ? { launcherPid: process.pid, provisional: true } : {}),
         startedAt: new Date().toISOString(),
         url,
     });
 
     if (!claim.ok) {
-        if (claim.existing !== undefined) {
-            reportExistingServer(logger, claim.existing);
-        }
-
-        return { code: 0 };
+        return { code: claim.existing === undefined ? 0 : await answerExistingServer(logger, claim.existing, context.probe) };
     }
 
     const handoff = { [DEV_HANDOFF_ENV]: String(process.pid) };
@@ -814,6 +758,25 @@ interface StatusCommandOptions {
     now?: () => number;
 }
 
+/** The `status` output when nothing is running, naming a background server that died since the last look. */
+const reportNotRunning = (options: StatusCommandOptions, exited: DevServerState | undefined): void => {
+    if (options.json) {
+        printJson(
+            exited === undefined
+                ? { running: false }
+                : { exited: { logTail: exitedLogTail(options.cwd, exited), pid: exited.pid, url: exited.url }, running: false },
+        );
+
+        return;
+    }
+
+    if (exited !== undefined) {
+        reportExitedServer(options.logger, options.cwd, exited);
+    }
+
+    options.logger.info("No dev server running.");
+};
+
 /**
  * `lunora dev status` — report the recorded dev server (URL, PID, uptime,
  * background/foreground). A stale record (dead PID) reads as "not running" and
@@ -821,14 +784,10 @@ interface StatusCommandOptions {
  */
 const runDevStatus = (options: StatusCommandOptions): { code: number } => {
     const { cwd, logger } = options;
-    const state = readLiveDevServerState(cwd);
+    const { exited, live: state } = readLiveOrExited(cwd);
 
     if (state === undefined) {
-        if (options.json) {
-            printJson({ running: false });
-        } else {
-            logger.info("No dev server running.");
-        }
+        reportNotRunning(options, exited);
 
         return { code: 0 };
     }
@@ -842,6 +801,7 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
             background: state.background === true,
             logFile: state.logFile,
             mode: state.mode,
+            phase: devServerPhase(state),
             pid: state.pid,
             // `running` is "a process exists"; `ready` is "it answered". A
             // supervisor composing Lunora with other workers wants the second —
@@ -866,10 +826,16 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
         // Distinguishes "the process is up" from "the worker answers" — the
         // record exists from the moment the server starts, so without this the
         // status line reads identically either side of the port opening.
-        isDevServerReady(state) ? "ready" : "starting",
+        devServerPhase(state),
     ];
 
     logger.success(`Dev server running at ${state.url} (${details.join(", ")})`);
+
+    if (state.provisional === true) {
+        logger.info("  This is the launcher's placeholder; the server replaces it with its own pid and URL once it starts.");
+    } else if (!isDevServerReady(state)) {
+        logger.info("  Not answering yet; `lunora dev logs` shows what it is doing.");
+    }
 
     if (state.studioUrl !== undefined) {
         logger.info(`  Studio: ${state.studioUrl}`);
@@ -958,12 +924,12 @@ export {
     codegenRequested,
     detectDevFlavor,
     printCloudflareCliConfigWarning,
-    reportExistingServer,
     runDevBackground,
     runDevLogs,
     runDevStatus,
     runDevStop,
     runLifecycleSubcommand,
+    serverReplacesRecord,
     startBackground,
     viteDevCommand,
     withViteChildEnv,

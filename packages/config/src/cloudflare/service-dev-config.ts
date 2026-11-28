@@ -78,7 +78,7 @@ const materializeOne = (
         contents = applyModify(contents, ["build", "cwd"], resolve(directory, typeof build.cwd === "string" ? build.cwd : "."));
     }
 
-    const written = writeDevConfig(directory, "service", contents);
+    const written = writeDevConfig(directory, "service", contents, options.projectRoot);
 
     return { cleanup: written.cleanup, configPath: written.configPath, withheld };
 };

@@ -36,9 +36,11 @@ describe("dev-server-state", () => {
 
         const path = writeDevServerState(workdir, {
             background: true,
+            launcherPid: 1234,
             logFile: join(workdir, "dev.log"),
             mode: "cli",
             pid: 4321,
+            provisional: true,
             readyAt: "2026-01-01T00:00:02.000Z",
             startedAt: "2026-01-01T00:00:00.000Z",
             studioUrl: "http://127.0.0.1:6173",
@@ -49,9 +51,11 @@ describe("dev-server-state", () => {
         expect(path).toBe(join(workdir, DEV_STATE_FILE));
         expect(readDevServerState(workdir)).toStrictEqual({
             background: true,
+            launcherPid: 1234,
             logFile: join(workdir, "dev.log"),
             mode: "cli",
             pid: 4321,
+            provisional: true,
             readyAt: "2026-01-01T00:00:02.000Z",
             startedAt: "2026-01-01T00:00:00.000Z",
             studioUrl: "http://127.0.0.1:6173",
@@ -211,5 +215,28 @@ describe("dev-server-state", () => {
 
         expect(stranger.ok).toBe(false);
         expect(readDevServerState(workdir)?.url).toBe("http://localhost:5173");
+    });
+
+    it("claimDevServerState supersedes a launcher placeholder re-pointed at another pid", () => {
+        expect.assertions(5);
+
+        // After the ready wait times out, the launcher re-points its placeholder at the
+        // child it spawned, which is not the process that claims later.
+        writeDevServerState(workdir, { background: true, launcherPid: 12_345, mode: "cli", pid: process.pid, provisional: true, url: "http://localhost:5173" });
+
+        const unhanded = claimDevServerState(workdir, { mode: "vite", pid: 99_999, url: "http://localhost:5199" });
+
+        expect(unhanded.ok).toBe(false);
+
+        // A child of another launch carries that launch's pid, and must not take this one's placeholder.
+        const otherLaunch = claimDevServerState(workdir, { mode: "vite", pid: 99_999, url: "http://localhost:5199" }, { supersedePid: 54_321 });
+
+        expect(otherLaunch.ok).toBe(false);
+
+        const handed = claimDevServerState(workdir, { mode: "vite", pid: 99_999, url: "http://localhost:5199" }, { supersedePid: 12_345 });
+
+        expect(handed.ok).toBe(true);
+        expect(readDevServerState(workdir)?.url).toBe("http://localhost:5199");
+        expect(readDevServerState(workdir)?.provisional).toBeUndefined();
     });
 });
