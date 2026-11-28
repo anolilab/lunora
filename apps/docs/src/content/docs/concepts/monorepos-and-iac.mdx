@@ -132,6 +132,9 @@ workaround and it races on a cold cache.
 adds a `readyAt` stamp the moment the worker first answers on its origin. The
 two are deliberately separate: `url` and `pid` are written _before_ anything is
 listening, which is enough to find and stop a server and not enough to gate on.
+A record carrying `exitedAt` belongs to a background server that has exited: it is
+kept so the next `lunora dev status`, start or `stop` can show how the server ended,
+and then removed.
 
 ```bash
 # Wait for the worker to serve, then run whatever depends on it.

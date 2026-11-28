@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -6,6 +5,7 @@ import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import {
     DEV_VARS_FILE,
     generateSecretValue,
+    gitCheckIgnore,
     inferLunoraBindings,
     isMintableSecretKey,
     isPlaceholderValue,
@@ -288,27 +288,38 @@ const fixD1Placeholders = async (options: DoctorFixOptions, result: DoctorFixRes
  * ignores it. Git answers that for any ignore file in the tree (a root `.gitignore`
  * of a monorepo, a `/.dev.vars` pattern); outside a repository, the project's own
  * `.gitignore` must carry the exact line. Unknown is a refusal, never a write.
+ * @returns Why no secret may be written, or `undefined` when git ignores the file.
  */
-const devVariablesIsIgnored = (cwd: string): boolean => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH (install location varies); args are fixed and no shell is involved
-    const check = spawnSync("git", ["check-ignore", "-q", DEV_VARS_FILE], { cwd, stdio: "ignore" });
+const devVariablesRefusal = (cwd: string): string | undefined => {
+    const path = join(cwd, DEV_VARS_FILE);
+    // Without `--no-index`: a tracked `.dev.vars` reads as not ignored, so no secret is written into a committed file.
+    const status = gitCheckIgnore(path, { noIndex: false });
+    const notIgnored = `${DEV_VARS_FILE} is not in .gitignore, so no secret is written there. Add \`${DEV_VARS_FILE}\` to .gitignore first.`;
 
-    if (check.status === 0) {
-        return true;
+    if (status === "ignored") {
+        return undefined;
     }
 
-    if (check.status === 1) {
-        return false;
+    // A timed-out git refuses too: the text match below cannot see that `.dev.vars` is tracked.
+    if (status === "timed-out") {
+        return `git did not say in time whether ${DEV_VARS_FILE} is ignored, so no secret is written there. Run \`lunora doctor --fix\` again.`;
+    }
+
+    if (status === "not-ignored") {
+        // The patterns ignore it, but the index holds it: a pattern does not untrack a committed file.
+        return gitCheckIgnore(path, { noIndex: true }) === "ignored"
+            ? `${DEV_VARS_FILE} is tracked by git, so no secret is written there. Run \`git rm --cached ${DEV_VARS_FILE}\` first.`
+            : notIgnored;
     }
 
     const gitignore = join(cwd, ".gitignore");
-
-    return (
+    const listed =
         existsSync(gitignore) &&
         readFileSync(gitignore, "utf8")
             .split(LINE_BREAK)
-            .some((line) => line.trim() === DEV_VARS_FILE)
-    );
+            .some((line) => line.trim() === DEV_VARS_FILE);
+
+    return listed ? undefined : notIgnored;
 };
 
 /**
@@ -381,8 +392,10 @@ const fixDevVariables = async (options: DoctorFixOptions, result: DoctorFixResul
         return;
     }
 
-    if (!devVariablesIsIgnored(options.cwd)) {
-        result.skipped.push(`${DEV_VARS_FILE} is not in .gitignore, so no secret is written there. Add \`${DEV_VARS_FILE}\` to .gitignore first.`);
+    const refusal = devVariablesRefusal(options.cwd);
+
+    if (refusal !== undefined) {
+        result.skipped.push(refusal);
 
         return;
     }

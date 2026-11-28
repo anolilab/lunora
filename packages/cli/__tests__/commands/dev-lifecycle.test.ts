@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { claimDevServerState, clearDevServerState, DEV_LOG_FILE, readDevServerState, writeDevServerState } from "@lunora/config";
+import { claimDevServerState, clearDevServerState, DEV_LOG_FILE, readDevServerState, readLiveDevServerState, writeDevServerState } from "@lunora/config";
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -51,6 +51,69 @@ describe("lunora dev lifecycle", () => {
 
             expect(result.code).toBe(0);
             expect(lines.some((line) => line.message.includes("No dev server running"))).toBe(true);
+        });
+
+        it("reports a dead background server it finds instead of only saying nothing runs", async () => {
+            expect.assertions(3);
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, DEV_LOG_FILE), "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n", "utf8");
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, url: "http://localhost:8788" });
+
+            const { lines, logger } = recordingLogger();
+
+            await runDevStop({ cwd: workdir, json: false, logger });
+
+            expect(lines.some((line) => line.level === "warn" && line.message.includes("(pid 2147483646) is no longer running"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("NODE_OPTIONS=--max-old-space-size"))).toBe(true);
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
+        it("names a server that claimed the record while it cleared a dead one", async () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, url: "http://localhost:8788" });
+
+            const { lines, logger } = recordingLogger();
+
+            await runDevStop({
+                // The liveness check is the moment another start claims the record.
+                alive: () => {
+                    writeDevServerState(workdir, { background: true, mode: "cli", pid: process.pid, url: "http://localhost:8789" });
+
+                    return false;
+                },
+                cwd: workdir,
+                json: false,
+                logger,
+            });
+
+            expect(lines.some((line) => line.level === "warn" && line.message.includes(`(pid ${String(process.pid)}) while this stop ran`))).toBe(true);
+            expect(readDevServerState(workdir)?.pid).toBe(process.pid);
+        });
+
+        it("names a dead background server in its --json document", async () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, DEV_LOG_FILE), "FATAL ERROR: heap out of memory\n", "utf8");
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, url: "http://localhost:8788" });
+
+            const chunks: string[] = [];
+
+            vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+                chunks.push(String(chunk));
+
+                return true;
+            });
+
+            await runDevStop({ cwd: workdir, json: true, logger: recordingLogger().logger });
+
+            expect(JSON.parse(chunks.join(""))).toStrictEqual({
+                exited: { logTail: ["FATAL ERROR: heap out of memory"], pid: 2_147_483_646, url: "http://localhost:8788" },
+                running: false,
+                stopped: false,
+            });
         });
 
         it("sIGTERMs the recorded pid and clears the state record", async () => {
@@ -235,6 +298,21 @@ describe("lunora dev lifecycle", () => {
             expect(lines.some((line) => line.message.includes("is no longer running"))).toBe(false);
             expect(lines.some((line) => line.message.includes("NODE_OPTIONS=--max-old-space-size"))).toBe(true);
             expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
+        it("still reports a dead background server after a command that cannot report it read the record", () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, url: "http://localhost:8788" });
+
+            // `lunora view`, the logs command and the MCP server's URL lookup read the record this way first.
+            expect(readLiveDevServerState(workdir)).toBeUndefined();
+
+            const { lines, logger } = recordingLogger();
+
+            runDevStatus({ cwd: workdir, json: false, logger });
+
+            expect(lines.some((line) => line.level === "warn" && line.message.includes("(pid 2147483646) is no longer running"))).toBe(true);
         });
 
         it("names a launcher's placeholder record as launching", () => {
@@ -948,6 +1026,32 @@ describe("lunora dev lifecycle", () => {
             expect(lines.some((line) => line.message.includes("port already in use"))).toBe(true);
         });
 
+        it("removes the record of a server that died before ready under a pid other than the spawned one", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+
+            const result = await runDevBackground({
+                command: { args: ["dev"], command: "lunora" },
+                cwd: workdir,
+                json: false,
+                logger,
+                pollIntervalMs: 1,
+                probe: async () => false,
+                readyTimeoutMs: 2000,
+                spawnDetached: () => {
+                    // A Vite server records its own pid, not the package-manager wrapper's the launcher spawned.
+                    writeDevServerState(workdir, { background: true, mode: "vite", pid: 2_147_483_646, url: "http://localhost:5173" });
+
+                    return { exited: Promise.resolve(1), pid: 999_999 };
+                },
+            });
+
+            expect(result.code).toBe(1);
+            // The launcher printed this crash; a record left behind would make the next `status` print it again.
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
         it("times out with an actionable hint when readiness is never confirmed", async () => {
             expect.assertions(3);
 
@@ -1035,7 +1139,7 @@ describe("lunora dev lifecycle", () => {
                     // `pid: process.ppid` — a genuinely alive pid (the runner's
                     // parent), like the other "child writes its own record"
                     // tests in this file use. A fake pid would itself read as
-                    // stale/dead and get cleared by `readLiveDevServerState`'s
+                    // stale/dead and be ignored by `readLiveDevServerState`'s
                     // own staleness check inside the poll loop, unrelated to
                     // (and masking) the behaviour under test here.
                     writeDevServerState(workdir, {

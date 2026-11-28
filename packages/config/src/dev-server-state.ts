@@ -15,11 +15,14 @@
  *
  * Every read is best-effort: a missing file, malformed JSON, or unexpected
  * shape collapses to `undefined`. A record whose PID is no longer alive is
- * stale* — `readLiveDevServerState` clears it and reports "not running", so a
- * crashed or SIGKILLed server never wedges the next start.
+ * stale: `readLiveDevServerState` reports "not running" for it, so a crashed or
+ * SIGKILLed server never wedges the next start. A dead background server's
+ * record is kept, stamped {@link DevServerState.exitedAt}, until a command that
+ * can report the crash reads it; any other record is removed.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
+import { atomicWrite } from "./atomic-write";
 import join from "./path";
 
 /** Directory holding per-checkout Lunora state (gitignored by convention). */
@@ -70,6 +73,15 @@ type DevServerMode = "cli" | "vite";
 interface DevServerState {
     /** Whether the server was detached into the background (`lunora dev --background`). */
     background?: boolean;
+
+    /**
+     * ISO-8601 stamp set when a reader found this background server's process gone.
+     * Its crash and log are only reported by `lunora dev status`, a start, `stop` and
+     * the MCP status tool, so a reader that cannot report it (`view`, `logs`, the
+     * MCP server's URL lookup) keeps the record for them instead of deleting it. A
+     * stamped record never reads as live again, even once its pid is recycled.
+     */
+    exitedAt?: string;
 
     /**
      * PID of the background launcher that wrote a provisional record. It stays when
@@ -214,9 +226,10 @@ const processStartTimeMs = (pid: number): number | undefined => {
  * record is written, so a process that started after `startedAt` (+ skew) is
  * a recycled PID wearing the corpse's number. The start-time check runs only
  * where the platform exposes it (Linux); elsewhere liveness alone decides.
+ * A record stamped {@link DevServerState.exitedAt} is never current.
  */
 const isRecordedProcessCurrent = (state: DevServerState): boolean => {
-    if (!isProcessAlive(state.pid)) {
+    if (state.exitedAt !== undefined || !isProcessAlive(state.pid)) {
         return false;
     }
 
@@ -263,6 +276,7 @@ const readDevServerState = (projectRoot: string): DevServerState | undefined => 
 
     return {
         background: parsed["background"] === true,
+        exitedAt: stringField(parsed, "exitedAt"),
         launcherPid: typeof parsed["launcherPid"] === "number" ? parsed["launcherPid"] : undefined,
         logFile: stringField(parsed, "logFile"),
         mode: parsed["mode"] === "vite" ? "vite" : "cli",
@@ -280,7 +294,9 @@ const readDevServerState = (projectRoot: string): DevServerState | undefined => 
  * Write the state record to `.lunora/dev.json`, creating the `.lunora/`
  * directory when absent. Returns the absolute path written, or `undefined`
  * when the write failed (state is convenience metadata — a read-only checkout
- * must never crash dev startup).
+ * must never crash dev startup). The write goes through a temp file and a
+ * rename: `status` polls this file while servers write it, and an in-place
+ * write could be read half-done or, interrupted, lose a crash record.
  */
 const writeDevServerState = (projectRoot: string, state: DevServerState): string | undefined => {
     try {
@@ -288,7 +304,7 @@ const writeDevServerState = (projectRoot: string, state: DevServerState): string
 
         const path = join(projectRoot, DEV_STATE_FILE);
 
-        writeFileSync(path, `${JSON.stringify(state, undefined, 2)}\n`, "utf8");
+        atomicWrite(path, `${JSON.stringify(state, undefined, 2)}\n`);
 
         return path;
     } catch {
@@ -371,9 +387,10 @@ const clearDevServerState = (projectRoot: string, expectedPid?: number): void =>
 
 /**
  * The state record of a dev server that is verifiably running right now, or
- * `undefined`. A record whose PID is dead — or recycled onto a different
- * process (see {@link isRecordedProcessCurrent}) — is stale: it is cleared on
- * the spot so subsequent starts don't keep re-reading a corpse.
+ * `undefined`. A record whose PID is dead, or recycled onto a different process
+ * (see {@link isRecordedProcessCurrent}), is stale. A stale background record is
+ * stamped {@link DevServerState.exitedAt} and kept, so the crash still reaches the
+ * next `status` or start; any other stale record is removed.
  */
 const readLiveDevServerState = (projectRoot: string): DevServerState | undefined => {
     const state = readDevServerState(projectRoot);
@@ -386,7 +403,11 @@ const readLiveDevServerState = (projectRoot: string): DevServerState | undefined
         return state;
     }
 
-    clearDevServerState(projectRoot, state.pid);
+    if (state.background !== true) {
+        clearDevServerState(projectRoot, state.pid);
+    } else if (state.exitedAt === undefined) {
+        updateDevServerState(projectRoot, { exitedAt: new Date().toISOString() }, { expectedPid: state.pid });
+    }
 
     return undefined;
 };
@@ -420,13 +441,20 @@ interface ClaimDevServerStateResult {
  * Resolve an exclusive-create conflict for {@link claimDevServerState}:
  * someone holds the file. Live (and not us) → they won — unless it is the
  * provisional record this claim was spawned to supersede. `undefined` means
- * the incumbent was stale (readLive cleared it) and the exclusive create
+ * the incumbent was gone or dead (and is now removed), so the exclusive create
  * should be retried.
  */
 const resolveClaimConflict = (projectRoot: string, state: DevServerState, supersedePid: number | undefined): ClaimDevServerStateResult | undefined => {
-    const existing = readLiveDevServerState(projectRoot);
+    const existing = readDevServerState(projectRoot);
 
     if (existing === undefined) {
+        return undefined;
+    }
+
+    // A dead record, kept or not, loses to a new server; removing it lets the retried exclusive create win.
+    if (!isRecordedProcessCurrent(existing)) {
+        clearDevServerState(projectRoot, existing.pid);
+
         return undefined;
     }
 

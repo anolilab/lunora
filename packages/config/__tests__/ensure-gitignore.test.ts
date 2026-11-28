@@ -2,9 +2,31 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ensureGitignoreEntries from "../src/ensure-gitignore";
+
+/** Runs once right after the helper reads a `.gitignore`, standing in for another process editing it then. */
+let afterGitignoreRead: (() => void) | undefined;
+
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        readFileSync: ((...arguments_: Parameters<typeof actual.readFileSync>) => {
+            const result = actual.readFileSync(...arguments_);
+            const hook = afterGitignoreRead;
+
+            if (hook !== undefined && String(arguments_[0]).endsWith(".gitignore")) {
+                afterGitignoreRead = undefined;
+                hook();
+            }
+
+            return result;
+        }) as typeof actual.readFileSync,
+    };
+});
 
 const PATTERNS = [".celld/", ".celld.wrangler.json", ".celld.service.*.wrangler.json"];
 const DEV_VARS = [".dev.vars", ".dev.vars.*", "!.dev.vars.example"];
@@ -27,6 +49,19 @@ describe("ensureGitignoreEntries", () => {
 
         expect(ensureGitignoreEntries(directory, PATTERNS)).toEqual(PATTERNS);
         expect(read().split("\n")).toEqual(expect.arrayContaining(PATTERNS));
+    });
+
+    it("keeps an edit another process made between the read and the write", () => {
+        expect.hasAssertions();
+
+        writeFileSync(join(directory, ".gitignore"), "node_modules/\n");
+        afterGitignoreRead = () => {
+            writeFileSync(join(directory, ".gitignore"), "node_modules/\ndist/\n");
+        };
+
+        ensureGitignoreEntries(directory, PATTERNS);
+
+        expect(read().split("\n")).toEqual(expect.arrayContaining(["node_modules/", "dist/", ...PATTERNS]));
     });
 
     it("is idempotent: a second call appends nothing and leaves the file byte-identical", () => {

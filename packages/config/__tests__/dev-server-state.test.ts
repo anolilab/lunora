@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
     claimDevServerState,
@@ -16,6 +16,34 @@ import {
     updateDevServerState,
     writeDevServerState,
 } from "../src/dev-server-state";
+
+/** Every `writeFileSync` the module under test makes, so a test can tell an exclusive create from an overwrite. */
+const fileWrites: { flag: string | undefined; path: string }[] = [];
+
+/** When set, the next write lands half its content and then fails, as an interrupted process would leave it. */
+let tearNextWrite: true | undefined;
+
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        writeFileSync: (...arguments_: Parameters<typeof actual.writeFileSync>) => {
+            const options = arguments_[2];
+
+            fileWrites.push({ flag: typeof options === "object" && options !== null ? options.flag?.toString() : undefined, path: String(arguments_[0]) });
+
+            if (tearNextWrite === true) {
+                tearNextWrite = undefined;
+                actual.writeFileSync(arguments_[0], typeof arguments_[1] === "string" ? arguments_[1].slice(0, 10) : "");
+
+                throw new Error("EIO: write interrupted");
+            }
+
+            actual.writeFileSync(...arguments_);
+        },
+    };
+});
 
 /** A PID that is effectively never alive: beyond every platform's pid_max. */
 const DEAD_PID = 2 ** 30;
@@ -36,6 +64,7 @@ describe("dev-server-state", () => {
 
         const path = writeDevServerState(workdir, {
             background: true,
+            exitedAt: "2026-01-01T00:00:05.000Z",
             launcherPid: 1234,
             logFile: join(workdir, "dev.log"),
             mode: "cli",
@@ -51,6 +80,7 @@ describe("dev-server-state", () => {
         expect(path).toBe(join(workdir, DEV_STATE_FILE));
         expect(readDevServerState(workdir)).toStrictEqual({
             background: true,
+            exitedAt: "2026-01-01T00:00:05.000Z",
             launcherPid: 1234,
             logFile: join(workdir, "dev.log"),
             mode: "cli",
@@ -62,6 +92,16 @@ describe("dev-server-state", () => {
             tunnelUrl: "https://quiet-marble-otter.trycloudflare.com",
             url: "http://localhost:8787",
         });
+    });
+
+    it("keeps the previous record when a write is torn halfway", () => {
+        expect.assertions(2);
+
+        writeDevServerState(workdir, { background: true, mode: "cli", pid: DEAD_PID, url: "http://localhost:8787" });
+        tearNextWrite = true;
+
+        expect(writeDevServerState(workdir, { mode: "cli", pid: process.pid, url: "http://localhost:8788" })).toBeUndefined();
+        expect(readDevServerState(workdir)).toMatchObject({ pid: DEAD_PID, url: "http://localhost:8787" });
     });
 
     it("returns undefined for a missing state file", () => {
@@ -149,6 +189,45 @@ describe("dev-server-state", () => {
         expect(readLiveDevServerState(workdir)).toBeUndefined();
         // The stale record was removed on the spot.
         expect(readDevServerState(workdir)).toBeUndefined();
+    });
+
+    it("readLiveDevServerState keeps a dead background record for the next status, stamped as exited", () => {
+        expect.assertions(4);
+
+        writeDevServerState(workdir, { background: true, mode: "cli", pid: DEAD_PID, url: "http://localhost:8787" });
+
+        expect(readLiveDevServerState(workdir)).toBeUndefined();
+
+        const exitedAt = readDevServerState(workdir)?.exitedAt;
+
+        expect(exitedAt).toBeDefined();
+        expect(readLiveDevServerState(workdir)).toBeUndefined();
+        // A second read keeps the first stamp rather than rewriting it.
+        expect(readDevServerState(workdir)?.exitedAt).toBe(exitedAt);
+    });
+
+    it("never reads a record stamped as exited as live, even when its pid is alive again", () => {
+        expect.assertions(3);
+
+        const recycled = { background: true, exitedAt: new Date().toISOString(), mode: "cli" as const, pid: process.pid, url: "http://localhost:8787" };
+
+        writeDevServerState(workdir, recycled);
+
+        expect(isRecordedProcessCurrent(recycled)).toBe(false);
+        expect(readLiveDevServerState(workdir)).toBeUndefined();
+        expect(readDevServerState(workdir)?.exitedAt).toBe(recycled.exitedAt);
+    });
+
+    it("claimDevServerState replaces a record kept for a dead background server", () => {
+        expect.assertions(3);
+
+        writeDevServerState(workdir, { background: true, exitedAt: new Date().toISOString(), mode: "cli", pid: process.ppid, url: "http://localhost:8787" });
+        fileWrites.length = 0;
+
+        expect(claimDevServerState(workdir, { mode: "vite", pid: process.pid, url: "http://localhost:5173" })).toStrictEqual({ ok: true });
+        expect(readDevServerState(workdir)).toMatchObject({ exitedAt: undefined, pid: process.pid });
+        // The record that won was an exclusive create; a plain overwrite would also replace a server that claimed in between.
+        expect(fileWrites.findLast((write) => write.path.endsWith("dev.json"))?.flag).toBe("wx");
     });
 
     it("treats a recycled PID as stale (record predates the process's start)", () => {

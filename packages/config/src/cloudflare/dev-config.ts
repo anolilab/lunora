@@ -14,11 +14,11 @@
  * its config from disk and resolves relative `main`/`assets` paths against the
  * config's own directory. The Vite path edits the config in memory instead.
  */
-import { spawnSync } from "node:child_process";
 import { lstatSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import ensureGitignoreEntries from "../ensure-gitignore";
+import { gitCheckIgnore } from "../git-check-ignore";
 import isWithinDirectory from "../is-within-directory";
 import join from "../path";
 
@@ -114,11 +114,6 @@ const createCleanup = (path: string): (() => void) => {
     };
 };
 
-/** `git check-ignore` for one path: 0 ignored, 1 not ignored, 128 (or `null`) outside a repository or without git. */
-const checkIgnoreStatus = (path: string): number | null =>
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell
-    spawnSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: dirname(path), stdio: "ignore", timeout: 5000 }).status;
-
 /**
  * Make git ignore a temp config before it exists. A service folder is often a
  * subdirectory the project's `.gitignore` was never written for, and a file there
@@ -139,7 +134,7 @@ const ensureDevConfigIgnored = (configPath: string, projectRoot: string): void =
 
     try {
         for (const target of targets) {
-            if (checkIgnoreStatus(configPath) !== 1) {
+            if (gitCheckIgnore(configPath, { noIndex: true }) !== "not-ignored") {
                 return;
             }
 

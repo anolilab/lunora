@@ -344,6 +344,26 @@ const waitUntilReady = async (parameters: {
 };
 
 /**
+ * Remove the record a background start that died before ready leaves. The pid guard
+ * falls back to this process: a spawn failure can yield no pid before the child
+ * claimed anything, and the record (if any) is then this launcher's own placeholder,
+ * or a record some OTHER server owns that an unguarded clear would delete.
+ *
+ * A Vite server records its own pid, not the package-manager wrapper's this launcher
+ * spawned, so the guarded clear misses it. Its crash was just printed; left behind,
+ * the next `status` would print it again.
+ */
+const clearFailedStartRecord = (cwd: string, childPid: number | undefined): void => {
+    clearDevServerState(cwd, childPid ?? process.pid);
+
+    const leftover = readDevServerState(cwd);
+
+    if (leftover !== undefined && !isRecordedProcessCurrent(leftover)) {
+        clearDevServerState(cwd, leftover.pid);
+    }
+};
+
+/**
  * Start the dev server as a managed background process: spawn detached with
  * output captured to `.lunora/dev.log`, block until the server has written its
  * state record AND accepts an HTTP request, print URL + PID, and return.
@@ -410,12 +430,7 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
             logger.error(`  ${line}`);
         }
 
-        // Guard with `?? process.pid`: a spawn failure can yield `pid:
-        // undefined` before the child ever claimed anything, in which case the
-        // record (if any) is still this parent's own provisional claim — or,
-        // worse, a pre-existing record some OTHER server owns. An unguarded
-        // clear would delete that unrelated record.
-        clearDevServerState(cwd, child.pid ?? process.pid);
+        clearFailedStartRecord(cwd, child.pid);
 
         return { code: outcome.exitCode === 0 ? 1 : outcome.exitCode };
     }
@@ -642,6 +657,60 @@ const forceKillRecordedServer = (
     }
 };
 
+/** The `status` and `stop` output when nothing is running, naming a background server that died since the last look. */
+const reportNotRunning = (options: { cwd: string; json: boolean; logger: Logger }, exited: DevServerState | undefined, extra?: { stopped: false }): void => {
+    if (options.json) {
+        printJson(
+            exited === undefined
+                ? { running: false, ...extra }
+                : { exited: { logTail: exitedLogTail(options.cwd, exited), pid: exited.pid, url: exited.url }, running: false, ...extra },
+        );
+
+        return;
+    }
+
+    if (exited !== undefined) {
+        reportExitedServer(options.logger, options.cwd, exited);
+    }
+
+    options.logger.info("No dev server running.");
+};
+
+/** The `stop` output when another dev server claimed the record while this stop was clearing a dead one. */
+const reportStartedDuringStop = (options: { json: boolean; logger: Logger }, replacement: DevServerState): void => {
+    if (options.json) {
+        printJson({ pid: replacement.pid, running: true, stopped: false, url: replacement.url });
+
+        return;
+    }
+
+    options.logger.warn(
+        `A dev server started at ${replacement.url} (pid ${String(replacement.pid)}) while this stop ran; run \`lunora dev stop\` again to stop it.`,
+    );
+};
+
+/**
+ * `stop` with no live server recorded. The stale record is dropped only while it is
+ * still the one read: unguarded, the clear would race a concurrent `lunora dev` that
+ * claimed a fresh record in between, orphaning that server from `stop`/`status`/`logs`.
+ */
+const stopWithoutLiveServer = (options: { cwd: string; json: boolean; logger: Logger }, state: DevServerState | undefined): void => {
+    if (state !== undefined) {
+        clearDevServerState(options.cwd, state.pid);
+
+        // The guarded clear kept a record another start claimed in between: that server runs.
+        const replacement = readDevServerState(options.cwd);
+
+        if (replacement !== undefined && replacement.pid !== state.pid && isRecordedProcessCurrent(replacement)) {
+            reportStartedDuringStop(options, replacement);
+
+            return;
+        }
+    }
+
+    reportNotRunning(options, state?.background === true ? state : undefined, { stopped: false });
+};
+
 interface StopCommandOptions {
     /** Injection seam for tests — defaults to {@link isRecordedProcessCurrent} against the record. */
     alive?: (pid: number) => boolean;
@@ -698,19 +767,7 @@ const runDevStop = async (options: StopCommandOptions): Promise<{ code: number }
     const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
 
     if (state === undefined || !alive(state.pid)) {
-        // Drop the stale record — but only if it is still the one we read.
-        // Unguarded, this would race a concurrent `lunora dev` that claimed a
-        // fresh record between our read and this clear, orphaning that server
-        // from `stop`/`status`/`logs`.
-        if (state !== undefined) {
-            clearDevServerState(cwd, state.pid);
-        }
-
-        if (options.json) {
-            printJson({ running: false, stopped: false });
-        } else {
-            logger.info("No dev server running.");
-        }
+        stopWithoutLiveServer({ cwd, json: options.json, logger }, state);
 
         return { code: 0 };
     }
@@ -757,25 +814,6 @@ interface StatusCommandOptions {
     /** Injection seam for tests — defaults to `Date.now()`. */
     now?: () => number;
 }
-
-/** The `status` output when nothing is running, naming a background server that died since the last look. */
-const reportNotRunning = (options: StatusCommandOptions, exited: DevServerState | undefined): void => {
-    if (options.json) {
-        printJson(
-            exited === undefined
-                ? { running: false }
-                : { exited: { logTail: exitedLogTail(options.cwd, exited), pid: exited.pid, url: exited.url }, running: false },
-        );
-
-        return;
-    }
-
-    if (exited !== undefined) {
-        reportExitedServer(options.logger, options.cwd, exited);
-    }
-
-    options.logger.info("No dev server running.");
-};
 
 /**
  * `lunora dev status` — report the recorded dev server (URL, PID, uptime,

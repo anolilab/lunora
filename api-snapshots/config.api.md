@@ -566,6 +566,7 @@ type DevServerPhase = "launching" | "ready" | "starting";
 ```ts
 interface DevServerState {
     background?: boolean;
+    exitedAt?: string;
     launcherPid?: number;
     logFile?: string;
     mode: DevServerMode;
@@ -788,6 +789,12 @@ const GENERATED_MODULE_DURABLE_OBJECTS: Partial<Record<GeneratedClassModule, Dur
 
 ```ts
 type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
+```
+
+### `GitIgnoreStatus` (type)
+
+```ts
+type GitIgnoreStatus = "ignored" | "not-ignored" | "timed-out" | "unknown";
 ```
 
 ### `HookLogger` (interface)
@@ -1655,6 +1662,14 @@ const formatLunoraEvent: (line: string) => LunoraFormattedLine | undefined;
 
 ```ts
 const generateSecretValue: (randomHex?: (bytes: number) => string) => string;
+```
+
+### `gitCheckIgnore` (const)
+
+```ts
+const gitCheckIgnore: (path: string, options: {
+    noIndex: boolean;
+}) => GitIgnoreStatus;
 ```
 
 ### `inferLunoraBindings` (const)
