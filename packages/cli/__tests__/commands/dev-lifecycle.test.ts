@@ -69,6 +69,29 @@ describe("lunora dev lifecycle", () => {
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
+        it("names a server that claimed the record while it cleared a dead one", async () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, url: "http://localhost:8788" });
+
+            const { lines, logger } = recordingLogger();
+
+            await runDevStop({
+                // The liveness check is the moment another start claims the record.
+                alive: () => {
+                    writeDevServerState(workdir, { background: true, mode: "cli", pid: process.pid, url: "http://localhost:8789" });
+
+                    return false;
+                },
+                cwd: workdir,
+                json: false,
+                logger,
+            });
+
+            expect(lines.some((line) => line.level === "warn" && line.message.includes(`(pid ${String(process.pid)}) while this stop ran`))).toBe(true);
+            expect(readDevServerState(workdir)?.pid).toBe(process.pid);
+        });
+
         it("names a dead background server in its --json document", async () => {
             expect.assertions(1);
 

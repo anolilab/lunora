@@ -297,6 +297,20 @@ describe("lunora doctor --fix", () => {
         expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe("# committed by mistake\n");
     });
 
+    it("names git rm --cached when a tracked .dev.vars blocks the write", async () => {
+        expect.hasAssertions();
+
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+        spawnSync("git", ["init", "-q"], { cwd: workdir });
+        writeFileSync(join(workdir, ".dev.vars"), "# committed by mistake\n");
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+        spawnSync("git", ["add", "--force", ".dev.vars"], { cwd: workdir });
+
+        const result = await applyDoctorFixes({ configPath: undefined, cwd: workdir, dryRun: false, logger: silentLogger });
+
+        expect(result.skipped.some((line) => line.includes("git rm --cached .dev.vars"))).toBe(true);
+    });
+
     it("never mints over a real value that a later placeholder duplicate shadows", async () => {
         expect.hasAssertions();
 

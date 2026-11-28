@@ -676,6 +676,41 @@ const reportNotRunning = (options: { cwd: string; json: boolean; logger: Logger 
     options.logger.info("No dev server running.");
 };
 
+/** The `stop` output when another dev server claimed the record while this stop was clearing a dead one. */
+const reportStartedDuringStop = (options: { json: boolean; logger: Logger }, replacement: DevServerState): void => {
+    if (options.json) {
+        printJson({ pid: replacement.pid, running: true, stopped: false, url: replacement.url });
+
+        return;
+    }
+
+    options.logger.warn(
+        `A dev server started at ${replacement.url} (pid ${String(replacement.pid)}) while this stop ran; run \`lunora dev stop\` again to stop it.`,
+    );
+};
+
+/**
+ * `stop` with no live server recorded. The stale record is dropped only while it is
+ * still the one read: unguarded, the clear would race a concurrent `lunora dev` that
+ * claimed a fresh record in between, orphaning that server from `stop`/`status`/`logs`.
+ */
+const stopWithoutLiveServer = (options: { cwd: string; json: boolean; logger: Logger }, state: DevServerState | undefined): void => {
+    if (state !== undefined) {
+        clearDevServerState(options.cwd, state.pid);
+
+        // The guarded clear kept a record another start claimed in between: that server runs.
+        const replacement = readDevServerState(options.cwd);
+
+        if (replacement !== undefined && replacement.pid !== state.pid && isRecordedProcessCurrent(replacement)) {
+            reportStartedDuringStop(options, replacement);
+
+            return;
+        }
+    }
+
+    reportNotRunning(options, state?.background === true ? state : undefined, { stopped: false });
+};
+
 interface StopCommandOptions {
     /** Injection seam for tests — defaults to {@link isRecordedProcessCurrent} against the record. */
     alive?: (pid: number) => boolean;
@@ -732,15 +767,7 @@ const runDevStop = async (options: StopCommandOptions): Promise<{ code: number }
     const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
 
     if (state === undefined || !alive(state.pid)) {
-        // Drop the stale record — but only if it is still the one we read.
-        // Unguarded, this would race a concurrent `lunora dev` that claimed a
-        // fresh record between our read and this clear, orphaning that server
-        // from `stop`/`status`/`logs`.
-        if (state !== undefined) {
-            clearDevServerState(cwd, state.pid);
-        }
-
-        reportNotRunning({ cwd, json: options.json, logger }, state?.background === true ? state : undefined, { stopped: false });
+        stopWithoutLiveServer({ cwd, json: options.json, logger }, state);
 
         return { code: 0 };
     }
