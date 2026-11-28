@@ -60,7 +60,9 @@ mail is set up (`MAIL_FROM` unset), `lunora dev` prints it in the dev server out
 `[auth] email → …`. Once `lunora add email` has set `MAIL_FROM`, dev sends are captured
 in the Studio **Mail** tab (`/__lunora`) instead of being delivered. Opening it
 verifies the address and signs you in. Create an organization and open `/dashboard`.
-Run `lunora add email` before deploying so real mail is delivered.
+Before deploying, set `MAIL_FROM` for the deployment too (`lunora add email` writes it
+only to `.dev.vars`), along with a provider: the `SEND_EMAIL` binding or `RESEND_API_KEY`.
+Without `MAIL_FROM` a deployed sign-up cannot send its verification mail.
 
 ## A tenant is a shard
 

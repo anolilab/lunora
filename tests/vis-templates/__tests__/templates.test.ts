@@ -302,7 +302,10 @@ describe("templates/* package.json validation", () => {
                 return;
             }
 
-            expect(Object.keys(deps), `${templateName} must list @lunora/client so lunorash and @lunora/react share one version`).toContain("@lunora/client");
+            // Runtime dependencies only: a production install skips devDependencies, and the pin has to be there.
+            expect(Object.keys(pkg.dependencies ?? {}), `${templateName} must list @lunora/client so lunorash and @lunora/react share one version`).toContain(
+                "@lunora/client",
+            );
         });
 
         /**
