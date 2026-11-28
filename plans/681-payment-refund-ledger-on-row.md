@@ -22,7 +22,8 @@ Record which refunds are counted **on the row**, in the same guarded write (`{ i
 - Column on `sessions` in `packages/payment/src/schema.ts`, next to `disputedMinor`, OPTIONAL with no backfill: `bookedRefunds: v.optional(v.array(v.object({ id: v.string(), minor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER) })))`. `v.array(v.object(...))` has precedent in `apps/cloud/lunora/tables/deploy.ts`. If the `externallyManaged` table or the database store cannot round-trip an array of objects, STOP and report (do not invent an encoding).
 - `packages/payment/src/database-store.ts`: `sessionToRow` writes the column (omitted when the list is absent or empty; each amount through `toMinorUnitsColumn`), `rowToSession` reads it (currency is the row's). Check what an update does with an omitted optional key: a session written without the list must not be able to **clear** a stored list by accident, and must be able to keep it. Say in the report what you found.
 - Mirror in `apps/cloud/lunora/tables/billing.ts` (it declares the payment tables by hand, see `disputedMinor` at about line 167), then regenerate `apps/cloud/lunora/_generated/` with the repo's codegen (those files are tracked; CI job "Lint (generated files)" compares them). Never hand-edit them.
-- Cap: at most 1000 entries. Past it, drop the oldest and still book. No observer event for this (no payment has that many refunds; the cap only bounds the row).
+- No cap and no eviction: forgetting an id lets a restatement of that refund count again. An entry is under 100 bytes and the row limit is 2 MB.
+- An entry for a lost dispute is marked (`reversal: "dispute"`, stored as `dispute: true`), so code that compares the list with a refund-only total can leave disputes out.
 
 ### One pure module: `packages/payment/src/refund-ledger.ts` (new, named exports only)
 
@@ -79,7 +80,7 @@ Locate code by the quoted names; line numbers are from 92b08af17.
 
 ## Order, one commit each
 
-1. Column, type, store mapping, `apps/cloud` mirror and regenerated files; store tests (round trip, absent column, cap).
+1. Column, type, store mapping, `apps/cloud` mirror and regenerated files; store tests (round trip, absent column).
 2. `refund-ledger.ts` with unit tests (`packages/payment/__tests__/refund-ledger.test.ts`).
 3. Webhook path. 4. `refundPayment`. 5. `bookSettledRefunds`. 6. Reconcile. 7. Deletions that remain, docs, API snapshot.
 
