@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.512](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.511...@lunora/cli@1.0.0-alpha.512) (2026-11-28)
+
+- fix(cli): make background lunora dev startup reliable and honest (#1733)
+
 ## @lunora/cli [1.0.0-alpha.511](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.510...@lunora/cli@1.0.0-alpha.511) (2026-11-27)
 
 - fix: address review findings on the dispute, audit and sdk-stamp changes (#1724)
