@@ -291,6 +291,24 @@ describe("templates/* package.json validation", () => {
         });
 
         /**
+         * `lunorash` floats on `@lunora/client` (`^…`) while `@lunora/react` needs a
+         * newer one, and `lunora init` pins only the deps a template lists. Without a
+         * direct entry a fresh install can resolve two client versions, and the browser
+         * client then lacks methods the React provider calls
+         * (`e.onShardConnectionStatus is not a function`).
+         */
+        test("lists @lunora/client directly when it uses @lunora/react", () => {
+            if (!Object.keys(deps).includes("@lunora/react")) {
+                return;
+            }
+
+            // Runtime dependencies only: a production install skips devDependencies, and the pin has to be there.
+            expect(Object.keys(pkg.dependencies ?? {}), `${templateName} must list @lunora/client so lunorash and @lunora/react share one version`).toContain(
+                "@lunora/client",
+            );
+        });
+
+        /**
          * A template that shards its demo backend — by declaring `.shardBy(...)` or
          * by routing a call to a non-default shard — must also open or gate shard
          * access on its worker. Without `allowUnauthenticatedShardAccess` or an

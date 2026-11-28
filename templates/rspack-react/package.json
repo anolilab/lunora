@@ -14,6 +14,7 @@
         "deploy": "lunora deploy"
     },
     "dependencies": {
+        "@lunora/client": "^0.0.0",
         "@lunora/ratelimit": "^0.0.0",
         "@lunora/react": "^0.0.0",
         "@tanstack/react-query": "^5.104.0",

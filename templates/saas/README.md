@@ -11,6 +11,7 @@ reload.
 pnpm install
 cp .dev.vars.example .dev.vars   # then set BETTER_AUTH_SECRET: openssl rand -base64 32
 pnpm exec lunora add auth-ui     # the sign-in, sign-up and organization screens
+# replace src/routes/auth.$view.tsx with the snippet under "The auth screens" below
 pnpm run dev
 ```
 
@@ -54,8 +55,16 @@ function AuthPage() {
 }
 ```
 
-Sign up (in dev the verification link is printed to the terminal until you run
-`lunora add email`), create an organization, and open `/dashboard`.
+Sign up, then open the verification link (subject "Verify your email address"). Until
+mail is set up (`MAIL_FROM` unset), `lunora dev` prints it in the dev server output as
+`[auth] email → …`. Once `lunora add email` has set `MAIL_FROM`, dev sends are captured
+in the Studio **Mail** tab (`/__lunora`) instead of being delivered. Opening it
+verifies the address and signs you in. Create an organization and open `/dashboard`.
+Before deploying, set `MAIL_FROM` for the deployment too (`lunora add email` writes it
+only to `.dev.vars`), along with a provider: the `SEND_EMAIL` binding `lunora add email`
+creates, or `RESEND_API_KEY`. The binding wins whenever it exists, so for Resend remove it
+from `wrangler.jsonc`.
+Without `MAIL_FROM` a deployed sign-up cannot send its verification mail.
 
 ## A tenant is a shard
 
