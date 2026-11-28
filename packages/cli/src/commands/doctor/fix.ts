@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -6,6 +5,7 @@ import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import {
     DEV_VARS_FILE,
     generateSecretValue,
+    gitCheckIgnore,
     inferLunoraBindings,
     isMintableSecretKey,
     isPlaceholderValue,
@@ -290,15 +290,11 @@ const fixD1Placeholders = async (options: DoctorFixOptions, result: DoctorFixRes
  * `.gitignore` must carry the exact line. Unknown is a refusal, never a write.
  */
 const devVariablesIsIgnored = (cwd: string): boolean => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH (install location varies); args are fixed and no shell is involved
-    const check = spawnSync("git", ["check-ignore", "-q", DEV_VARS_FILE], { cwd, stdio: "ignore" });
+    // Without `--no-index`: a tracked `.dev.vars` reads as not ignored, so no secret is written into a committed file.
+    const status = gitCheckIgnore(join(cwd, DEV_VARS_FILE), { noIndex: false });
 
-    if (check.status === 0) {
-        return true;
-    }
-
-    if (check.status === 1) {
-        return false;
+    if (status !== "unknown") {
+        return status === "ignored";
     }
 
     const gitignore = join(cwd, ".gitignore");

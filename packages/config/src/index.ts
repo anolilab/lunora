@@ -108,6 +108,8 @@ export {
     targetRunsOwnDevServer,
 } from "./driver-registry";
 export { default as ensureGitignoreEntries } from "./ensure-gitignore";
+export type { GitIgnoreStatus } from "./git-check-ignore";
+export { gitCheckIgnore } from "./git-check-ignore";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, secretSourcesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";

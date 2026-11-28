@@ -283,6 +283,20 @@ describe("lunora doctor --fix", () => {
         expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toMatch(/^LUNORA_ADMIN_TOKEN="[0-9a-f]{64}"$/mu);
     });
 
+    it("refuses a .dev.vars that git tracks, even when a pattern ignores it", async () => {
+        expect.hasAssertions();
+
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+        spawnSync("git", ["init", "-q"], { cwd: workdir });
+        writeFileSync(join(workdir, ".dev.vars"), "# committed by mistake\n");
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+        spawnSync("git", ["add", "--force", ".dev.vars"], { cwd: workdir });
+
+        await applyDoctorFixes({ configPath: undefined, cwd: workdir, dryRun: false, logger: silentLogger });
+
+        expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toBe("# committed by mistake\n");
+    });
+
     it("never mints over a real value that a later placeholder duplicate shadows", async () => {
         expect.hasAssertions();
 
