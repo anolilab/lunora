@@ -156,7 +156,7 @@ await ctx.containers.fetcher.get(tenantId).egress.allow("hooks.slack.com");
 
 Private, loopback and link-local address ranges are not blocked by Lunora, and the allow/deny lists match host names, not resolved addresses. If a container fetches user-supplied URLs, block those ranges yourself; see "Private and internal addresses" in the docs for what is and is not established.
 
-For advanced egress rewriting in worker code, `@lunora/container/do` re-exports Cloudflare's custom outbound-handler types (`OutboundHandler`, `OutboundHandlers`, `outboundParams`) — wire them onto a hand-authored `LunoraContainer` subclass to inject auth, route, or mock a container's outbound calls.
+For advanced egress rewriting in worker code, `@lunora/container/do` re-exports Cloudflare's custom outbound-handler types (`OutboundHandler`, `OutboundHandlers`, `outboundParams`) — set them on the generated container class (for example `TranscoderContainer.outbound = …`) in the worker entry to inject auth, route, or mock a container's outbound calls.
 
 ### Readiness gating
 
@@ -220,7 +220,7 @@ Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization
 
 ### Entry points
 
-- `@lunora/container` — Node-safe: `defineContainer`, naming/normalization helpers, `createContainerContext`, and the Docker-free `createContainerTestContext` test double (it does not simulate retries: `.pool()` always makes one attempt, and `.get()` / `.any()` default to one unless you pass `attempts`).
+- `@lunora/container` — Node-safe: `defineContainer`, naming/normalization helpers, `createContainerContext`, and the Docker-free `createContainerTestContext` test double (it does not simulate retries or their backoff: `.pool()` always makes one attempt, and `.get()` / `.any()` default to one unless you pass `attempts`).
 - `@lunora/container/do` — workerd-only: the `LunoraContainer` base class the generated DO classes extend (pulls in `@cloudflare/containers`).
 - `@lunora/container/bridge` — runtime-agnostic: `createContainerBridge` for calling Lunora functions from inside a container.
 
