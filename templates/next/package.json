@@ -18,6 +18,7 @@
         "deploy": "pnpm run deploy:lunora && pnpm run deploy:next"
     },
     "dependencies": {
+        "@lunora/client": "^0.0.0",
         "@lunora/ratelimit": "^0.0.0",
         "@lunora/react": "^0.0.0",
         "lunorash": "^0.0.0",
