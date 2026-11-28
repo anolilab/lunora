@@ -1,10 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { describeWithheld, devConfigBasename, sweepStaleDevConfigs, withheldBindings, writeDevConfig } from "../src/cloudflare/dev-config";
+import { describeWithheld, DEV_CONFIG_IGNORE, devConfigBasename, sweepStaleDevConfigs, withheldBindings, writeDevConfig } from "../src/cloudflare/dev-config";
 
 describe(withheldBindings, () => {
     it("reads a malformed artifacts value as no binding instead of throwing", () => {
@@ -102,7 +103,7 @@ describe("writeDevConfig and the stale sweep", () => {
     it("writes the contents and removes the file on cleanup", () => {
         expect.assertions(3);
 
-        const written = writeDevConfig(root, "dev", '{ "name": "app" }');
+        const written = writeDevConfig(root, "dev", '{ "name": "app" }', root);
 
         expect(readFileSync(written.configPath, "utf8")).toBe('{ "name": "app" }');
 
@@ -143,5 +144,70 @@ describe("writeDevConfig and the stale sweep", () => {
         expect(() => {
             sweepStaleDevConfigs(join(root, "missing"));
         }).not.toThrow();
+    });
+});
+
+describe("writeDevConfig and git", () => {
+    let root: string;
+
+    const git = (...args: string[]): void => {
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+        spawnSync("git", args, { cwd: root, stdio: "ignore" });
+    };
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell.
+    const isIgnored = (path: string): boolean => spawnSync("git", ["check-ignore", "-q", path], { cwd: root }).status === 0;
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), "lunora-dev-config-git-"));
+        mkdirSync(join(root, "services", "parser"), { recursive: true });
+    });
+
+    afterEach(() => {
+        rmSync(root, { force: true, recursive: true });
+    });
+
+    it("ignores a service copy through the project's .gitignore", () => {
+        expect.assertions(2);
+
+        git("init", "-q");
+
+        const written = writeDevConfig(join(root, "services", "parser"), "service", "{}", root);
+
+        expect(readFileSync(join(root, ".gitignore"), "utf8")).toContain(DEV_CONFIG_IGNORE);
+        expect(isIgnored(written.configPath)).toBe(true);
+    });
+
+    it("leaves .gitignore alone when git already ignores the file", () => {
+        expect.assertions(2);
+
+        git("init", "-q");
+        writeFileSync(join(root, ".git", "info", "exclude"), `${DEV_CONFIG_IGNORE}\n`, "utf8");
+
+        const written = writeDevConfig(join(root, "services", "parser"), "service", "{}", root);
+
+        expect(existsSync(join(root, ".gitignore"))).toBe(false);
+        expect(isIgnored(written.configPath)).toBe(true);
+    });
+
+    it("uses the service folder's own .gitignore when the folder is outside the project", () => {
+        expect.assertions(2);
+
+        git("init", "-q");
+
+        const app = join(root, "app");
+
+        mkdirSync(app);
+        writeDevConfig(join(root, "services", "parser"), "service", "{}", app);
+
+        expect(readFileSync(join(root, "services", "parser", ".gitignore"), "utf8")).toContain(DEV_CONFIG_IGNORE);
+        expect(existsSync(join(app, ".gitignore"))).toBe(false);
+    });
+
+    it("writes no .gitignore outside a repository", () => {
+        expect.assertions(1);
+
+        writeDevConfig(root, "dev", "{}", root);
+
+        expect(existsSync(join(root, ".gitignore"))).toBe(false);
     });
 });

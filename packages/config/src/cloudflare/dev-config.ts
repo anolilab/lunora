@@ -14,8 +14,12 @@
  * its config from disk and resolves relative `main`/`assets` paths against the
  * config's own directory. The Vite path edits the config in memory instead.
  */
+import { spawnSync } from "node:child_process";
 import { readdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
+import ensureGitignoreEntries from "../ensure-gitignore";
+import isWithinDirectory from "../is-within-directory";
 import join from "../path";
 
 /** Which kind of temp config a file is, in its name. */
@@ -23,9 +27,13 @@ type DevConfigKind = "dev" | "service";
 
 /**
  * Matches the names {@link devConfigBasename} produces. The sweep uses it to find
- * files a dead session left behind, and `.gitignore` covers the same pattern.
+ * files a dead session left behind; {@link DEV_CONFIG_IGNORE} is the same set as a
+ * `.gitignore` line.
  */
 const STALE_DEV_CONFIG: RegExp = /^\.wrangler\.lunora-(?:dev|service)\.(\d+)\.\d+\.jsonc$/;
+
+/** The `.gitignore` line covering every temp config. No slash, so it matches at any depth below the file. */
+const DEV_CONFIG_IGNORE = ".wrangler.lunora-*.jsonc";
 
 let generation = 0;
 
@@ -107,13 +115,49 @@ const createCleanup = (path: string): (() => void) => {
 };
 
 /**
- * Write a temp config into `directory` and return where it is and how to remove it.
- * The directory is swept of dead sessions' files first.
+ * Make git ignore a temp config before it exists. A service folder is often a
+ * subdirectory the project's `.gitignore` was never written for, and a file there
+ * shows up as an untracked change for the whole session.
+ *
+ * Git answers, not a text match on one `.gitignore`: a parent's pattern, a global
+ * excludes file or `.git/info/exclude` already covering the path must not make
+ * this append a line to a tracked file. The line goes into the project's
+ * `.gitignore` when the folder is inside the project (the pattern has no slash,
+ * so it reaches subfolders), else into the folder's own. Outside a repository
+ * (`check-ignore` exits 128) or without git, nothing is written.
  */
-const writeDevConfig = (directory: string, kind: DevConfigKind, contents: string): { cleanup: () => void; configPath: string } => {
+const ensureDevConfigIgnored = (configPath: string, projectRoot: string): void => {
+    const directory = dirname(configPath);
+
+    try {
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH; fixed args, no shell
+        const { status } = spawnSync("git", ["check-ignore", "-q", "--no-index", configPath], { cwd: directory, stdio: "ignore", timeout: 5000 });
+
+        if (status !== 1) {
+            return;
+        }
+
+        ensureGitignoreEntries(directory === projectRoot || isWithinDirectory(directory, projectRoot) ? projectRoot : directory, [DEV_CONFIG_IGNORE]);
+    } catch {
+        // An unignored temp file is noise in `git status`, never a reason to fail dev startup.
+    }
+};
+
+/**
+ * Write a temp config into `directory` and return where it is and how to remove it.
+ * The directory is swept of dead sessions' files first, and git is made to ignore
+ * the file (see {@link ensureDevConfigIgnored}).
+ * @param directory Where the copy goes; wrangler resolves its relative paths against it.
+ * @param kind Which temp config this is, in its name.
+ * @param contents The config text.
+ * @param projectRoot The app's folder, whose `.gitignore` takes the ignore line when `directory` is inside it.
+ */
+const writeDevConfig = (directory: string, kind: DevConfigKind, contents: string, projectRoot: string): { cleanup: () => void; configPath: string } => {
     sweepStaleDevConfigs(directory);
 
     const configPath = join(directory, devConfigBasename(kind));
+
+    ensureDevConfigIgnored(configPath, projectRoot);
 
     writeFileSync(configPath, contents, "utf8");
 
@@ -170,4 +214,14 @@ const describeWithheld = ({ binding, kind }: WithheldBinding): string =>
           "`ctx.artifacts` will throw. Run `wrangler login` or set CLOUDFLARE_API_TOKEN to turn it on.";
 
 export type { DevConfigKind, WithheldBinding };
-export { createCleanup, describeWithheld, devConfigBasename, noopCleanup, STALE_DEV_CONFIG, sweepStaleDevConfigs, withheldBindings, writeDevConfig };
+export {
+    createCleanup,
+    describeWithheld,
+    DEV_CONFIG_IGNORE,
+    devConfigBasename,
+    noopCleanup,
+    STALE_DEV_CONFIG,
+    sweepStaleDevConfigs,
+    withheldBindings,
+    writeDevConfig,
+};

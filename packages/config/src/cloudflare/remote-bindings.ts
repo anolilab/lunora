@@ -302,7 +302,7 @@ const materializeDevWranglerConfig = (options: MaterializeDevOptions): Materiali
     }
 
     const contents = remoteBindings.length > 0 ? injectRemoteFlags(withoutWithheld, remoteBindings) : withoutWithheld;
-    const written = writeDevConfig(options.projectRoot, "dev", contents);
+    const written = writeDevConfig(options.projectRoot, "dev", contents, options.projectRoot);
 
     return { cleanup: written.cleanup, configPath: written.configPath, remoteBindings, withheld };
 };
