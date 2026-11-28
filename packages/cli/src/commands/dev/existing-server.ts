@@ -20,8 +20,7 @@ const EXITED_LOG_TAIL_LINES = 15;
  * that crash: the launcher has exited and the output went to the log. The next
  * `status` or start is the first command that notices, so it gets the dead record
  * back instead of it being cleared silently. A foreground server's record has no
- * log to show, and a launcher's placeholder outlives a launcher interrupted while
- * its detached server still compiles, so neither is reported as exited.
+ * log to show; it is cleared as before.
  */
 const readLiveOrExited = (cwd: string): { exited?: DevServerState; live?: DevServerState } => {
     const recorded = readDevServerState(cwd);
@@ -36,7 +35,7 @@ const readLiveOrExited = (cwd: string): { exited?: DevServerState; live?: DevSer
 
     clearDevServerState(cwd, recorded.pid);
 
-    return recorded.background === true && recorded.provisional !== true ? { exited: recorded } : {};
+    return recorded.background === true ? { exited: recorded } : {};
 };
 
 /** The last lines of a dead background server's log. */
@@ -46,8 +45,13 @@ const exitedLogTail = (cwd: string, exited: DevServerState): string[] => readLog
 const reportExitedServer = (logger: Logger, cwd: string, exited: DevServerState): void => {
     const logTail = exitedLogTail(cwd, exited);
 
+    // A placeholder names the launcher, or the detached child it was re-pointed at after the ready
+    // timeout. Its pid being gone says the start ended before the server recorded itself, not that
+    // the server died: an interrupted launcher leaves one while its child may still be compiling.
     logger.warn(
-        `The background dev server recorded at ${exited.url} (pid ${String(exited.pid)}) is no longer running; its record was cleared. Its log ended with:`,
+        exited.provisional === true
+            ? `A background dev server start (pid ${String(exited.pid)}) ended before its server recorded itself; its record was cleared. Its log ended with:`
+            : `The background dev server recorded at ${exited.url} (pid ${String(exited.pid)}) is no longer running; its record was cleared. Its log ended with:`,
     );
 
     for (const line of logTail) {

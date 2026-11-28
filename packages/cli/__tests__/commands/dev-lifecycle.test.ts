@@ -217,20 +217,22 @@ describe("lunora dev lifecycle", () => {
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
-        it("does not report an interrupted launcher's placeholder as an exited server", () => {
-            expect.assertions(3);
+        it("reports a dead placeholder as a start that ended, with the end of its log", () => {
+            expect.assertions(4);
 
             mkdirSync(join(workdir, ".lunora"), { recursive: true });
-            writeFileSync(join(workdir, DEV_LOG_FILE), "compiling services\n", "utf8");
-            // The launcher's pid is dead; its detached server may still be compiling and has not claimed the record yet.
+            writeFileSync(join(workdir, DEV_LOG_FILE), "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n", "utf8");
+            // The shape the ready timeout leaves: the placeholder re-pointed at a detached child that died
+            // before its server recorded itself.
             writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, provisional: true, url: "http://localhost:8788" });
 
             const { lines, logger } = recordingLogger();
 
             runDevStatus({ cwd: workdir, json: false, logger });
 
-            expect(lines.some((line) => line.message.includes("no longer running"))).toBe(false);
-            expect(lines.some((line) => line.message.includes("No dev server running"))).toBe(true);
+            expect(lines.some((line) => line.level === "warn" && line.message.includes("(pid 2147483646) ended before its server recorded itself"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("is no longer running"))).toBe(false);
+            expect(lines.some((line) => line.message.includes("NODE_OPTIONS=--max-old-space-size"))).toBe(true);
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
