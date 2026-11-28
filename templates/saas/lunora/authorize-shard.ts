@@ -2,8 +2,7 @@
  * The template's tenant boundary, as plain functions.
  *
  * `lunora/server.ts` wires these into the worker; they live here, free of the
- * Worker env and of `_generated`, so `lunora/authorize-shard.test.ts` can call
- * them directly (the repository's `tests/vis-templates` suite does). If you edit
+ * Worker env and of `_generated`, so a test can call them directly. If you edit
  * them, keep that boundary covered by a test of your own.
  */
 
@@ -100,4 +99,4 @@ const resolveIdentity = async (auth: IdentityAuth, request: Request): Promise<{ 
 };
 
 export type { IdentityAuth };
-export { authorizeShard, resolveIdentity, ROOT_SHARD };
+export { authorizeShard, resolveIdentity };
