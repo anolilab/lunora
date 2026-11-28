@@ -20,6 +20,9 @@ import {
 /** Every `writeFileSync` the module under test makes, so a test can tell an exclusive create from an overwrite. */
 const fileWrites: { flag: string | undefined; path: string }[] = [];
 
+/** When set, the next write lands half its content and then fails, as an interrupted process would leave it. */
+let tearNextWrite = false;
+
 vi.mock(import("node:fs"), async (importOriginal) => {
     const actual = await importOriginal();
 
@@ -29,6 +32,13 @@ vi.mock(import("node:fs"), async (importOriginal) => {
             const options = arguments_[2];
 
             fileWrites.push({ flag: typeof options === "object" && options !== null ? options.flag?.toString() : undefined, path: String(arguments_[0]) });
+
+            if (tearNextWrite) {
+                tearNextWrite = false;
+                actual.writeFileSync(arguments_[0], typeof arguments_[1] === "string" ? arguments_[1].slice(0, 10) : "");
+
+                throw new Error("EIO: write interrupted");
+            }
 
             actual.writeFileSync(...arguments_);
         },
@@ -82,6 +92,16 @@ describe("dev-server-state", () => {
             tunnelUrl: "https://quiet-marble-otter.trycloudflare.com",
             url: "http://localhost:8787",
         });
+    });
+
+    it("keeps the previous record when a write is torn halfway", () => {
+        expect.assertions(2);
+
+        writeDevServerState(workdir, { background: true, mode: "cli", pid: DEAD_PID, url: "http://localhost:8787" });
+        tearNextWrite = true;
+
+        expect(writeDevServerState(workdir, { mode: "cli", pid: process.pid, url: "http://localhost:8788" })).toBeUndefined();
+        expect(readDevServerState(workdir)).toMatchObject({ pid: DEAD_PID, url: "http://localhost:8787" });
     });
 
     it("returns undefined for a missing state file", () => {

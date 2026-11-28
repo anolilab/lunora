@@ -22,6 +22,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
+import { atomicWrite } from "./atomic-write";
 import join from "./path";
 
 /** Directory holding per-checkout Lunora state (gitignored by convention). */
@@ -293,7 +294,9 @@ const readDevServerState = (projectRoot: string): DevServerState | undefined => 
  * Write the state record to `.lunora/dev.json`, creating the `.lunora/`
  * directory when absent. Returns the absolute path written, or `undefined`
  * when the write failed (state is convenience metadata — a read-only checkout
- * must never crash dev startup).
+ * must never crash dev startup). The write goes through a temp file and a
+ * rename: `status` polls this file while servers write it, and an in-place
+ * write could be read half-done or, interrupted, lose a crash record.
  */
 const writeDevServerState = (projectRoot: string, state: DevServerState): string | undefined => {
     try {
@@ -301,7 +304,7 @@ const writeDevServerState = (projectRoot: string, state: DevServerState): string
 
         const path = join(projectRoot, DEV_STATE_FILE);
 
-        writeFileSync(path, `${JSON.stringify(state, undefined, 2)}\n`, "utf8");
+        atomicWrite(path, `${JSON.stringify(state, undefined, 2)}\n`);
 
         return path;
     } catch {
