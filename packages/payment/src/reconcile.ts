@@ -18,14 +18,15 @@
  */
 import type { PaymentAdapter } from "./adapter";
 import { usageForwardIsIdempotent } from "./idempotency";
-import { addMoney, compareMoney } from "./money";
+import { addMoney, compareMoney, disputedAmountOf, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
+import { bookedChanges, bookRefundTotal, isRefundBooked } from "./refund-ledger";
 import { REFUND_RANK, refundRungKept } from "./state-machine";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
 import { storeSubscription } from "./subscription-policy";
-import type { Customer, Money, PaymentSession, PaymentState, Subscription } from "./types";
+import type { Customer, Money, PaymentSession, PaymentState, ProviderRefund, Subscription } from "./types";
 
 interface ReconcileInput {
     readonly adapter: PaymentAdapter;
@@ -104,7 +105,8 @@ const subscriptionDrifted = (existing: Subscription | undefined, current: Subscr
 const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSession): boolean =>
     existing?.state !== current.state ||
     !sameCurrencyAmount(existing.capturedAmount, current.capturedAmount) ||
-    !sameCurrencyAmount(existing.refundedAmount, current.refundedAmount);
+    !sameCurrencyAmount(existing.refundedAmount, current.refundedAmount) ||
+    (current.bookedRefunds?.some((refund) => !isRefundBooked(existing, refund.id)) ?? false);
 
 /**
  * The money has already moved, so a refund total plus the stored disputes past the capture is
@@ -174,14 +176,66 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
     const refundedAmount = sameRefundCurrency && compareMoney(existing.refundedAmount, reported) > 0 ? existing.refundedAmount : reported;
     const ladderState = refundRungKept(existing.state, current.state);
 
+    // A snapshot names no refund, so the row's list is carried over as the dispute total is: written as the snapshot
+    // has it, the list would be gone, and the next delta webhook for a listed refund would count it again.
     return {
         ...current,
+        ...(existing.bookedRefunds === undefined ? {} : { bookedRefunds: existing.bookedRefunds }),
         ...(disputedAmount === undefined ? {} : { disputedAmount }),
         referenceId: ownerOf(existing.referenceId, current.referenceId),
         refundedAmount,
         state: refundStateAbove(ladderState, refundedAmount, current),
         subscriptionId: current.subscriptionId ?? existing.subscriptionId,
     };
+};
+
+/** `merged`, but never further along the refund ladder than `stored` (a state off the ladder counts as `captured`). */
+const refundRungHeld = (stored: PaymentState, merged: PaymentState): PaymentState => {
+    const mergedRank = REFUND_RANK[merged];
+
+    if (mergedRank === undefined || mergedRank <= (REFUND_RANK[stored] ?? 0)) {
+        return merged;
+    }
+
+    return REFUND_RANK[stored] === undefined ? "captured" : stored;
+};
+
+/**
+ * Whether reconciling `stored` against `merged` raises the refunded total: a snapshot total that names no refund, which a
+ * later delta webhook for one of its refunds would then count again unless the refunds are named with it.
+ */
+const raisesRefundedTotal = (stored: PaymentSession | undefined, merged: PaymentSession): stored is PaymentSession =>
+    stored?.refundedAmount.currency === merged.refundedAmount.currency && compareMoney(merged.refundedAmount, stored.refundedAmount) > 0;
+
+/**
+ * The write for a snapshot that raises the refunded total, given the provider's refund list (`undefined` when it could
+ * not be read). When the list's settled refunds, with the row's disputes, account for the raised total, total and ids
+ * are booked together. Otherwise the snapshot is written with the stored refunded total and refund state, and the next
+ * refund webhook or reconcile books the rest: raising the total without the ids is what let a delta webhook for a
+ * refund the total already held count it a second time.
+ */
+const withListedRefunds = (
+    stored: PaymentSession,
+    merged: PaymentSession,
+    snapshot: PaymentSession,
+    refunds: ReadonlyArray<ProviderRefund> | undefined,
+): PaymentSession => {
+    const { currency } = stored.refundedAmount;
+    const succeeded = (refunds ?? []).filter((refund) => refund.status === "succeeded" && refund.amount.currency === currency);
+    let listed = zeroMoney(currency);
+
+    for (const refund of succeeded) {
+        listed = addMoney(listed, refund.amount);
+    }
+
+    const accounted = refunds !== undefined && compareMoney(capAtCapture(addMoney(listed, disputedAmountOf(stored)), merged), merged.refundedAmount) >= 0;
+    const outcome = accounted ? bookRefundTotal(stored, { refunds: succeeded, total: snapshot.refundedAmount }) : undefined;
+
+    if (outcome?.kind === "booked") {
+        return { ...merged, ...bookedChanges(outcome) };
+    }
+
+    return { ...merged, refundedAmount: stored.refundedAmount, state: refundRungHeld(stored.state, merged.state) };
 };
 
 // Amounts are bigints, which `JSON.stringify` refuses without a replacer.
@@ -254,7 +308,8 @@ const reconcileSubscription = async (
     return true;
 };
 
-// Same before/after guard as `reconcileSubscription`.
+// Same before/after guard as `reconcileSubscription`. A refund list read after `after` is followed by another read, so the
+// write stays guarded on a row read after every provider call.
 const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
     const before = await store.getPaymentSession(adapter.identifier, id);
     const providerTruth = await adapter.getPaymentStatus(id);
@@ -264,7 +319,18 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
         return false;
     }
 
-    const current = mergePaymentTruth(after, providerTruth);
+    let current = mergePaymentTruth(after, providerTruth);
+
+    // Stripe and Creem list no refunds: Stripe sends no delta refund events, and a Creem delta past the capture is refused.
+    if (adapter.listRefunds !== undefined && raisesRefundedTotal(after, current)) {
+        const refunds = await adapter.listRefunds(id).catch(() => undefined);
+
+        if (rowChanged(after, await store.getPaymentSession(adapter.identifier, id))) {
+            return false;
+        }
+
+        current = withListedRefunds(after, current, providerTruth, refunds);
+    }
 
     if (!paymentDrifted(after, current)) {
         return false;
