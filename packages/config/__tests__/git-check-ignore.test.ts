@@ -67,6 +67,15 @@ describe(gitCheckIgnore, () => {
         expect(gitCheckIgnore(join(directory, ".dev.vars"), { noIndex: true })).toBe("ignored");
     });
 
+    it("answers for a file whose name starts with a dash", () => {
+        expect.hasAssertions();
+
+        git(directory, "init", "-q");
+        writeFileSync(join(directory, ".gitignore"), "-secret\n");
+
+        expect(gitCheckIgnore(join(directory, "-secret"), { noIndex: false })).toBe("ignored");
+    });
+
     it("is unknown outside a repository", () => {
         expect.hasAssertions();
 

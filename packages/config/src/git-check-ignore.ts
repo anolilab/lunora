@@ -17,7 +17,7 @@ type GitIgnoreStatus = "ignored" | "not-ignored" | "timed-out" | "unknown";
  * @param options.noIndex Pass `--no-index`, so a tracked file reads by its patterns alone.
  */
 const gitCheckIgnore = (path: string, options: { noIndex: boolean }): GitIgnoreStatus => {
-    const gitArguments = ["check-ignore", "-q", ...(options.noIndex ? ["--no-index"] : []), basename(path)];
+    const gitArguments = ["check-ignore", "-q", ...(options.noIndex ? ["--no-index"] : []), "--", basename(path)];
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH (install location varies); args are fixed and no shell is involved
     const { error, status } = spawnSync("git", gitArguments, { cwd: dirname(path), stdio: "ignore", timeout: 5000 });
 

@@ -9,11 +9,24 @@ import { atomicWrite, temporaryPathFor } from "../src/atomic-write";
 /** When set, the next rename fails with this code, as POSIX allows for a target that is a non-empty directory. */
 let nextRenameError: string | undefined;
 
+/** When set, the next write lands half its content and then fails, as a full disk would leave it. */
+let tearNextWrite: true | undefined;
+
 vi.mock(import("node:fs"), async (importOriginal) => {
     const actual = await importOriginal();
 
     return {
         ...actual,
+        writeFileSync: (...arguments_: Parameters<typeof actual.writeFileSync>) => {
+            if (tearNextWrite === true) {
+                tearNextWrite = undefined;
+                actual.writeFileSync(arguments_[0], typeof arguments_[1] === "string" ? arguments_[1].slice(0, 4) : "");
+
+                throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+            }
+
+            actual.writeFileSync(...arguments_);
+        },
         renameSync: (...arguments_: Parameters<typeof actual.renameSync>) => {
             const code = nextRenameError;
 
@@ -62,6 +75,17 @@ describe(atomicWrite, () => {
         expect(() => {
             atomicWrite(join(directory, ".dev.vars"), "SECRET=1\n");
         }).toThrow("EEXIST: rename failed");
+        expect(readdirSync(directory)).toStrictEqual([]);
+    });
+
+    it("removes a temp file a write left half-written", () => {
+        expect.hasAssertions();
+
+        tearNextWrite = true;
+
+        expect(() => {
+            atomicWrite(join(directory, ".dev.vars"), "SECRET=1\n");
+        }).toThrow("ENOSPC: no space left on device");
         expect(readdirSync(directory)).toStrictEqual([]);
     });
 
