@@ -17,8 +17,9 @@
  * that repair is the per-session `settlePendingRefund` on the payment facade.
  */
 import type { PaymentAdapter } from "./adapter";
+import { LunoraPaymentError } from "./errors";
 import { usageForwardIsIdempotent } from "./idempotency";
-import { addMoney, compareMoney, disputedAmountOf, maxMoney, zeroMoney } from "./money";
+import { addMoney, compareMoney, disputedAmountOf, maxMoney, subtractMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import { bookedChanges, bookRefundTotal, isRefundBooked } from "./refund-ledger";
@@ -201,44 +202,78 @@ const refundRungHeld = (stored: PaymentState, merged: PaymentState): PaymentStat
 };
 
 /**
- * Whether reconciling `stored` against `merged` raises the refunded total: a snapshot total that names no refund, which a
- * later delta webhook for one of its refunds would then count again unless the refunds are named with it.
+ * Whether `merged` holds refund money its list does not name: its refunded total less its disputes is larger than the
+ * named refunds. A snapshot total names no refund, and a later delta webhook for one of its refunds would count it again,
+ * so this covers a total a reconcile raises, a payment it writes for the first time, and a total an earlier reconcile
+ * wrote before rows named their refunds; it stops once every refund in the total is named.
  */
-const raisesRefundedTotal = (stored: PaymentSession | undefined, merged: PaymentSession): stored is PaymentSession =>
-    stored?.refundedAmount.currency === merged.refundedAmount.currency && compareMoney(merged.refundedAmount, stored.refundedAmount) > 0;
+const holdsUnnamedRefunds = (merged: PaymentSession): boolean => {
+    const { currency } = merged.refundedAmount;
+
+    if (merged.disputedAmount !== undefined && merged.disputedAmount.currency !== currency) {
+        return false;
+    }
+
+    let named = zeroMoney(currency);
+
+    for (const refund of merged.bookedRefunds ?? []) {
+        if (refund.amount.currency === currency) {
+            named = addMoney(named, refund.amount);
+        }
+    }
+
+    return compareMoney(subtractMoney(merged.refundedAmount, disputedAmountOf(merged)), named) > 0;
+};
+
+/** The stored side of a payment the store has no row for yet: nothing refunded, nothing named, not on a refund rung. */
+const unrefundedRow = (snapshot: PaymentSession): PaymentSession => {
+    return { ...snapshot, refundedAmount: zeroMoney(snapshot.refundedAmount.currency), state: "captured" };
+};
 
 /**
- * The write for a snapshot that raises the refunded total, given the provider's refund list (`undefined` when it could
- * not be read). When the list's settled refunds, with the row's disputes, account for the raised total, total and ids
- * are booked together. Otherwise the snapshot is written with the stored refunded total and refund state, and the next
- * refund webhook or reconcile books the rest: raising the total without the ids is what let a delta webhook for a
- * refund the total already held count it a second time.
+ * The write for a row that holds refund money it does not name, given the provider's refund list or the error reading
+ * it. When the list's settled refunds, with the row's disputes, account for the total, total and ids are booked
+ * together. Otherwise the snapshot is written with the stored refunded total and refund state, the next refund webhook
+ * or reconcile books the rest, and `problem` says why: raising the total without the ids is what let a delta webhook
+ * for a refund the total already held count it a second time.
  */
 const withListedRefunds = (
     stored: PaymentSession,
     merged: PaymentSession,
     snapshot: PaymentSession,
-    refunds: ReadonlyArray<ProviderRefund> | undefined,
-): PaymentSession => {
+    listing: { readonly error: unknown } | { readonly refunds: ReadonlyArray<ProviderRefund> },
+): { problem?: unknown; row: PaymentSession } => {
     const { currency } = stored.refundedAmount;
-    const succeeded = (refunds ?? []).filter((refund) => refund.status === "succeeded" && refund.amount.currency === currency);
+    const refunds = "refunds" in listing ? listing.refunds : [];
+    const succeeded = refunds.filter((refund) => refund.status === "succeeded" && refund.amount.currency === currency);
     let listed = zeroMoney(currency);
 
     for (const refund of succeeded) {
         listed = addMoney(listed, refund.amount);
     }
 
-    const accounted = refunds !== undefined && compareMoney(capAtCapture(addMoney(listed, disputedAmountOf(stored)), merged), merged.refundedAmount) >= 0;
+    const accounted = "refunds" in listing && compareMoney(capAtCapture(addMoney(listed, disputedAmountOf(stored)), merged), merged.refundedAmount) >= 0;
     // The list is read after the snapshot, so a refund that settled in between is listed but not in the snapshot's total:
     // naming it without its money would make its own webhook a duplicate, and the refund would be counted nowhere.
     const total = snapshot.refundedAmount.currency === currency ? maxMoney(snapshot.refundedAmount, listed) : listed;
     const outcome = accounted ? bookRefundTotal(stored, { refunds: succeeded, total }) : undefined;
 
-    if (outcome?.kind === "booked") {
-        return { ...merged, ...bookedChanges(outcome) };
+    if (outcome?.kind === "unchanged") {
+        return { row: merged };
     }
 
-    return { ...merged, refundedAmount: stored.refundedAmount, state: refundRungHeld(stored.state, merged.state) };
+    if (outcome?.kind === "booked") {
+        // The booked total can pass the snapshot's (a refund listed after it), so the state is labelled from the booked one.
+        return { row: { ...merged, ...bookedChanges(outcome), state: refundStateAbove(merged.state, outcome.refundedAmount, merged) } };
+    }
+
+    return {
+        problem:
+            "error" in listing
+                ? listing.error
+                : new LunoraPaymentError("PROVIDER_ERROR", `the provider's refund list does not account for its refund total on payment "${merged.id}"`),
+        row: { ...merged, refundedAmount: stored.refundedAmount, state: refundRungHeld(stored.state, merged.state) },
+    };
 };
 
 // Amounts are bigints, which `JSON.stringify` refuses without a replacer.
@@ -325,14 +360,29 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
     let current = mergePaymentTruth(after, providerTruth);
 
     // Stripe and Creem list no refunds: Stripe sends no delta refund events, and a Creem delta past the capture is refused.
-    if (adapter.listRefunds !== undefined && raisesRefundedTotal(after, current)) {
-        const refunds = await adapter.listRefunds(id).catch(() => undefined);
+    if (adapter.listRefunds !== undefined && holdsUnnamedRefunds(current)) {
+        const listing = await adapter.listRefunds(id).then(
+            (refunds) => {
+                return { refunds };
+            },
+            (error: unknown) => {
+                return { error };
+            },
+        );
 
+        // A missing row must still be missing, and a stored one unchanged, or the write would not be guarded on what it read.
         if (rowChanged(after, await store.getPaymentSession(adapter.identifier, id))) {
             return false;
         }
 
-        current = withListedRefunds(after, current, providerTruth, refunds);
+        const listed = withListedRefunds(after ?? unrefundedRow(providerTruth), current, providerTruth, listing);
+
+        current = listed.row;
+
+        // Not thrown: the fallback row is still written, and the sweep counts only a thrown reconcile as failed.
+        if (listed.problem !== undefined) {
+            notifyObserver(observer, { error: listed.problem, id, kind: "payment", provider: adapter.identifier, type: "reconcile.error" });
+        }
     }
 
     if (!paymentDrifted(after, current)) {

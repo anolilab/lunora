@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { money } from "../src/money";
-import { bookRefundDelta, bookRefundTotal, isRefundBooked, MAX_BOOKED_REFUNDS } from "../src/refund-ledger";
+import { bookRefundDelta, bookRefundTotal, isRefundBooked } from "../src/refund-ledger";
 import type { PaymentSession } from "../src/types";
 
 const row = (overrides: Partial<PaymentSession> = {}): PaymentSession => {
@@ -67,19 +67,6 @@ describe("bookRefundDelta", () => {
             kind: "booked",
             refundedAmount: money(1000, "USD"),
         });
-    });
-
-    it("drops the oldest entry past the cap and still books", () => {
-        expect.assertions(3);
-
-        const bookedRefunds = Array.from({ length: MAX_BOOKED_REFUNDS }, (_, index) => {
-            return { amount: money(0, "USD"), id: `re_${String(index)}` };
-        });
-        const outcome = bookRefundDelta(row({ bookedRefunds }), { amount: money(1, "USD"), id: "re_new" });
-
-        expect(outcome.kind === "booked" ? outcome.bookedRefunds.length : 0).toBe(MAX_BOOKED_REFUNDS);
-        expect(outcome.kind === "booked" ? outcome.bookedRefunds[0]?.id : undefined).toBe("re_1");
-        expect(outcome.kind === "booked" ? outcome.bookedRefunds.at(-1)?.id : undefined).toBe("re_new");
     });
 });
 

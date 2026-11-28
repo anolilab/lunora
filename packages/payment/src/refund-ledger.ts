@@ -8,12 +8,6 @@
 import { addMoney, compareMoney, maxMoney, zeroMoney } from "./money";
 import type { BookedRefund, Money, PaymentSession } from "./types";
 
-/**
- * The most refunds one row lists. Past it the oldest entry is dropped and the refund still books: no payment has that
- * many refunds, so the cap only bounds the row.
- */
-const MAX_BOOKED_REFUNDS: number = 1000;
-
 /** One refund a provider reports on its own, by its id. */
 interface RefundDelta {
     readonly amount: Money;
@@ -50,11 +44,8 @@ const DUPLICATE: RefundDeltaOutcome = { kind: "duplicate" };
 
 const REFUSED: { readonly kind: "refused" } = { kind: "refused" };
 
-const appendBooked = (listed: ReadonlyArray<BookedRefund> | undefined, added: ReadonlyArray<BookedRefund>): BookedRefund[] => {
-    const next = [...(listed ?? []), ...added];
-
-    return next.length > MAX_BOOKED_REFUNDS ? next.slice(next.length - MAX_BOOKED_REFUNDS) : next;
-};
+// Never trimmed: an id dropped from the list lets a restatement of that refund count again.
+const appendBooked = (listed: ReadonlyArray<BookedRefund> | undefined, added: ReadonlyArray<BookedRefund>): BookedRefund[] => [...(listed ?? []), ...added];
 
 const sameCurrency = (row: PaymentSession, amount: Money): boolean =>
     row.refundedAmount.currency === amount.currency &&
@@ -144,5 +135,5 @@ const bookedChanges = (
     };
 };
 
-export { bookedChanges, bookRefundDelta, bookRefundTotal, isRefundBooked, MAX_BOOKED_REFUNDS };
+export { bookedChanges, bookRefundDelta, bookRefundTotal, isRefundBooked };
 export type { RefundDelta, RefundDeltaOutcome, RefundTotal, RefundTotalOutcome };

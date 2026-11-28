@@ -9,7 +9,6 @@ import { createDatabasePaymentStore, PAYMENT_TABLES } from "../src/database-stor
 import { money } from "../src/money";
 import type { CreemClientLike } from "../src/providers/creem";
 import { createCreemAdapter } from "../src/providers/creem";
-import { MAX_BOOKED_REFUNDS } from "../src/refund-ledger";
 import paymentExtension from "../src/schema";
 import type { PaymentStore } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
@@ -1000,22 +999,6 @@ describe("createDatabasePaymentStore", () => {
             "re_1",
             "dp_1",
         ]);
-    });
-
-    it("round-trips a list of booked refunds at its cap", async () => {
-        expect.assertions(2);
-
-        const store = createDatabasePaymentStore(makeValidatingDb());
-        const bookedRefunds = Array.from({ length: MAX_BOOKED_REFUNDS }, (_, index) => {
-            return { amount: money(1, "USD"), id: `re_${String(index)}` };
-        });
-
-        await store.upsertPaymentSession({ ...session, bookedRefunds });
-
-        const stored = await store.getPaymentSession("stripe", "pi_1");
-
-        expect(stored?.bookedRefunds).toHaveLength(MAX_BOOKED_REFUNDS);
-        expect(stored?.bookedRefunds?.at(-1)).toStrictEqual({ amount: money(1n, "USD"), id: `re_${String(MAX_BOOKED_REFUNDS - 1)}` });
     });
 
     it("refuses a stored booked refund without an id, rather than forgetting it was counted", async () => {
