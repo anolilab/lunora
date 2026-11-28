@@ -346,8 +346,9 @@ export class MemoryPaymentStore implements PaymentStore {
 
     public upsertPaymentSession(session: PaymentSession, guard?: RevisionGuard): Promise<boolean> {
         const key = recordKey(session.provider, session.id);
-        // As the database store patches: a write that omits the list keeps the stored one, so it cannot clear it.
-        const bookedRefunds = session.bookedRefunds ?? this.sessions.get(key)?.bookedRefunds;
+        // As the database store patches (it omits an empty list): a write that omits the list, or carries an empty one,
+        // keeps the stored one, so it cannot clear it.
+        const bookedRefunds = session.bookedRefunds?.length ? session.bookedRefunds : this.sessions.get(key)?.bookedRefunds;
 
         return Promise.resolve(applyRevisioned(this.sessions, key, bookedRefunds === undefined ? session : { ...session, bookedRefunds }, guard));
     }
