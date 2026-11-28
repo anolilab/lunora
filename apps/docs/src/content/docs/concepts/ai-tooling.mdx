@@ -73,6 +73,13 @@ lunora dev logs           # captured output (--lines n, 0 = all)
 lunora dev stop           # SIGTERM, then SIGKILL after 10s
 ```
 
+The detached server gets a V8 heap limit of up to 8 GiB (`--max-old-space-size`
+in its `NODE_OPTIONS`, capped at three quarters of the machine's memory), since a
+session with several services can outgrow Node's default while it starts. A
+heap size already in `NODE_OPTIONS` is kept. If the server dies after the
+start stopped waiting for it, the next `lunora dev status` or start says so and
+prints the end of its log.
+
 Agents can also poll `GET /_lunora/status` on the running worker, a public,
 secret-free health probe answering `{"ok":true}`.
 

@@ -194,6 +194,28 @@ describe("lunora dev lifecycle", () => {
             expect(lines.some((line) => line.message.includes("No dev server running"))).toBe(true);
         });
 
+        it("reports a dead background server with the end of its log, then clears the record", () => {
+            expect.assertions(4);
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, DEV_LOG_FILE),
+                "starting wrangler dev + studio\nFATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory\n",
+                "utf8",
+            );
+            // pid 2147483646 is above the platform's pid ceiling, so it can't be running.
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, url: "http://localhost:8788" });
+
+            const { lines, logger } = recordingLogger();
+
+            runDevStatus({ cwd: workdir, json: false, logger });
+
+            expect(lines.some((line) => line.level === "warn" && line.message.includes("(pid 2147483646) is no longer running"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("FATAL ERROR: Ineffective mark-compacts"))).toBe(true);
+            expect(lines.some((line) => line.message.includes("NODE_OPTIONS=--max-old-space-size"))).toBe(true);
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
         it("reports URL, pid, uptime, and background for a live record", () => {
             expect.assertions(3);
 
@@ -689,6 +711,32 @@ describe("lunora dev lifecycle", () => {
             expect(banner?.message).toContain(`pid ${String(process.ppid)}`);
             expect(lines.some((line) => line.message.includes("lunora dev stop"))).toBe(true);
             expect(lines.some((line) => line.message.includes("lunora dev logs"))).toBe(true);
+        });
+
+        it("gives the detached server a raised heap limit through NODE_OPTIONS", async () => {
+            expect.assertions(1);
+
+            vi.stubEnv("NODE_OPTIONS", "--enable-source-maps");
+
+            let nodeOptions: string | undefined;
+            const { logger } = recordingLogger();
+
+            await runDevBackground({
+                command: { args: ["dev"], command: "lunora" },
+                cwd: workdir,
+                json: false,
+                logger,
+                pollIntervalMs: 1,
+                probe: async () => false,
+                readyTimeoutMs: 2000,
+                spawnDetached: ({ env }) => {
+                    nodeOptions = env["NODE_OPTIONS"];
+
+                    return { exited: Promise.resolve(1), pid: 999_999 };
+                },
+            });
+
+            expect(nodeOptions).toMatch(/^--enable-source-maps --max-old-space-size=\d+$/u);
         });
 
         it("surfaces the log tail and fails when the daemon dies before readiness", async () => {

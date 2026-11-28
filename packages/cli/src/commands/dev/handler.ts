@@ -51,7 +51,15 @@ import { createTuiConfirm } from "../../util/tui-prompts";
 import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
-import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
+import {
+    codegenRequested,
+    detectDevFlavor,
+    printCloudflareCliConfigWarning,
+    readLiveReportingExited,
+    reportExistingServer,
+    runLifecycleSubcommand,
+    startBackground,
+} from "./lifecycle";
 import { startNodeDevWorker } from "./node-dev-server";
 import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
@@ -1010,7 +1018,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
 
     if (!isDaemon && (options.background === true || agent !== undefined)) {
         // Idempotent start: a live server means success, not a conflict.
-        const existing = readLiveDevServerState(cwd);
+        const existing = readLiveReportingExited(cwd, logger);
 
         if (existing !== undefined) {
             reportExistingServer(logger, existing);

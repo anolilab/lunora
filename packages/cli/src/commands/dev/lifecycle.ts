@@ -44,6 +44,7 @@ import { warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
 import { servesDevInProcess } from "../../util/deploy-target-resolve";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { devHeapEnvironment } from "../../util/dev-heap";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
 import { EXIT_CODE } from "../../util/exit-code";
@@ -265,6 +266,69 @@ const readLogTail = (path: string, count: number): string[] => {
 /** The absolute capture-log path for a project, honouring the state record when present. */
 const resolveLogPath = (cwd: string, state: DevServerState | undefined): string => state?.logFile ?? join(cwd, DEV_LOG_FILE);
 
+/** Log lines shown for a background server found dead by the next `status` or start. */
+const EXITED_LOG_TAIL_LINES = 15;
+
+/** What a background dev server left behind when it died without clearing its record. */
+interface ExitedServer {
+    logTail: string[];
+    pid: number;
+    url: string;
+}
+
+/**
+ * Read the live record, and report one whose background server has died.
+ *
+ * A background server can die after the launcher stopped waiting for it, as one
+ * that runs out of V8 heap a few seconds past the ready timeout does. Nobody sees
+ * that crash: the launcher has exited and the output went to the log. The next
+ * `status` or start is the first command that notices, so it returns what the log
+ * ended with instead of silently clearing the record. A foreground server's record
+ * has no log to show; it is cleared as before.
+ */
+const readLiveOrExited = (cwd: string): { exited?: ExitedServer; live?: DevServerState } => {
+    const recorded = readDevServerState(cwd);
+    const live = readLiveDevServerState(cwd);
+
+    if (live !== undefined || recorded?.background !== true) {
+        return { live };
+    }
+
+    return { exited: { logTail: readLogTail(resolveLogPath(cwd, recorded), EXITED_LOG_TAIL_LINES), pid: recorded.pid, url: recorded.url } };
+};
+
+/** Matches V8's fatal out-of-memory line. */
+const HEAP_EXHAUSTED = /JavaScript heap out of memory|Ineffective mark-compacts near heap limit/u;
+
+/** The flag the heap hint names; `<MiB>` is a placeholder for the user to fill in. */
+const HEAP_HINT_FLAG = ["--max-old-space-size", "<MiB>"].join("=");
+
+/** Tell the user a recorded background server is gone, with the end of its log. */
+const reportExitedServer = (logger: Logger, exited: ExitedServer): void => {
+    logger.warn(
+        `The background dev server recorded at ${exited.url} (pid ${String(exited.pid)}) is no longer running; its record was cleared. Its log ended with:`,
+    );
+
+    for (const line of exited.logTail) {
+        logger.warn(`  ${line}`);
+    }
+
+    if (exited.logTail.some((line) => HEAP_EXHAUSTED.test(line))) {
+        logger.warn(`  It ran out of V8 heap. Raise the limit with NODE_OPTIONS=${HEAP_HINT_FLAG} and start it again.`);
+    }
+};
+
+/** Read the live record for a start, reporting a dead background server first (see {@link readLiveOrExited}). */
+const readLiveReportingExited = (cwd: string, logger: Logger): DevServerState | undefined => {
+    const { exited, live } = readLiveOrExited(cwd);
+
+    if (exited !== undefined) {
+        reportExitedServer(logger, exited);
+    }
+
+    return live;
+};
+
 /** Print the `stop` / `status` / `logs` hint triple shown after every start-adjacent report. */
 const printLifecycleHints = (logger: Logger): void => {
     logger.info("  Stop:   lunora dev stop");
@@ -434,6 +498,7 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
             // agent) — ANSI colour codes would only garble it.
             ...(process.env.FORCE_COLOR === undefined ? { NO_COLOR: "1" } : {}),
             ...(options.json ? { LUNORA_LOG_JSON: "1" } : {}),
+            ...devHeapEnvironment(options.env?.["NODE_OPTIONS"] ?? process.env["NODE_OPTIONS"]),
         },
         logPath,
     });
@@ -814,6 +879,21 @@ interface StatusCommandOptions {
     now?: () => number;
 }
 
+/** The `status` output when nothing is running, naming a background server that died since the last look. */
+const reportNotRunning = (options: StatusCommandOptions, exited: ExitedServer | undefined): void => {
+    if (options.json) {
+        printJson(exited === undefined ? { running: false } : { exited, running: false });
+
+        return;
+    }
+
+    if (exited !== undefined) {
+        reportExitedServer(options.logger, exited);
+    }
+
+    options.logger.info("No dev server running.");
+};
+
 /**
  * `lunora dev status` — report the recorded dev server (URL, PID, uptime,
  * background/foreground). A stale record (dead PID) reads as "not running" and
@@ -821,14 +901,10 @@ interface StatusCommandOptions {
  */
 const runDevStatus = (options: StatusCommandOptions): { code: number } => {
     const { cwd, logger } = options;
-    const state = readLiveDevServerState(cwd);
+    const { exited, live: state } = readLiveOrExited(cwd);
 
     if (state === undefined) {
-        if (options.json) {
-            printJson({ running: false });
-        } else {
-            logger.info("No dev server running.");
-        }
+        reportNotRunning(options, exited);
 
         return { code: 0 };
     }
@@ -958,6 +1034,7 @@ export {
     codegenRequested,
     detectDevFlavor,
     printCloudflareCliConfigWarning,
+    readLiveReportingExited,
     reportExistingServer,
     runDevBackground,
     runDevLogs,

@@ -1,0 +1,74 @@
+/**
+ * The V8 heap a detached `lunora dev` gets.
+ *
+ * A dev session with several in-session services has run out of V8's default
+ * old-space limit (about 4 GB on a 64-bit build) while starting, with tens of GB of
+ * system memory free, and a raised `--max-old-space-size` let the same start
+ * finish. The background launcher hands the detached server its environment, so it
+ * sets the flag there through `NODE_OPTIONS`, which every Node descendant (wrangler,
+ * Vite, esbuild's host) inherits too. A foreground run cannot raise its own heap
+ * after it has started; `NODE_OPTIONS` stays the way to do that.
+ */
+import { totalmem } from "node:os";
+import { getHeapStatistics } from "node:v8";
+
+/** The old-space size a background dev server is given when memory allows, in MiB. */
+const DEV_HEAP_TARGET_MB = 8192;
+
+const MIB = 1024 * 1024;
+
+/** Matches either spelling V8 accepts, so a limit the user chose is never overridden. */
+const HEAP_FLAG = /--max[-_]old[-_]space[-_]size/u;
+
+/** How much memory this process may use and the heap limit V8 runs with, in bytes. */
+interface HeapMemory {
+    availableBytes: number;
+    currentLimitBytes: number;
+}
+
+const measureMemory = (): HeapMemory => {
+    // Looked up, not called directly: the engines range still includes Node releases
+    // where the method is experimental. It returns 0 (or, on some releases, a huge
+    // sentinel) when no cgroup limit applies, which the `min` with total memory absorbs.
+    const constrainedMemory = Reflect.get(process, "constrainedMemory") as (() => number) | undefined;
+    const constrained = typeof constrainedMemory === "function" ? constrainedMemory.call(process) : 0;
+
+    return {
+        availableBytes: Math.min(constrained > 0 ? constrained : Number.POSITIVE_INFINITY, totalmem()),
+        currentLimitBytes: getHeapStatistics().heap_size_limit,
+    };
+};
+
+/**
+ * The `NODE_OPTIONS` value for the detached server, or `undefined` to leave the
+ * variable as it is: the user already set a heap size, or raising it would not
+ * help.
+ *
+ * Capped at three quarters of the memory this process may use (a cgroup limit
+ * when there is one), so a small container is never promised more heap than it
+ * has, and never set below the limit V8 already runs with.
+ */
+const devHeapNodeOptions = (existing: string | undefined, memory: HeapMemory = measureMemory()): string | undefined => {
+    if (existing !== undefined && HEAP_FLAG.test(existing)) {
+        return undefined;
+    }
+
+    const sizeMb = Math.min(DEV_HEAP_TARGET_MB, Math.floor((memory.availableBytes * 0.75) / MIB));
+
+    if (sizeMb * MIB <= memory.currentLimitBytes) {
+        return undefined;
+    }
+
+    const flag = `--max-old-space-size=${String(sizeMb)}`;
+
+    return existing === undefined || existing.trim() === "" ? flag : `${existing} ${flag}`;
+};
+
+/** The env patch to spread into a spawn's environment, from {@link devHeapNodeOptions}; empty when nothing changes. */
+const devHeapEnvironment = (existing: string | undefined): Record<string, string> => {
+    const nodeOptions = devHeapNodeOptions(existing);
+
+    return nodeOptions === undefined ? {} : { NODE_OPTIONS: nodeOptions };
+};
+
+export { DEV_HEAP_TARGET_MB, devHeapEnvironment, devHeapNodeOptions };
