@@ -24,7 +24,8 @@ const WRITER_ROLES = new Set(["admin", "owner"]);
  * not loaded) reads as "Someone" rather than as a raw id.
  *
  * The list is fetched only for actor ids no earlier fetch covered, so a member who
- * just joined is named on their first activity while known actors cost nothing.
+ * just joined is named on their first activity while known actors cost nothing. A
+ * failed fetch covers nothing and is tried again when the feed next changes.
  * The lookup is kept with the organization it was fetched for: after a switch,
  * the previous organization's names never apply.
  */
@@ -35,6 +36,9 @@ const useMemberNames = (organizationId: string, actorIds: ReadonlyArray<string> 
         .filter((id) => !current?.asked.has(id))
         .sort()
         .join(",");
+    // Part of the effect's key so a fetch that failed (left ids unasked) is retried on the next
+    // feed change; once every id is asked, `unasked` is empty and a feed change costs nothing.
+    const feed = actorIds?.join(",");
 
     useEffect(() => {
         if (unasked === "") {
@@ -56,7 +60,7 @@ const useMemberNames = (organizationId: string, actorIds: ReadonlyArray<string> 
         return () => {
             cancelled = true;
         };
-    }, [organizationId, unasked]);
+    }, [organizationId, unasked, feed]);
 
     return (actorId) => current?.names.get(actorId) ?? "Someone";
 };
