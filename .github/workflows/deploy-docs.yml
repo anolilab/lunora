@@ -1,0 +1,211 @@
+"name": "Deploy Docs"
+
+# Ships `apps/docs`, the documentation and marketing site, as a Cloudflare Worker.
+#
+# A merge to `alpha` deploys stage `prod`. `preview-docs.yml` calls this workflow for a
+# labelled pull request, with stage `pr-<number>` and the `preview` environment.
+#
+# `push`, not `pull_request`: a deploy publishes to a real Cloudflare account, so
+# production happens after review. The `docs-production` environment must be limited to
+# the `alpha` branch; the ref check below only names the mistake, because a dispatched
+# branch runs its OWN copy of this file and can drop any check in it.
+#
+# The path list is wider than `apps/docs/**` on purpose: the site collects every
+# package's `docs/` folder at build time and imports the built `@lunora/*` packages,
+# so a change under `packages/**` is a change to the deployed bytes.
+#
+# GitHub Environments (create them before the first run):
+#   docs-production   secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, ALCHEMY_PASSWORD,
+#                     ALCHEMY_STATE_TOKEN, TURNSTILE_SECRET_KEY, VITE_TURNSTILE_SITE_KEY
+#                     (the pair of a Turnstile widget for the production hostname)
+#                     variables: VITE_PUBLIC_POSTHOG_HOST, VITE_PUBLIC_POSTHOG_PROJECT_TOKEN,
+#                     DOCS_CUSTOM_DOMAIN (set to the hostname only when the DNS cutover
+#                     should happen; leave it unset to serve on workers.dev)
+#   docs-preview      secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, ALCHEMY_PASSWORD,
+#                     ALCHEMY_STATE_TOKEN. The Turnstile pair is Cloudflare's documented
+#                     always-passing test pair, set below; the real keys are bound to the
+#                     production hostname and never reach a preview.
+#
+# The token scopes: Workers Scripts:Edit, Workers KV Storage:Edit, Workers Rate Limiting,
+# and Zone:Workers Routes:Edit plus DNS:Edit on the zone for the custom domain. Use a
+# SEPARATE Cloudflare account for `docs-preview`. A preview deploys the pull request's
+# code with that token, so with the production account's token a pull request could
+# reach the production Worker and its waitlist KV.
+"on": # yamllint disable-line rule:truthy
+    "push":
+        "branches": ["alpha"]
+        "paths":
+            - ".github/workflows/deploy-docs.yml"
+            - "apps/docs/**"
+            # Copied into the site as /code-of-conduct by the docs build.
+            - ".github/CODE_OF_CONDUCT.md"
+            - "packages/**"
+            - "shared/**"
+            # The root files the package build reads (`build:packages:prod` runs vis).
+            - "package.json"
+            - "project.json"
+            - "tsconfig.base.json"
+            - "vis.config.ts"
+            - "pnpm-lock.yaml"
+            - "pnpm-workspace.yaml"
+    "workflow_dispatch": {}
+    "workflow_call":
+        "inputs":
+            "environment":
+                "required": true
+                "type": "string"
+            "stage":
+                "required": true
+                "type": "string"
+        "outputs":
+            "website-url":
+                "description": "The deployed site's URL"
+                "value": "${{ jobs.deploy.outputs.website-url }}"
+
+# Keyed on the stage, not the ref: two runs against one stage would write one alchemy
+# state at once, while two pull request previews deploy side by side. A caller must NOT
+# use this group itself: a caller and its callee holding one group deadlock.
+"concurrency":
+    "group": "deploy-docs-${{ inputs.stage || 'prod' }}"
+    "cancel-in-progress": false
+
+"permissions":
+    "contents": "read"
+
+"jobs":
+    "deploy":
+        "name": "Deploy (${{ inputs.stage || 'prod' }})"
+        "if": "github.repository == 'anolilab/lunora'"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 40
+        "environment":
+            "name": "docs-${{ inputs.environment || 'production' }}"
+            "url": "${{ steps.alchemy.outputs.website-url }}"
+        "outputs":
+            "website-url": "${{ steps.alchemy.outputs.website-url }}"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "persist-credentials": "false"
+
+            - "name": "Resolve the stage"
+              "id": "target"
+              "env":
+                  "ENVIRONMENT": "${{ inputs.environment || 'production' }}"
+                  "STAGE": "${{ inputs.stage || 'prod' }}"
+                  "REF": "${{ github.ref }}"
+              "run": |
+                  set -euo pipefail
+
+                  # Production is the prod stage on alpha and nothing else. The
+                  # environment's branch policy is the gate; this names the mistake.
+                  if [ "${ENVIRONMENT}" = "production" ] && { [ "${STAGE}" != "prod" ] || [ "${REF}" != "refs/heads/alpha" ]; }; then
+                      echo "::error::Production deploys stage prod from alpha only. Pick alpha under 'Use workflow from'."
+                      exit 1
+                  fi
+
+                  if [ "${ENVIRONMENT}" = "preview" ] && [ "${STAGE}" = "prod" ]; then
+                      echo "::error::The prod stage belongs to the production environment only."
+                      exit 1
+                  fi
+
+                  # The stage ends up in resource names and a workers.dev hostname.
+                  if [[ ! "${STAGE}" =~ ^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$ ]]; then
+                      echo "::error::The stage must be 1-20 lowercase letters, digits or hyphens."
+                      exit 1
+                  fi
+
+            # The Cloudflare credentials are set on the alchemy step alone, not on the
+            # job: the setup action, install scripts and the build all run third-party
+            # code and need no token that edits the account.
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "deploy-docs"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `build:packages:prod`, never the development build: the site imports the
+            # built `@lunora/*` packages, and a development build ships the React dev
+            # JSX runtime into the deployed Worker.
+            - "name": "Build packages"
+              "run": "pnpm run build:packages:prod"
+
+            # The deploy builds the site itself (`build` in alchemy.run.ts), so the
+            # Turnstile site key is in this step's environment too.
+            - "name": "Deploy the Worker via Alchemy"
+              "id": "alchemy"
+              "working-directory": "apps/docs"
+              "env":
+                  "CI": "true"
+                  "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+                  "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+                  "ALCHEMY_PASSWORD": "${{ secrets.ALCHEMY_PASSWORD }}"
+                  "ALCHEMY_STATE_TOKEN": "${{ secrets.ALCHEMY_STATE_TOKEN }}"
+                  "STAGE": "${{ inputs.stage || 'prod' }}"
+                  # Cloudflare's documented always-passing pair. A preview runs the pull
+                  # request's code, so it gets no real key.
+                  "VITE_TURNSTILE_SITE_KEY": "${{ inputs.environment == 'preview' && '1x00000000000000000000AA' || secrets.VITE_TURNSTILE_SITE_KEY }}"
+                  "TURNSTILE_SECRET_KEY": "${{ inputs.environment == 'preview' && '1x0000000000000000000000000000000AA' || secrets.TURNSTILE_SECRET_KEY }}"
+                  "DOCS_CUSTOM_DOMAIN": "${{ vars.DOCS_CUSTOM_DOMAIN }}"
+                  # Built into the client: left unset, the site ships with analytics
+                  # silently off. Public values, so variables rather than secrets.
+                  "VITE_PUBLIC_POSTHOG_HOST": "${{ vars.VITE_PUBLIC_POSTHOG_HOST }}"
+                  "VITE_PUBLIC_POSTHOG_PROJECT_TOKEN": "${{ vars.VITE_PUBLIC_POSTHOG_PROJECT_TOKEN }}"
+              # `--adopt` takes over a `lunora-docs` Worker created outside alchemy, which
+              # the first run needs; later runs find it in the state and ignore the flag.
+              "run": |
+                  pnpm exec alchemy deploy --stage "$STAGE" --adopt
+
+            # A deploy that "succeeds" is not a working site: prerendering runs in workerd
+            # and leaves a route out silently when it breaks there. So call the new
+            # deployment: a page, a docs page, the search API, the sitemap and a redirect.
+            - "name": "Smoke test the deployment"
+              "env":
+                  "SITE": "${{ steps.alchemy.outputs.website-url }}"
+              "run": |
+                  set -euo pipefail
+
+                  if [ -z "${SITE}" ]; then
+                      echo "::error::The deploy reported no URL. Is a workers.dev subdomain registered for the account?"
+                      exit 1
+                  fi
+
+                  # check <path> <expected status regex> — the first request after a deploy
+                  # can be slow, hence the retries.
+                  check() {
+                      local path=$1 expected=$2 code=""
+
+                      for _ in 1 2 3 4 5; do
+                          code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 60 "${SITE}${path}" || true)"
+
+                          if [[ "${code}" =~ ${expected} ]]; then
+                              echo "ok     ${path}: ${code}"
+                              return 0
+                          fi
+
+                          sleep 10
+                      done
+
+                      echo "::error::${path} answered ${code:-nothing}, expected ${expected}"
+                      return 1
+                  }
+
+                  failed=0
+                  check "/" '^200$' || failed=1
+                  check "/docs" '^200$' || failed=1
+                  check "/api/search?query=lunora" '^200$' || failed=1
+                  check "/sitemap.xml" '^200$' || failed=1
+                  check "/chat" '^302$' || failed=1
+
+                  exit "${failed}"

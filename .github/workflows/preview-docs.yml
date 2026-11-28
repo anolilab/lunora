@@ -1,0 +1,231 @@
+"name": "Preview Docs"
+
+# A pull request carrying the `preview-docs` label gets its own copy of the docs site
+# (stage `pr-<number>`) in the preview Cloudflare account, redeployed on every push and
+# destroyed when the pull request closes or loses the label. Nothing else deploys it.
+#
+# Same-repository pull requests only: the deploy job holds the preview environment's
+# Cloudflare token and runs the pull request's code, which a fork must never do. The
+# label is the opt-in, because a full build is slow and every preview is a set of
+# billed resources.
+#
+# The `docs-preview` environment should hold a token for a Cloudflare account that is
+# NOT the production one: this code runs with it, so a token that reaches production
+# would let any same-repository pull request reach the production Worker and KV.
+"on": # yamllint disable-line rule:truthy
+    "pull_request":
+        "types":
+            - "labeled"
+            - "unlabeled"
+            - "synchronize"
+            - "reopened"
+            - "closed"
+
+# One run per pull request. deploy-docs.yml serialises its own state under
+# `deploy-docs-pr-<number>`; this group must NOT be that one, or caller and callee wait
+# on each other forever. `queue: max` keeps every waiting run: with the default only one
+# can wait, so a later event (another label, a push) would replace a pending destroy,
+# skip both jobs, and leave the preview deployed until the pull request closes.
+"concurrency":
+    "group": "preview-docs-${{ github.event.pull_request.number }}"
+    "cancel-in-progress": false
+    "queue": "max"
+
+"permissions": {}
+
+"jobs":
+    # Whether the pull request wants a preview right now: open, and carrying the label. The
+    # event payload only says what the pull request was when the event fired, and queued runs
+    # of one pull request do not start in event order. A deploy that starts after the destroy
+    # of a later `unlabeled` or `closed` event would bring the preview back, and a destroy
+    # that starts after the deploy of a later `labeled` event would remove a wanted one, so
+    # both jobs go by this answer.
+    "label":
+        "name": "Check the pull request"
+        "if": >-
+            github.repository == 'anolilab/lunora'
+            && github.event.pull_request.head.repo.full_name == github.repository
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 5
+        "permissions":
+            "pull-requests": "read"
+        "outputs":
+            "preview": "${{ steps.live.outputs.preview }}"
+        "steps":
+            - "name": "Read the pull request's current state and labels"
+              "id": "live"
+              "env":
+                  "GH_TOKEN": "${{ github.token }}"
+                  "PR": "${{ github.event.pull_request.number }}"
+              "run": |
+                  set -euo pipefail
+
+                  # Labels of an open pull request only: a closed one keeps its labels.
+                  labels="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq 'select(.state == "open") | .labels[].name')"
+
+                  if grep -qx 'preview-docs' <<< "${labels}"; then
+                      echo "preview=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "preview=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+    "deploy":
+        "name": "Deploy the preview"
+        "needs": "label"
+        "if": >-
+            needs.label.outputs.preview == 'true'
+            && github.event.action != 'closed'
+            && github.event.action != 'unlabeled'
+            && (github.event.action != 'labeled' || github.event.label.name == 'preview-docs')
+        "permissions":
+            "contents": "read"
+            "deployments": "write"
+        "uses": "./.github/workflows/deploy-docs.yml"
+        "with":
+            "environment": "preview"
+            "stage": "pr-${{ github.event.pull_request.number }}"
+
+    "comment":
+        "name": "Comment the preview URL"
+        "needs": "deploy"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 5
+        "permissions":
+            "pull-requests": "write"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Post or update the comment"
+              "uses": "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" # v9.0.0
+              "env":
+                  "WEBSITE_URL": "${{ needs.deploy.outputs.website-url }}"
+                  "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "with":
+                  "script": |
+                      const marker = "<!-- docs-preview -->";
+                      const { owner, repo } = context.repo;
+                      const issue_number = context.payload.pull_request.number;
+                      const sha = context.payload.pull_request.head.sha.slice(0, 7);
+                      const url = process.env.WEBSITE_URL;
+
+                      const body = [
+                          marker,
+                          `**Docs preview** for \`${sha}\`: ${url ? url : "deployed (the run did not report a URL)"}`,
+                          "",
+                          "A full copy of the site in the preview account. Its waitlist form uses Cloudflare's test Turnstile keys and a KV namespace of its own.",
+                          "",
+                          `[Deploy run](${process.env.RUN_URL}). It is destroyed when this pull request closes or loses the \`preview-docs\` label.`,
+                      ].join("\n");
+
+                      const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+                      const existing = comments.find((comment) => comment.body?.startsWith(marker));
+
+                      if (existing) {
+                          await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+                      } else {
+                          await github.rest.issues.createComment({ owner, repo, issue_number, body });
+                      }
+
+    "destroy":
+        "name": "Destroy the preview"
+        "needs": "label"
+        "if": >-
+            needs.label.outputs.preview != 'true'
+            && (github.event.action == 'closed'
+            || (github.event.action == 'unlabeled' && github.event.label.name == 'preview-docs'))
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "environment": "docs-preview"
+        "permissions":
+            "contents": "read"
+            "pull-requests": "write"
+        "env":
+            "STAGE": "pr-${{ github.event.pull_request.number }}"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+              "with":
+                  "egress-policy": "audit"
+
+            # The base branch, not the pull request: a destroy holds the preview account's
+            # token, so it runs reviewed code only. It is also the one entrypoint with the
+            # persistent state store that every deploy uses, which a pull request that
+            # branched before that store existed does not have, and it survives the head
+            # branch being deleted. Destroy deletes what the stage's state lists.
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "persist-credentials": "false"
+                  "ref": "${{ github.event.pull_request.base.ref }}"
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "deploy-docs"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # A destroy reads the stage's state and deletes what it lists: it builds
+            # nothing and the deploy-only checks in alchemy.run.ts stand down. The
+            # secret is read at module load either way, so it is bound to the test
+            # value a preview deployed with.
+            - "name": "Destroy the stage"
+              "working-directory": "apps/docs"
+              "env":
+                  "CI": "true"
+                  "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+                  "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+                  "ALCHEMY_PASSWORD": "${{ secrets.ALCHEMY_PASSWORD }}"
+                  "ALCHEMY_STATE_TOKEN": "${{ secrets.ALCHEMY_STATE_TOKEN }}"
+                  "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"
+              "run": |
+                  pnpm exec alchemy destroy --stage "$STAGE"
+
+            # `alchemy destroy` exits 0 even when the deletion failed (it catches the error
+            # and calls process.exit(0)), so the exit status proves nothing. Ask the state
+            # store what is left: a failure here keeps the "destroyed" comment from being
+            # posted, and unlabelling and relabelling or reopening retries the deletion.
+            - "name": "Check that the stage is empty"
+              "working-directory": "apps/docs"
+              "env":
+                  "CI": "true"
+                  "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+                  "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+                  "ALCHEMY_PASSWORD": "${{ secrets.ALCHEMY_PASSWORD }}"
+                  "ALCHEMY_STATE_TOKEN": "${{ secrets.ALCHEMY_STATE_TOKEN }}"
+                  "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"
+              "run": |
+                  set -euo pipefail
+
+                  # Its own command, so a failed listing fails the step. Only the grep may
+                  # find nothing, which is the success case.
+                  listing="$(pnpm exec alchemy state list --stage "${STAGE}")"
+                  remaining="$(grep -F "/${STAGE}/" <<< "${listing}" || true)"
+
+                  if [ -n "${remaining}" ]; then
+                      echo "::error::The destroy left resources in stage ${STAGE}:"
+                      echo "${remaining}"
+                      exit 1
+                  fi
+
+            - "name": "Update the comment"
+              "uses": "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" # v9.0.0
+              "with":
+                  "script": |
+                      const marker = "<!-- docs-preview -->";
+                      const { owner, repo } = context.repo;
+                      const issue_number = context.payload.pull_request.number;
+
+                      const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+                      const existing = comments.find((comment) => comment.body?.startsWith(marker));
+
+                      if (existing) {
+                          await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: `${marker}\nThe preview was destroyed.` });
+                      }
