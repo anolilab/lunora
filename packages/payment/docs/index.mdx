@@ -494,7 +494,9 @@ Every row carries a `provider` discriminator so multiple providers can coexist d
 migration. A **capture or refund is not its own table**: both fold into the
 payment's `payment_sessions` row as `capturedMinor` / `refundedMinor` (the
 lost-dispute part of the refunded total also in `disputedMinor`) plus a
-state (`refunded` / `partially_refunded`). Products, prices, checkouts and
+state (`refunded` / `partially_refunded`). Each refund is named by its provider
+id in `bookedRefunds`, written with the total, so a redelivered or restated
+refund event is counted once. Products, prices, checkouts and
 invoices stay with the provider — the store does not mirror them.
 
 Extension tables live on the shard. Chaining `.global()` on one of them is not

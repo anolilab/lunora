@@ -302,8 +302,8 @@ const disputeClosedAction = ({ base, currency, object }: StripeEvent): WebhookAc
         // — as with the `charge.refunded` total it may follow.
         amount: moneyFromMinor(readNumber(object, "amount") ?? 0, currency),
         referenceId: readReferenceId(object),
-        // Not a refund the facade issued, so the dispute id can never consume a local refund marker
-        // and have its reversal silently dropped — see `sync.ts`.
+        // The dispute id names the reversal on the row as a refund id names a refund; it never equals
+        // one, so the reversal is never mistaken for a refund already booked — see `sync.ts`.
         refundId: readString(object, "id"),
         reversal: "dispute",
         // Payment rows are keyed on the PaymentIntent id. A dispute on a charge with no intent

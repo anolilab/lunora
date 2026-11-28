@@ -267,9 +267,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 ...base,
                 amount: minorUnits === undefined ? undefined : money(minorUnits, currency),
                 referenceId: referenceFromMetadata(object),
-                // Per-refund identity for the sync layer's marker match. A lost dispute is not a refund
-                // the facade issued, so `dispute_id` stands in: distinct from every refund id, it can
-                // never consume a marker and have its reversal silently dropped.
+                // Per-refund identity the sync layer counts the refund once by. A lost dispute has no
+                // refund id, so `dispute_id` stands in: distinct from every refund id, its reversal is
+                // never mistaken for a refund already booked.
                 refundId: readString(object, "refund_id") ?? readString(object, "dispute_id"),
                 ...(eventType === "dispute.lost" ? { reversal: "dispute" as const } : {}),
                 sessionId: readString(object, "payment_id"),

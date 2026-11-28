@@ -372,9 +372,9 @@ export interface LunoraPayment {
      * never arrives. Authorized like `refundPayment` (unknown and not-owner both raise NOT_FOUND).
      *
      * While the provider still reports a refund pending, the hold stays. Otherwise the ledger is raised to the
-     * provider's succeeded refund total, never past the captured amount: money the ledger already holds
-     * (reconcile writes the provider's total without per-refund markers) is not added again. Every succeeded
-     * refund's marker is claimed first, so a late webhook adds nothing, and the hold is released with a
+     * provider's succeeded refund total, never past the captured amount: money the ledger already holds is not
+     * added again. Every succeeded refund is named on the row in the same write, so a late webhook for it adds
+     * nothing, and the hold is released with a
      * `refund.hold_released` observer event; a refund that failed, or none at all, releases it with nothing booked. A session holding nothing is returned as
      * it stands, without asking the provider; so is a session on any other provider, and one whose
      * `refundPayment` call is still waiting on the provider. Returns the stored row.
@@ -1447,7 +1447,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                     );
                 });
 
-                // An unsettled (pending) refund moves no money yet: leave the row and add no refund marker, so
+                // An unsettled (pending) refund moves no money yet: leave the row and record nothing, so
                 // the confirming `payment.refunded` webhook books it (or `payment.refund_failed` leaves
                 // nothing to undo). The pending marker stays until one of those two, or settlePendingRefund, settles it.
                 if (issuedRefund.pending) {

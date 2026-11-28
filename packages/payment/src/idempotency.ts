@@ -113,8 +113,8 @@ export const localRefundKey = (sessionId: string, refundId: string): string => `
  * carries it from there), or the row write took it. Every other way out — a failed ledger write, a lost
  * answer, a stopped isolate — leaves it standing, so nothing has to succeed for the session to stay blocked.
  * Once its holder has ended (see {@link unbookedRefundDoneKey}) or its lease has run out, the next `refundPayment` or
- * `settlePendingRefund` takes it over and books the provider's settled refunds before any further refund is issued. A confirming webhook acknowledged as a duplicate meanwhile loses
- * nothing: the provider's list is what books the money.
+ * `settlePendingRefund` takes it over and books the provider's settled refunds before any further refund is issued. A
+ * refund its confirming webhook booked meanwhile is named on the row, so the list adds nothing for it.
  */
 export const unbookedRefundKey = (sessionId: string): string => `unbooked-refund:${sessionId}`;
 

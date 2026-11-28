@@ -83,7 +83,7 @@ export interface PaymentStore {
      *
      * `type` is recorded on the claim row so the `events` table is a readable audit log rather than
      * bare ids and timestamps: a real delivery passes its `WebhookActionType`, and the
-     * internal claim markers (`sync.ts`'s orphan-retry bound, the local-refund ledger) pass a
+     * internal claim markers (`sync.ts`'s orphan-retry bound, the refund holds) pass a
      * `marker.*` label so they are distinguishable from provider traffic in the studio.
      */
     markEventProcessed: (provider: ProviderId, eventId: string, type: string) => Promise<boolean>;
