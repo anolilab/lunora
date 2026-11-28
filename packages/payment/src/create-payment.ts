@@ -1025,8 +1025,12 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         // A refund id the row already named before the provider was called: the provider replayed an earlier refund
         // under a colliding key, so no money moved. The caller asked for a refund that never happened, so the observer
         // is told; the return value stays the row as it stands. A refund booked before rows named their refunds left
-        // a `localRefundKey` marker instead: delete that read with the one in `sync.ts`.
-        if (isRefundBooked(existing, refundId) || (await store.getEventClaim(adapter.identifier, localRefundKey(input.sessionId, refundId))) !== undefined) {
+        // a `localRefundKey` marker instead: delete that read with the one in `sync.ts`. That marker proves no booking,
+        // though (a webhook claimed it before a row write that could fail), so it leaves the unbooked-refund record
+        // standing, and the next call or `settlePendingRefund` books the refund from the provider's list.
+        const named = isRefundBooked(existing, refundId);
+
+        if (named || (await store.getEventClaim(adapter.identifier, localRefundKey(input.sessionId, refundId))) !== undefined) {
             notifyObserver(options.observability, {
                 provider: adapter.identifier,
                 referenceId: existing.referenceId,
@@ -1035,7 +1039,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 type: "refund.replayed",
             });
 
-            return { onLedger: true, row: existing };
+            return { onLedger: named, row: existing };
         }
 
         try {

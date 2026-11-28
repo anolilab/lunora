@@ -1173,6 +1173,49 @@ describe("createPayment", () => {
             });
         });
 
+        it("keeps the record for a refund only an old local-refund claim names, so the provider's list books it once", async () => {
+            expect.assertions(5);
+
+            const store = new MemoryPaymentStore();
+            const { facade } = await issuingSetup(store);
+            const claimed: string[] = [];
+            const markEventProcessed = store.markEventProcessed.bind(store);
+
+            store.markEventProcessed = async (provider, eventId, type) => {
+                claimed.push(eventId);
+
+                return markEventProcessed(provider, eventId, type);
+            };
+
+            // Left by a webhook before rows named their refunds, which claimed the key before a row write that never landed.
+            await store.markEventProcessed("polar", "local-refund:ord_1:id:ref_1", "marker.local_refund");
+
+            await facade(store).refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+            // The claim proves no booking, so the call's unbooked-refund record stands and says the call has ended.
+            await expect(store.getEventClaim("polar", "unbooked-refund:ord_1")).resolves.toBeDefined();
+            expect(claimed.some((eventId) => eventId.startsWith("unbooked-refund-done:ord_1:"))).toBe(true);
+
+            await facade(store).settlePendingRefund({ sessionId: "ord_1" });
+            await facade(store).settlePendingRefund({ sessionId: "ord_1" });
+
+            await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({
+                bookedRefunds: [{ amount: money(300, "USD"), id: "ref_1" }],
+                refundedAmount: money(300, "USD"),
+            });
+            await expect(store.getEventClaim("polar", "unbooked-refund:ord_1")).resolves.toBeUndefined();
+            await expect(
+                applyWebhookAction(store, {
+                    amount: money(300, "USD"),
+                    eventId: "evt_ref_1",
+                    provider: "polar",
+                    refundId: "ref_1",
+                    sessionId: "ord_1",
+                    type: "payment.refunded",
+                }),
+            ).resolves.toStrictEqual({ applied: false, reason: "duplicate" });
+        });
+
         it("counts the refund once when the confirming webhook is still writing it as the call books it", async () => {
             expect.assertions(2);
 
