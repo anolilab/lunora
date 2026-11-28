@@ -645,20 +645,18 @@ block those ranges yourself. What is established:
 import { LunoraContainer } from "@lunora/container/do";
 
 const PRIVATE_V4 = /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/;
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+const PRIVATE_V6 = /^(f[cd]|fe80:|::ffff:)/;
 
 const isPrivateTarget = (hostname: string): boolean => {
     const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
 
-    return (
-        host === "localhost" ||
-        host.endsWith(".localhost") ||
-        PRIVATE_V4.test(host) ||
-        host === "::1" ||
-        host.startsWith("fc") || // fc00::/7 (also matches host names starting "fc"; refusing them is acceptable)
-        host.startsWith("fd") ||
-        host.startsWith("fe80:") ||
-        host.startsWith("::ffff:") // IPv4-mapped IPv6
-    );
+    if (host.includes(":")) {
+        // IPv6: loopback, unique local (fc00::/7), link-local and IPv4-mapped.
+        return host === "::1" || PRIVATE_V6.test(host);
+    }
+
+    return host === "localhost" || host.endsWith(".localhost") || (IPV4.test(host) && PRIVATE_V4.test(host));
 };
 
 export class Fetcher extends LunoraContainer {
