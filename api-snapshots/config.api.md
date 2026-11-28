@@ -794,7 +794,7 @@ type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
 ### `GitIgnoreStatus` (type)
 
 ```ts
-type GitIgnoreStatus = "ignored" | "not-ignored" | "unknown";
+type GitIgnoreStatus = "ignored" | "not-ignored" | "timed-out" | "unknown";
 ```
 
 ### `HookLogger` (interface)

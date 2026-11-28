@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { basename, dirname } from "node:path";
 
-/** Git's answer for one path: `unknown` outside a repository, without git, or when it timed out. */
-type GitIgnoreStatus = "ignored" | "not-ignored" | "unknown";
+/** Git's answer for one path: `unknown` outside a repository or without git, `timed-out` when git did not answer in time. */
+type GitIgnoreStatus = "ignored" | "not-ignored" | "timed-out" | "unknown";
 
 /**
  * Ask git whether `path` is ignored, counting every ignore source it reads (each
@@ -19,7 +19,11 @@ type GitIgnoreStatus = "ignored" | "not-ignored" | "unknown";
 const gitCheckIgnore = (path: string, options: { noIndex: boolean }): GitIgnoreStatus => {
     const gitArguments = ["check-ignore", "-q", ...(options.noIndex ? ["--no-index"] : []), basename(path)];
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- `git` must resolve from PATH (install location varies); args are fixed and no shell is involved
-    const { status } = spawnSync("git", gitArguments, { cwd: dirname(path), stdio: "ignore", timeout: 5000 });
+    const { error, status } = spawnSync("git", gitArguments, { cwd: dirname(path), stdio: "ignore", timeout: 5000 });
+
+    if (error !== undefined && "code" in error && error.code === "ETIMEDOUT") {
+        return "timed-out";
+    }
 
     if (status === 0) {
         return "ignored";

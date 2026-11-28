@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
     claimDevServerState,
@@ -16,6 +16,24 @@ import {
     updateDevServerState,
     writeDevServerState,
 } from "../src/dev-server-state";
+
+/** Every `writeFileSync` the module under test makes, so a test can tell an exclusive create from an overwrite. */
+const fileWrites: { flag: string | undefined; path: string }[] = [];
+
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        writeFileSync: (...arguments_: Parameters<typeof actual.writeFileSync>) => {
+            const options = arguments_[2];
+
+            fileWrites.push({ flag: typeof options === "object" && options !== null ? options.flag?.toString() : undefined, path: String(arguments_[0]) });
+
+            actual.writeFileSync(...arguments_);
+        },
+    };
+});
 
 /** A PID that is effectively never alive: beyond every platform's pid_max. */
 const DEAD_PID = 2 ** 30;
@@ -181,12 +199,15 @@ describe("dev-server-state", () => {
     });
 
     it("claimDevServerState replaces a record kept for a dead background server", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         writeDevServerState(workdir, { background: true, exitedAt: new Date().toISOString(), mode: "cli", pid: process.ppid, url: "http://localhost:8787" });
+        fileWrites.length = 0;
 
         expect(claimDevServerState(workdir, { mode: "vite", pid: process.pid, url: "http://localhost:5173" })).toStrictEqual({ ok: true });
         expect(readDevServerState(workdir)).toMatchObject({ exitedAt: undefined, pid: process.pid });
+        // The record that won was an exclusive create; a plain overwrite would also replace a server that claimed in between.
+        expect(fileWrites.findLast((write) => write.path.endsWith("dev.json"))?.flag).toBe("wx");
     });
 
     it("treats a recycled PID as stale (record predates the process's start)", () => {

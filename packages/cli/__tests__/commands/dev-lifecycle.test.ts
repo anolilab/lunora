@@ -69,6 +69,30 @@ describe("lunora dev lifecycle", () => {
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
+        it("names a dead background server in its --json document", async () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, DEV_LOG_FILE), "FATAL ERROR: heap out of memory\n", "utf8");
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, url: "http://localhost:8788" });
+
+            const chunks: string[] = [];
+
+            vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+                chunks.push(String(chunk));
+
+                return true;
+            });
+
+            await runDevStop({ cwd: workdir, json: true, logger: recordingLogger().logger });
+
+            expect(JSON.parse(chunks.join(""))).toStrictEqual({
+                exited: { logTail: ["FATAL ERROR: heap out of memory"], pid: 2_147_483_646, url: "http://localhost:8788" },
+                running: false,
+                stopped: false,
+            });
+        });
+
         it("sIGTERMs the recorded pid and clears the state record", async () => {
             expect.assertions(4);
 

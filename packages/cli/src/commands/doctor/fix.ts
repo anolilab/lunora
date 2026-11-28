@@ -293,6 +293,7 @@ const devVariablesIsIgnored = (cwd: string): boolean => {
     // Without `--no-index`: a tracked `.dev.vars` reads as not ignored, so no secret is written into a committed file.
     const status = gitCheckIgnore(join(cwd, DEV_VARS_FILE), { noIndex: false });
 
+    // A timed-out git refuses too: the text match below cannot see that `.dev.vars` is tracked.
     if (status !== "unknown") {
         return status === "ignored";
     }
