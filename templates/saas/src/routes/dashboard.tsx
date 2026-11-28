@@ -23,28 +23,42 @@ const WRITER_ROLES = new Set(["admin", "owner"]);
  * organization's member list; a user who is not in it (removed, or the list has
  * not loaded) reads as "Someone" rather than as a raw id.
  *
- * The list is fetched again whenever the feed changes, so a member who just joined
- * is named on their first activity. The names are kept with the organization they
- * were fetched for: after a switch, the previous organization's names never apply.
+ * The list is fetched only for actor ids no earlier fetch covered, so a member who
+ * just joined is named on their first activity while known actors cost nothing.
+ * The lookup is kept with the organization it was fetched for: after a switch,
+ * the previous organization's names never apply.
  */
-const useMemberNames = (organizationId: string, feed: unknown): ((actorId: string) => string) => {
-    const [lookup, setLookup] = useState<{ names: ReadonlyMap<string, string>; organizationId: string } | undefined>(undefined);
+const useMemberNames = (organizationId: string, actorIds: ReadonlyArray<string> | undefined): ((actorId: string) => string) => {
+    const [lookup, setLookup] = useState<{ asked: ReadonlySet<string>; names: ReadonlyMap<string, string>; organizationId: string } | undefined>(undefined);
+    const current = lookup?.organizationId === organizationId ? lookup : undefined;
+    const unasked = [...new Set(actorIds)]
+        .filter((id) => !current?.asked.has(id))
+        .sort()
+        .join(",");
 
     useEffect(() => {
+        if (unasked === "") {
+            return undefined;
+        }
+
         let cancelled = false;
 
         void authClient.organization.getFullOrganization({ query: { organizationId } }).then(({ data }) => {
             if (!cancelled && data) {
-                setLookup({ names: new Map(data.members.map((member) => [member.userId, member.user.name || member.user.email])), organizationId });
+                setLookup((previous) => ({
+                    asked: new Set([...(previous?.organizationId === organizationId ? previous.asked : []), ...unasked.split(",")]),
+                    names: new Map(data.members.map((member) => [member.userId, member.user.name || member.user.email])),
+                    organizationId,
+                }));
             }
         });
 
         return () => {
             cancelled = true;
         };
-    }, [organizationId, feed]);
+    }, [organizationId, unasked]);
 
-    return (actorId) => (lookup?.organizationId === organizationId ? lookup.names.get(actorId) : undefined) ?? "Someone";
+    return (actorId) => current?.names.get(actorId) ?? "Someone";
 };
 
 /**
@@ -114,7 +128,10 @@ interface OrganizationDashboardProps {
 function OrganizationDashboard({ name, organizationId, orgRole, userId }: OrganizationDashboardProps) {
     const shard = { shardKey: organizationId };
     const payload = useQuery(api.saas.overview, {}, shard);
-    const resolveActor = useMemberNames(organizationId, payload?.activity);
+    const resolveActor = useMemberNames(
+        organizationId,
+        payload?.activity.map((entry) => entry.actorId),
+    );
 
     /*
      * Who else has this page open. `usePresence` heartbeats on an interval and
