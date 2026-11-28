@@ -1632,7 +1632,7 @@ describe("lunora dev", () => {
         });
 
         it("claims a provisional record for the vite flavor and hands off via env", async () => {
-            expect.assertions(4);
+            expect.assertions(5);
 
             writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "workspace:*" }, name: "app" }), "utf8");
 
@@ -1663,6 +1663,8 @@ describe("lunora dev", () => {
 
             expect(state?.pid).toBe(process.pid);
             expect(state?.url).toBe("http://localhost:5173");
+            // The URL is a guess until Vite listens, so a probe there must not count as "already running".
+            expect(state?.provisional).toBe(true);
             // The handoff env names the record the plugin may supersede.
             expect(childEnvironment?.LUNORA_DEV_HANDOFF_PID).toBe(String(process.pid));
 
@@ -1702,6 +1704,29 @@ describe("lunora dev", () => {
             expect(result.code).toBe(0);
             expect(spawned).toBe(false);
             expect(warns.some((line) => line.includes("already running"))).toBe(true);
+        });
+
+        it("reports a dead background server before a foreground start replaces it", async () => {
+            expect.assertions(2);
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, ".lunora", "dev.log"), "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n", "utf8");
+            // pid 2147483646 is above the platform's pid ceiling, so it can't be running.
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 2_147_483_646, url: "http://localhost:8787" });
+
+            const warns: string[] = [];
+            const logger: Logger = { error: () => {}, info: () => {}, success: () => {}, warn: (message) => warns.push(message) };
+
+            await runDevCommand({
+                cwd: workdir,
+                logger,
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(warns.some((line) => line.includes("(pid 2147483646) is no longer running"))).toBe(true);
+            expect(warns.some((line) => line.includes("NODE_OPTIONS=--max-old-space-size"))).toBe(true);
         });
 
         it("supersedes the background parent's provisional record (does not self-detect as already-running)", async () => {

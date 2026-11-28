@@ -11,30 +11,38 @@ describe(devHeapNodeOptions, () => {
     it("raises the heap to the target on a machine with room for it", () => {
         expect.assertions(1);
 
-        expect(devHeapNodeOptions(undefined, memory(62))).toBe(`--max-old-space-size=${String(DEV_HEAP_TARGET_MB)}`);
+        expect(devHeapNodeOptions(undefined, memory(62), [])).toBe(`--max-old-space-size=${String(DEV_HEAP_TARGET_MB)}`);
     });
 
     it("keeps the options already set and appends the flag", () => {
         expect.assertions(1);
 
-        expect(devHeapNodeOptions("--enable-source-maps", memory(62))).toBe(`--enable-source-maps --max-old-space-size=${String(DEV_HEAP_TARGET_MB)}`);
+        expect(devHeapNodeOptions("--enable-source-maps", memory(62), [])).toBe(`--enable-source-maps --max-old-space-size=${String(DEV_HEAP_TARGET_MB)}`);
     });
 
     it.each(["--max-old-space-size=2048", "--max_old_space_size=2048"])("never overrides a heap size the user chose (%s)", (existing) => {
         expect.assertions(1);
 
-        expect(devHeapNodeOptions(existing, memory(62))).toBeUndefined();
+        expect(devHeapNodeOptions(existing, memory(62), [])).toBeUndefined();
+    });
+
+    it("carries a heap size from the launcher's own command line, which the child does not inherit", () => {
+        expect.assertions(1);
+
+        expect(devHeapNodeOptions("--enable-source-maps", memory(62, 16), ["--max-old-space-size=16384"])).toBe(
+            "--enable-source-maps --max-old-space-size=16384",
+        );
     });
 
     it("caps the heap at three quarters of the available memory", () => {
         expect.assertions(1);
 
-        expect(devHeapNodeOptions(undefined, memory(8, 2))).toBe("--max-old-space-size=6144");
+        expect(devHeapNodeOptions(undefined, memory(8, 2), [])).toBe("--max-old-space-size=6144");
     });
 
     it("leaves the limit alone when memory would not allow more than V8 already has", () => {
         expect.assertions(1);
 
-        expect(devHeapNodeOptions(undefined, memory(4))).toBeUndefined();
+        expect(devHeapNodeOptions(undefined, memory(4), [])).toBeUndefined();
     });
 });

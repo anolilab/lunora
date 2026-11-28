@@ -825,7 +825,7 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
     logger.success(`Dev server running at ${state.url} (${details.join(", ")})`);
 
     if (state.provisional === true) {
-        logger.info("  This is the background launcher's placeholder; the server replaces it with its own pid and URL once it starts.");
+        logger.info("  This is the launcher's placeholder; the server replaces it with its own pid and URL once it starts.");
     } else if (!isDevServerReady(state)) {
         logger.info("  Not answering yet; `lunora dev logs` shows what it is doing.");
     }

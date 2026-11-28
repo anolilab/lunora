@@ -24,7 +24,6 @@ import {
     formatDevBannerRow,
     inferLunoraBindings,
     isInteractive,
-    readLiveDevServerState,
     readProjectRemotePreference,
     resolveLazyFunctions,
     resolveSchemaDirectory,
@@ -304,6 +303,10 @@ const afterWorkerSpawn = (
  */
 const claimStartRecord = (plan: DevCommandPlan, cwd: string): DevServerState | undefined => {
     const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
+    // Under a framework's Vite server `workerOrigin` is a guess made before anything
+    // listens, so the record is a placeholder until the dev-state plugin replaces it:
+    // an answer at the guessed URL could come from anything.
+    const placeholder = plan.flavor === "vite" || plan.flavor === "framework-worker";
     const claim = claimDevServerState(
         cwd,
         {
@@ -311,6 +314,7 @@ const claimStartRecord = (plan: DevCommandPlan, cwd: string): DevServerState | u
             logFile: process.env[DEV_LOG_FILE_ENV],
             mode: "cli",
             pid: process.pid,
+            ...(placeholder ? { launcherPid: process.pid, provisional: true } : {}),
             startedAt: new Date().toISOString(),
             url: plan.workerOrigin,
         },
@@ -717,7 +721,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // fail to launch). A genuine other server has a PID that is neither ours
         // nor the handoff parent's, so it still short-circuits correctly.
         const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
-        const existing = readLiveDevServerState(cwd);
+        const existing = readLiveReportingExited(cwd, logger);
 
         if (existing !== undefined && existing.pid !== process.pid && existing.pid !== handoffPid) {
             return { code: await answerExistingServer(logger, existing, options.probeReady), plan };

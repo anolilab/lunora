@@ -156,8 +156,9 @@ pnpm run test:integration
 ```
 
 `lunora dev status` shows the same thing for a human, as `launching` (a
-background launcher's placeholder record, whose pid and URL change once the
-server starts), `starting` or `ready` in its detail line; `--json` carries it as
+launcher's placeholder record, written by a background start or by `lunora dev`
+in front of a framework's Vite server, whose pid and URL change once the server
+starts), `starting` or `ready` in its detail line; `--json` carries it as
 `phase`. It works under `--no-worker` too: this process still owns the
 record, so it reports on the worker your runner started.
 

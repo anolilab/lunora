@@ -46,9 +46,22 @@ const measureMemory = (): HeapMemory => {
  * when there is one), so a small container is never promised more heap than it
  * has, and never set below the limit V8 already runs with.
  */
-const devHeapNodeOptions = (existing: string | undefined, memory: HeapMemory = measureMemory()): string | undefined => {
+const devHeapNodeOptions = (
+    existing: string | undefined,
+    memory: HeapMemory = measureMemory(),
+    execArgv: ReadonlyArray<string> = process.execArgv,
+): string | undefined => {
     if (existing !== undefined && HEAP_FLAG.test(existing)) {
         return undefined;
+    }
+
+    // A size given on the launcher's own command line (`node --max-old-space-size=…`)
+    // is the user's choice too, but the child is a fresh command that does not get
+    // the launcher's exec arguments, so it is carried over through `NODE_OPTIONS`.
+    const launcherFlag = execArgv.find((argument) => HEAP_FLAG.test(argument) && argument.includes("="));
+
+    if (launcherFlag !== undefined) {
+        return existing === undefined || existing.trim() === "" ? launcherFlag : `${existing} ${launcherFlag}`;
     }
 
     const sizeMb = Math.min(DEV_HEAP_TARGET_MB, Math.floor((memory.availableBytes * 0.75) / MIB));
