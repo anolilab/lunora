@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.282...@lunora/payment@1.0.0-alpha.283) (2026-11-28)
+
+- fix(payment)!: count a refund once by naming it on the payment row (#1734)
+
 ## @lunora/payment [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.281...@lunora/payment@1.0.0-alpha.282) (2026-11-27)
 
 - fix(payment): stop concurrent events overwriting a payment row (#1727)
