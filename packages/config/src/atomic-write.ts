@@ -27,12 +27,15 @@ const temporaryPathFor = (path: string): string => `${path}.tmp-${String(process
 const atomicWrite = (path: string, content: string, options: { mode?: number } = {}): void => {
     const temporaryPath = `${temporaryPathFor(path)}-${randomBytes(6).toString("hex")}`;
 
+    // Only a temp this call created is removed on failure: a path that already existed is someone else's.
+    let created = false;
+
     try {
         writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx", ...options });
+        created = true;
         renameSync(temporaryPath, path);
     } catch (error) {
-        // A path that already existed is someone else's, not a temp this call created.
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        if (created) {
             rmSync(temporaryPath, { force: true });
         }
 

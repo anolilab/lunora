@@ -2,9 +2,31 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { atomicWrite, temporaryPathFor } from "../src/atomic-write";
+
+/** When set, the next rename fails with this code, as POSIX allows for a target that is a non-empty directory. */
+let nextRenameError: string | undefined;
+
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+        ...actual,
+        renameSync: (...arguments_: Parameters<typeof actual.renameSync>) => {
+            const code = nextRenameError;
+
+            if (code !== undefined) {
+                nextRenameError = undefined;
+
+                throw Object.assign(new Error(`${code}: rename failed`), { code });
+            }
+
+            actual.renameSync(...arguments_);
+        },
+    };
+});
 
 describe(atomicWrite, () => {
     let directory: string;
@@ -30,6 +52,17 @@ describe(atomicWrite, () => {
 
         expect(readFileSync(victim, "utf8")).toBe("untouched");
         expect(readFileSync(target, "utf8")).toBe("{}\n");
+    });
+
+    it("removes its own temp file when the rename fails with EEXIST", () => {
+        expect.hasAssertions();
+
+        nextRenameError = "EEXIST";
+
+        expect(() => {
+            atomicWrite(join(directory, ".dev.vars"), "SECRET=1\n");
+        }).toThrow("EEXIST: rename failed");
+        expect(readdirSync(directory)).toStrictEqual([]);
     });
 
     it("leaves no temp file behind", () => {
